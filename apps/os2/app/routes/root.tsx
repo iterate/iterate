@@ -1,5 +1,11 @@
 import { Suspense, type PropsWithChildren, type ReactNode } from "react";
-import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanstack/react-router";
+import {
+  Outlet,
+  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+  useRouterState,
+} from "@tanstack/react-router";
 import { PostHogProvider as _PostHogProvider } from "posthog-js/react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
@@ -12,6 +18,20 @@ const PostHogProvider =
   import.meta.env.PROD && import.meta.env.VITE_POSTHOG_PUBLIC_KEY
     ? _PostHogProvider
     : ({ children }: PropsWithChildren) => <>{children}</>;
+
+function RouterProgress() {
+  const isLoading = useRouterState({
+    select: (s) => s.status === "pending",
+  });
+
+  if (!isLoading) return null;
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-primary/20">
+      <div className="h-full bg-primary animate-progress" />
+    </div>
+  );
+}
 
 export const Route = createRootRouteWithContext<TanstackRouterContext>()({
   head: () => ({
@@ -56,6 +76,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
+        <RouterProgress />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

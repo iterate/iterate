@@ -3,10 +3,11 @@ import {
   Link,
   Outlet,
   redirect,
-  useLocation,
+  useMatchRoute,
   useParams,
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import {
   Bot,
   GitBranch,
@@ -31,10 +32,31 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarTrigger,
 } from "../../../components/ui/sidebar.tsx";
+import { AppHeader } from "../../../components/app-header.tsx";
 
 export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/projects/$projectSlug")({
+  beforeLoad: async ({ context, params }) => {
+    // Ensure org exists
+    const currentOrg = await context.queryClient.ensureQueryData(
+      trpc.organization.withProjects.queryOptions({
+        organizationSlug: params.organizationSlug,
+      }),
+    );
+
+    if (!currentOrg) {
+      throw redirect({ to: "/" });
+    }
+
+    // Ensure project exists within the org
+    const projectExists = currentOrg.projects?.some((p) => p.slug === params.projectSlug);
+    if (!projectExists) {
+      throw redirect({
+        to: "/orgs/$organizationSlug",
+        params: { organizationSlug: params.organizationSlug },
+      });
+    }
+  },
   component: ProjectLayout,
 });
 
@@ -42,7 +64,7 @@ function ProjectLayout() {
   const params = useParams({
     from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
   });
-  const location = useLocation();
+  const matchRoute = useMatchRoute();
   const { user } = useSessionUser();
 
   if (!user) {
@@ -64,13 +86,23 @@ function ProjectLayout() {
     }),
   );
 
+  // Memoize user props to avoid creating new objects on each render
+  const userProps = useMemo(
+    () => ({
+      name: user.name,
+      email: user.email,
+      image: user.image,
+      role: user.role ?? undefined,
+    }),
+    [user.name, user.email, user.image, user.role],
+  );
+
+  // currentOrg is guaranteed by beforeLoad, but TypeScript needs the check
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
 
-  const orgSlug = currentOrg.slug;
-
-  const orgsList = (organizations || []).map((organization) => ({
+  const orgsList = organizations.map((organization) => ({
     id: organization.id,
     name: organization.name,
     slug: organization.slug,
@@ -80,41 +112,68 @@ function ProjectLayout() {
   const currentOrgData = {
     id: currentOrg.id,
     name: currentOrg.name,
-    slug: orgSlug,
+    slug: currentOrg.slug,
   };
 
-  const projects = (currentOrg.projects || []).map((p) => ({
+  const projects = (currentOrg.projects ?? []).map((p) => ({
     id: p.id,
     name: p.name,
     slug: p.slug,
   }));
 
-  const projectBasePath = `/orgs/${params.organizationSlug}/projects/${params.projectSlug}`;
-
-  const isHomeActive =
-    location.pathname === projectBasePath || location.pathname === `${projectBasePath}/`;
-
+  // Type-safe navigation items
   const navItems = [
-    { href: `${projectBasePath}/connectors`, label: "Connectors", icon: Plug },
-    { href: `${projectBasePath}/agents`, label: "Agents", icon: Bot },
-    { href: `${projectBasePath}/machines`, label: "Machines", icon: Server },
-    { href: `${projectBasePath}/repo`, label: "Repo", icon: GitBranch },
-    { href: `${projectBasePath}/access-tokens`, label: "Access tokens", icon: KeyRound },
-    { href: `${projectBasePath}/env-vars`, label: "Env vars", icon: SlidersHorizontal },
-    { href: `${projectBasePath}/settings`, label: "Settings", icon: Settings },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/connectors" as const,
+      label: "Connectors",
+      icon: Plug,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/agents" as const,
+      label: "Agents",
+      icon: Bot,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
+      label: "Machines",
+      icon: Server,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/repo" as const,
+      label: "Repo",
+      icon: GitBranch,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/access-tokens" as const,
+      label: "Access tokens",
+      icon: KeyRound,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/env-vars" as const,
+      label: "Env vars",
+      icon: SlidersHorizontal,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/settings" as const,
+      label: "Settings",
+      icon: Settings,
+    },
   ];
+
+  const isHomeActive = Boolean(
+    matchRoute({
+      to: "/orgs/$organizationSlug/projects/$projectSlug",
+      params,
+      fuzzy: false,
+    }),
+  );
 
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
         <SidebarShell
           header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
-          user={{
-            name: user.name,
-            email: user.email,
-            image: user.image,
-            role: user.role ?? undefined,
-          }}
+          user={userProps}
         >
           <SidebarGroup>
             <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
@@ -125,18 +184,18 @@ function ProjectLayout() {
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={isHomeActive}>
-                    <Link to={projectBasePath}>
+                    <Link to="/orgs/$organizationSlug/projects/$projectSlug" params={params}>
                       <Home className="h-4 w-4" />
                       <span>Home</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 {navItems.map((item) => {
-                  const isActive = location.pathname.startsWith(item.href);
+                  const isActive = Boolean(matchRoute({ to: item.to, params, fuzzy: true }));
                   return (
-                    <SidebarMenuItem key={item.href}>
+                    <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton asChild isActive={isActive}>
-                        <Link to={item.href}>
+                        <Link to={item.to} params={params}>
                           <item.icon className="h-4 w-4" />
                           <span>{item.label}</span>
                         </Link>
@@ -148,12 +207,17 @@ function ProjectLayout() {
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <OrgSidebarNav orgSlug={orgSlug} orgName={currentOrg.name} projects={projects} />
+          <OrgSidebarNav orgSlug={currentOrg.slug} orgName={currentOrg.name} projects={projects} />
         </SidebarShell>
         <SidebarInset>
-          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
-            <SidebarTrigger />
-          </header>
+          <AppHeader
+            orgName={currentOrg.name}
+            projectName={currentProject?.name}
+            organizationSlug={params.organizationSlug}
+            projectSlug={params.projectSlug}
+            organizations={orgsList}
+            projects={projects}
+          />
           <main className="flex-1 overflow-auto">
             <Outlet />
           </main>
