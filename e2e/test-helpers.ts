@@ -1,5 +1,5 @@
 // eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
-import { expect, type Page, test as base } from "@playwright/test";
+import { type Page, test as base } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
 
 const TEST_OTP = "424242";
@@ -20,50 +20,39 @@ export async function login(page: Page, email: string, baseURL?: string) {
   await page.goto(loginURL);
 
   const emailInput = page.getByTestId("email-input");
-  await expect(emailInput).toBeEnabled({ timeout: 5000 });
+  await emailInput.waitFor();
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
-  await expect(submitButton).toBeEnabled({ timeout: 5000 });
+  await submitButton.waitFor();
   await submitButton.click();
 
-  await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 20000 });
+  await page.getByText("Enter verification code").waitFor();
 
-  const otpInputs = page.locator('input[inputmode="numeric"]');
-  await otpInputs.first().click();
-  for (const char of TEST_OTP) {
-    await page.keyboard.type(char);
-  }
+  const firstOtpInput = page.locator('input[inputmode="numeric"]').first();
+  await firstOtpInput.focus();
+  await page.keyboard.type(TEST_OTP);
 
-  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15000 });
+  await page
+    .locator("h1")
+    .filter({ hasText: /Create organization|Dashboard|Projects/ })
+    .first()
+    .waitFor();
 }
 
-export async function ensureOrganization(page: Page) {
-  if (!page.url().includes("/new-organization")) {
-    return;
-  }
+export async function createOrganization(page: Page, orgName = `E2E Org ${Date.now()}`) {
+  await page.getByLabel("Organization name").fill(orgName);
+  await page.getByRole("button", { name: "Create organization" }).click();
 
-  await page.waitForSelector('input[id="organization-name"]');
-  const orgName = `E2E Org ${Date.now()}`;
-  await page.fill('input[id="organization-name"]', orgName);
-  await page.click('button:has-text("Create organization")');
-
-  await page.waitForURL(
-    (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
-    { timeout: 30000 },
-  );
+  // make sure the org switcher eventually shows up
+  await page.locator("[data-component='OrgSwitcher']", { hasText: orgName }).waitFor();
 }
 
-export async function ensureProject(page: Page) {
-  if (!page.url().includes("/projects/new")) {
-    return;
-  }
-
-  await page.waitForSelector('input[id="project-name"]');
-  const projectName = `E2E Project ${Date.now()}`;
-  await page.fill('input[id="project-name"]', projectName);
-  await page.click('button:has-text("Create project")');
-  await page.waitForURL((url) => !url.pathname.includes("/projects/new"), { timeout: 30000 });
+export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
+  await page.getByText("Add project").click();
+  await page.getByLabel("Project name").fill(projectName);
+  await page.getByRole("button", { name: "Create project" }).click();
+  await page.locator("[data-component='ProjectHomePage']", { hasText: projectName }).waitFor();
 }
 
 export function getProjectBasePath(page: Page) {
@@ -75,4 +64,8 @@ export function getOrganizationSlug(pathname: string) {
   const parts = pathname.split("/").filter(Boolean);
   const orgIndex = parts.indexOf("orgs");
   return orgIndex >= 0 ? parts[orgIndex + 1] : "";
+}
+
+export function sidebarButton(page: Page, text: string) {
+  return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
 }

@@ -1,6 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useHydrated } from "@tanstack/react-router";
 
+// dev-only page for testing the test helpers, debugging etc. Dump whatever you want in here (if you don't want it deleted, write a test protecting it)
+
 export const Route = createFileRoute("/dev")({
   component: RouteComponent,
 });

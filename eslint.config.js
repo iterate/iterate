@@ -177,6 +177,22 @@ export default defineConfig([
             "Use import { test } from './test-helpers.ts' instead. It has some opinionated conventions like adding a spinner waiter to the waitFor/click etc..",
         },
       ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.name='expect']",
+          message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='toBe'][callee][arguments.0.value=true],CallExpression[callee.property.name='toBe'][callee][arguments.0.value=false]",
+          message: `Don't use toBe(true) or toBe(false), this is an indicator of an assertion that will fail unhelpfully. Examples: use \`await expect.poll(() => realtimeMessages).toMatchObject(expect.arrayContaining([expect.stringContaining("CONNECTED")]));\` instead of \`await expect.poll(() => realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);\`.`,
+        },
+        {
+          selector: `CallExpression[callee.property.name='goto'][arguments.0] TemplateLiteral Identifier[name='baseURL']`,
+          message: `Don't use baseURL in goto, it's added as a prefix automatically. e.g. instead of \`await page.goto(\`\${baseURL}/foo/bar}\`)\`, use \`await page.goto("/foo/bar")\``,
+        },
+      ],
     },
   },
   { plugins: { unicorn: eslintPluginUnicorn } },

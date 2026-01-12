@@ -35,7 +35,7 @@ function ProjectHomePage() {
   );
 
   return (
-    <div className="p-8 max-w-4xl space-y-6">
+    <div className="p-8 max-w-4xl space-y-6" data-component="ProjectHomePage">
       <h1 className="text-2xl font-bold">{project?.name}</h1>
       <p className="text-muted-foreground">
         Welcome to your project. Use the sidebar to navigate to different sections.
