@@ -38,22 +38,3 @@ posthogProxyApp.all("/ingest/*", async (c) => {
     headers: response.headers,
   });
 });
-
-// Also proxy static assets from PostHog (for session replay)
-posthogProxyApp.all("/static/*", async (c) => {
-  const url = new URL(c.req.url);
-  const posthogUrl = `https://${POSTHOG_HOST}${url.pathname}${url.search}`;
-
-  const response = await fetch(posthogUrl, {
-    method: c.req.method,
-    headers: {
-      Host: POSTHOG_HOST,
-    },
-  });
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-});
