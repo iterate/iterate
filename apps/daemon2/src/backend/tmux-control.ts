@@ -110,10 +110,10 @@ export function hasTmuxSession(name: string): boolean {
   return success;
 }
 
-export function createTmuxSession(name: string, command?: string[]): boolean {
+export function createTmuxSession(name: string, command?: string): boolean {
   const args = ["new-session", "-d", "-s", name];
-  if (command && command.length > 0) {
-    args.push(command.join(" "));
+  if (command) {
+    args.push(command);
   }
   const { success } = runTmuxCommand(args);
   if (success) {
@@ -143,8 +143,8 @@ export function sendCtrlC(sessionName: string): boolean {
   return success;
 }
 
-export function respawnPane(sessionName: string, command: string[]): boolean {
-  const { success } = runTmuxCommand(["respawn-pane", "-k", "-t", sessionName, command.join(" ")]);
+export function respawnPane(sessionName: string, command: string): boolean {
+  const { success } = runTmuxCommand(["respawn-pane", "-k", "-t", sessionName, command]);
   return success;
 }
 

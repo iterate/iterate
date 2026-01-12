@@ -44,7 +44,7 @@ export const trpcRouter = createTRPCRouter({
       if (hasTmuxSession(input.sessionName)) {
         return { created: false };
       }
-      createTmuxSession(input.sessionName, ["sh", "-c", input.command]);
+      createTmuxSession(input.sessionName, input.command);
       return { created: true };
     }),
 
@@ -66,7 +66,11 @@ export const trpcRouter = createTRPCRouter({
         .from(schema.agents)
         .where(eq(schema.agents.slug, input.slug))
         .limit(1);
-      return result[0] ?? null;
+      const agent = result[0];
+      if (!agent || agent.archivedAt !== null) {
+        return null;
+      }
+      return agent;
     }),
 
   createAgent: publicProcedure
@@ -288,9 +292,8 @@ export const trpcRouter = createTRPCRouter({
     }),
 });
 
-function buildTmuxCommand(agentCommand: string[], workingDirectory: string): string[] {
-  const fullCommand = `cd "${workingDirectory}" && ${getCommandString(agentCommand)}`;
-  return ["sh", "-c", fullCommand];
+function buildTmuxCommand(agentCommand: string[], workingDirectory: string): string {
+  return `cd "${workingDirectory}" && ${getCommandString(agentCommand)}`;
 }
 
 export type TRPCRouter = typeof trpcRouter;

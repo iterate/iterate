@@ -1,4 +1,4 @@
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Loader2Icon } from "lucide-react";
@@ -161,9 +161,15 @@ function NewAgentForm() {
   const { data: serverInfo } = useSuspenseQuery(trpc.getServerCwd.queryOptions());
   const { cwd: defaultCwd, homeDir } = serverInfo;
 
-  const [slug, setSlug] = useState(initialName ?? generateRandomName());
+  const [slug, setSlug] = useState(initialName ?? "");
   const [harnessType, setHarnessType] = useState<AgentType>("claude-code");
   const [workingDirectory, setWorkingDirectory] = useState(defaultCwd);
+
+  useEffect(() => {
+    if (!initialName && !slug) {
+      setSlug(generateRandomName());
+    }
+  }, [initialName, slug]);
 
   const displayPath = (path: string) =>
     path.startsWith(homeDir) ? path.replace(homeDir, "~") : path;

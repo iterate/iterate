@@ -62,6 +62,30 @@ function AgentsContent() {
     }),
   );
 
+  const startAgentMutation = useMutation(
+    trpc.startAgent.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      },
+    }),
+  );
+
+  const stopAgentMutation = useMutation(
+    trpc.stopAgent.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      },
+    }),
+  );
+
+  const archiveAgentMutation = useMutation(
+    trpc.archiveAgent.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      },
+    }),
+  );
+
   return (
     <div className="h-full p-6">
       <div className="flex items-center justify-between mb-6">
@@ -132,15 +156,33 @@ function AgentsContent() {
                 <TableCell>
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     {agent.status === "running" ? (
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => stopAgentMutation.mutate({ slug: agent.slug })}
+                        disabled={stopAgentMutation.isPending}
+                      >
                         <SquareIcon className="size-4" />
                       </Button>
                     ) : (
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => startAgentMutation.mutate({ slug: agent.slug })}
+                        disabled={startAgentMutation.isPending}
+                      >
                         <PlayIcon className="size-4" />
                       </Button>
                     )}
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-destructive"
+                      onClick={() => archiveAgentMutation.mutate({ slug: agent.slug })}
+                      disabled={archiveAgentMutation.isPending}
+                    >
                       <TrashIcon className="size-4" />
                     </Button>
                   </div>
