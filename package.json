@@ -1,5 +1,6 @@
 {
   "name": "iterate-root",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --reporter-hide-prefix --parallel dev",
