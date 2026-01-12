@@ -1,31 +1,38 @@
 import { defineConfig } from "vite";
 import { devtools } from "@tanstack/devtools-vite";
-import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import { nitro } from "nitro/vite";
 
-const config = defineConfig(() => ({
+export default defineConfig({
   plugins: [
     devtools(),
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],
     }),
     tailwindcss(),
-    nitro({
-      preset: "node-server",
-      serverDir: "server",
-      output: {
-        dir: "dist",
-      },
-      features: {
-        websocket: true,
-      },
+    tanstackRouter({
+      // this plugin generates routeTree.gen.ts while in dev
+      target: "react",
+      generatedRouteTree: "./client/routeTree.gen.ts",
+      routesDirectory: "./client/routes",
+      autoCodeSplitting: true,
     }),
-    tanstackStart(),
     viteReact(),
   ],
-}));
-
-export default config;
+  build: {
+    outDir: "dist",
+  },
+  clearScreen: false,
+  server: {
+    port: 3000,
+    proxy: {
+      "/api": {
+        target: `http://localhost:3001`,
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
+});
