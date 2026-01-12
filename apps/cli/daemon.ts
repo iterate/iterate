@@ -13,18 +13,14 @@ import { FileSystem, Path } from "@effect/platform";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Storage backend type */
-export type StorageBackend = "memory" | "fs";
-
 /** Daemon configuration */
 export interface DaemonConfig {
   readonly pidFile: string;
   readonly logFile: string;
   readonly port: number;
-  readonly storage: StorageBackend;
 }
 
-/** Data directory for all event-stream files */
+/** Data directory for daemon files */
 export const DATA_DIR = ".iterate";
 
 /** Default config - files in .iterate/ */
@@ -32,7 +28,6 @@ export const defaultDaemonConfig: DaemonConfig = {
   pidFile: `${DATA_DIR}/daemon.pid`,
   logFile: `${DATA_DIR}/daemon.log`,
   port: 3000,
-  storage: "fs",
 };
 
 /** Error for daemon operations */
@@ -105,19 +100,18 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
       const logPath = resolvePath(config.logFile);
       const out = openSync(logPath, "a");
 
-      // Launch the daemon server from the daemon package
-      // The daemon server is in apps/daemon/server.ts
-      const daemonPackagePath = join(__dirname, "..", "daemon");
-      const serverScript = join(daemonPackagePath, "server.ts");
+      // Launch the standalone daemon server from the daemon2 package
+      // Run from daemon2 directory so TypeScript path aliases resolve correctly
+      const daemonPackagePath = join(__dirname, "..", "daemon2");
+      const serverScript = join("src", "standalone-server.ts");
 
       const child = spawn("npx", ["tsx", serverScript], {
         detached: true,
         stdio: ["ignore", out, out],
-        cwd,
+        cwd: daemonPackagePath,
         env: {
           ...process.env,
           PORT: String(config.port),
-          DAEMON_STORAGE: config.storage,
         },
       });
       child.unref();

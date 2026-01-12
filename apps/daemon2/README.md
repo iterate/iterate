@@ -70,16 +70,11 @@ A Hono-based HTTP server that provides real-time event streaming and agent manag
 ## Directory Structure
 
 ```
-apps/daemon/
-├── agents/pi/           # Pi SDK adapter and event types
-├── event-stream/        # Effect-based stream management
-│   ├── stream.ts        # Core stream implementation
-│   ├── stream-manager.ts # Multi-stream orchestration
-│   ├── storage.ts       # File-system persistence
-│   └── types.ts         # Branded types (StreamName, Offset, etc.)
-├── ui/                  # React UI components
-├── index.ts             # Hono app definition
-├── server.ts            # HTTP server entry point
+apps/daemon2/
+├── src/
+│   ├── backend/         # Server-side code
+│   ├── app/             # React UI components
+│   └── server.ts        # HTTP server entry point
 └── vite.config.ts       # Vite dev server config
 ```
 
