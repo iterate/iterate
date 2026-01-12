@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5f0fc0f5-d208-4a7b-bbdc-76b24ef6dffd",
+  "id": "212fc630-b6bc-434f-a178-fe9e32f0d512",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -79,6 +79,13 @@
           "notNull": false,
           "autoincrement": false,
           "default": "(unixepoch())"
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
