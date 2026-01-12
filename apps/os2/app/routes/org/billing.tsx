@@ -46,10 +46,15 @@ function BillingPage() {
   );
 
   const createCheckout = useMutation({
-    mutationFn: () =>
-      trpcClient.billing.createCheckoutSession.mutate({
+    mutationFn: () => {
+      const baseUrl = window.location.origin;
+      const billingPath = `/orgs/${params.organizationSlug}/billing`;
+      return trpcClient.billing.createCheckoutSession.mutate({
         organizationSlug: params.organizationSlug,
-      }),
+        successUrl: `${baseUrl}${billingPath}?success=true`,
+        cancelUrl: `${baseUrl}${billingPath}?canceled=true`,
+      });
+    },
     onSuccess: (data) => {
       window.location.href = data.url;
     },
@@ -79,14 +84,23 @@ function BillingPage() {
     );
   }
 
-  const hasSubscription = billingAccount?.subscriptionStatus === "active";
-  const isPastDue = billingAccount?.subscriptionStatus === "past_due";
+  const subscriptionStatus = billingAccount?.subscriptionStatus;
+  const hasActiveSubscription =
+    subscriptionStatus === "active" || subscriptionStatus === "trialing";
+  const isPastDue = subscriptionStatus === "past_due";
+  const isPaused = subscriptionStatus === "paused";
+  const isCanceled = subscriptionStatus === "canceled";
+  const isIncomplete =
+    subscriptionStatus === "incomplete" || subscriptionStatus === "incomplete_expired";
+  const isUnpaid = subscriptionStatus === "unpaid";
+  const hasAnySubscription =
+    hasActiveSubscription || isPastDue || isPaused || isCanceled || isIncomplete || isUnpaid;
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Billing</h1>
-        {hasSubscription && (
+        {hasAnySubscription && (
           <Button
             variant="outline"
             onClick={() => createPortal.mutate()}
@@ -108,28 +122,63 @@ function BillingPage() {
             <CardDescription>Your current billing plan</CardDescription>
           </CardHeader>
           <CardContent>
-            {hasSubscription ? (
+            {hasActiveSubscription ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Badge variant="default">Active</Badge>
+                  <Badge variant="default">
+                    {subscriptionStatus === "trialing" ? "Trialing" : "Active"}
+                  </Badge>
                   {billingAccount?.cancelAtPeriodEnd && (
                     <Badge variant="secondary">Cancels at period end</Badge>
                   )}
                 </div>
                 {billingAccount?.currentPeriodEnd && (
                   <p className="text-sm text-muted-foreground">
-                    Current period ends: {format(new Date(billingAccount.currentPeriodEnd), "PPP")}
+                    {subscriptionStatus === "trialing" ? "Trial ends: " : "Current period ends: "}
+                    {format(new Date(billingAccount.currentPeriodEnd), "PPP")}
                   </p>
                 )}
               </div>
-            ) : isPastDue ? (
+            ) : isPastDue || isUnpaid ? (
               <div className="space-y-4">
-                <Badge variant="destructive">Past Due</Badge>
+                <Badge variant="destructive">{isPastDue ? "Past Due" : "Unpaid"}</Badge>
                 <p className="text-sm text-muted-foreground">
-                  Your payment is past due. Please update your payment method.
+                  Your payment is {isPastDue ? "past due" : "unpaid"}. Please update your payment
+                  method.
                 </p>
                 <Button onClick={() => createPortal.mutate()} disabled={createPortal.isPending}>
                   Update Payment Method
+                </Button>
+              </div>
+            ) : isPaused ? (
+              <div className="space-y-4">
+                <Badge variant="secondary">Paused</Badge>
+                <p className="text-sm text-muted-foreground">
+                  Your subscription is paused. You can resume it from the billing portal.
+                </p>
+                <Button onClick={() => createPortal.mutate()} disabled={createPortal.isPending}>
+                  Manage Subscription
+                </Button>
+              </div>
+            ) : isCanceled ? (
+              <div className="space-y-4">
+                <Badge variant="secondary">Canceled</Badge>
+                <p className="text-sm text-muted-foreground">
+                  Your subscription has been canceled. Subscribe again to continue using
+                  iterate&apos;s AI-powered features.
+                </p>
+                <Button onClick={() => createCheckout.mutate()} disabled={createCheckout.isPending}>
+                  {createCheckout.isPending ? "Loading..." : "Subscribe Again"}
+                </Button>
+              </div>
+            ) : isIncomplete ? (
+              <div className="space-y-4">
+                <Badge variant="destructive">Incomplete</Badge>
+                <p className="text-sm text-muted-foreground">
+                  Your subscription setup is incomplete. Please complete the payment process.
+                </p>
+                <Button onClick={() => createPortal.mutate()} disabled={createPortal.isPending}>
+                  Complete Setup
                 </Button>
               </div>
             ) : (
