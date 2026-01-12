@@ -22,10 +22,10 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // webServer: {
-  //   command: "cd .. && pnpm dev", // todo: uncomment when dev script runs os and daemon
-  //   url: baseURL,
-  //   reuseExistingServer: true,
-  //   timeout: 120_000,
-  // },
+  webServer: {
+    command: "cd .. && pnpm dev2", // todo: uncomment when dev script runs os and daemon
+    url: baseURL,
+    reuseExistingServer: !process.env.CI,
+    timeout: 30_000,
+  },
 });

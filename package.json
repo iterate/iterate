@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --reporter-hide-prefix --parallel dev",
+    "dev2": "pnpm os2:dev & pnpm daemon2:dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -11,7 +12,9 @@
     "iterate": "pnpm run --silent os iterate",
     "os": "cd apps/os && pnpm",
     "os2": "cd apps/os2 && pnpm",
+    "os2:dev": "cd apps/os2 && pnpm dev",
     "daemon2": "cd apps/daemon2 && pnpm",
+    "daemon2:dev": "cd apps/daemon2 && pnpm dev",
     "e2e": "pnpm --filter @iterate-com/e2e e2e",
     "eval": "doppler run -- pnpm os eval",
     "eval:light": "doppler run -- env -u BRAINTRUST_API_KEY pnpm os eval",
@@ -75,9 +78,6 @@
     }
   },
   "lint-staged": {
-    "*.{ts,tsx,js,jsx,mjs,cjs}": [
-      "eslint --fix --max-warnings=-1"
-    ],
     "*": [
       "prettier --write --ignore-unknown"
     ]
