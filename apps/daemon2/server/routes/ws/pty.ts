@@ -10,6 +10,8 @@ const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 interface PtyConnection {
   ptyProcess: IPty;
   tmuxSessionName: string | null;
+  hasSentInitialCommand: boolean;
+  initialCommand: string | null;
 }
 
 const connections = new Map<string, PtyConnection>();
@@ -20,9 +22,10 @@ export default defineWebSocketHandler({
     const cols = parseInt(url.searchParams.get("cols") || "80");
     const rows = parseInt(url.searchParams.get("rows") || "24");
     const tmuxSessionName = url.searchParams.get("tmuxSession");
+    const initialCommand = url.searchParams.get("initialCommand");
 
     console.log(
-      `[PTY] New connection: ${cols}x${rows}${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}`,
+      `[PTY] New connection: ${cols}x${rows}${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}${initialCommand ? ` (cmd: ${initialCommand})` : ""}`,
     );
 
     let ptyProcess: IPty;
@@ -76,10 +79,23 @@ export default defineWebSocketHandler({
       return;
     }
 
-    connections.set(peer.id, { ptyProcess, tmuxSessionName });
+    const conn: PtyConnection = {
+      ptyProcess,
+      tmuxSessionName,
+      hasSentInitialCommand: false,
+      initialCommand,
+    };
+    connections.set(peer.id, conn);
 
     ptyProcess.onData((data) => {
       peer.send(data);
+
+      if (!conn.hasSentInitialCommand && conn.initialCommand) {
+        conn.hasSentInitialCommand = true;
+        setTimeout(() => {
+          ptyProcess.write(conn.initialCommand + "\n");
+        }, 100);
+      }
     });
 
     ptyProcess.onExit(({ exitCode }) => {
