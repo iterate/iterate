@@ -120,6 +120,13 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
+  if (machineRecord.type === "local-vanilla") {
+    return c.json(
+      { error: "Proxy not supported for local-vanilla machines. Use native URL instead." },
+      400,
+    );
+  }
+
   // Daytona machine handling
   if (!/^[a-zA-Z0-9-]+$/.test(externalId)) {
     logger.error("Invalid sandbox ID format", {

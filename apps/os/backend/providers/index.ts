@@ -31,7 +31,13 @@ export async function createMachineProvider(
         findAvailablePort: options.findAvailablePort,
       });
     }
-
+    case "local-vanilla": {
+      if (!import.meta.env.DEV) {
+        throw new Error("local-vanilla provider only available in development");
+      }
+      const { createLocalVanillaProvider } = await import("./local-docker.ts");
+      return createLocalVanillaProvider();
+    }
     default: {
       const _exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${_exhaustiveCheck}`);

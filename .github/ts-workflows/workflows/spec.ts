@@ -1,4 +1,4 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
@@ -40,11 +40,10 @@ export default workflow({
         {
           name: "upload logs",
           if: "failure()",
-          run: "ls -A ./spec",
-          // uses("actions/upload-artifact@v4", {
-          //   name: "spec-logs",
-          //   path: "spec/ignoreme",
-          // }),
+          ...uses("actions/upload-artifact@v4", {
+            name: "spec-results",
+            path: "test-results",
+          }),
         },
       ],
     },
