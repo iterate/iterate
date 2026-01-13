@@ -34,6 +34,35 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - No `useEffect` for data fetching — use `useSuspenseQuery`
 - No inline error/success messages — use toast notifications
 
+## Frontend react guide
+
+Mobile-first is mandatory. Design for 375px, expand to desktop.
+
+**Layout:**
+
+- No page titles (h1) — breadcrumbs provide context
+- Page containers: `p-4 md:p-8`
+- Main content max-width: `max-w-md` (phone-width, set in layouts)
+- Use `HeaderActions` for action buttons in header
+- Use `CenteredLayout` for standalone pages (login, settings)
+
+**Data lists:**
+
+- Use cards, not tables: `space-y-3` with card items
+- Card: `flex items-start justify-between gap-4 p-4 border rounded-lg bg-card`
+- Content: `min-w-0 flex-1` to enable truncation
+- Status: `Circle` icon with fill color, not badges
+- Meta: text with `·` separators, not badges
+
+**Components:**
+
+- Prefer `Sheet` over `Dialog` — slides in from side, mobile-friendly
+- Use `toast` from sonner, not inline messages
+- Use `EmptyState` for empty states
+- Use `Field` components for form accessibility
+
+Canonical example: `apps/os/app/routes/org/project/machines.tsx`
+
 ## TypeScript (repo-wide)
 
 - Strict TS; infer types where possible
@@ -63,6 +92,5 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - Frontend: `apps/os/app/AGENTS.md`
 - Backend: `apps/os/backend/AGENTS.md`
 - E2E: `e2e/AGENTS.md`
-- Design system: `docs/design-system.md`
 - Vitest patterns: `docs/vitest-patterns.md`
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`

@@ -4,6 +4,7 @@ import { Box, Plus } from "lucide-react";
 import { trpc } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
+import { HeaderActions } from "../../components/header-actions.tsx";
 import {
   Item,
   ItemContent,
@@ -29,19 +30,18 @@ function OrgHomePage() {
   const projects = org?.projects ?? [];
 
   return (
-    <div className="p-8 max-w-4xl space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Projects</h1>
-        <Button asChild>
+    <div className="p-4 md:p-8 space-y-6">
+      <HeaderActions>
+        <Button asChild size="sm">
           <Link
             to="/orgs/$organizationSlug/new-project"
             params={{ organizationSlug: params.organizationSlug }}
           >
             <Plus className="h-4 w-4" />
-            New project
+            <span className="sr-only">New project</span>
           </Link>
         </Button>
-      </div>
+      </HeaderActions>
 
       {projects.length === 0 ? (
         <EmptyState

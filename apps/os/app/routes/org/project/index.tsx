@@ -27,7 +27,7 @@ function ProjectHomePage() {
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/",
   });
 
-  const { data: project } = useSuspenseQuery(
+  const { data: _project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
@@ -35,8 +35,7 @@ function ProjectHomePage() {
   );
 
   return (
-    <div className="p-8 max-w-4xl space-y-6" data-component="ProjectHomePage">
-      <h1 className="text-2xl font-bold">{project?.name}</h1>
+    <div className="p-4 md:p-8 space-y-6" data-component="ProjectHomePage">
       <p className="text-muted-foreground">
         Welcome to your project. Use the sidebar to navigate to different sections.
       </p>

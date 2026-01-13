@@ -127,6 +127,12 @@
   caret-color: transparent !important;
 }
 
+/* Ensure ghostty terminal elements fill their container */
+[data-testid="terminal-container"] > div {
+  width: 100% !important;
+  height: 100% !important;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -134,4 +140,21 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Router progress animation */
+@keyframes progress {
+  0% {
+    width: 0;
+  }
+  50% {
+    width: 70%;
+  }
+  100% {
+    width: 100%;
+  }
+}
+
+.animate-progress {
+  animation: progress 1s ease-in-out infinite;
 }
