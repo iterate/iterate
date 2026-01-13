@@ -70,7 +70,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs,cjs}": [
-      "eslint --fix --max-warnings=-1"
+      "eslint --fix --max-warnings=0"
     ],
     "*": [
       "prettier --write --ignore-unknown"
