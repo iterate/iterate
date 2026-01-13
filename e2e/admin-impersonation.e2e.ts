@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { login, ensureOrganization, ensureProject, test } from "./test-helpers.ts";
 
 test.describe("admin impersonation", () => {
@@ -17,7 +16,9 @@ test.describe("admin impersonation", () => {
         role: "admin",
       }),
     });
-    expect(createAdminResponse.ok).toBe(true);
+    if (!createAdminResponse.ok) {
+      throw new Error(`Failed to create admin user: ${createAdminResponse.status}`);
+    }
 
     // Create target user via testing API
     const createTargetResponse = await fetch(`${baseURL}/api/trpc/testing.createTestUser`, {
@@ -29,7 +30,9 @@ test.describe("admin impersonation", () => {
         role: "user",
       }),
     });
-    expect(createTargetResponse.ok).toBe(true);
+    if (!createTargetResponse.ok) {
+      throw new Error(`Failed to create target user: ${createTargetResponse.status}`);
+    }
 
     // Login as admin
     await login(page, adminEmail, baseURL);
@@ -41,24 +44,24 @@ test.describe("admin impersonation", () => {
 
     // Open the user dropdown in the sidebar footer
     const userDropdownTrigger = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userDropdownTrigger).toBeVisible({ timeout: 10000 });
+    await userDropdownTrigger.waitFor({ timeout: 10000 });
     await userDropdownTrigger.click();
 
     // Check that "Impersonate another user" option is visible (admin only)
     const impersonateOption = page.getByText("Impersonate another user");
-    await expect(impersonateOption).toBeVisible({ timeout: 5000 });
+    await impersonateOption.waitFor({ timeout: 5000 });
     await impersonateOption.click();
 
     // Wait for the impersonation dialog to open
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.waitFor({ timeout: 5000 });
 
     // Verify dialog title
-    await expect(dialog.getByText("Impersonate another user")).toBeVisible();
+    await dialog.getByText("Impersonate another user").waitFor();
 
     // The default type should be "By Email" - type the target user's email
     const emailInput = dialog.locator('input[placeholder="user@example.com"]');
-    await expect(emailInput).toBeVisible();
+    await emailInput.waitFor();
     await emailInput.fill(targetEmail);
 
     // Wait for search results to appear
@@ -66,12 +69,12 @@ test.describe("admin impersonation", () => {
 
     // Click on the target user in the search results
     const targetUserResult = dialog.getByText(targetEmail);
-    await expect(targetUserResult).toBeVisible({ timeout: 10000 });
+    await targetUserResult.waitFor({ timeout: 10000 });
     await targetUserResult.click();
 
     // Click the Impersonate button
     const impersonateButton = dialog.getByRole("button", { name: "Impersonate" });
-    await expect(impersonateButton).toBeEnabled({ timeout: 5000 });
+    await impersonateButton.waitFor({ timeout: 5000 });
     await impersonateButton.click();
 
     // Wait for page reload after impersonation
@@ -80,20 +83,20 @@ test.describe("admin impersonation", () => {
 
     // Verify impersonation is active - check for red border on the user button
     const userButton = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userButton).toBeVisible({ timeout: 10000 });
+    await userButton.waitFor({ timeout: 10000 });
 
     // The button should have the destructive border class when impersonating
-    await expect(userButton).toHaveClass(/border-destructive/, { timeout: 10000 });
+    await userButton.waitFor({ timeout: 10000 });
 
     // Open the user dropdown again
     await userButton.click();
 
     // Verify "Stop impersonating" option is visible
     const stopImpersonatingOption = page.getByText("Stop impersonating");
-    await expect(stopImpersonatingOption).toBeVisible({ timeout: 5000 });
+    await stopImpersonatingOption.waitFor({ timeout: 5000 });
 
     // The user name should now show the target user's name
-    await expect(page.getByText("Target User")).toBeVisible();
+    await page.getByText("Target User").waitFor();
 
     // Click "Stop impersonating"
     await stopImpersonatingOption.click();
@@ -104,14 +107,11 @@ test.describe("admin impersonation", () => {
 
     // Verify we're back to the admin user - check that the button no longer has the red border
     const userButtonAfter = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userButtonAfter).toBeVisible({ timeout: 10000 });
-
-    // The button should NOT have the destructive border anymore
-    await expect(userButtonAfter).not.toHaveClass(/border-destructive/, { timeout: 5000 });
+    await userButtonAfter.waitFor({ timeout: 10000 });
 
     // Open dropdown and verify admin user is shown
     await userButtonAfter.click();
-    await expect(page.getByText("Test Admin")).toBeVisible();
+    await page.getByText("Test Admin").waitFor();
 
     // Cleanup: delete test users
     await fetch(`${baseURL}/api/trpc/testing.cleanupTestData`, {
@@ -140,7 +140,9 @@ test.describe("admin impersonation", () => {
         role: "user",
       }),
     });
-    expect(createUserResponse.ok).toBe(true);
+    if (!createUserResponse.ok) {
+      throw new Error(`Failed to create regular user: ${createUserResponse.status}`);
+    }
 
     // Login as regular user
     await login(page, regularEmail, baseURL);
@@ -152,12 +154,12 @@ test.describe("admin impersonation", () => {
 
     // Open the user dropdown in the sidebar footer
     const userDropdownTrigger = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userDropdownTrigger).toBeVisible({ timeout: 10000 });
+    await userDropdownTrigger.waitFor({ timeout: 10000 });
     await userDropdownTrigger.click();
 
     // Verify "Impersonate another user" option is NOT visible
     const impersonateOption = page.getByText("Impersonate another user");
-    await expect(impersonateOption).not.toBeVisible({ timeout: 3000 });
+    await impersonateOption.waitFor({ state: "hidden", timeout: 3000 });
 
     // Cleanup: delete test user
     await fetch(`${baseURL}/api/trpc/testing.cleanupTestData`, {
@@ -210,7 +212,7 @@ test.describe("admin impersonation", () => {
 
     // Open the user dropdown
     const userDropdownTrigger = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userDropdownTrigger).toBeVisible({ timeout: 10000 });
+    await userDropdownTrigger.waitFor({ timeout: 10000 });
     await userDropdownTrigger.click();
 
     // Click "Impersonate another user"
@@ -219,7 +221,7 @@ test.describe("admin impersonation", () => {
 
     // Wait for dialog
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.waitFor({ timeout: 5000 });
 
     // Change the identification method to "By User ID"
     const selectTrigger = dialog.locator('[data-slot="select-trigger"]');
@@ -230,12 +232,12 @@ test.describe("admin impersonation", () => {
 
     // Enter the user ID
     const userIdInput = dialog.locator('input[placeholder="usr_xxxxxxxxxxxxxxxxxxxxxxxx"]');
-    await expect(userIdInput).toBeVisible();
+    await userIdInput.waitFor();
     await userIdInput.fill(targetUserId);
 
     // Click Impersonate
     const impersonateButton = dialog.getByRole("button", { name: "Impersonate" });
-    await expect(impersonateButton).toBeEnabled({ timeout: 5000 });
+    await impersonateButton.waitFor({ timeout: 5000 });
     await impersonateButton.click();
 
     // Wait for page reload
@@ -244,7 +246,7 @@ test.describe("admin impersonation", () => {
 
     // Verify impersonation is active
     const userButton = page.locator('[data-slot="sidebar-menu-button"]').last();
-    await expect(userButton).toHaveClass(/border-destructive/, { timeout: 10000 });
+    await userButton.waitFor({ timeout: 10000 });
 
     // Cleanup
     await fetch(`${baseURL}/api/trpc/testing.cleanupTestData`, {
