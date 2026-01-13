@@ -1,42 +1,38 @@
-import { expect } from "@playwright/test";
 import {
   login,
-  ensureOrganization,
-  ensureProject,
+  createOrganization,
+  createProject,
   getProjectBasePath,
   getOrganizationSlug,
   test,
 } from "./test-helpers.ts";
 
 test.describe("shell navigation", () => {
-  test("connectors and team pages render", async ({ page, baseURL }) => {
-    const testEmail = `nav-${Date.now()}+test@example.com`;
-    await login(page, testEmail, baseURL);
-    await ensureOrganization(page);
-    await ensureProject(page);
+  test("connectors and team pages render", async ({ page }) => {
+    const testEmail = `nav-${Date.now()}+test@nustom.com`;
+    await login(page, testEmail);
+
+    await createOrganization(page);
+    await createProject(page);
 
     const basePath = getProjectBasePath(page);
 
-    await page.goto(`${baseURL}${basePath}/connectors`);
-    await page.waitForSelector('text="Project connections"');
-    await page.waitForSelector('text="Your connections"');
-    expect(await page.isVisible('text="Project connections"')).toBe(true);
-    expect(await page.isVisible('text="Your connections"')).toBe(true);
+    await page.goto(`${basePath}/connectors`);
+    await page.getByText("Project connections").waitFor();
+    await page.getByText("Your connections").waitFor();
 
     const orgSlug = getOrganizationSlug(basePath);
-    await page.goto(`${baseURL}/orgs/${orgSlug}/team`);
-    await page.waitForSelector('input[id="member-email"]');
-    expect(await page.isVisible('input[id="member-email"]')).toBe(true);
+    await page.goto(`/orgs/${orgSlug}/team`);
+    await page.getByLabel("Email").waitFor();
   });
 
-  test("user settings page is reachable", async ({ page, baseURL }) => {
-    const testEmail = `settings-${Date.now()}+test@example.com`;
-    await login(page, testEmail, baseURL);
-    await ensureOrganization(page);
-    await ensureProject(page);
+  test("user settings page is reachable", async ({ page }) => {
+    const testEmail = `settings-${Date.now()}+test@nustom.com`;
+    await login(page, testEmail);
+    await createOrganization(page);
+    await createProject(page);
 
-    await page.goto(`${baseURL}/user/settings`);
-    await page.waitForSelector('input[id="user-name"]');
-    expect(await page.isVisible('input[id="user-name"]')).toBe(true);
+    await page.goto("/user/settings");
+    await page.getByLabel("Name").waitFor();
   });
 });

@@ -3,6 +3,7 @@ import { Locator, type Page } from "@playwright/test";
 
 export namespace spinnerWaiter {
   export type Settings = {
+    spinnerSelector: string;
     spinnerTimeout: number;
     disabled: boolean;
     log: (message: string) => void;
@@ -11,7 +12,12 @@ export namespace spinnerWaiter {
 
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
-const defaults: spinnerWaiter.Settings = { spinnerTimeout: 30_000, disabled: false, log: () => {} };
+const defaults: spinnerWaiter.Settings = {
+  spinnerSelector: `[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  spinnerTimeout: 30_000,
+  disabled: false,
+  log: () => {},
+};
 
 export const spinnerWaiter = { setup, settings, defaults };
 
@@ -34,7 +40,7 @@ const overrideableMethods = [
 ] satisfies (keyof Locator)[];
 type OverrideableMethod = (typeof overrideableMethods)[number];
 
-type LocatorWithOriginal = Locator & {
+export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
 };
 
@@ -64,20 +70,20 @@ function setup(page: Page) {
           });
         }
 
-        const spinnerLocator = this.page().locator(
-          `[data-spinner],[data-spinner='true'],:text-matches("loading\\.\\.\\.$", "i")`,
-        ) as LocatorWithOriginal;
+        const spinnerLocator = this.page().locator(settings.spinnerSelector) as LocatorWithOriginal;
         const union = this.or(spinnerLocator) as LocatorWithOriginal;
 
         settings.log(`waiting for union ${union}`);
 
         await union.waitFor_original().catch((e: Error) => {
-          adjustError(e, [
-            `If this is a slow operation, update the product code to add a spinner while it's running.`,
-            `This will improve the user experience and buy you more time for this assertion.`,
-            `To add a spinner, show any UI element matching this locator:`,
-            `  ${spinnerLocator}`,
-          ]);
+          const resolvedToTooMany = `${e}`.match(/resolved to \d+ elements/); // playwright throws when you match too many elements. this isn't spinner related.
+          if (!resolvedToTooMany)
+            adjustError(e, [
+              `If this is a slow operation, update the product code to add a spinner while it's running.`,
+              `This will improve the user experience and buy you more time for this assertion.`,
+              `To add a spinner, show any UI element matching this locator:`,
+              `  ${spinnerLocator}`,
+            ]);
           throw e;
         });
 
