@@ -120,6 +120,7 @@ export function createTmuxSession(name: string, command?: string): boolean {
     runTmuxCommand(["set-option", "-t", name, "history-limit", String(DEFAULT_HISTORY_LIMIT)]);
     runTmuxCommand(["set-option", "-t", name, "status", "off"]);
     runTmuxCommand(["set-option", "-t", name, "mouse", "on"]);
+    runTmuxCommand(["set-option", "-t", name, "remain-on-exit", "on"]);
   }
   return success;
 }

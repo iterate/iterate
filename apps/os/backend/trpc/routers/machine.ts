@@ -9,14 +9,15 @@ import { decrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
-import { dockerApi } from "../../providers/local-docker.ts";
 
 interface DockerContainer {
   Ports?: Array<{ PublicPort?: number }>;
 }
 
 // Helper to find an available port for local-docker machines by querying Docker directly
+// Uses dynamic import to avoid bundling local-docker module in production
 async function findAvailablePort(): Promise<number> {
+  const { dockerApi } = await import("../../providers/local-docker.ts");
   const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
 
   const usedPorts = new Set<number>();
@@ -52,7 +53,7 @@ async function getProviderForMachine(
     });
   }
 
-  const provider = createMachineProvider(machine.type, cloudflareEnv, {
+  const provider = await createMachineProvider(machine.type, cloudflareEnv, {
     findAvailablePort,
   });
 
@@ -118,7 +119,7 @@ export const machineRouter = router({
       const machineId = typeid("mach").toString();
 
       // Create provider for the specified type
-      const provider = createMachineProvider(input.type, ctx.env, {
+      const provider = await createMachineProvider(input.type, ctx.env, {
         findAvailablePort,
       });
 
@@ -152,6 +153,10 @@ export const machineRouter = router({
           envVars: {
             ...envVars,
             ...githubEnvVars,
+            // In dev, use the current git branch for Daytona sandboxes
+            ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
+              ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
+              : {}),
           },
         })
         .catch((err) => {

@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { CenteredLayout } from "../../components/centered-layout.tsx";
 import {
   Field,
   FieldDescription,
@@ -27,11 +28,11 @@ export const Route = createFileRoute("/_auth/user/settings")({
 
 function UserSettingsRoute() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/50">
+    <CenteredLayout>
       <Suspense fallback={<div className="text-muted-foreground">Loading...</div>}>
         <UserSettingsPage />
       </Suspense>
-    </div>
+    </CenteredLayout>
   );
 }
 

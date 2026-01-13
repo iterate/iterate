@@ -7,6 +7,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Card } from "../../../components/ui/card.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
+import { HeaderActions } from "../../../components/header-actions.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -145,75 +146,66 @@ function ProjectRepoPage() {
 
   if (!githubConnection.connected) {
     return (
-      <div className="p-8">
-        <h1 className="text-2xl font-bold">Repositories</h1>
-        <div className="mt-6">
-          <EmptyState
-            icon={<GitBranch className="h-12 w-12" />}
-            title="No GitHub connected"
-            description="Connect your GitHub account to link repositories."
-            action={
-              <Button
-                onClick={() => startGithubInstall.mutate()}
-                disabled={startGithubInstall.isPending}
-              >
-                {startGithubInstall.isPending ? (
-                  <Spinner className="mr-2" />
-                ) : (
-                  <Github className="mr-2 h-4 w-4" />
-                )}
-                Connect GitHub
-              </Button>
-            }
-          />
-        </div>
+      <div className="p-4 md:p-8">
+        <EmptyState
+          icon={<GitBranch className="h-12 w-12" />}
+          title="No GitHub connected"
+          description="Connect your GitHub account to link repositories."
+          action={
+            <Button
+              onClick={() => startGithubInstall.mutate()}
+              disabled={startGithubInstall.isPending}
+            >
+              {startGithubInstall.isPending ? (
+                <Spinner className="mr-2" />
+              ) : (
+                <Github className="mr-2 h-4 w-4" />
+              )}
+              Connect GitHub
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   if (isAddingRepo) {
     return (
-      <div className="p-8 max-w-2xl">
-        <h1 className="text-2xl font-bold">Add Repository</h1>
-        <div className="mt-6">
-          <Suspense fallback={<RepoPickerSkeleton />}>
-            <RepoPicker
-              params={params}
-              existingRepos={repos}
-              onCancel={() => setIsAddingRepo(false)}
-            />
-          </Suspense>
-        </div>
+      <div className="p-4 md:p-8">
+        <Suspense fallback={<RepoPickerSkeleton />}>
+          <RepoPicker
+            params={params}
+            existingRepos={repos}
+            onCancel={() => setIsAddingRepo(false)}
+          />
+        </Suspense>
       </div>
     );
   }
 
   return (
-    <div className="p-8 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Repositories</h1>
-        <Button variant="outline" onClick={() => setIsAddingRepo(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Repository
+    <div className="p-4 md:p-8">
+      <HeaderActions>
+        <Button variant="outline" size="sm" onClick={() => setIsAddingRepo(true)}>
+          <Plus className="h-4 w-4" />
+          <span className="sr-only">Add Repository</span>
         </Button>
-      </div>
+      </HeaderActions>
 
       {repos.length === 0 ? (
-        <div className="mt-6">
-          <EmptyState
-            icon={<GitBranch className="h-12 w-12" />}
-            title="No repositories linked"
-            description="Add a repository to get started."
-            action={
-              <Button onClick={() => setIsAddingRepo(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Repository
-              </Button>
-            }
-          />
-        </div>
+        <EmptyState
+          icon={<GitBranch className="h-12 w-12" />}
+          title="No repositories linked"
+          description="Add a repository to get started."
+          action={
+            <Button onClick={() => setIsAddingRepo(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Repository
+            </Button>
+          }
+        />
       ) : (
-        <div className="mt-6 space-y-4">
+        <div className="space-y-4">
           {repos.map((repo) => (
             <Card key={repo.id} className="p-6">
               <div className="flex items-start gap-4">
