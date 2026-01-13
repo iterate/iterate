@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const ITERATE_REPO = join(homedir(), "src", "github.com", "iterate", "iterate");
 const S6_DAEMONS_PATH = join(ITERATE_REPO, "s6-daemons");
-const DAEMON2_PATH = join(ITERATE_REPO, "apps", "daemon2");
+const DAEMON_PATH = join(ITERATE_REPO, "apps", "daemon");
 
 // ============================================
 // Coding tools installation
@@ -95,17 +95,17 @@ const setupIterateRepo = () => {
 };
 
 // ============================================
-// Daemon2 frontend build
+// Daemon frontend build
 // ============================================
 
-const buildDaemon2 = () => {
+const buildDaemon = () => {
   console.log("");
   console.log("========================================");
-  console.log("Building daemon2 frontend");
+  console.log("Building daemon frontend");
   console.log("========================================");
   console.log("");
 
-  execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
+  execSync("npx vite build", { cwd: DAEMON_PATH, stdio: "inherit" });
 
   console.log("");
 };
@@ -169,7 +169,7 @@ const main = () => {
 
   installCodingTools();
   setupIterateRepo();
-  buildDaemon2();
+  buildDaemon();
   cleanupS6RuntimeState();
 
   const svscan = startS6Svscan();

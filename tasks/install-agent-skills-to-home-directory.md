@@ -52,7 +52,7 @@ Instructions here...
 
 ## Implementation
 
-From `apps/daemon2/entry.ts` or daemon bootstrap endpoint:
+From `apps/daemon/entry.ts` or daemon bootstrap endpoint:
 
 1. Read skills from customer repo (e.g., `.claude/skills/` or estate's skills directory)
 2. Copy to `~/.claude/skills/` (covers Claude Code, OpenCode, Copilot)

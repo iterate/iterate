@@ -66,7 +66,7 @@ Run scripts get `$ITERATE_REPO`:
 ```bash
 #!/bin/sh
 exec 2>&1
-cd "$ITERATE_REPO/apps/daemon2"
+cd "$ITERATE_REPO/apps/daemon"
 "$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3000/api/health &
 exec env HOSTNAME=0.0.0.0 PORT=3000 tsx server.ts
 ```

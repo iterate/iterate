@@ -5,7 +5,7 @@ size: large
 tags:
   - sandbox
   - ui
-  - daemon2
+  - daemon
 dependsOn:
   - tasks/daemon-supervision.md
 ---
@@ -32,7 +32,7 @@ interface S6DaemonMetadata {
 
 ### 1. tRPC Procedures
 
-Add new tRPC procedures in daemon2 to interact with s6:
+Add new tRPC procedures in daemon to interact with s6:
 
 #### `s6.listDaemons`
 
@@ -109,7 +109,7 @@ The sandbox ID should be available from environment or context.
 
 ### Executing s6 Commands
 
-The daemon2 server runs inside the same container as s6. Use Node.js `child_process` to execute s6 commands:
+The daemon server runs inside the same container as s6. Use Node.js `child_process` to execute s6 commands:
 
 ```typescript
 import { execSync } from "node:child_process";
@@ -145,13 +145,13 @@ Recommendation: Start with polling (every 2-5 seconds), add subscriptions later 
 
 ## Files to Modify/Create
 
-| File                                              | Action                         |
-| ------------------------------------------------- | ------------------------------ |
-| `apps/daemon2/src/integrations/trpc/s6-router.ts` | Create - s6 tRPC procedures    |
-| `apps/daemon2/src/integrations/trpc/router.ts`    | Modify - add s6 router         |
-| `apps/daemon2/src/routes/daemons.tsx`             | Create - daemons page          |
-| `apps/daemon2/src/components/daemon-list.tsx`     | Create - daemon list component |
-| `apps/daemon2/src/components/log-viewer.tsx`      | Create - log viewer component  |
+| File                                             | Action                         |
+| ------------------------------------------------ | ------------------------------ |
+| `apps/daemon/src/integrations/trpc/s6-router.ts` | Create - s6 tRPC procedures    |
+| `apps/daemon/src/integrations/trpc/router.ts`    | Modify - add s6 router         |
+| `apps/daemon/src/routes/daemons.tsx`             | Create - daemons page          |
+| `apps/daemon/src/components/daemon-list.tsx`     | Create - daemon list component |
+| `apps/daemon/src/components/log-viewer.tsx`      | Create - log viewer component  |
 
 ## Verification
 

@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import type { TRPCRouter } from "../../daemon2/server/trpc/router.ts";
+import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
 import { dockerApi, DOCKER_API_URL } from "../backend/providers/local-docker.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -455,7 +455,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
 
     // 3. tRPC endpoints - the main API surface
     const serverCwd = await trpc.getServerCwd.query();
-    expect(serverCwd.cwd).toBe("/iterate-repo/apps/daemon2");
+    expect(serverCwd.cwd).toBe("/iterate-repo/apps/daemon");
     expect(serverCwd.homeDir).toBe("/home/node");
 
     // 4. Static assets with cache-busted filenames
