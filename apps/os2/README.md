@@ -21,15 +21,17 @@ To verify it's working:
 curl http://127.0.0.1:2375/version
 ```
 
-### Automatic Image Building
+### Local Docker Snapshots
 
-When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built from `sandbox/Dockerfile` if it doesn't exist.
+When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built from the repo root using `apps/os2/sandbox/Dockerfile` if it doesn't exist.
 
-To manually rebuild the image:
+To manually rebuild the local Docker snapshot from the repo root or `apps/os2`:
 
 ```bash
-docker build -t iterate-sandbox:local ./sandbox
+pnpm snapshot:local-docker
 ```
+
+New local-docker machines always use the latest `iterate-sandbox:local` image tag.
 
 ### Creating a Local Machine
 
@@ -43,53 +45,73 @@ The os2 app uses Daytona sandboxes for machine execution. Snapshots are Docker i
 
 ### Naming Convention
 
-Snapshots follow the naming pattern: `<prefix><timestamp>`
+Snapshots follow the naming pattern: `<alchemy-stage>--<timestamp>`
 
-- **Prefix**: Environment-specific, ending with `--` (double hyphen delimiter)
+- **Alchemy stage name**: Matches the alchemy stage name (e.g., `dev-jonas`, `stg`, `prd`)
 - **Timestamp**: UTC time in `YYYYMMDD-HHMMSS` format
 
 Examples:
 
-- `iterate-sandbox-dev--20260111-193045`
-- `iterate-sandbox-stg--20260111-193045`
-- `iterate-sandbox-prd--20260111-193045`
+- `dev-jonas--20260111-193045` (dev, user-specific)
+- `stg--20260111-193045`
+- `prd--20260111-193045`
 
 ### Environment Configuration
 
-The `DAYTONA_SNAPSHOT_PREFIX` environment variable is configured in Doppler for each environment:
+The snapshot prefix is derived from the stage, which is constructed from environment variables:
 
-| Environment | Doppler Config | Prefix                  |
-| ----------- | -------------- | ----------------------- |
-| Development | `dev`          | `iterate-sandbox-dev--` |
-| Staging     | `stg`          | `iterate-sandbox-stg--` |
-| Production  | `prd`          | `iterate-sandbox-prd--` |
+| Environment | Doppler Config | Stage Construction         | Example Prefix |
+| ----------- | -------------- | -------------------------- | -------------- |
+| Development | `dev`          | `dev-${ITERATE_USER}`      | `dev-jonas--`  |
+| Staging     | `stg`          | `APP_STAGE` (set to `stg`) | `stg--`        |
+| Production  | `prd`          | `APP_STAGE` (set to `prd`) | `prd--`        |
+
+For local development, each developer gets their own namespace based on `ITERATE_USER`.
 
 ### Creating a New Snapshot
 
-To create a new snapshot, run from the repo root with the appropriate Doppler config:
+To create a new Daytona snapshot from `apps/os2`:
+
+```bash
+pnpm snapshot:daytona
+```
+
+Or from the repo root using the filter flag:
+
+```bash
+pnpm --filter os2 snapshot:daytona
+```
+
+To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
-doppler run --config dev -- tsx apps/os2/sandbox/snapshot.ts
+doppler run --config dev -- tsx apps/os2/sandbox/daytona-snapshot.ts
 
 # For staging snapshots
-doppler run --config stg -- tsx apps/os2/sandbox/snapshot.ts
+doppler run --config stg -- tsx apps/os2/sandbox/daytona-snapshot.ts
 
 # For production snapshots
-doppler run --config prd -- tsx apps/os2/sandbox/snapshot.ts
+doppler run --config prd -- tsx apps/os2/sandbox/daytona-snapshot.ts
 ```
 
 Or from the `apps/os2` directory:
 
 ```bash
-doppler run --config prd -- tsx sandbox/snapshot.ts
+pnpm snapshot:daytona
+```
+
+If you want to force a specific Doppler config while staying in `apps/os2`:
+
+```bash
+doppler run --config stg -- pnpm snapshot:daytona
 ```
 
 This will:
 
-1. Read the prefix from `DAYTONA_SNAPSHOT_PREFIX`
+1. Construct the stage from `ITERATE_USER` (dev) or `APP_STAGE` (stg/prd)
 2. Generate a timestamp-based snapshot name
-3. Build the Docker image from `sandbox/Dockerfile`
+3. Build the Docker image from the repo root using `apps/os2/sandbox/Dockerfile`
 4. Push the snapshot to Daytona
 
 ### Dynamic Snapshot Resolution
@@ -98,13 +120,13 @@ When a machine is created, the app automatically fetches the latest snapshot mat
 
 1. Calling the Daytona REST API with `name=<prefix>`, `sort=createdTime`, `order=desc`
 2. Using the first (most recent) matching snapshot
-3. Caching the result for 5 minutes to reduce API calls
+3. Caching the result for 5 minutes to reduce API calls (disabled for dev prefixes)
 
-This means new snapshots are automatically picked up within 5 minutes of creation, without requiring code changes or redeployment.
+This means new snapshots are automatically picked up quickly in dev and within 5 minutes in staging/production, without requiring code changes or redeployment.
 
 ### Snapshot Contents
 
-The snapshot (`sandbox/Dockerfile`) includes:
+The snapshot (`apps/os2/sandbox/Dockerfile`) includes:
 
 - Node.js 24
 - pnpm 10, tsx 4
@@ -113,7 +135,9 @@ The snapshot (`sandbox/Dockerfile`) includes:
 - OpenCode CLI
 - Git (configured for iterate-bot)
 
-The entry point (`sandbox/entry.ts`) clones the iterate repository and starts the daemon server on port 3000.
+The entry point (`apps/os2/sandbox/entry.ts`) runs `pnpm install` and starts the daemon server on port 3000.
+
+For detailed documentation on the s6 process supervision setup, see [`apps/os2/sandbox/README.md`](./sandbox/README.md).
 
 ---
 

@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "build": "doppler run -- vite build",
-    "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${USER}}\"",
-    "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
+    "deploy": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-dev-$ITERATE_USER}\"'",
+    "dev": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER'",
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "vitest",
@@ -14,6 +14,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
+    "snapshot:daytona": "doppler run -- tsx sandbox/daytona-snapshot.ts",
+    "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {

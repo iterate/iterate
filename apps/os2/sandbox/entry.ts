@@ -1,159 +1,187 @@
-import { spawn, execSync, type ExecSyncOptions } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
+import { join } from "node:path";
 
-interface RepoConfig {
-  owner: string;
-  name: string;
-  defaultBranch: string;
-}
+const ITERATE_REPO = join(homedir(), "src", "github.com", "iterate", "iterate");
+const S6_DAEMONS_PATH = join(ITERATE_REPO, "s6-daemons");
+const DAEMON2_PATH = join(ITERATE_REPO, "apps", "daemon2");
 
-const SRC_BASE = `${homedir()}/src/github.com`;
-const ITERATE_REPO_OWNER = "iterate";
-const ITERATE_REPO_NAME = "iterate";
-const ITERATE_REPO_PATH = `${SRC_BASE}/${ITERATE_REPO_OWNER}/${ITERATE_REPO_NAME}`;
-const ITERATE_REPO_URL = `https://github.com/${ITERATE_REPO_OWNER}/${ITERATE_REPO_NAME}.git`;
-const DAEMON_PATH = `${ITERATE_REPO_PATH}/apps/daemon2`;
+// ============================================
+// Coding tools installation
+// ============================================
 
-const getRepoPath = (owner: string, name: string) => `${SRC_BASE}/${owner}/${name}`;
+const installCodingTools = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Installing coding tools");
+  console.log("========================================");
 
-const getGitEnvWithToken = (owners: string[]): ExecSyncOptions["env"] => {
-  const token = process.env.GITHUB_ACCESS_TOKEN;
-  if (!token || owners.length === 0) return process.env;
+  // pi-coding-agent
+  console.log("");
+  console.log("--- pi-coding-agent ---");
+  try {
+    execSync("which pi", { stdio: "pipe" });
+    console.log("Already installed");
+  } catch {
+    console.log("Installing...");
+    execSync("npm install -g @mariozechner/pi-coding-agent@0.44.0", { stdio: "inherit" });
+  }
 
-  const uniqueOwners = [...new Set(owners)];
-  const gitConfig: Record<string, string> = {
-    ...process.env,
-    GIT_CONFIG_COUNT: uniqueOwners.length.toString(),
-  };
+  // opencode
+  console.log("");
+  console.log("--- opencode ---");
+  try {
+    execSync("which opencode", { stdio: "pipe" });
+    console.log("Already installed");
+  } catch {
+    console.log("Installing...");
+    execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit" });
+  }
 
-  uniqueOwners.forEach((owner, index) => {
-    gitConfig[`GIT_CONFIG_KEY_${index}`] =
-      `url.https://x-access-token:${token}@github.com/${owner}/.insteadOf`;
-    gitConfig[`GIT_CONFIG_VALUE_${index}`] = `https://github.com/${owner}/`;
+  // Claude Code
+  console.log("");
+  console.log("--- Claude Code ---");
+  try {
+    execSync("which claude", { stdio: "pipe" });
+    console.log("Already installed");
+  } catch {
+    console.log("Installing...");
+    try {
+      execSync("curl -fsSL https://claude.ai/install.sh | bash", { stdio: "inherit" });
+    } catch {
+      console.log("Claude install failed (may hang in non-interactive mode)");
+    }
+  }
+
+  console.log("");
+};
+
+// ============================================
+// Repository setup
+// ============================================
+
+const setupIterateRepo = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up iterate repo");
+  console.log("========================================");
+
+  if (!existsSync(ITERATE_REPO)) {
+    console.log("");
+    console.log("Cloning iterate repo...");
+    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, { stdio: "inherit" });
+    execSync("git clone https://github.com/iterate/iterate.git " + ITERATE_REPO, {
+      stdio: "inherit",
+    });
+  } else {
+    console.log("");
+    console.log("Pulling latest code...");
+    execSync("git fetch origin main && git reset --hard origin/main", {
+      cwd: ITERATE_REPO,
+      stdio: "inherit",
+    });
+  }
+
+  console.log("");
+  console.log("Running pnpm install...");
+  execSync("pnpm install", {
+    cwd: ITERATE_REPO,
+    stdio: "inherit",
+    env: { ...process.env, CI: "true" },
   });
 
-  return gitConfig;
+  console.log("");
 };
 
-const cloneOrUpdateRepo = (repo: RepoConfig, gitEnv: ExecSyncOptions["env"]) => {
-  const repoPath = getRepoPath(repo.owner, repo.name);
-  const repoFullName = `${repo.owner}/${repo.name}`;
-  const repoUrl = `https://github.com/${repoFullName}.git`;
+// ============================================
+// Daemon2 frontend build
+// ============================================
 
-  mkdirSync(dirname(repoPath), { recursive: true });
+const buildDaemon2 = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Building daemon2 frontend");
+  console.log("========================================");
+  console.log("");
 
-  if (existsSync(repoPath)) {
-    console.log(`Repository ${repoFullName} already exists at ${repoPath}, pulling latest...`);
-    execSync(`git fetch origin ${repo.defaultBranch}`, {
-      cwd: repoPath,
-      stdio: "inherit",
-      env: gitEnv,
-    });
-    execSync(`git reset --hard origin/${repo.defaultBranch}`, { cwd: repoPath, stdio: "inherit" });
-  } else {
-    console.log(`Cloning ${repoFullName} to ${repoPath}...`);
-    execSync(`git clone --branch ${repo.defaultBranch} ${repoUrl} ${repoPath}`, {
-      stdio: "inherit",
-      env: gitEnv,
-    });
-  }
+  execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
 
-  console.log(`Repository ${repoFullName} ready at ${repoPath}`);
+  console.log("");
 };
 
-const cloneUserRepos = () => {
-  const reposJson = process.env.GITHUB_REPOS;
-  if (!reposJson) {
-    console.log("No GITHUB_REPOS found, skipping user repository clone");
+// ============================================
+// S6 process supervision
+// ============================================
+
+const cleanupS6RuntimeState = () => {
+  if (!existsSync(S6_DAEMONS_PATH)) {
     return;
   }
 
-  const token = process.env.GITHUB_ACCESS_TOKEN;
-  if (!token) {
-    console.log("No GITHUB_ACCESS_TOKEN found, skipping user repository clone");
-    return;
-  }
+  rmSync(join(S6_DAEMONS_PATH, ".s6-svscan"), { recursive: true, force: true });
 
-  let repos: RepoConfig[];
-  try {
-    repos = JSON.parse(reposJson) as RepoConfig[];
-  } catch {
-    console.error("Failed to parse GITHUB_REPOS JSON:", reposJson);
-    return;
-  }
-
-  if (repos.length === 0) {
-    console.log("No repositories configured, skipping user repository clone");
-    return;
-  }
-
-  const owners = repos.map((r) => r.owner);
-  const gitEnv = getGitEnvWithToken(owners);
-
-  for (const repo of repos) {
-    cloneOrUpdateRepo(repo, gitEnv);
+  for (const entry of readdirSync(S6_DAEMONS_PATH, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    rmSync(join(S6_DAEMONS_PATH, entry.name, "supervise"), { recursive: true, force: true });
+    rmSync(join(S6_DAEMONS_PATH, entry.name, "log", "supervise"), { recursive: true, force: true });
   }
 };
 
-const cloneAndSetupIterateRepo = () => {
-  mkdirSync(dirname(ITERATE_REPO_PATH), { recursive: true });
+const startS6Svscan = (): ChildProcess => {
+  console.log("");
+  console.log("========================================");
+  console.log("Starting s6-svscan");
+  console.log("========================================");
+  console.log("");
 
-  if (existsSync(ITERATE_REPO_PATH)) {
-    console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
-    execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
-    execSync("git reset --hard origin/main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
-  } else {
-    console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
-    execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
-  }
-
-  console.log("Running pnpm install (should be fast if lockfile unchanged)...");
-  execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
-};
-
-const startDaemon = () => {
-  console.log(`Building daemon in ${DAEMON_PATH}...`);
-  execSync("npx vite build", { cwd: DAEMON_PATH, stdio: "inherit" });
-
-  console.log(`Starting daemon server in ${DAEMON_PATH}...`);
-  const daemon = spawn("node", ["dist/server/index.mjs"], {
-    cwd: DAEMON_PATH,
+  const svscan = spawn("s6-svscan", [S6_DAEMONS_PATH], {
     stdio: "inherit",
     env: {
       ...process.env,
-      PORT: "3000",
+      ITERATE_REPO,
+      HOSTNAME: "0.0.0.0",
     },
   });
 
-  daemon.on("error", (err) => {
-    console.error("Failed to start daemon:", err);
+  svscan.on("error", (err) => {
+    console.error("Failed to start s6-svscan:", err);
     process.exit(1);
   });
 
-  daemon.on("exit", (code) => {
-    console.log(`Daemon exited with code ${code}`);
+  svscan.on("exit", (code, signal) => {
+    console.log(`s6-svscan exited with code ${code}, signal ${signal}`);
     process.exit(code ?? 1);
   });
 
-  return daemon;
+  return svscan;
 };
 
+// ============================================
+// Main
+// ============================================
+
 const main = () => {
-  cloneAndSetupIterateRepo();
-  cloneUserRepos();
-  const daemon = startDaemon();
+  console.log("");
+  console.log("########################################");
+  console.log("# iterate sandbox entry point");
+  console.log("########################################");
 
-  process.on("SIGINT", () => {
-    console.log("Received SIGINT, shutting down...");
-    daemon.kill("SIGINT");
-  });
+  installCodingTools();
+  setupIterateRepo();
+  buildDaemon2();
+  cleanupS6RuntimeState();
 
-  process.on("SIGTERM", () => {
-    console.log("Received SIGTERM, shutting down...");
-    daemon.kill("SIGTERM");
-  });
+  const svscan = startS6Svscan();
+
+  // Forward signals for clean shutdown
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}, shutting down...`);
+    svscan.kill("SIGTERM");
+  };
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 };
 
 main();

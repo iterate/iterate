@@ -27,14 +27,14 @@ Create a deploy workflow for os2 (similar to the existing `deploy-os` job in `.g
 
 Create a workflow to build and publish the sandbox snapshot:
 
-- Run `apps/os2/sandbox/snapshot.ts` to create/update the Daytona snapshot
+- Run `apps/os2/sandbox/daytona-snapshot.ts` to create/update the Daytona snapshot
 - Requires `DAYTONA_API_KEY` environment variable
 - Builds from `apps/os2/sandbox/Dockerfile`
-- Current snapshot name: `iterate-sandbox-0.0.3-dev` (hardcoded in both `snapshot.ts` and `alchemy.run.ts`)
+- Snapshot names are derived from stage + timestamp, and the app uses `DAYTONA_SNAPSHOT_PREFIX`
 
 ### Considerations
 
-- Snapshot name is currently hardcoded in two places (`DAYTONA_SNAPSHOT_NAME` in `alchemy.run.ts` line 217 and in `snapshot.ts` line 10) - consider extracting to a shared constant or making it configurable via env var
+- Snapshot prefix is configured via `DAYTONA_SNAPSHOT_PREFIX` in `alchemy.run.ts`
 - Snapshot updates should probably be manual/on-demand rather than on every deploy
 - Need to coordinate snapshot version bumps with deploys that reference them
 

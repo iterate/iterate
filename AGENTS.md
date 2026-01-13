@@ -10,6 +10,24 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
 Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
 
+## Environment variables (Doppler)
+
+We use [Doppler](https://doppler.com) for secrets management. Configs: `dev`, `stg`, `prd`.
+
+```bash
+# Run any command with env vars injected
+doppler run --config dev -- <command>
+
+# Examples
+doppler run --config dev -- pnpm test
+doppler run --config dev -- tsx apps/os2/sandbox/daytona-snapshot.ts
+
+# Check available vars
+doppler run --config dev -- env | grep SOME_VAR
+```
+
+For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
+
 ## Critical rules
 
 - No `console` in backend — use `apps/os2/backend/tag-logger.ts`
@@ -47,3 +65,4 @@ Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && p
 - E2E: `e2e/AGENTS.md`
 - Design system: `docs/design-system.md`
 - Vitest patterns: `docs/vitest-patterns.md`
+- Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`

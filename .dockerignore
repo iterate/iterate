@@ -1,3 +1,5 @@
+.git
+.context
 .DS_Store
 node_modules
 .pnpm-store
@@ -24,6 +26,8 @@ dist
 .cursor/rules
 .rules
 .clinerules/
+AGENTS.md
+CLAUDE.md
 
 .cache
 

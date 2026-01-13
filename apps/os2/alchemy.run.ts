@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
@@ -12,6 +12,7 @@ import { z } from "zod/v4";
 import dedent from "dedent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..");
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -29,7 +30,11 @@ if (!/^[\w-]+$/.test(app.stage)) {
 const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
-const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
+const isPreview =
+  app.stage.startsWith("pr-") ||
+  app.stage === "dev" ||
+  app.stage.startsWith("dev-") ||
+  app.stage.startsWith("local-");
 
 const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
 
@@ -47,14 +52,18 @@ function ensureLocalDockerImage() {
 
   if (!imageExists) {
     console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME}...`);
-    const buildResult = spawnSync("docker", ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "./sandbox"], {
-      cwd: __dirname,
-      stdio: "inherit",
-    });
+    const buildResult = spawnSync(
+      "docker",
+      ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os2/sandbox/Dockerfile", "."],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+      },
+    );
 
     if (buildResult.status !== 0) {
-      console.warn(
-        `Warning: Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Local Docker machines won't work.`,
+      throw new Error(
+        `Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Check Docker is running and try again.`,
       );
     } else {
       console.log(`Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
@@ -94,7 +103,6 @@ const Optional = z.string().optional();
 const Env = z.object({
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -255,6 +263,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
+      DAYTONA_SNAPSHOT_PREFIX: `${app.stage}--`,
       REALTIME_PUSHER,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,

@@ -6,6 +6,9 @@ import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  // Use relative paths for assets so they work when proxied at any base path
+  // The proxy injects <base href="..."> which makes relative URLs resolve correctly
+  base: "./",
   plugins: [
     devtools(),
     viteTsConfigPaths({

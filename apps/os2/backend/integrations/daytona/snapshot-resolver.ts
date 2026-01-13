@@ -20,28 +20,27 @@ type ResolverConfig = {
   organizationId?: string;
 };
 
-// Simple in-memory cache with TTL
-let cachedSnapshot: { name: string; prefix: string; timestamp: number } | null = null;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/**
- * Fetches a single page of snapshots from the Daytona API.
- */
-async function fetchSnapshotsPage(
-  baseUrl: string,
-  page: number,
-  headers: Record<string, string>,
-): Promise<PaginatedSnapshots> {
-  const url = new URL(`${baseUrl}/snapshots?limit=100&page=${page}`);
-  const response = await fetch(url.toString(), { headers });
+// Encapsulated cache to avoid global mutable state pollution in tests
+const snapshotCache = (() => {
+  let cached: { name: string; prefix: string; timestamp: number } | null = null;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
-  }
-
-  return (await response.json()) as PaginatedSnapshots;
-}
+  return {
+    get(prefix: string, now: number, ttlMs: number): string | null {
+      if (!cached || cached.prefix !== prefix || now - cached.timestamp >= ttlMs) {
+        return null;
+      }
+      return cached.name;
+    },
+    set(name: string, prefix: string, timestamp: number): void {
+      cached = { name, prefix, timestamp };
+    },
+    clear(): void {
+      cached = null;
+    },
+  };
+})();
 
 // Only consider snapshots in these states as usable
 const USABLE_SNAPSHOT_STATES = ["ready", "active"];
@@ -59,15 +58,13 @@ export async function resolveLatestSnapshot(
   config: ResolverConfig,
 ): Promise<string> {
   const now = Date.now();
+  const cacheTtlMs = getCacheTtlMs(prefix);
 
-  // Check cache - must match the same prefix
-  if (
-    cachedSnapshot &&
-    cachedSnapshot.prefix === prefix &&
-    now - cachedSnapshot.timestamp < CACHE_TTL_MS
-  ) {
-    logger.debug("Using cached snapshot", { name: cachedSnapshot.name });
-    return cachedSnapshot.name;
+  // Check cache - must match the same prefix and be within TTL
+  const cachedName = cacheTtlMs > 0 ? snapshotCache.get(prefix, now, cacheTtlMs) : null;
+  if (cachedName) {
+    logger.debug("Using cached snapshot", { name: cachedName });
+    return cachedName;
   }
 
   const baseUrl = config.baseUrl ?? "https://app.daytona.io/api";
@@ -121,7 +118,9 @@ export async function resolveLatestSnapshot(
   const latestSnapshot = matchingSnapshots[0];
 
   // Update cache
-  cachedSnapshot = { name: latestSnapshot.name, prefix, timestamp: now };
+  if (cacheTtlMs > 0) {
+    snapshotCache.set(latestSnapshot.name, prefix, now);
+  }
 
   logger.info("Resolved latest snapshot", {
     prefix,
@@ -138,5 +137,36 @@ export async function resolveLatestSnapshot(
  * Clears the snapshot cache. Useful for testing or manual refresh.
  */
 export function clearSnapshotCache(): void {
-  cachedSnapshot = null;
+  snapshotCache.clear();
+}
+
+function getCacheTtlMs(prefix: string): number {
+  const normalized = prefix.toLowerCase();
+  if (
+    normalized.startsWith("dev-") ||
+    normalized.includes("-dev--") ||
+    normalized.startsWith("local-")
+  ) {
+    return 0;
+  }
+  return DEFAULT_CACHE_TTL_MS;
+}
+
+/**
+ * Fetches a single page of snapshots from the Daytona API.
+ */
+async function fetchSnapshotsPage(
+  baseUrl: string,
+  page: number,
+  headers: Record<string, string>,
+): Promise<PaginatedSnapshots> {
+  const url = new URL(`${baseUrl}/snapshots?limit=100&page=${page}`);
+  const response = await fetch(url.toString(), { headers });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
+  }
+
+  return (await response.json()) as PaginatedSnapshots;
 }

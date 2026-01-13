@@ -11,13 +11,8 @@ CREATE TABLE "billing_account" (
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "billing_account_organizationId_unique" UNIQUE("organization_id"),
-	CONSTRAINT "billing_account_stripeCustomerId_unique" UNIQUE("stripe_customer_id")
-);
---> statement-breakpoint
-CREATE TABLE "stripe_event" (
-	"event_id" text PRIMARY KEY NOT NULL,
-	"type" text NOT NULL,
-	"processed_at" timestamp DEFAULT now() NOT NULL
+	CONSTRAINT "billing_account_stripeCustomerId_unique" UNIQUE("stripe_customer_id"),
+	CONSTRAINT "billing_account_stripeSubscriptionId_unique" UNIQUE("stripe_subscription_id")
 );
 --> statement-breakpoint
 ALTER TABLE "billing_account" ADD CONSTRAINT "billing_account_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

@@ -24,7 +24,6 @@ export function createMachineProvider(
         throw new Error("findAvailablePort function required for local-docker provider");
       }
       return createLocalDockerProvider({
-        sandboxPath: "./sandbox",
         imageName: "iterate-sandbox:local",
         findAvailablePort: options.findAvailablePort,
       });
