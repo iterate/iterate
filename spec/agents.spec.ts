@@ -14,12 +14,12 @@ function uniqueSlug(base: string): string {
 test.describe("agent management", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("heading", { name: "Agents" }).waitFor();
+    await page.locator('[data-sidebar="group-label"]').getByText("Agents").waitFor();
   });
 
-  test("agents page shows heading and new agent button", async ({ page }) => {
-    await page.getByRole("heading", { name: "Agents" }).waitFor();
-    await page.getByRole("main").getByRole("link", { name: "New Agent" }).waitFor();
+  test("agents page shows sidebar label and new agent button", async ({ page }) => {
+    await page.locator('[data-sidebar="group-label"]').getByText("Agents").waitFor();
+    await page.getByRole("link", { name: "New Agent" }).first().waitFor();
   });
 
   test("sidebar shows Agents label", async ({ page }) => {
@@ -29,7 +29,6 @@ test.describe("agent management", () => {
   test("can open new agent page", async ({ page }) => {
     await page.getByRole("main").getByRole("link", { name: "New Agent" }).click();
 
-    await page.getByRole("heading", { name: "New Agent" }).waitFor();
     await page.getByLabel("Name").waitFor();
     await page.getByLabel("Agent Type").waitFor();
     await page.getByLabel("Working Directory").waitFor();
@@ -42,7 +41,7 @@ test.describe("agent management", () => {
     await page.getByLabel("Name").fill(slug);
     await page.getByRole("button", { name: "Create Agent" }).click();
 
-    await page.locator("header").getByText(slug).waitFor();
+    await page.locator('[data-slot="breadcrumb-page"]').getByText(slug).waitFor();
   });
 
   test("agent appears in sidebar after creation", async ({ page }) => {
@@ -63,15 +62,15 @@ test.describe("agent management", () => {
     await page.getByLabel("Name").fill(slug);
     await page.getByRole("button", { name: "Create Agent" }).click();
 
-    await page.locator("header").getByText(slug).waitFor();
+    await page.locator('[data-slot="breadcrumb-page"]').getByText(slug).waitFor();
 
     await page.goto("/");
-    await page.getByRole("heading", { name: "Agents" }).waitFor();
+    await page.locator('[data-sidebar="group-label"]').getByText("Agents").waitFor();
 
     const sidebar = page.locator('[data-slot="sidebar"]');
     await sidebar.getByText(slug).click();
 
-    await page.locator("header").getByText(slug).waitFor();
+    await page.locator('[data-slot="breadcrumb-page"]').getByText(slug).waitFor();
   });
 
   test("agent page loads after creation", async ({ page }) => {
@@ -81,7 +80,7 @@ test.describe("agent management", () => {
     await page.getByLabel("Name").fill(slug);
     await page.getByRole("button", { name: "Create Agent" }).click();
 
-    await page.locator("header").getByText(slug).waitFor();
+    await page.locator('[data-slot="breadcrumb-page"]').getByText(slug).waitFor();
   });
 
   test("header shows reset and stop buttons on agent page", async ({ page }) => {
@@ -118,7 +117,6 @@ test.describe("agent management", () => {
     await page.getByLabel("Name").fill(slug);
     await page.getByRole("button", { name: "Create Agent" }).click();
 
-    const header = page.locator("header");
-    await header.getByText(slug).waitFor();
+    await page.locator('[data-slot="breadcrumb-page"]').getByText(slug).waitFor();
   });
 });

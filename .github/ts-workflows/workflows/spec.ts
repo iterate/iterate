@@ -1,4 +1,5 @@
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import dedent from "dedent";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
@@ -36,7 +37,14 @@ export default workflow({
           name: "Install Playwright browsers",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
         },
-        { run: "pnpm spec" },
+        {
+          name: "Run specs",
+          run: dedent`
+            mkdir -p test-results
+            # tee everything to a log file but filter out WebServer logs which are noisy
+            pnpm spec | tee test-results/spec.log | grep -v WebServer
+          `,
+        },
         {
           name: "upload logs",
           if: "failure()",
