@@ -39,7 +39,7 @@ function ProjectMachinesPage() {
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
   });
   const queryClient = useQueryClient();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createSheetOpen, setCreateSheetOpen] = useState(false);
   const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
   const [newMachineName, setNewMachineName] = useState(`${newMachineType}-${Date.now()}`);
 
@@ -67,7 +67,7 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      setCreateDialogOpen(false);
+      setCreateSheetOpen(false);
       setNewMachineType("daytona");
       setNewMachineName(`daytona-${Date.now()}`);
       toast.success("Machine created!");
