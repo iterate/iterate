@@ -20,13 +20,15 @@ function AppLayout() {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <AppSidebar agents={agents} />
-      <SidebarInset className="max-h-svh">
-        <AppHeader agent={currentAgent} />
-        <div className="flex-1 min-h-0">
-          <Outlet />
-        </div>
-      </SidebarInset>
+      <div className="flex min-h-screen w-full">
+        <AppSidebar agents={agents} />
+        <SidebarInset>
+          <AppHeader agent={currentAgent} agents={agents} />
+          <main className="relative flex min-h-0 flex-1 flex-col overflow-auto">
+            <Outlet />
+          </main>
+        </SidebarInset>
+      </div>
     </SidebarProvider>
   );
 }

@@ -204,7 +204,6 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-
     await migrate(role.connectionUrl.unencrypted);
 
     return {

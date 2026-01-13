@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button.tsx";
+import { CenteredLayout } from "../components/centered-layout.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../components/ui/field.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { trpcClient, trpc } from "../lib/trpc.tsx";
@@ -49,11 +50,9 @@ function NewOrganizationPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/50">
+    <CenteredLayout>
       <div className="w-full max-w-md space-y-6">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold">Create organization</h1>
-        </div>
+        <h1 className="text-2xl font-semibold">Create organization</h1>
         <form onSubmit={handleSubmit}>
           <FieldGroup>
             <FieldSet>
@@ -80,6 +79,6 @@ function NewOrganizationPage() {
           </FieldGroup>
         </form>
       </div>
-    </div>
+    </CenteredLayout>
   );
 }

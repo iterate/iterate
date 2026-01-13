@@ -236,7 +236,9 @@ function ProjectLayout() {
             projects={projects}
           />
           <main className="flex-1 overflow-auto">
-            <Outlet />
+            <div className="max-w-md">
+              <Outlet />
+            </div>
           </main>
         </SidebarInset>
       </div>
