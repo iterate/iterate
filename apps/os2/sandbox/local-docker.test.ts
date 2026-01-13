@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import type { TRPCRouter } from "../../../daemon2/server/trpc/router.ts";
+import type { TRPCRouter } from "../../daemon2/server/trpc/router.ts";
 import { dockerApi, DOCKER_API_URL } from "../backend/providers/local-docker.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -350,7 +350,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
 
     // List sessions and verify it exists
     const sessions = await trpc.listTmuxSessions.query();
-    expect(sessions.some((s) => s.name === testSessionName)).toBe(true);
+    expect(sessions.some((s: { name: string }) => s.name === testSessionName)).toBe(true);
   }, 30000);
 
   test("can create tmux session directly in container and verify it exists", async () => {
