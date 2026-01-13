@@ -13,12 +13,12 @@ import {
   ItemTitle,
 } from "../../components/ui/item.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/")({
   component: OrgHomePage,
 });
 
 function OrgHomePage() {
-  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/" });
+  const params = useParams({ from: "/_auth/orgs/$organizationSlug/" });
 
   const { data: org } = useSuspenseQuery(
     trpc.organization.withProjects.queryOptions({

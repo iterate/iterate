@@ -22,7 +22,7 @@ const Search = z.object({
   canceled: z.string().optional(),
 });
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/billing")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
   component: BillingPage,
   validateSearch: Search,
 });
@@ -42,8 +42,8 @@ function BillingPage() {
 }
 
 function BillingContent() {
-  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/billing" });
-  const search = useSearch({ from: "/_auth.layout/orgs/$organizationSlug/billing" });
+  const params = useParams({ from: "/_auth/orgs/$organizationSlug/billing" });
+  const search = useSearch({ from: "/_auth/orgs/$organizationSlug/billing" });
 
   useEffect(() => {
     if (search.success === "true") {

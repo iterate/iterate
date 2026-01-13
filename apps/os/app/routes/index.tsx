@@ -34,7 +34,7 @@ const getHomeRedirect = createServerFn({ method: "GET" })
     });
   });
 
-export const Route = createFileRoute("/_auth/layout/")({
+export const Route = createFileRoute("/_auth/")({
   beforeLoad: () => getHomeRedirect(),
   component: IndexPage,
 });

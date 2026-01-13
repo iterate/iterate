@@ -8,14 +8,14 @@ import { Field, FieldGroup, FieldLabel, FieldSet } from "../../../components/ui/
 import { Input } from "../../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/settings",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/settings",
 )({
   component: ProjectSettingsPage,
 });
 
 function ProjectSettingsPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/settings",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/settings",
   });
   const navigate = useNavigate();
 

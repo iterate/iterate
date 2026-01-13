@@ -28,14 +28,14 @@ import { isNonProd } from "../../../../env-client.ts";
 type MachineType = "daytona" | "local-docker";
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/machines",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
   component: ProjectMachinesPage,
 });
 
 function ProjectMachinesPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
   });
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);

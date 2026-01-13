@@ -6,7 +6,7 @@ import { usePostHogIdentity } from "../hooks/use-posthog-identity.tsx";
 
 const assertAuthenticated = authenticatedServerFn.handler(() => {});
 
-export const Route = createFileRoute("/_auth/layout")({
+export const Route = createFileRoute("/_auth")({
   beforeLoad: () => assertAuthenticated(),
   loader: async ({ context }) => {
     await context.queryClient.ensureQueryData(trpc.user.me.queryOptions());

@@ -7,13 +7,13 @@ import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/settings")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/settings")({
   component: OrgSettingsPage,
 });
 
 function OrgSettingsPage() {
   const routeParams = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/settings",
+    from: "/_auth/orgs/$organizationSlug/settings",
   });
 
   const { data: org } = useSuspenseQuery(

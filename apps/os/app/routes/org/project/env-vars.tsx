@@ -34,7 +34,7 @@ import {
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/env-vars",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
 )({
   component: ProjectEnvVarsRoute,
 });
@@ -55,7 +55,7 @@ function ProjectEnvVarsRoute() {
 
 function ProjectEnvVarsPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
   });
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");

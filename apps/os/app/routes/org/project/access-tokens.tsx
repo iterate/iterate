@@ -27,7 +27,7 @@ import {
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
 )({
   component: ProjectAccessTokensRoute,
 });
@@ -48,7 +48,7 @@ function ProjectAccessTokensRoute() {
 
 function ProjectAccessTokensPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
   });
   const [name, setName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);

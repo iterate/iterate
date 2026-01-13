@@ -15,7 +15,7 @@ const Search = z.object({
 });
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors",
 )({
   component: ProjectConnectorsPage,
   validateSearch: Search,
@@ -37,10 +37,10 @@ function ProjectConnectorsPage() {
 
 function ProjectConnectorsContent() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors",
   });
   const search = useSearch({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors",
   });
   const queryClient = useQueryClient();
 

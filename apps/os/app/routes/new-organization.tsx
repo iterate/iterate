@@ -7,7 +7,7 @@ import { Field, FieldGroup, FieldLabel, FieldSet } from "../components/ui/field.
 import { Input } from "../components/ui/input.tsx";
 import { trpcClient, trpc } from "../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth/layout/new-organization")({
+export const Route = createFileRoute("/_auth/new-organization")({
   component: NewOrganizationPage,
 });
 

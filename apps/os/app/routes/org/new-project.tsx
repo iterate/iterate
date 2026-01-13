@@ -7,13 +7,13 @@ import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/new-project")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
 });
 
 function NewProjectPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/new-project",
+    from: "/_auth/orgs/$organizationSlug/new-project",
   });
   const navigate = useNavigate();
   const [name, setName] = useState("");

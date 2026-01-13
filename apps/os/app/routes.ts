@@ -5,8 +5,8 @@ export const routes = rootRoute("root.tsx", [
   route("/login", "login.tsx"),
   ...(process.env.NODE_ENV !== "production" ? [route("/dev", "dev.tsx")] : []),
 
-  // Auth required layout (named ID creates cleaner route IDs)
-  layout("auth.layout", "auth-required.layout.tsx", [
+  // Auth required layout (underscore prefix = pathless)
+  layout("_auth", "auth-required.layout.tsx", [
     // Index redirects to first org
     index("index.tsx"),
 

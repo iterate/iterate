@@ -81,9 +81,7 @@ function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }
   });
 }
 
-export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/repo",
-)({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug/repo")({
   component: ProjectRepoRoute,
 });
 
@@ -103,7 +101,7 @@ function ProjectRepoRoute() {
 
 function ProjectRepoPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/repo",
   });
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<{

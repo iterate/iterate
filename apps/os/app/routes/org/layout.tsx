@@ -10,7 +10,7 @@ import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
 import { SidebarInset, SidebarProvider } from "../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../components/app-header.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
@@ -26,12 +26,12 @@ export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug")({
 });
 
 function OrgLayout() {
-  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug" });
+  const params = useParams({ from: "/_auth/orgs/$organizationSlug" });
   const { user } = useSessionUser();
 
   // Check if we're rendering a project child route - if so, just pass through to Outlet
   const projectMatch = useMatch({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug",
     shouldThrow: false,
   });
 

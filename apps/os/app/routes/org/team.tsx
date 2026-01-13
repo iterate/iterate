@@ -24,12 +24,12 @@ import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/team")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/team")({
   component: OrgTeamPage,
 });
 
 function OrgTeamPage() {
-  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/team" });
+  const params = useParams({ from: "/_auth/orgs/$organizationSlug/team" });
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 

@@ -2,9 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Bot } from "lucide-react";
 import { EmptyState } from "../../../components/empty-state.tsx";
 
-export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/agents",
-)({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug/agents")({
   component: ProjectAgentsPage,
 });
 

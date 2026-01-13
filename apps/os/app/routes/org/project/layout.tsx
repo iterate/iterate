@@ -36,7 +36,7 @@ import {
 } from "../../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../../components/app-header.tsx";
 
-export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/projects/$projectSlug")({
+export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
   beforeLoad: async ({ context, params }) => {
     // Ensure org exists
     const currentOrg = await context.queryClient.ensureQueryData(
@@ -63,7 +63,7 @@ export const Route = createFileRoute("/_auth/layout/orgs/$organizationSlug/proje
 
 function ProjectLayout() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug",
   });
   const matchRoute = useMatchRoute();
   const { user } = useSessionUser();

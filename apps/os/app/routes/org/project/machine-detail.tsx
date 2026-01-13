@@ -26,14 +26,14 @@ import {
 } from "../../../components/ui/card.tsx";
 
 export const Route = createFileRoute(
-  "/_auth/layout/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
+  "/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
 )({
   component: MachineDetailPage,
 });
 
 function MachineDetailPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
+    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
   });
   const navigate = useNavigate();
   const queryClient = useQueryClient();

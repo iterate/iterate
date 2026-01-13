@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "../../components/ui/select.tsx";
 
-export const Route = createFileRoute("/_auth/layout/user/settings")({
+export const Route = createFileRoute("/_auth/user/settings")({
   component: UserSettingsRoute,
 });
 
