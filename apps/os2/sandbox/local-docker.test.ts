@@ -395,8 +395,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
     const html = await response.text();
     expect(html.toLowerCase()).toContain("<!doctype html>");
     expect(html).toContain("<title>");
-    // Should reference the built JS bundle
-    expect(html).toMatch(/src="\/assets\/index-[a-zA-Z0-9]+\.js"/);
+    // Should reference the built JS bundle (either absolute or relative path)
+    expect(html).toMatch(/src="\.?\/assets\/index-[a-zA-Z0-9]+\.js"/);
   });
 
   test("daemon serves CSS bundle", async () => {
@@ -404,11 +404,11 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
     const indexResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}/`);
     const html = await indexResponse.text();
 
-    // Extract CSS filename from the HTML (e.g., /assets/index-B298OPQd.css)
-    const cssMatch = html.match(/href="(\/assets\/index-[a-zA-Z0-9]+\.css)"/);
+    // Extract CSS filename from the HTML (e.g., /assets/index-B298OPQd.css or ./assets/...)
+    const cssMatch = html.match(/href="(\.?\/assets\/index-[a-zA-Z0-9]+\.css)"/);
     expect(cssMatch).not.toBeNull();
 
-    const cssPath = cssMatch![1];
+    const cssPath = cssMatch![1]!.replace(/^\.\//, "/"); // Normalize ./assets to /assets
     const cssResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}${cssPath}`);
     expect(cssResponse.ok).toBe(true);
     expect(cssResponse.headers.get("content-type")).toContain("text/css");
@@ -422,11 +422,11 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
     const indexResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}/`);
     const html = await indexResponse.text();
 
-    // Extract JS filename from the HTML (e.g., /assets/index-ZAeYHw86.js)
-    const jsMatch = html.match(/src="(\/assets\/index-[a-zA-Z0-9]+\.js)"/);
+    // Extract JS filename from the HTML (e.g., /assets/index-ZAeYHw86.js or ./assets/...)
+    const jsMatch = html.match(/src="(\.?\/assets\/index-[a-zA-Z0-9]+\.js)"/);
     expect(jsMatch).not.toBeNull();
 
-    const jsPath = jsMatch![1];
+    const jsPath = jsMatch![1]!.replace(/^\.\//, "/"); // Normalize ./assets to /assets
     const jsResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}${jsPath}`);
     expect(jsResponse.ok).toBe(true);
     expect(jsResponse.headers.get("content-type")).toContain("javascript");
@@ -460,16 +460,18 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
 
     // 4. Static assets with cache-busted filenames
     const indexHtml = await (await fetch(`${baseUrl}/`)).text();
-    const cssMatch = indexHtml.match(/href="(\/assets\/[^"]+\.css)"/);
-    const jsMatch = indexHtml.match(/src="(\/assets\/[^"]+\.js)"/);
+    const cssMatch = indexHtml.match(/href="(\.?\/assets\/[^"]+\.css)"/);
+    const jsMatch = indexHtml.match(/src="(\.?\/assets\/[^"]+\.js)"/);
 
     if (cssMatch) {
-      const cssResponse = await fetch(`${baseUrl}${cssMatch[1]}`);
+      const cssPath = cssMatch[1]!.replace(/^\.\//, "/");
+      const cssResponse = await fetch(`${baseUrl}${cssPath}`);
       expect(cssResponse.ok).toBe(true);
     }
 
     if (jsMatch) {
-      const jsResponse = await fetch(`${baseUrl}${jsMatch[1]}`);
+      const jsPath = jsMatch[1]!.replace(/^\.\//, "/");
+      const jsResponse = await fetch(`${baseUrl}${jsPath}`);
       expect(jsResponse.ok).toBe(true);
     }
 
