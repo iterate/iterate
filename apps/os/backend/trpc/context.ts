@@ -1,15 +1,21 @@
 import type { Context as HonoContext } from "hono";
-import type { Variables } from "../worker";
-import type { CloudflareEnv } from "../../env";
+import type { CloudflareEnv } from "../../env.ts";
+import type { Variables } from "../worker.ts";
 
-export function createContext(c: HonoContext<{ Variables: Variables; Bindings: CloudflareEnv }>) {
-  const { db, session } = c.var;
+export type Context = {
+  env: CloudflareEnv;
+  db: Variables["db"];
+  session: Variables["session"];
+  user: NonNullable<Variables["session"]>["user"] | null;
+};
+
+export function createContext(
+  c: HonoContext<{ Bindings: CloudflareEnv; Variables: Variables }>,
+): Context {
   return {
-    db,
-    session,
-    user: session?.user || null,
     env: c.env,
+    db: c.var.db,
+    session: c.var.session,
+    user: c.var.session?.user ?? null,
   };
 }
-
-export type Context = ReturnType<typeof createContext>;

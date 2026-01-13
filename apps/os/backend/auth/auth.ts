@@ -1,95 +1,87 @@
-import { randomInt } from "node:crypto";
-import { betterAuth } from "better-auth";
+import { betterAuth, APIError } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
-import { stripe } from "@better-auth/stripe";
+import { minimatch } from "minimatch";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { env, isNonProd } from "../../env.ts";
+import { env, isNonProd, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
-import { stripeClient } from "../integrations/stripe/stripe.ts";
-import { integrationsPlugin, SLACK_USER_AUTH_SCOPES } from "./integrations.ts";
-import { serviceAuthPlugin } from "./service-auth.ts";
 
-// better-auth has an internal type that is not portable
-// turning on declaration causes it to give you a portable type error
-// so declaration is turned off, sdk builds work fine as tsdown handles it internally and doesn't rely on this type
-// Possibly related https://github.com/better-auth/better-auth/issues/5122
-export const getAuth = (db: DB) => {
+const TEST_EMAIL_PATTERN = /\+.*test@/i;
+const TEST_OTP_CODE = "424242";
+
+function parseEmailPatterns(value: string) {
+  return value
+    .split(",")
+    .map((p) => p.trim().toLowerCase())
+    .filter((p) => p.length > 0);
+}
+
+function matchesEmailPattern(email: string, patterns: string[]) {
+  return patterns.some((pattern) => minimatch(email, pattern));
+}
+
+function createAuth(db: DB, envParam: CloudflareEnv) {
+  const allowSignupFromEmails = parseEmailPatterns(
+    envParam.ALLOW_SIGNUP_FROM_EMAILS ?? "*@example.com",
+  );
+
   return betterAuth({
-    baseURL: env.VITE_PUBLIC_URL,
+    baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
-    secret: env.BETTER_AUTH_SECRET,
-    trustedOrigins: [
-      env.VITE_PUBLIC_URL,
-      // This is needed for the stripe webhook to work in dev mode
-      ...(env.VITE_PUBLIC_URL.startsWith("http://localhost")
-        ? [`https://${env.ITERATE_USER}.dev.iterate.com`]
-        : []),
-    ],
+    secret: envParam.BETTER_AUTH_SECRET,
+    trustedOrigins: [envParam.VITE_PUBLIC_URL],
     database: drizzleAdapter(db, {
       provider: "pg",
-      schema,
-    }),
-    user: {
-      additionalFields: {
-        debugMode: {
-          type: "boolean",
-          defaultValue: false,
-        },
-        isBot: {
-          type: "boolean",
-          defaultValue: false,
-        },
+      schema: {
+        user: schema.user,
+        session: schema.session,
+        account: schema.account,
+        verification: schema.verification,
       },
-    },
-    account: {
-      accountLinking: {
-        enabled: true,
-        trustedProviders: ["google"],
-        allowDifferentEmails: true,
+    }),
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            const email = user.email.trim().toLowerCase();
+            if (!matchesEmailPattern(email, allowSignupFromEmails)) {
+              throw new APIError("FORBIDDEN", {
+                message: "Sign up is not available for this email address",
+              });
+            }
+            return { data: user };
+          },
+        },
       },
     },
     plugins: [
       admin(),
-      ...(import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN
+      ...(envParam.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
         ? [
             emailOTP({
-              ...(isNonProd && {
-                generateOTP: (o) => {
-                  // magic: turns `bob+123456@nustom.com` into `123456`. or `alice+oct23.001001@nustom.com` into `001001`
-                  const getSpecialEmailOtp = (email: string) => {
-                    const [beforeAt, domain, ...rest] = email.split("@");
-                    if (domain !== "nustom.com") return null;
-                    if (rest.length !== 0) throw new Error("Invalid email " + email);
-                    const plusDigits = beforeAt.split("+").at(-1)?.split(/\D/).at(-1);
-                    return plusDigits?.match(/^\d{6}$/)?.[0];
-                  };
-                  return getSpecialEmailOtp(o.email) || randomInt(100000, 999999).toString();
-                },
-              }),
-              async sendVerificationOTP(data) {
-                logger.warn("Verification OTP needs to be sent to email", data.email, data.otp);
+              otpLength: 6,
+              expiresIn: 300,
+              generateOTP: ({ email }) => {
+                if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+                  return TEST_OTP_CODE;
+                }
+                return undefined;
+              },
+              sendVerificationOTP: async ({ email, otp }) => {
+                if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+                  logger.info(
+                    `[DEV] Skipping email for test address: ${email}. Use OTP: ${TEST_OTP_CODE}`,
+                  );
+                  return;
+                }
+                logger.info(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
+                // TODO: Implement actual email sending (e.g., Resend, SendGrid, etc.)
               },
             }),
           ]
         : []),
-      integrationsPlugin(),
-      serviceAuthPlugin(),
-      // We don't use any of the better auth stripe plugin's database schema or
-      // subscription / plan management features
-      // But it's handy just for the webhook handling and for creating a customer portal
-      // session etc
-      stripe({
-        stripeClient,
-        stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
-        // we do this manually in the user creation hook
-        createCustomerOnSignUp: false,
-        onEvent: async (event) => {
-          logger.debug("Stripe webhook received", event);
-        },
-      }),
     ],
     socialProviders: {
       google: {
@@ -98,20 +90,14 @@ export const getAuth = (db: DB) => {
           "https://www.googleapis.com/auth/userinfo.profile",
           "openid",
         ],
-        clientId: env.GOOGLE_CLIENT_ID,
-        clientSecret: env.GOOGLE_CLIENT_SECRET,
-      },
-      slack: {
-        clientId: env.SLACK_CLIENT_ID,
-        clientSecret: env.SLACK_CLIENT_SECRET,
-        scope: SLACK_USER_AUTH_SCOPES,
-        redirectURI: `${env.VITE_PUBLIC_URL}/api/auth/callback/slack`,
+        clientId: envParam.GOOGLE_CLIENT_ID,
+        clientSecret: envParam.GOOGLE_CLIENT_SECRET,
       },
     },
     session: {
       cookieCache: {
         enabled: true,
-        maxAge: 10 * 60, // seconds - see https://www.better-auth.com/docs/reference/options#session
+        maxAge: 10 * 60, // 10 minutes
       },
     },
     advanced: {
@@ -129,7 +115,11 @@ export const getAuth = (db: DB) => {
       },
     },
   });
-};
+}
+
+export const getAuth = (db: DB) => createAuth(db, env);
+
+export const getAuthWithEnv = (db: DB, envParam: CloudflareEnv) => createAuth(db, envParam);
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;

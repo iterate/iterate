@@ -1,49 +1,72 @@
-import { WebClient } from "@slack/web-api";
-import { getDb } from "../../db/client.ts";
-import { env } from "../../../env.ts";
-import { logger } from "../../tag-logger.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * Send a notification message to iterate's Slack workspace.
- * This uses the estate ID configured in ITERATE_NOTIFICATION_ESTATE_ID.
- *
- * @param message - The message to send (supports Slack markdown)
- * @param channel - The channel to post to (defaults to "#building")
+ * Verify Slack request signature
+ * https://api.slack.com/authentication/verifying-requests-from-slack
  */
-export async function sendNotificationToIterateSlack(
-  message: string,
-  channel = "#building",
-): Promise<void> {
-  const notificationEstateId = env.ITERATE_NOTIFICATION_ESTATE_ID;
-
-  if (!notificationEstateId) {
-    logger.warn("ITERATE_NOTIFICATION_ESTATE_ID not configured, skipping notification");
-    return;
+export async function verifySlackSignature(
+  signingSecret: string,
+  signature: string | null,
+  timestamp: string | null,
+  body: string,
+): Promise<boolean> {
+  if (!signature || !timestamp) {
+    return false;
   }
 
-  const db = getDb();
-
-  // Get Slack access token for the notification estate
-  const slackAccount = await getSlackAccessTokenForEstate(db, notificationEstateId);
-
-  if (!slackAccount) {
-    logger.error("Slack access token not found for notification estate", {
-      estateId: notificationEstateId,
-    });
-    return;
+  // Check timestamp is within 5 minutes
+  const timestampNum = parseInt(timestamp, 10);
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestampNum) > 60 * 5) {
+    return false;
   }
 
-  const slackClient = new WebClient(slackAccount.accessToken);
+  // Compute signature
+  const sigBaseString = `v0:${timestamp}:${body}`;
+  const hmac = createHmac("sha256", signingSecret);
+  hmac.update(sigBaseString);
+  const mySignature = `v0=${hmac.digest("hex")}`;
 
-  const result = await slackClient.chat.postMessage({
-    channel,
-    text: message,
-    unfurl_links: false,
-    unfurl_media: false,
-  });
-
-  if (!result.ok) {
-    logger.error(`Failed to send notification to Slack: ${result.error}`);
+  // Compare signatures using timing-safe comparison
+  try {
+    return timingSafeEqual(Buffer.from(mySignature), Buffer.from(signature));
+  } catch {
+    return false;
   }
+}
+
+/**
+ * Parse Slack event type from payload
+ */
+export function getSlackEventType(payload: unknown): string {
+  if (typeof payload !== "object" || payload === null) {
+    return "unknown";
+  }
+
+  const p = payload as Record<string, unknown>;
+
+  // URL verification challenge
+  if (p.type === "url_verification") {
+    return "url_verification";
+  }
+
+  // Event callback
+  if (p.type === "event_callback" && typeof p.event === "object" && p.event !== null) {
+    const event = p.event as Record<string, unknown>;
+    const eventType = event.type as string;
+    const subtype = event.subtype as string | undefined;
+    return subtype ? `slack.${eventType}.${subtype}` : `slack.${eventType}`;
+  }
+
+  // Interactive component
+  if (p.type === "block_actions" || p.type === "view_submission" || p.type === "shortcut") {
+    return `slack.interactive.${p.type}`;
+  }
+
+  // Slash command
+  if (p.command) {
+    return "slack.slash_command";
+  }
+
+  return `slack.${p.type || "unknown"}`;
 }

@@ -17,7 +17,7 @@ export default {
       outputs: {
         worker_url: {
           description: "The URL of the deployed worker.",
-          value: "${{ jobs.deploy-os.outputs.worker_url }}",
+          value: "",
         },
       },
     },
@@ -27,35 +27,6 @@ export default {
     deployments: "write",
   },
   jobs: {
-    "deploy-os": {
-      name: "deploy-os ${{ inputs.stage }}",
-      "timeout-minutes": 15,
-      ...utils.runsOn,
-      outputs: {
-        worker_url: "${{ steps.alchemy_deploy.outputs.worker_url }}",
-      },
-      steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
-        {
-          name: "Enable QEMU",
-          uses: "docker/setup-qemu-action@v3",
-          with: {
-            platforms: "all",
-          },
-        },
-        {
-          id: "alchemy_deploy",
-          name: "Deploy using Alchemy",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            STAGE: "${{ inputs.stage }}",
-          },
-          run: "pnpm run deploy",
-          "working-directory": "apps/os",
-        },
-      ],
-    },
     "deploy-website": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
@@ -69,7 +40,7 @@ export default {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: "pnpm run deploy",
-          "working-directory": "estates/iterate/apps/website",
+          "working-directory": "apps/iterate-com",
         },
       ],
     },

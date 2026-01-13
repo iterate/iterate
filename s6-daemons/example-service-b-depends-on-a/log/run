@@ -1,0 +1,3 @@
+#!/bin/sh
+mkdir -p /var/log/example-service-b
+exec s6-log -b n20 s1000000 S50000000 T /var/log/example-service-b

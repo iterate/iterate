@@ -1,7 +1,7 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { LoginProviders } from "../components/auth-components.tsx";
+import { LoginCard } from "../components/auth-components.tsx";
 
 const redirectIfAuthenticated = createServerFn()
   .inputValidator(z.object({ redirectUrl: z.string().catch("/") }))
@@ -10,33 +10,18 @@ const redirectIfAuthenticated = createServerFn()
   });
 
 export const Route = createFileRoute("/login")({
-  component: LoginComponent,
+  component: LoginPage,
   validateSearch: z.object({
     redirectUrl: z.string().catch("/"),
-    autoSignin: z.string().optional(),
   }),
   beforeLoad: ({ search }) =>
     redirectIfAuthenticated({ data: { redirectUrl: search.redirectUrl } }),
 });
 
-function LoginComponent() {
+function LoginPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="space-y-2 text-center">
-          <h1 className="text-3xl font-semibold">
-            Log in to{" "}
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ backgroundColor: "#4A154B1A", color: "#4A154B" }}
-            >
-              @iterate
-            </span>
-          </h1>
-        </div>
-
-        <LoginProviders />
-      </div>
+    <div className="flex min-h-screen items-center justify-center bg-muted/50">
+      <LoginCard />
     </div>
   );
 }

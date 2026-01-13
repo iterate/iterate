@@ -1,5 +1,6 @@
 .DS_Store
 node_modules
+.pnpm-store
 *.tsbuildinfo
 
 # React Router
@@ -23,8 +24,6 @@ dist
 .cursor/rules
 .rules
 .clinerules/
-AGENTS.md
-CLAUDE.md
 
 .cache
 

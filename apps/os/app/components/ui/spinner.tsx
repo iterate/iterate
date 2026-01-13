@@ -1,6 +1,5 @@
 import { Loader2Icon } from "lucide-react";
-
-import { cn } from "../../lib/utils";
+import { cn } from "../../lib/cn.ts";
 
 function Spinner({ className, ...props }: React.ComponentPropsWithoutRef<typeof Loader2Icon>) {
   return (

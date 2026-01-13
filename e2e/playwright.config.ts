@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.APP_URL || "http://localhost:5173";
+const DAEMON_URL = process.env.DAEMON_URL || "http://localhost:3000";
+const OS_URL = process.env.OS_URL || "http://localhost:5173";
 
 export default defineConfig({
   testDir: ".",
@@ -18,8 +19,21 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      name: "os",
+      testDir: ".",
+      testIgnore: ["os/**"],
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: OS_URL,
+      },
+    },
+    {
+      name: "daemon",
+      testDir: "./os",
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: DAEMON_URL,
+      },
     },
   ],
   webServer: {

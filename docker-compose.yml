@@ -5,14 +5,14 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: os2
+      POSTGRES_DB: os
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d os2"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d os"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -20,7 +20,7 @@ services:
   neon-proxy:
     image: ghcr.io/timowilhelm/local-neon-http-proxy:main
     environment:
-      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres-iterate:5432/os2
+      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres-iterate:5432/os
     ports:
       - "4444:4444"
     depends_on:

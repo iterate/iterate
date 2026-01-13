@@ -9,11 +9,11 @@
     "declarationMap": false,
     "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": false, // this makes defining workers a bit of a PITA
+    "noImplicitOverride": false,
     "noImplicitReturns": true,
     "noImplicitAny": true,
     "noUncheckedIndexedAccess": false,
-    "noUnusedLocals": false, // ESLint handles this
+    "noUnusedLocals": false,
     "noUnusedParameters": false,
     "useUnknownInCatchVariables": true,
     "strict": true,
@@ -26,13 +26,6 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    /**
-     * From Tanstack Docs: enabling verbatimModuleSyntax can result in server
-     * bundles leaking into client bundles. It is recommended to keep this
-     * option disabled. More details:
-     * - https://github.com/TanStack/router/issues/3401
-     * - https://tanstack.com/start/latest/docs/framework/react/build-from-scratch#typescript-configuration
-     */
     "verbatimModuleSyntax": false
   },
   "include": ["./**/*"],

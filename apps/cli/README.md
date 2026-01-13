@@ -55,4 +55,4 @@ iterate server stop
 
 ## Related
 
-- [`apps/daemon2`](../daemon2) - The daemon server this CLI manages
+- [`apps/daemon`](../daemon) - The daemon server this CLI manages

@@ -11,46 +11,11 @@ on:
     outputs:
       worker_url:
         description: The URL of the deployed worker.
-        value: ${{ jobs.deploy-os.outputs.worker_url }}
+        value: ""
 permissions:
   contents: read
   deployments: write
 jobs:
-  deploy-os:
-    name: deploy-os ${{ inputs.stage }}
-    timeout-minutes: 15
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
-    outputs:
-      worker_url: ${{ steps.alchemy_deploy.outputs.worker_url }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
-      - name: Setup Doppler
-        run: doppler setup --config ${{ inputs.stage }} --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Enable QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-      - id: alchemy_deploy
-        name: Deploy using Alchemy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          STAGE: ${{ inputs.stage }}
-        run: pnpm run deploy
-        working-directory: apps/os
   deploy-website:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     if: inputs.stage == 'prd'
@@ -76,7 +41,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run deploy
-        working-directory: estates/iterate/apps/website
+        working-directory: apps/iterate-com
   deploy-mcp-mock-server:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:

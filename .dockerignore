@@ -1,0 +1,51 @@
+.git
+.context
+.DS_Store
+node_modules
+.pnpm-store
+*.tsbuildinfo
+
+# React Router
+.react-router
+
+# TanStack
+.tanstack
+build
+dist
+
+# Cloudflare
+.mf
+.wrangler
+.dev.vars*
+.alchemy
+
+!.dev.vars.example
+.env*
+!.env.example
+
+.cursor/rules
+.rules
+.clinerules/
+AGENTS.md
+CLAUDE.md
+
+.cache
+
+# ad-hoc ignored files/paths
+*ignoreme*
+evalite-export
+
+# Playwright test artifacts
+test-results/
+playwright-report/
+.last-run.json
+
+*.db
+*.sqlite
+.output
+
+# opensrc - source code for packages
+opensrc/
+
+# opencode sessions
+session-ses*.md

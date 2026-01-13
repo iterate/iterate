@@ -5,20 +5,17 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "app/app.css",
-    "baseColor": "slate",
+    "css": "app/styles.css",
+    "baseColor": "neutral",
     "cssVariables": true,
     "prefix": ""
   },
   "iconLibrary": "lucide",
   "aliases": {
     "components": "app/components",
-    "utils": "app/lib/utils",
+    "utils": "app/lib/cn",
     "ui": "app/components/ui",
     "lib": "app/lib",
     "hooks": "app/hooks"
-  },
-  "registries": {
-    "@ai-elements": "https://registry.ai-sdk.dev/{name}.json"
   }
 }

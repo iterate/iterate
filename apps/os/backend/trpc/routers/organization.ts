@@ -1,263 +1,260 @@
-import { z } from "zod";
-import { eq, inArray } from "drizzle-orm";
+import { z } from "zod/v4";
+import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { waitUntil } from "../../../env.ts";
-import {
-  protectedProcedure,
-  router,
-  orgProtectedProcedure,
-  orgAdminProcedure,
-  getUserOrganizations,
-} from "../trpc.ts";
-import { schema } from "../../db/client.ts";
-import { stripeClient } from "../../integrations/stripe/stripe.ts";
-import { logger } from "../../tag-logger.ts";
-import { createOrganizationAndEstate } from "../../org-utils.ts";
-
-type SlackUserProperties = {
-  discoveredInChannels: string[] | undefined;
-  slackUsername: string | undefined;
-  slackRealName: string | undefined;
-};
-
-type OrganizationMember = {
-  id: string;
-  userId: string;
-  name: string;
-  email: string;
-  image: string | null;
-  role: string;
-  isBot: boolean;
-  createdAt: Date;
-} & SlackUserProperties;
+import { router, protectedMutation, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
+import { organization, organizationUserMembership, UserRole, user } from "../../db/schema.ts";
+import { generateSlug } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
-  // List all organizations the user has access to (excluding external)
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const userOrganizations = await getUserOrganizations(ctx.db, ctx.user.id);
-
-    return userOrganizations.map(({ organization, role }) => ({
-      id: organization.id,
-      name: organization.name,
-      role,
-      stripeCustomerId: organization.stripeCustomerId,
-      createdAt: organization.createdAt,
-      updatedAt: organization.updatedAt,
-    }));
-  }),
-
   // Create a new organization
-  create: protectedProcedure
+  create: protectedMutation
     .input(
       z.object({
-        name: z.string().min(1, "Organization name is required"),
+        name: z.string().min(1).max(100),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const created = await createOrganizationAndEstate(ctx.db, {
-        organizationName: input.name,
-        ownerUserId: ctx.user.id,
-        estateName: `${input.name} Estate`,
-      });
-      const organization = created.organization;
-      const estate = created.estate;
+      const slug = generateSlug(input.name);
 
-      // Return created resources
-      return {
-        organization: organization,
-        estate: estate,
-      };
-    }),
-
-  // Get organization by ID
-  get: orgProtectedProcedure.query(async ({ ctx }) => {
-    return ctx.organization;
-  }),
-
-  // Update organization name
-  updateName: orgAdminProcedure
-    .input(
-      z.object({
-        name: z.string().min(1, "Organization name is required"),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const [updatedOrganization] = await ctx.db
-        .update(schema.organization)
-        .set({ name: input.name })
-        .where(eq(schema.organization.id, ctx.organization.id))
+      const [newOrg] = await ctx.db
+        .insert(organization)
+        .values({
+          name: input.name,
+          slug,
+        })
         .returning();
 
-      if (!updatedOrganization) {
+      if (!newOrg) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to update organization",
+          message: "Failed to create organization",
         });
       }
 
-      const stripeCustomerId = updatedOrganization.stripeCustomerId;
+      // Add creator as owner
+      await ctx.db.insert(organizationUserMembership).values({
+        organizationId: newOrg.id,
+        userId: ctx.user.id,
+        role: "owner",
+      });
 
-      if (stripeCustomerId) {
-        waitUntil(
-          (async () => {
-            try {
-              await stripeClient.customers.update(stripeCustomerId, {
-                name: updatedOrganization.name,
-              });
-            } catch (error) {
-              logger.error(
-                `Failed to update Stripe customer ${stripeCustomerId} for organization ${updatedOrganization.id}`,
-                error,
-              );
-            }
-          })(),
-        );
-      }
-
-      return updatedOrganization;
+      return newOrg;
     }),
 
-  // List all members of an organization
-  listMembers: orgProtectedProcedure.query(async ({ ctx }): Promise<OrganizationMember[]> => {
+  // Get organization by slug
+  bySlug: orgProtectedProcedure.query(async ({ ctx }) => {
+    return {
+      ...ctx.organization,
+      role: ctx.membership?.role,
+    };
+  }),
+
+  // Get organization with projects
+  withProjects: orgProtectedProcedure.query(async ({ ctx }) => {
+    const org = await ctx.db.query.organization.findFirst({
+      where: eq(organization.id, ctx.organization.id),
+      with: {
+        projects: true,
+      },
+    });
+
+    return {
+      ...org,
+      role: ctx.membership?.role,
+    };
+  }),
+
+  // Update organization settings
+  update: orgAdminMutation
+    .input(
+      z.object({
+        name: z.string().min(1).max(100).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [updated] = await ctx.db
+        .update(organization)
+        .set({
+          ...(input.name && { name: input.name }),
+        })
+        .where(eq(organization.id, ctx.organization.id))
+        .returning();
+
+      return updated;
+    }),
+
+  // Get organization members
+  members: orgProtectedProcedure.query(async ({ ctx }) => {
     const members = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(schema.organizationUserMembership.organizationId, ctx.organization.id),
+      where: eq(organizationUserMembership.organizationId, ctx.organization.id),
       with: {
         user: true,
       },
     });
 
-    // Get estate for this organization to fetch slack channels
-    const estate = await ctx.db.query.estate.findFirst({
-      where: eq(schema.estate.organizationId, ctx.organization.id),
-    });
-
-    // Fetch slack channels and metadata for all users
-    const channelsByUser = new Map<string, string[]>();
-
-    if (estate && members.length > 0) {
-      // Fetch provider mappings for all users to get Slack usernames
-      const providerMappings = await ctx.db.query.providerUserMapping.findMany({
-        where: inArray(
-          schema.providerUserMapping.internalUserId,
-          members.map((m) => m.user.id),
-        ),
-      });
-
-      // Fetch all slack channels for this estate
-      const slackChannels = await ctx.db.query.slackChannel.findMany({
-        where: eq(schema.slackChannel.estateId, estate.id),
-      });
-
-      const channelMap = new Map(slackChannels.map((c) => [c.externalId, c.name]));
-
-      // Extract channel names and user metadata for each external user
-      const userMetadataMap = new Map<string, { slackUsername?: string; slackRealName?: string }>();
-
-      for (const mapping of providerMappings) {
-        const metadata = mapping.providerMetadata as any;
-        const discoveredChannels = metadata?.discoveredInChannels as string[] | undefined;
-
-        // Extract Slack username and real name
-        userMetadataMap.set(mapping.internalUserId, {
-          slackUsername: metadata?.name,
-          slackRealName: metadata?.profile?.real_name || metadata?.real_name,
-        });
-
-        if (discoveredChannels && Array.isArray(discoveredChannels)) {
-          const channelNames = discoveredChannels
-            .map((channelId) => channelMap.get(channelId))
-            .filter((name): name is string => name !== undefined);
-
-          if (channelNames.length > 0) {
-            channelsByUser.set(mapping.internalUserId, channelNames);
-          }
-        }
-      }
-
-      return members.map((m): OrganizationMember => {
-        const isGuestOrExternal = ["external", "guest"].includes(m.role);
-        const userMetadata = userMetadataMap.get(m.user.id);
-        return {
-          id: m.id,
-          userId: m.user.id,
-          name: m.user.name,
-          email: m.user.email,
-          image: m.user.image,
-          role: m.role,
-          isBot: m.user.isBot,
-          createdAt: m.createdAt,
-          discoveredInChannels: isGuestOrExternal ? channelsByUser.get(m.user.id) || [] : undefined,
-          slackUsername: userMetadata?.slackUsername,
-          slackRealName: userMetadata?.slackRealName,
-        };
-      });
-    }
-
-    // If no estate found, return basic member info without Slack metadata
-    return members.map(
-      (m): OrganizationMember => ({
-        id: m.id,
-        userId: m.user.id,
+    return members.map((m) => ({
+      id: m.id,
+      userId: m.userId,
+      role: m.role,
+      user: {
+        id: m.user.id,
         name: m.user.name,
         email: m.user.email,
         image: m.user.image,
-        role: m.role,
-        isBot: m.user.isBot,
-        createdAt: m.createdAt,
-        discoveredInChannels: undefined,
-        slackUsername: undefined,
-        slackRealName: undefined,
-      }),
-    );
+      },
+      createdAt: m.createdAt,
+    }));
   }),
 
-  // Update a member's role
-  updateMemberRole: orgAdminProcedure
+  addMember: orgAdminMutation
     .input(
       z.object({
-        userId: z.string(),
-        role: z.enum(["member", "admin", "owner", "guest"]),
+        email: z.string().email(),
+        role: z.enum(UserRole).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Prevent users from changing their own role
-      if (input.userId === ctx.user.id) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "You cannot change your own role",
-        });
-      }
-
-      // Get the membership to update
-      const membershipToUpdate = await ctx.db.query.organizationUserMembership.findFirst({
-        where: (membership, { and, eq }) =>
-          and(
-            eq(membership.organizationId, ctx.organization.id),
-            eq(membership.userId, input.userId),
-          ),
+      const existingUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email),
       });
 
-      if (!membershipToUpdate) {
+      if (!existingUser) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Member not found in this organization",
+          message: "User not found",
         });
       }
 
-      // Update the member's role
-      const [updatedMembership] = await ctx.db
-        .update(schema.organizationUserMembership)
-        .set({ role: input.role })
-        .where(eq(schema.organizationUserMembership.id, membershipToUpdate.id))
+      const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(organizationUserMembership.organizationId, ctx.organization.id),
+          eq(organizationUserMembership.userId, existingUser.id),
+        ),
+      });
+
+      if (existingMembership) {
+        return existingMembership;
+      }
+
+      if (input.role === "owner" && ctx.membership?.role !== "owner") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners can add other owners",
+        });
+      }
+
+      const [membership] = await ctx.db
+        .insert(organizationUserMembership)
+        .values({
+          organizationId: ctx.organization.id,
+          userId: existingUser.id,
+          role: input.role ?? "member",
+        })
         .returning();
 
-      if (!updatedMembership) {
+      if (!membership) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to update member role",
+          message: "Failed to add member",
         });
       }
 
-      return updatedMembership;
+      return membership;
     }),
+
+  // Update member role
+  updateMemberRole: orgAdminMutation
+    .input(
+      z.object({
+        userId: z.string(),
+        role: z.enum(UserRole),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Can't change your own role
+      if (input.userId === ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot change your own role",
+        });
+      }
+
+      // Only owners can promote to owner
+      if (input.role === "owner" && ctx.membership?.role !== "owner") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners can promote to owner",
+        });
+      }
+
+      const [updated] = await ctx.db
+        .update(organizationUserMembership)
+        .set({ role: input.role })
+        .where(
+          and(
+            eq(organizationUserMembership.organizationId, ctx.organization.id),
+            eq(organizationUserMembership.userId, input.userId),
+          ),
+        )
+        .returning();
+
+      return updated;
+    }),
+
+  // Remove member from organization
+  removeMember: orgAdminMutation
+    .input(
+      z.object({
+        userId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Can't remove yourself
+      if (input.userId === ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot remove yourself from the organization",
+        });
+      }
+
+      // Check if trying to remove an owner
+      const targetMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(organizationUserMembership.organizationId, ctx.organization.id),
+          eq(organizationUserMembership.userId, input.userId),
+        ),
+      });
+
+      if (targetMembership?.role === "owner" && ctx.membership?.role !== "owner") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners can remove other owners",
+        });
+      }
+
+      await ctx.db
+        .delete(organizationUserMembership)
+        .where(
+          and(
+            eq(organizationUserMembership.organizationId, ctx.organization.id),
+            eq(organizationUserMembership.userId, input.userId),
+          ),
+        );
+
+      return { success: true };
+    }),
+
+  // Delete organization (owner only)
+  delete: orgAdminMutation.mutation(async ({ ctx }) => {
+    if (ctx.membership?.role !== "owner") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only owners can delete organizations",
+      });
+    }
+
+    await ctx.db.delete(organization).where(eq(organization.id, ctx.organization.id));
+
+    return { success: true };
+  }),
 });

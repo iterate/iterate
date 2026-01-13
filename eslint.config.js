@@ -1,5 +1,4 @@
 // @ts-check
-import { tsImport } from "tsx/esm/api";
 import js from "@eslint/js";
 import typescript from "@typescript-eslint/eslint-plugin";
 import typescriptParser from "@typescript-eslint/parser";
@@ -22,9 +21,6 @@ const getBuiltinRule = (name) => {
   if (!rule) throw new Error(`Builtin rule ${name} not found`);
   return rule;
 };
-
-/** @type {{default: Array<Exclude<typeof import("./vibe-rules/llms.ts")['default'][number], string> & {eslint?: import('eslint').Linter.Config}>}} */
-const { default: vibeRules } = await tsImport("./vibe-rules/llms.ts", import.meta.url);
 
 export default defineConfig([
   {
@@ -493,12 +489,14 @@ export default defineConfig([
       "iterate/no-direct-waituntil-import": "error",
     },
   },
-  ...vibeRules.flatMap((rule) => {
-    if (!rule.eslint) return [];
-    const { eslint, globs, name } = rule;
-    const files = typeof globs === "string" ? [globs] : globs;
-    return [{ name: `vibe-rules/${name}`, files, ...eslint }];
-  }),
+  {
+    name: "backend-no-console",
+    files: ["apps/*/backend/**/*.ts"],
+    ignores: ["**/*test*/**", "**/*test*", "**/*e2e*"],
+    rules: {
+      "no-console": "error",
+    },
+  },
 ]);
 
 /** @param {import("eslint").Rule.RuleModule} builtinRule */

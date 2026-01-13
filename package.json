@@ -9,26 +9,26 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "iterate": "pnpm run --silent os iterate",
     "os": "cd apps/os && pnpm",
     "os2": "cd apps/os2 && pnpm",
     "os2:dev": "cd apps/os2 && pnpm dev",
     "daemon2": "cd apps/daemon2 && pnpm",
     "daemon2:dev": "cd apps/daemon2 && pnpm dev",
     "e2e": "pnpm --filter @iterate-com/e2e e2e",
-    "eval": "doppler run -- pnpm os eval",
-    "eval:light": "doppler run -- env -u BRAINTRUST_API_KEY pnpm os eval",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
-    "prepare": "(cd apps/os && pnpm tsdown) && (is-ci || husky)",
-    "vitest": "cd apps/os && pnpm vitest",
+    "prepare": "is-ci || husky",
+    "vitest": "pnpm os test",
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:clean": "docker compose down -v",
+    "snapshot:daytona": "pnpm os snapshot:daytona",
+    "snapshot:local-docker": "pnpm os snapshot:local-docker",
+    "sandbox:local-rebuild": "pnpm snapshot:local-docker",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",
@@ -39,14 +39,11 @@
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate",
-    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate",
-    "postinstall": "is-ci || pnpm /postinstall:/"
+    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@iterate-com/vibe-rules": "workspace:*",
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@types/node": "^24.10.1",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
@@ -68,9 +65,7 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
-  "dependencies": {
-    "vibe-rules": "^0.3.91"
-  },
+  "dependencies": {},
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {

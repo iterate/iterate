@@ -1,49 +1,51 @@
-import { index, route, layout, rootRoute } from "@tanstack/virtual-file-routes";
+import { rootRoute, route, layout, index } from "@tanstack/virtual-file-routes";
 
-// All routes are read relative to 'apps/routes' directory
 export const routes = rootRoute("root.tsx", [
-  // Public routes (no auth required)
+  // Public routes
   route("/login", "login.tsx"),
+  ...(process.env.NODE_ENV !== "production" ? [route("/dev", "dev.tsx")] : []),
 
-  layout("auth.layout", "auth-required.layout.tsx", [
-    // index - doesn't render anything, it just redirects
+  // Auth required layout (underscore prefix = pathless)
+  layout("_auth", "auth-required.layout.tsx", [
+    // Index redirects to first org
     index("index.tsx"),
 
-    route("/user-settings", "user-settings.tsx"),
+    // New organization
     route("/new-organization", "new-organization.tsx"),
 
-    // // Admin routes (admin only, no estate context required)
-    route("/admin", "admin/layout.tsx", [
-      index("admin/index.tsx"),
-      route("session-info", "admin/session-info.tsx"),
-      route("slack-notification", "admin/slack-notification.tsx"),
-      route("db-tools", "admin/db-tools.tsx"),
-      route("trpc-tools", "admin/trpc-tools.tsx"),
-      route("estates", "admin/estates.tsx"),
-    ]),
+    // User settings
+    route("/user/settings", "user/settings.tsx"),
 
-    route("$organizationId", "org/layout.tsx", [
-      // Index route doesn't have anything, it just redirects to the first estate
+    // Organization routes
+    route("/orgs/$organizationSlug", "org/layout.tsx", [
+      // Org dashboard
       index("org/index.tsx"),
 
-      // Organization-level routes (no estate context)
-      route("settings", "org/settings.tsx"),
-      route("team", "org/team.tsx"),
+      // Org settings
+      route("/settings", "org/settings.tsx"),
+      route("/team", "org/team.tsx"),
+      route("/billing", "org/billing.tsx"),
+      route("/new-project", "org/new-project.tsx"),
 
-      // Estate-specific routes with their own loader
-      route("$estateId", "org/estate/layout.tsx", [
-        index("org/estate/index.tsx"),
-        route("repo", "org/estate/repo.tsx"),
-        route("integrations", [
-          index("org/estate/integrations/index.tsx"),
-          route("mcp-params", "org/estate/integrations/mcp-params.tsx"),
-          route("redirect", "org/estate/integrations/redirect.tsx"),
-        ]),
-        route("agents", [
-          route("offline", "offline-agent-detail.tsx"),
-          route("$agentClassName/$durableObjectName", "online-agent-detail.tsx"),
-        ]),
+      // Project routes
+      route("/projects/$projectSlug", "org/project/layout.tsx", [
+        index("org/project/index.tsx"),
+        route("/access-tokens", "org/project/access-tokens.tsx"),
+        route("/machines", "org/project/machines.tsx"),
+        route("/machine/$machineId", "org/project/machine-detail.tsx"),
+        route("/repo", "org/project/repo.tsx"),
+        route("/connectors", "org/project/connectors.tsx"),
+        route("/env-vars", "org/project/env-vars.tsx"),
+        route("/settings", "org/project/settings.tsx"),
+        route("/agents", "org/project/agents.tsx"),
       ]),
+    ]),
+
+    // Admin routes
+    route("/admin", "admin/layout.tsx", [
+      index("admin/index.tsx"),
+      route("/trpc-tools", "admin/trpc-tools.tsx"),
+      route("/session-info", "admin/session-info.tsx"),
     ]),
   ]),
 ]);

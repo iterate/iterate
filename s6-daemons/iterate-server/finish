@@ -1,0 +1,8 @@
+#!/bin/sh
+# s6-supervise passes: $1 = exit code (256+ if killed by signal), $2 = signal number
+# Log exit status for debugging
+if test "$1" -gt 255; then
+    echo "Service killed by signal $2"
+else
+    echo "Service exited with code $1"
+fi

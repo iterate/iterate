@@ -1,645 +1,257 @@
-import { z } from "zod";
-import { and, eq, desc, like, sql } from "drizzle-orm";
+import { z } from "zod/v4";
+import { and, eq, ilike } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { parseRouter, type AnyRouter } from "trpc-cli";
-import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
-import { schema } from "../../db/client.ts";
-import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
-import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
-import type { DB } from "../../db/client.ts";
-import { logger } from "../../tag-logger.ts";
-import {
-  createTrialSlackConnectChannel,
-  getIterateSlackEstateId,
-} from "../../utils/trial-channel-setup.ts";
-import { env } from "../../../env.ts";
-import { recentActiveSources } from "../../db/helpers.ts";
-import { queuer } from "../../outbox/outbox-queuer.ts";
-import { outboxClient } from "../../outbox/client.ts";
-import { deleteUserAccount } from "./user.ts";
-
-// don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
-const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "You are not authorized to access this resource",
-    });
-  }
-  return next({ ctx });
-});
-
-const findUserByEmail = adminProcedure
-  .input(z.object({ email: z.string() }))
-  .query(async ({ ctx, input }) => {
-    const user = await ctx.db.query.user.findFirst({
-      where: eq(schema.user.email, input.email),
-    });
-    return user;
-  });
-
-const searchUsersByEmail = adminProcedure
-  .input(
-    z.object({
-      searchEmail: z.string(),
-    }),
-  )
-  .query(async ({ ctx, input }) => {
-    const users = await ctx.db.query.user.findMany({
-      where: like(schema.user.email, `%${input.searchEmail}%`),
-      columns: {
-        id: true,
-        email: true,
-        name: true,
-      },
-      limit: 10,
-    });
-
-    return users;
-  });
-
-const getEstateOwner = adminProcedure
-  .input(z.object({ estateId: z.string() }))
-  .query(async ({ ctx, input }) => {
-    const estate = await ctx.db.query.estate.findFirst({
-      where: eq(schema.estate.id, input.estateId),
-    });
-
-    if (!estate) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Estate not found",
-      });
-    }
-
-    const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
-      where: and(
-        eq(schema.organizationUserMembership.organizationId, estate.organizationId),
-        eq(schema.organizationUserMembership.role, "owner"),
-      ),
-      with: {
-        user: true,
-      },
-    });
-
-    if (!ownerMembership?.user) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Estate owner not found",
-      });
-    }
-
-    return {
-      userId: ownerMembership.user.id,
-      email: ownerMembership.user.email,
-      name: ownerMembership.user.name,
-    };
-  });
-
-const deleteUserByEmail = adminProcedure
-  .input(z.object({ email: z.string().email() }))
-  .mutation(async ({ ctx, input }) => {
-    const user = await ctx.db.query.user.findFirst({
-      where: eq(schema.user.email, input.email),
-    });
-
-    if (!user) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "User not found",
-      });
-    }
-
-    return deleteUserAccount({ db: ctx.db, user });
-  });
-
-const allProcedureInputs = adminProcedure.query(async () => {
-  const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
-  const parsed = parseRouter({ router });
-  return JSON.parse(
-    JSON.stringify(parsed, (_key, value) => {
-      if (value?._def?.procedure) return { _def: value._def };
-      return value;
-    }),
-  ) as typeof parsed;
-});
+import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
+import * as schema from "../../db/schema.ts";
+import { user, billingAccount } from "../../db/schema.ts";
+import { getStripe } from "../../integrations/stripe/stripe.ts";
 
 export const adminRouter = router({
-  findUserByEmail,
-  searchUsersByEmail,
-  getEstateOwner,
-  deleteUserByEmail,
-  allProcedureInputs,
+  // Impersonate a user (creates a session as that user)
+  impersonate: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // This would typically integrate with better-auth's admin plugin
+      // For now, return the user info that would be impersonated
+      const targetUser = await ctx.db.query.user.findFirst({
+        where: eq(user.id, input.userId),
+      });
+
+      if (!targetUser) {
+        throw new Error("User not found");
+      }
+
+      return {
+        message: "Impersonation would be handled via Better Auth admin plugin",
+        targetUser: {
+          id: targetUser.id,
+          email: targetUser.email,
+          name: targetUser.name,
+        },
+      };
+    }),
+
+  // Stop impersonating
+  stopImpersonating: protectedProcedure.mutation(async ({ ctx: _ctx }) => {
+    // This would integrate with better-auth's admin plugin
+    return {
+      message: "Stop impersonation would be handled via Better Auth admin plugin",
+    };
+  }),
+
+  // List all users (admin only)
+  listUsers: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 50;
+      const offset = input?.offset ?? 0;
+
+      const users = await ctx.db.query.user.findMany({
+        limit,
+        offset,
+        orderBy: (u, { desc }) => [desc(u.createdAt)],
+      });
+
+      return users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        image: u.image,
+        role: u.role,
+        createdAt: u.createdAt,
+      }));
+    }),
+
+  // List all organizations (admin only)
+  listOrganizations: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const limit = input?.limit ?? 50;
+      const offset = input?.offset ?? 0;
+
+      const orgs = await ctx.db.query.organization.findMany({
+        limit,
+        offset,
+        orderBy: (o, { desc }) => [desc(o.createdAt)],
+        with: {
+          projects: true,
+          members: {
+            with: {
+              user: true,
+            },
+          },
+        },
+      });
+
+      return orgs.map((o) => ({
+        id: o.id,
+        name: o.name,
+        slug: o.slug,
+        projectCount: o.projects.length,
+        memberCount: o.members.length,
+        createdAt: o.createdAt,
+      }));
+    }),
+
+  // Get session info for debugging
+  sessionInfo: protectedProcedure.query(async ({ ctx }) => {
+    return {
+      user: {
+        id: ctx.user.id,
+        email: ctx.user.email,
+        name: ctx.user.name,
+        role: ctx.user.role,
+      },
+      session: ctx.session
+        ? {
+            expiresAt: ctx.session.session.expiresAt,
+            ipAddress: ctx.session.session.ipAddress,
+            userAgent: ctx.session.session.userAgent,
+            impersonatedBy: ctx.session.session.impersonatedBy,
+          }
+        : null,
+    };
+  }),
+
+  chargeUsage: adminProcedure
+    .input(
+      z.object({
+        organizationId: z.string(),
+        units: z.number().int().positive(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const account = await ctx.db.query.billingAccount.findFirst({
+        where: eq(billingAccount.organizationId, input.organizationId),
+      });
+
+      if (!account?.stripeCustomerId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Organization has no billing account or Stripe customer",
+        });
+      }
+
+      const stripe = getStripe();
+
+      const meterEvent = await stripe.v2.billing.meterEvents.create({
+        event_name: "test_usage_units",
+        payload: {
+          stripe_customer_id: account.stripeCustomerId,
+          value: String(input.units),
+        },
+      });
+
+      return {
+        success: true,
+        units: input.units,
+        costCents: input.units,
+        meterEventId: meterEvent.identifier,
+        stripeCustomerId: account.stripeCustomerId,
+      };
+    }),
+
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
-    // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
-    // important because it's available to anyone signed in
     const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
     const isAdmin = ctx?.user?.role === "admin" || undefined;
     return { impersonatedBy, isAdmin };
   }),
-  sendSlackNotification: adminProcedure
-    .input(
-      z.object({
-        message: z.string().min(1, "Message cannot be empty"),
-        channel: z.string().min(1, "Channel cannot be empty"),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      await sendNotificationToIterateSlack(input.message, input.channel);
-      return { success: true };
+
+  searchUsersByEmail: adminProcedure
+    .input(z.object({ searchEmail: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const users = await ctx.db.query.user.findMany({
+        where: ilike(schema.user.email, `%${input.searchEmail}%`),
+        columns: { id: true, email: true, name: true },
+        limit: 10,
+      });
+      return users;
     }),
-  getSessionInfo: adminProcedure.query(async ({ ctx }) => {
-    return {
-      user: ctx.user,
-      session: ctx.session,
-    };
-  }),
-  listAllEstates: adminProcedure.query(async ({ ctx }) => {
-    const estates = await ctx.db.query.estate.findMany({
-      with: {
-        organization: {
-          with: {
-            members: {
-              where: eq(schema.organizationUserMembership.role, "owner"),
-              with: {
-                user: true,
-              },
-            },
-          },
-        },
-        ...recentActiveSources,
-      },
-      orderBy: desc(schema.estate.updatedAt),
-    });
 
-    return estates.map((estate) => ({
-      id: estate.id,
-      name: estate.name,
-      organizationId: estate.organizationId,
-      organizationName: estate.organization.name,
-      ownerEmail: estate.organization.members[0]?.user.email,
-      ownerName: estate.organization.members[0]?.user.name,
-      ownerId: estate.organization.members[0]?.user.id,
-      connectedRepoId: estate.sources?.[0]?.repoId ?? null,
-      connectedRepoPath: estate.sources?.[0]?.path ?? null,
-      connectedRepoRef: estate.sources?.[0]?.branch ?? null,
-      createdAt: estate.createdAt,
-      updatedAt: estate.updatedAt,
-    }));
-  }),
-  rebuildEstate: adminProcedure
-    .input(z.object({ estateId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const { triggerEstateRebuild } = await import("./estate.ts");
-
-      const _estateData = await ctx.db.query.estate.findFirst({
-        where: eq(schema.estate.id, input.estateId),
-        with: recentActiveSources,
+  findUserByEmail: adminProcedure
+    .input(z.object({ email: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const foundUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email.toLowerCase()),
       });
-
-      const estateData = {
-        ..._estateData,
-        connectedRepoId: _estateData?.sources?.[0]?.repoId ?? null,
-        connectedRepoRef: _estateData?.sources?.[0]?.branch ?? null,
-        connectedRepoPath: _estateData?.sources?.[0]?.path ?? null,
-      };
-
-      if (!estateData) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Estate not found",
-        });
-      }
-
-      if (!estateData.connectedRepoId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Estate has no connected repository",
-        });
-      }
-
-      const result = await triggerEstateRebuild({
-        db: ctx.db,
-        env: ctx.env,
-        estateId: input.estateId,
-        commitHash: estateData.connectedRepoRef || "main",
-        commitMessage: "Manual rebuild triggered by admin",
-        isManual: true,
-      });
-
-      return { success: true, buildId: result.id };
+      return foundUser;
     }),
-  rebuildAllEstates: adminProcedure.mutation(async ({ ctx }) => {
-    const { triggerEstateRebuild } = await import("./estate.ts");
 
-    const estates = await ctx.db.query.estate.findMany({
-      with: recentActiveSources,
-    });
-
-    const results = [];
-
-    for (const estate of estates) {
-      if (!estate.sources.at(0)?.repoId) {
-        results.push({
-          estateId: estate.id,
-          estateName: estate.name,
-          success: false,
-          error: "No connected repository",
-        });
-        continue;
-      }
-
-      try {
-        const result = await triggerEstateRebuild({
-          db: ctx.db,
-          env: ctx.env,
-          estateId: estate.id,
-          commitHash: estate.sources.at(0)?.branch || "main",
-          commitMessage: "Bulk rebuild triggered by admin",
-          isManual: true,
-        });
-
-        results.push({
-          estateId: estate.id,
-          estateName: estate.name,
-          success: true,
-          buildId: result.id,
-        });
-      } catch (error) {
-        results.push({
-          estateId: estate.id,
-          estateName: estate.name,
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-      }
-    }
-
-    return {
-      total: estates.length,
-      results,
-    };
-  }),
-  syncSlackForEstate: adminProcedure
-    .input(z.object({ estateId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
-
-      if (!slackAccount) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No Slack token found for this estate",
-        });
-      }
-
-      // Get team ID from provider estate mapping
-      const estateMapping = await ctx.db.query.providerEstateMapping.findFirst({
-        where: and(
-          eq(schema.providerEstateMapping.internalEstateId, input.estateId),
-          eq(schema.providerEstateMapping.providerId, "slack-bot"),
-        ),
+  getProjectOwner: adminProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.query.project.findFirst({
+        where: eq(schema.project.id, input.projectId),
       });
 
-      if (!estateMapping) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No Slack team mapping found for this estate",
-        });
+      if (!project) {
+        throw new Error("Project not found");
       }
 
-      return await syncSlackForEstateInBackground(
-        ctx.db,
-        slackAccount.accessToken,
-        input.estateId,
-        estateMapping.externalId,
-      );
-    }),
-  syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
-    return await syncSlackForAllEstatesHelper(ctx.db);
-  }),
-  // Create Stripe customer for an organization (admin only)
-  createStripeCustomer: adminProcedure
-    .input(
-      z.object({
-        organizationId: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      // Fetch the organization
-      const organization = await ctx.db.query.organization.findFirst({
-        where: eq(schema.organization.id, input.organizationId),
-      });
-
-      if (!organization) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Organization not found",
-        });
-      }
-
-      // Check if organization already has a Stripe customer
-      if (organization.stripeCustomerId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Organization already has a Stripe customer: ${organization.stripeCustomerId}`,
-        });
-      }
-
-      // Get the organization owner for Stripe customer details
       const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
-        where: (membership, { and, eq }) =>
-          and(eq(membership.organizationId, input.organizationId), eq(membership.role, "owner")),
-        with: {
-          user: true,
-        },
+        where: and(
+          eq(schema.organizationUserMembership.organizationId, project.organizationId),
+          eq(schema.organizationUserMembership.role, "owner"),
+        ),
+        with: { user: true },
       });
 
       if (!ownerMembership) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Organization owner not found",
-        });
-      }
-
-      // Create Stripe customer and subscription synchronously so we can return the result
-      const customer = await createStripeCustomerAndSubscriptionForOrganization(
-        ctx.db,
-        organization,
-        ownerMembership.user,
-      );
-
-      if (!customer) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create Stripe customer",
-        });
+        throw new Error("Organization owner not found");
       }
 
       return {
-        success: true,
-        stripeCustomerId: customer.id,
+        userId: ownerMembership.user.id,
+        email: ownerMembership.user.email,
+        name: ownerMembership.user.name,
       };
     }),
 
-  /**
-   * Admin endpoint to manually create a trial Slack Connect channel
-   * Can create a new estate/org or use an existing one
-   */
-  createTrialSlackChannel: adminProcedure
+  setUserRole: adminProcedure
     .input(
       z.object({
-        userEmail: z.email(),
-        userName: z.string().optional(),
-        existingEstateId: z.string().optional(),
-        createNewEstate: z.boolean().default(true),
-        estateName: z.string().optional(),
-        organizationName: z.string().optional(),
+        userId: z.string(),
+        role: z.enum(["user", "admin"]),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const {
-        userEmail,
-        userName,
-        existingEstateId,
-        createNewEstate,
-        estateName,
-        organizationName,
-      } = input;
-
-      let estateId = existingEstateId;
-      let organizationId: string | undefined;
-
-      // Create estate/org if needed
-      if (createNewEstate) {
-        const [org] = await ctx.db
-          .insert(schema.organization)
-          .values({
-            name: organizationName || `${userName || userEmail}'s Organization`,
-          })
-          .returning();
-
-        const [estate] = await ctx.db
-          .insert(schema.estate)
-          .values({
-            name: estateName || `${userName || userEmail}'s Estate`,
-            organizationId: org.id,
-          })
-          .returning();
-
-        estateId = estate.id;
-        organizationId = org.id;
-
-        logger.info(`Admin created new org ${org.id} and estate ${estate.id} for trial channel`);
-      } else if (!existingEstateId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Either createNewEstate must be true or existingEstateId must be provided",
-        });
-      } else {
-        // Get org ID from existing estate
-        const estate = await ctx.db.query.estate.findFirst({
-          where: eq(schema.estate.id, existingEstateId),
-        });
-        if (!estate) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Estate not found",
-          });
-        }
-        organizationId = estate.organizationId;
+      if (input.userId === ctx.user.id && input.role !== "admin") {
+        throw new Error("You cannot remove your own admin role");
       }
 
-      // Get iterate's Slack workspace estate
-      const iterateTeamId = env.SLACK_ITERATE_TEAM_ID;
-      if (!iterateTeamId) {
-        throw new Error("Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)");
-      }
-
-      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
-      if (!iterateEstateId) {
-        throw new Error("Iterate Slack workspace estate not found");
-      }
-
-      // Get iterate's bot account and token
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
-      if (!iterateBotAccount) {
-        throw new Error("Iterate Slack bot account not found");
-      }
-
-      // Link trial estate to iterate's bot account
-      await ctx.db
-        .insert(schema.estateAccountsPermissions)
-        .values({
-          accountId: iterateBotAccount.accountId,
-          estateId: estateId!,
-        })
-        .onConflictDoNothing();
-
-      logger.info(`Linked trial estate ${estateId} to iterate's bot account`);
-
-      // Create trial channel and send invite
-      const result = await createTrialSlackConnectChannel({
-        db: ctx.db,
-        userEstateId: estateId!,
-        userEmail,
-        userName: userName || userEmail.split("@")[0],
-        iterateTeamId,
-        iterateBotToken: iterateBotAccount.accessToken,
+      const targetUser = await ctx.db.query.user.findFirst({
+        where: eq(user.id, input.userId),
       });
 
-      logger.info(
-        `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${estateId}`,
-      );
+      if (!targetUser) {
+        throw new Error("User not found");
+      }
+
+      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
 
       return {
-        success: true,
-        estateId: estateId!,
-        organizationId,
-        channelId: result.channelId,
-        channelName: result.channelName,
+        userId: input.userId,
+        email: targetUser.email,
+        name: targetUser.name,
+        role: input.role,
       };
     }),
-
-  outbox: {
-    poke: adminProcedure
-      .meta({
-        description:
-          "Emit a meaningless message into the outbox queue. Note that consumers are defined separately, so may or may not choose to subscribe to this mutation.",
-      })
-      .input(z.object({ message: z.string() }))
-      .mutation(async ({ ctx, input }) => {
-        return ctx.db.transaction(async (tx) => {
-          const {
-            rows: [{ now: dbtime }],
-          } = await tx.execute(sql`select now()`);
-          const reply = `You used ${input.message.split(" ").length} words, well done.`;
-          return ctx.sendTrpc(tx, { dbtime, reply });
-        });
-      }),
-    pokeOutboxClientDirectly: adminProcedure
-      .input(z.object({ message: z.string() }))
-      .mutation(async ({ ctx, input }) => {
-        await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
-          const {
-            rows: [{ now: dbtime }],
-          } = await tx.execute<{ now: string }>(sql`select now()::text`);
-          return {
-            payload: { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` },
-          };
-        });
-        return { done: true };
-      }),
-    peek: adminProcedure
-      .meta({
-        description:
-          "Peek at the outbox queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
-      })
-      .input(
-        z
-          .object({
-            limit: z.number().optional(),
-            offset: z.number().optional(),
-            minReadCount: z.number().optional(),
-          })
-          .optional(),
-      )
-      .query(async ({ ctx, input }) => {
-        return await queuer.peekQueue(ctx.db, input);
-      }),
-    peekArchive: adminProcedure
-      .meta({
-        description:
-          "Peek at the outbox archive queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
-      })
-      .input(
-        z
-          .object({
-            limit: z.number().optional(),
-            offset: z.number().optional(),
-            minReadCount: z.number().optional(),
-          })
-          .optional(),
-      )
-      .query(async ({ ctx, input }) => {
-        return await queuer.peekArchive(ctx.db, input);
-      }),
-    process: adminProcedure
-      .meta({
-        description:
-          "Process the outbox queue. This *shoulud* be happening automatically after events are added, and in a cron job",
-      })
-      .mutation(async ({ ctx }) => {
-        return await queuer.processQueue(ctx.db);
-      }),
-  },
 });
-
-/**
- * Helper function to sync Slack data for all estates
- * Used by both the tRPC procedure and the scheduled cron job
- */
-export async function syncSlackForAllEstatesHelper(db: DB) {
-  const estates = await db.query.estate.findMany();
-
-  const syncPromises = estates.map(async (estate) => {
-    try {
-      const slackAccount = await getSlackAccessTokenForEstate(db, estate.id);
-
-      if (!slackAccount) {
-        return {
-          estateId: estate.id,
-          estateName: estate.name,
-          success: false,
-          error: "No Slack token found",
-        };
-      }
-
-      // Get team ID from provider estate mapping
-      const estateMapping = await db.query.providerEstateMapping.findFirst({
-        where: and(
-          eq(schema.providerEstateMapping.internalEstateId, estate.id),
-          eq(schema.providerEstateMapping.providerId, "slack-bot"),
-        ),
-      });
-
-      if (!estateMapping) {
-        return {
-          estateId: estate.id,
-          estateName: estate.name,
-          success: false,
-          error: "No Slack team mapping found",
-        };
-      }
-
-      const result = await syncSlackForEstateInBackground(
-        db,
-        slackAccount.accessToken,
-        estate.id,
-        estateMapping.externalId,
-      );
-
-      return {
-        estateId: estate.id,
-        estateName: estate.name,
-        success: true,
-        data: result,
-      };
-    } catch (error) {
-      return {
-        estateId: estate.id,
-        estateName: estate.name,
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
-  });
-
-  const results = await Promise.all(syncPromises);
-
-  return {
-    total: estates.length,
-    results,
-  };
-}

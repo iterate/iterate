@@ -1,37 +1,43 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useTRPC } from "../../lib/trpc.ts";
+import { trpc } from "../../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth.layout/admin/session-info")({
+export const Route = createFileRoute("/_auth/admin/session-info")({
   component: SessionInfoPage,
 });
 
 function SessionInfoPage() {
-  const trpc = useTRPC();
-  const { data: sessionInfo } = useSuspenseQuery(trpc.admin.getSessionInfo.queryOptions());
+  const { data: sessionInfo } = useSuspenseQuery(trpc.admin.sessionInfo.queryOptions());
 
   return (
-    <>
-      <div>
-        <h2 className="text-2xl font-bold">Session Information</h2>
-        <p className="text-muted-foreground">Current user and session details</p>
-      </div>
+    <div className="p-8 space-y-6">
+      <h1 className="text-2xl font-bold">Session info</h1>
 
-      <div className="space-y-2">
-        <div className="font-semibold">User</div>
-        <div className="text-sm text-muted-foreground">Information about the current user</div>
-        <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto border">
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">Current user</h2>
+        <pre className="p-4 bg-muted rounded-lg text-sm overflow-auto">
           {JSON.stringify(sessionInfo?.user, null, 2)}
         </pre>
-      </div>
+      </section>
 
-      <div className="space-y-2">
-        <div className="font-semibold">Session</div>
-        <div className="text-sm text-muted-foreground">Current session data</div>
-        <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto border">
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold">Session</h2>
+        <pre className="p-4 bg-muted rounded-lg text-sm overflow-auto">
           {JSON.stringify(sessionInfo?.session, null, 2)}
         </pre>
-      </div>
-    </>
+      </section>
+
+      {sessionInfo?.session?.impersonatedBy && (
+        <div className="border-l-2 border-border pl-4 space-y-1">
+          <div className="text-sm font-medium">Impersonation active</div>
+          <p className="text-sm text-muted-foreground">
+            Impersonated by{" "}
+            <code className="bg-muted px-1 py-0.5 rounded">
+              {sessionInfo.session.impersonatedBy}
+            </code>
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

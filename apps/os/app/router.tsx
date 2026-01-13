@@ -1,73 +1,72 @@
-import { createRouter } from "@tanstack/react-router";
+import { createRouter, Link, type ErrorComponentProps } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
-import { createTRPCOptionsProxy, type TRPCOptionsProxy } from "@trpc/tanstack-react-query";
-import type { PropsWithChildren } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import type { TRPCClient } from "@trpc/client";
-import type { AppRouter } from "../backend/trpc/root.ts";
 import { routeTree } from "./routeTree.gen";
-import { ErrorRenderer } from "./components/error-renderer.tsx";
-import { makeQueryClient, makeTrpcClient, TRPCProvider } from "./lib/trpc.ts";
-import { RootComponent } from "./root-component.tsx";
+import { makeQueryClient, TRPCProvider } from "./lib/trpc.tsx";
+import { Spinner } from "./components/ui/spinner.tsx";
+
+/* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
 
 export type TanstackRouterContext = {
-  trpc: TRPCOptionsProxy<AppRouter>;
-  trpcClient: TRPCClient<AppRouter>;
   queryClient: QueryClient;
 };
 
+function NotFoundComponent() {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+      <h1 className="text-2xl font-bold">Page not found</h1>
+      <p className="text-muted-foreground">The page you're looking for doesn't exist.</p>
+      <Link to="/" className="text-primary hover:underline">
+        Go home
+      </Link>
+    </div>
+  );
+}
+
+function DefaultPendingComponent() {
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <Spinner className="size-8" />
+    </div>
+  );
+}
+
+function DefaultErrorComponent({ error, reset }: ErrorComponentProps) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+      <h1 className="text-2xl font-bold">Something went wrong</h1>
+      <p className="text-muted-foreground max-w-md text-center">
+        {error instanceof Error ? error.message : "An unexpected error occurred"}
+      </p>
+      <div className="flex gap-3">
+        <button
+          onClick={reset}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Try again
+        </button>
+        <Link to="/" className="text-primary hover:underline self-center">
+          Go home
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 export function getRouter() {
   const queryClient = makeQueryClient();
-  const trpcClient = makeTrpcClient();
-
-  const trpc = createTRPCOptionsProxy<AppRouter>({
-    client: trpcClient,
-    queryClient,
-  });
 
   const router = createRouter({
     routeTree,
+    context: { queryClient },
     scrollRestoration: true,
-    context: { queryClient, trpc, trpcClient },
-    defaultNotFoundComponent: () => (
-      <RootComponent>
-        <ErrorRenderer
-          message="Page not found"
-          details="The page you're looking for doesn't exist."
-          actions={[
-            {
-              label: "Refresh",
-              action: () => window.location.reload(),
-              key: "refresh",
-            },
-          ]}
-        />
-      </RootComponent>
-    ),
-    defaultErrorComponent: ({ error, info, reset }) => (
-      <RootComponent>
-        <ErrorRenderer
-          message={error.name}
-          details={error.message}
-          stack={info?.componentStack}
-          actions={[
-            {
-              label: "Reload",
-              action: () => reset(),
-              key: "reload",
-            },
-          ]}
-        />
-      </RootComponent>
-    ),
-    Wrap: function Wrapper({ children }: PropsWithChildren) {
-      return (
-        <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
-          {children}
-        </TRPCProvider>
-      );
-    },
     search: { strict: false },
+    defaultNotFoundComponent: NotFoundComponent,
+    defaultPendingMs: 150,
+    defaultPendingMinMs: 200,
+    defaultPendingComponent: DefaultPendingComponent,
+    defaultErrorComponent: DefaultErrorComponent,
+    Wrap: ({ children }) => <TRPCProvider queryClient={queryClient}>{children}</TRPCProvider>,
   });
 
   setupRouterSsrQueryIntegration({

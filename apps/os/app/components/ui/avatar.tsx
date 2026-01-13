@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Avatar as AvatarPrimitive } from "radix-ui";
-import { cn } from "../../lib/utils.ts";
+import { cn } from "../../lib/cn.ts";
 
 function Avatar({ className, ...props }: React.ComponentProps<typeof AvatarPrimitive.Root>) {
   return (

@@ -1,15 +1,17 @@
+import "./tracked-mutations.ts";
 import { initTRPC, TRPCError } from "@trpc/server";
-import { prettifyError, z, ZodError } from "zod";
-import { and, eq, ne } from "drizzle-orm";
-import { organizationUserMembership } from "../db/schema.ts";
-import type { DB } from "../db/client.ts";
-import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
+import { prettifyError, z, ZodError } from "zod/v4";
+import { and, eq } from "drizzle-orm";
+import superjson from "superjson";
+import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
+import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
-import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
+import { captureServerEvent } from "../lib/posthog.ts";
 import { waitUntil } from "../../env.ts";
-import { recentActiveSources } from "../db/helpers.ts";
-import { queuer } from "../outbox/outbox-queuer.ts";
+import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
+
+// Import tracked mutations to register them on module load
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
 const looksLikeStandardSchemaFailureResult = (
@@ -18,19 +20,16 @@ const looksLikeStandardSchemaFailureResult = (
   return typeof error === "object" && !!error && "issues" in error && Array.isArray(error.issues);
 };
 
-const t = initTRPC.context<Context>().create({
+export const t = initTRPC.context<Context>().create({
+  transformer: superjson,
   errorFormatter: (opts) => {
     const { shape, error } = opts;
 
-    // Check if this is a ZodError and format it nicely
     let zodFormatted: any;
-
-    // Helper to extract ZodError from error or error.cause
     const zodError =
       error.cause instanceof ZodError ? error.cause : error instanceof ZodError ? error : undefined;
 
     if (zodError) {
-      // Create a structured error format similar to flattenError
       zodFormatted = {
         formErrors: zodError.issues
           .filter((issue) => issue.path.length === 0)
@@ -54,266 +53,73 @@ const t = initTRPC.context<Context>().create({
 
     return {
       ...shape,
-      // zod errors are big and ugly, but it ships a built-in pretty printer, so let's override the `message` with a more useful one if we can.
-      //  we need to check that it's a zod error (or other standard schema failure) before using it though.
       ...(looksLikeStandardSchemaFailureResult(error.cause) && {
         message: prettifyError(error.cause),
       }),
       data: {
         ...shape.data,
-        // Add stack trace in development
         stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-        // Add formatted Zod error details
-        zodFormatted: zodFormatted,
-        // Include raw issues for clients that want to format themselves
+        zodFormatted,
         zodIssues: zodError?.issues,
       },
     };
   },
 });
 
-export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, { waitUntil });
-
 // Base router and procedure helpers
 export const router = t.router;
-export const publicProcedure = t.procedure.concat(eventsProcedure);
-// Type for authenticated context
-type AuthenticatedContext = Context & {
-  user: NonNullable<Context["user"]>;
-  session: NonNullable<Context["session"]>;
-};
+export const publicProcedure = t.procedure;
 
-// Middleware to automatically invalidate queries after mutations
-export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
-  const authCtx = ctx as AuthenticatedContext;
-  const result = await next({ ctx: authCtx });
-
-  // Only invalidate on successful mutations
-  if (type === "mutation" && result.ok && ctx.user) {
-    // Cast context as authenticated since we know user exists here
-    // Get the user's organization
-    const membership = await authCtx.db.query.organizationUserMembership.findFirst({
-      where: eq(organizationUserMembership.userId, authCtx.user.id),
-    });
-
-    if (membership?.organizationId) {
-      // Just invalidate everything
-      await invalidateOrganizationQueries(ctx.env, membership.organizationId, {
-        type: "INVALIDATE",
-        invalidateInfo: {
-          type: "ALL", // Invalidate all queries
-        },
-      }).catch((error) => {
-        // Log but don't fail the mutation if invalidation fails
-        logger.error("Failed to invalidate queries:", error);
-      });
-    }
-  }
-
-  return result;
-});
-
-/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any estate-specific resources */
-export const protectedProcedureWithNoEstateRestrictions = publicProcedure
-  .use(({ ctx, next }) => {
-    if (!ctx.session || !ctx.user) {
-      throw new TRPCError({ code: "UNAUTHORIZED" });
-    }
-    return next({
-      ctx: {
-        ...ctx,
-        session: ctx.session,
-        user: ctx.user,
-      },
-    });
-  })
-  .use(autoInvalidateMiddleware); // Add auto-invalidation to all protected procedures
-
-export const protectedProcedure = protectedProcedureWithNoEstateRestrictions.input(
-  z.object({ estateId: z.never().optional() }).optional(),
-);
-
-// Create a version of protectedProcedure without auto-invalidation for special cases
-export const protectedProcedureNoAutoInvalidate = t.procedure.use(({ ctx, next }) => {
+/** Protected procedure that requires authentication */
+export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.session || !ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   return next({
     ctx: {
       ...ctx,
-      session: ctx.session,
-      user: ctx.user,
+      session: ctx.session as NonNullable<typeof ctx.session>,
+      user: ctx.user as NonNullable<typeof ctx.user>,
     },
   });
 });
 
-// Helper to notify organization from within mutations
-export async function notifyOrganizationFromContext(
-  ctx: Context & { user: NonNullable<Context["user"]> },
-  type: "success" | "error" | "info" | "warning",
-  message: string,
-  extraArgs?: Record<string, unknown>,
-) {
-  const membership = await ctx.db.query.organizationUserMembership.findFirst({
-    where: eq(organizationUserMembership.userId, ctx.user.id),
-  });
-
-  if (membership?.organizationId) {
-    await notifyOrganization(ctx.env, membership.organizationId, type, message, extraArgs).catch(
-      (error) => {
-        logger.error("Failed to send notification:", error);
-      },
-    );
-  }
-}
-
-// Helper to create the non-external organization filter
-function getNonExternalOrganizationFilter(userId: string) {
-  return and(
-    eq(organizationUserMembership.userId, userId),
-    ne(organizationUserMembership.role, "external"),
-  );
-}
-
-// Helper function to get user's non-external organizations
-export async function getUserOrganizations(db: DB, userId: string) {
-  return db.query.organizationUserMembership.findMany({
-    where: getNonExternalOrganizationFilter(userId),
-    with: {
-      organization: true,
-    },
-  });
-}
-
-// Helper function to get user's non-external organizations with estates
-export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
-  return db.query.organizationUserMembership.findMany({
-    where: getNonExternalOrganizationFilter(userId),
-    with: {
-      organization: {
-        with: {
-          estates: { with: recentActiveSources },
-        },
-      },
-    },
-  });
-}
-
-// Helper function to get user's organization access
-export async function getUserOrganizationAccess(
-  db: DB,
-  userId: string,
-  organizationId: string,
-): Promise<{ hasAccess: boolean; organization: any | null }> {
-  const membership = await db.query.organizationUserMembership.findFirst({
-    where: and(
-      eq(organizationUserMembership.userId, userId),
-      eq(organizationUserMembership.organizationId, organizationId),
-    ),
-    with: {
-      organization: true,
-    },
-  });
-
-  if (!membership) {
-    return { hasAccess: false, organization: null };
-  }
-
-  return { hasAccess: true, organization: membership.organization };
-}
-
-// Helper function to get user's estate if they have access
-export async function getUserEstateAccess(
-  db: DB,
-  userId: string,
-  estateId: string,
-  organizationId?: string,
-) {
-  const userWithEstates = await db.query.organizationUserMembership.findMany({
-    where: eq(organizationUserMembership.userId, userId),
-    with: { organization: { with: { estates: { with: recentActiveSources } } } },
-  });
-
-  if (!userWithEstates?.length) {
-    return { hasAccess: false, estate: null } as const;
-  }
-
-  const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
-
-  // Check if the estate belongs to the user's organization
-  const _userEstate = allEstates.find((e) => e.id === estateId);
-  const userEstate = _userEstate && {
-    ..._userEstate,
-    connectedRepoId: _userEstate?.sources?.[0]?.repoId,
-    connectedRepoPath: _userEstate?.sources?.[0]?.path,
-    connectedRepoRef: _userEstate?.sources?.[0]?.branch,
-    connectedRepoAccountId: _userEstate?.sources?.[0]?.accountId,
-  };
-
-  if (!userEstate) {
-    return { hasAccess: false, estate: null } as const;
-  }
-
-  // If organizationId is provided, verify it matches
-  if (organizationId && userEstate.organizationId !== organizationId) {
-    return { hasAccess: false, estate: null } as const;
-  }
-
-  return { hasAccess: true, estate: userEstate } as const;
-}
-
-// Organization protected procedure that requires both authentication and organization membership
-// Admins can access any organization
+/** Organization protected procedure that requires both authentication and organization membership */
+// Uses slug instead of ID
 export const orgProtectedProcedure = protectedProcedure
-  .input(z.object({ organizationId: z.string() }))
+  .input(z.object({ organizationSlug: z.string() }))
   .use(async ({ ctx, input, next, path }) => {
-    // Check if user has membership in the organization
+    const org = await ctx.db.query.organization.findFirst({
+      where: eq(organization.slug, input.organizationSlug),
+    });
+
+    if (!org) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Organization with slug ${input.organizationSlug} not found`,
+      });
+    }
+
     const membership = await ctx.db.query.organizationUserMembership.findFirst({
       where: and(
-        eq(organizationUserMembership.organizationId, input.organizationId),
+        eq(organizationUserMembership.organizationId, org.id),
         eq(organizationUserMembership.userId, ctx.user.id),
       ),
-      with: {
-        organization: true,
-      },
     });
 
     // Allow if user has membership OR is a system admin
     if (!membership && ctx.user.role !== "admin") {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: `Access to ${path} denied: User ${ctx.user.id} does not have access to organization ${input.organizationId}`,
+        message: `Access to ${path} denied: User does not have access to organization`,
       });
     }
 
-    // If admin without membership, fetch organization separately
-    if (!membership) {
-      const organization = await ctx.db.query.organization.findFirst({
-        where: (org, { eq }) => eq(org.id, input.organizationId),
-      });
-
-      if (!organization) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Organization ${input.organizationId} not found`,
-        });
-      }
-
-      return next({
-        ctx: {
-          ...ctx,
-          organization,
-          membership: undefined,
-        },
-      });
-    }
-
-    // Pass the organization and membership data to the next middleware/resolver
     return next({
       ctx: {
         ...ctx,
-        organization: membership.organization,
-        membership,
+        organization: org,
+        membership: membership ?? undefined,
       },
     });
   });
@@ -325,9 +131,7 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
     return next({ ctx });
   }
 
-  // Otherwise check membership role (extract to local variable to help TypeScript narrow the type)
-  const { membership } = ctx;
-  const role = membership?.["role"];
+  const role = ctx.membership?.role;
   if (!role || (role !== "owner" && role !== "admin")) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -338,29 +142,163 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
   return next({ ctx });
 });
 
-// Estate protected procedure that requires both authentication and estate access
-export const estateProtectedProcedure = protectedProcedureWithNoEstateRestrictions
-  .use(autoInvalidateMiddleware) // Add auto-invalidation to all protected procedures
-  .input(z.object({ estateId: z.string() }))
-  .use(async ({ ctx, input, next, path }) => {
-    const { hasAccess, estate: userEstate } = await getUserEstateAccess(
-      ctx.db,
-      ctx.user.id,
-      input.estateId,
-    );
+// Project protected procedure that requires authentication and project access
+// Uses slug instead of ID
+export const projectProtectedProcedure = orgProtectedProcedure
+  .input(z.object({ projectSlug: z.string() }))
+  .use(async ({ ctx, input, next }) => {
+    const proj = await ctx.db.query.project.findFirst({
+      where: and(
+        eq(projectTable.organizationId, ctx.organization.id),
+        eq(projectTable.slug, input.projectSlug),
+      ),
+      with: {
+        projectRepos: true,
+        envVars: true,
+        accessTokens: true,
+        connections: true,
+      },
+    });
 
-    if (!hasAccess || !userEstate) {
+    if (!proj) {
       throw new TRPCError({
-        code: "FORBIDDEN",
-        message: `Access to ${path} denied: User ${ctx.user.id} does not have permission to access this estate ${input.estateId}`,
+        code: "NOT_FOUND",
+        message: `Project with slug ${input.projectSlug} not found in organization`,
       });
     }
 
-    // Pass the estate data to the next middleware/resolver
     return next({
       ctx: {
         ...ctx,
-        estate: userEstate,
+        project: proj,
       },
     });
   });
+
+// Admin procedure - requires system admin role
+export const adminProcedure = protectedProcedure.use(async ({ ctx, next, path }) => {
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Access to ${path} denied: Admin role required`,
+    });
+  }
+  return next({ ctx });
+});
+
+/** Middleware that broadcasts query invalidation to all connected clients after mutation */
+const withQueryInvalidation = t.middleware(async ({ ctx, next }) => {
+  const result = await next();
+  if (result.ok) {
+    broadcastInvalidation(ctx.env).catch((error) => {
+      logger.error("Failed to broadcast invalidation:", error);
+    });
+  }
+  return result;
+});
+
+/** Middleware that tracks mutations to PostHog */
+const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawInput }) => {
+  // Only track mutations
+  if (type !== "mutation") {
+    return next();
+  }
+
+  // Check if this mutation should be tracked
+  const config = getTrackingConfig(path);
+  if (!config) {
+    return next();
+  }
+
+  // Capture input BEFORE mutation to avoid blocking response path
+  const rawInput = await getRawInput();
+
+  // Execute the mutation
+  const result = await next();
+
+  // Only track successful mutations
+  if (!result.ok) {
+    return result;
+  }
+
+  // Wrap analytics in try-catch to prevent analytics errors from affecting the mutation response
+  try {
+    // Get user ID for distinct_id
+    const userId = ctx.user?.id;
+    if (!userId) {
+      return result;
+    }
+
+    // Extract properties
+    let properties: Record<string, unknown> = {
+      procedure: path,
+      success: true,
+    };
+
+    if (config.extractProperties) {
+      const extracted = config.extractProperties(rawInput);
+      if (extracted === undefined) {
+        // Skip tracking this specific call
+        return result;
+      }
+      properties = { ...properties, ...extracted };
+    } else if (config.includeFullInput) {
+      properties.input = rawInput;
+    }
+
+    if (config.staticProperties) {
+      properties = { ...properties, ...config.staticProperties };
+    }
+
+    // Build groups
+    const groups: Record<string, string> = {};
+
+    if ("organization" in ctx && ctx.organization) {
+      const org = ctx.organization as { id: string };
+      groups.organization = org.id;
+    }
+
+    if ("project" in ctx && ctx.project) {
+      const proj = ctx.project as { id: string };
+      groups.project = proj.id;
+    }
+
+    // Capture the event using waitUntil to ensure delivery
+    const eventName = config.eventName || `trpc.${path}`;
+    waitUntil(
+      captureServerEvent(ctx.env, {
+        distinctId: userId,
+        event: eventName,
+        properties,
+        groups: Object.keys(groups).length > 0 ? groups : undefined,
+      }),
+    );
+  } catch (error) {
+    logger.error("PostHog tracking error (mutation succeeded, analytics failed):", error);
+  }
+
+  return result;
+});
+
+/** Public mutation procedure - invalidates queries after successful mutation (for testing) */
+export const publicMutation = publicProcedure.use(withQueryInvalidation).use(withPostHogTracking);
+
+/** Protected mutation procedure - invalidates queries after successful mutation */
+export const protectedMutation = protectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
+
+/** Org protected mutation procedure - invalidates queries after successful mutation */
+export const orgProtectedMutation = orgProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
+
+/** Org admin mutation procedure - invalidates queries after successful mutation */
+export const orgAdminMutation = orgAdminProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
+
+/** Project protected mutation procedure - invalidates queries after successful mutation */
+export const projectProtectedMutation = projectProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);

@@ -4,10 +4,13 @@ import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
+import cloudflareTunnel from "vite-plugin-cloudflare-tunnel";
+
+const tunnelHost = process.env.CLOUDFLARE_TUNNEL_HOST;
 
 export default defineConfig({
   resolve: {
-    dedupe: ["@cloudflare/sandbox", "agents", "react", "react-dom"],
+    dedupe: ["react", "react-dom"],
   },
   build: {
     sourcemap: true,
@@ -18,22 +21,29 @@ export default defineConfig({
   },
   server: {
     allowedHosts: [".dev.iterate.com"],
+    cors: false,
+    strictPort: false,
   },
   preview: {
-    port: 5173,
+    port: 5174,
   },
   plugins: [
-    devtools(),
-    // This is needed because github apps oauth is dumb and broken
-    // Even if you set redirect_uri to point to your ngrok host,
-    // github will still redirect back to you using whatever the first URL in the app
-    // callback URLs is set to
-    // https://github.com/orgs/community/discussions/64705
-    // Since a bunch of us also use localhost:5173 in their browser in development but ALSO
-    // want to receive slack webhooks on their ngrok host, we NEVER redirect _to_ localhost
-    // (as slack's webhook service wouldn't be able to follow that redirect)
+    tunnelHost
+      ? cloudflareTunnel({
+          hostname: tunnelHost,
+          apiToken: process.env.CLOUDFLARE_API_TOKEN,
+          port: 5173,
+          tunnelName: `os-${tunnelHost.split(".")[0]}`,
+        })
+      : null,
+    devtools({
+      eventBusConfig: {
+        // Port 0 enables auto-assigned port (default behavior)
+        port: 0,
+      },
+    }),
     {
-      name: "iterate:force-vite-public-url",
+      name: "os:force-vite-public-url",
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
           const publicURL = process.env.VITE_PUBLIC_URL;

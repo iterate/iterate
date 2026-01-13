@@ -1,1544 +1,401 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
-import * as R from "remeda";
-import { waitUntil, type CloudflareEnv } from "../../../env.ts";
-import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
-import type { DB } from "../../db/client.ts";
-import * as schema from "../../db/schema.ts";
-import { SlackAgent } from "../../agent/slack-agent.ts";
-import { logger } from "../../tag-logger.ts";
-import {
-  extractBotUserIdFromAuthorizations,
-  extractUserId,
-  getMessageMetadata,
-  isBotMentionedInMessage,
-  getMentionedExternalUserIds,
-} from "../../agent/slack-agent-utils.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
-import type { AgentCoreEvent } from "../../agent/agent-core.ts";
-import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
-import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod/v4";
+import { eq } from "drizzle-orm";
+import { WebClient } from "@slack/web-api";
+import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../worker.ts";
-// Type alias for Slack message elements from ConversationsRepliesResponse
-type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
+import * as schema from "../../db/schema.ts";
+import { logger } from "../../tag-logger.ts";
+import { encrypt } from "../../utils/encryption.ts";
+import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
 
-export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+export const SLACK_BOT_SCOPES = [
+  "channels:history",
+  "channels:join",
+  "channels:manage",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "files:read",
+  "files:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "users.profile:read",
+  "users:read",
+  "users:read.email",
+  "assistant:write",
+  "conversations.connect:write",
+];
+
+export type SlackOAuthStateData = {
+  projectId: string;
+  userId: string;
+  callbackURL?: string;
+};
 
 /**
- * Looks up which estate owns a specific Slack bot user ID.
- * Uses the account table where bot user IDs are stored in account.accountId.
- *
- * This is used for Slack Connect routing where we need to determine which estate
- * a mentioned bot belongs to.
- *
- * @param db - Database connection
- * @param botUserId - Slack bot user ID (e.g., "U08UQSK9D2M")
- * @returns Estate ID or null if not found
+ * Revoke a Slack access token using auth.revoke API
+ * Returns true if revocation succeeded or token was already invalid
  */
-async function botUserIdToEstateId(db: DB, botUserId: string): Promise<string | null> {
-  const result = await db
-    .select({ estateId: schema.estateAccountsPermissions.estateId })
-    .from(schema.account)
-    .innerJoin(
-      schema.estateAccountsPermissions,
-      eq(schema.account.id, schema.estateAccountsPermissions.accountId),
-    )
-    .where(and(eq(schema.account.providerId, "slack-bot"), eq(schema.account.accountId, botUserId)))
-    .limit(1);
-
-  const estateId = result[0]?.estateId ?? null;
-  logger.info(`[botUserIdToEstateId] ${botUserId} → ${estateId}`);
-  return estateId;
-}
-
-/**
- * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
- *
- * Resolution order:
- * 1. If channelId is provided, check slackChannelEstateOverride table first
- * 2. Fall back to providerEstateMapping (team_id → estate_id)
- *
- * @param db - Database connection
- * @param teamId - Slack team/workspace ID
- * @param channelId - Optional Slack channel ID for channel-specific routing
- * @returns Estate ID or null if not found
- */
-async function slackTeamIdToEstateId({
-  db,
-  teamId,
-  channelId,
-}: {
-  db: DB;
-  teamId: string;
-  channelId?: string;
-}): Promise<string | null> {
-  // First, check for channel-specific override if channelId is provided
-  if (channelId) {
-    const overrideResult = await db.query.slackChannelEstateOverride.findFirst({
-      where: and(
-        eq(schema.slackChannelEstateOverride.slackChannelId, channelId),
-        eq(schema.slackChannelEstateOverride.slackTeamId, teamId),
-      ),
-      columns: {
-        estateId: true,
+export async function revokeSlackToken(accessToken: string): Promise<boolean> {
+  try {
+    const response = await fetch("https://slack.com/api/auth.revoke", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
       },
     });
 
-    if (overrideResult) {
-      logger.info(
-        `Using channel override routing: channel=${channelId}, team=${teamId} → estate=${overrideResult.estateId}`,
-      );
-      return overrideResult.estateId;
-    }
-  }
-
-  // Fall back to default team_id → estate_id mapping
-  const result = await db
-    .select({
-      estateId: schema.providerEstateMapping.internalEstateId,
-    })
-    .from(schema.providerEstateMapping)
-    .where(
-      and(
-        eq(schema.providerEstateMapping.externalId, teamId),
-        eq(schema.providerEstateMapping.providerId, "slack-bot"),
-      ),
-    )
-    .limit(1);
-
-  return result[0]?.estateId ?? null;
-}
-
-/**
- * Just-in-time sync of a single Slack user who sent a message but isn't in our database yet.
- * This handles both internal users and external Slack Connect users.
- *
- * Returns true if user was successfully synced, false otherwise.
- */
-export async function ensureUserSynced(params: {
-  db: DB;
-  estateId: string;
-  slackUserId: string;
-  botToken: string;
-  syncingTeamId: string;
-}): Promise<boolean> {
-  const { db, estateId, slackUserId, botToken, syncingTeamId } = params;
-
-  logger.info(
-    `[JIT Sync] Starting sync for user ${slackUserId}, estate ${estateId}, syncingTeam ${syncingTeamId}`,
-  );
-
-  try {
-    // Check if user already exists for this estate
-    const existing = await db.query.providerUserMapping.findFirst({
-      where: and(
-        eq(schema.providerUserMapping.providerId, "slack-bot"),
-        eq(schema.providerUserMapping.estateId, estateId),
-        eq(schema.providerUserMapping.externalId, slackUserId),
-      ),
-    });
-
-    if (existing) {
-      logger.info(
-        `[JIT Sync] User ${slackUserId} already synced for estate ${estateId} (internalUserId=${existing.internalUserId})`,
-      );
-      return true; // Already synced
-    }
-
-    logger.info(`[JIT Sync] User ${slackUserId} not in database, proceeding with sync`);
-
-    // Check if this is a trial estate
-    const estate = await db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
-      columns: { organizationId: true },
-    });
-
-    const isTrial = await slackChannelOverrideExists(db, estateId);
-
-    // Fetch user info from Slack
-    const slackAPI = new WebClient(botToken);
-    let userInfoResponse;
-    let userInfo: any = null;
-    let hasFullUserInfo = false;
-
-    try {
-      userInfoResponse = await slackAPI.users.info({ user: slackUserId });
-      hasFullUserInfo = userInfoResponse.ok && !!userInfoResponse.user;
-      userInfo = userInfoResponse.user || null;
-
-      if (!hasFullUserInfo) {
-        logger.warn(
-          `[JIT Sync] Limited user info for ${slackUserId} on estate ${estateId} (${userInfoResponse.error})`,
-        );
-      }
-    } catch (error: any) {
-      logger.warn(
-        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on estate ${estateId} (likely external Slack Connect user):`,
-        error,
-      );
-      // For trial estates, this is expected - all users are external
-      // Continue with minimal user record creation
-      if (!isTrial) {
-        return false; // For non-trial estates, fail if we can't get user info
-      }
-    }
-
-    // Determine user's home team ID (for external users)
-    const userHomeTeamId = userInfo?.team_id;
-
-    // Determine if user is external by comparing team IDs
-    // For both trial and regular estates, users from other workspaces are external
-    // For trial estates:
-    //   - iterate team members are INTERNAL (same team ID as syncingTeamId)
-    //   - trial users via Slack Connect are EXTERNAL (different team ID)
-    //   - if we don't have userHomeTeamId, assume EXTERNAL (Slack Connect users have limited API access)
-    const isExternalUser = isTrial
-      ? userHomeTeamId !== syncingTeamId // For trials, assume external unless proven internal
-      : userHomeTeamId && userHomeTeamId !== syncingTeamId; // For regular estates, require proof
-
-    logger.info(
-      `[JIT Sync] User ${slackUserId}: homeTeam=${userHomeTeamId}, syncingTeam=${syncingTeamId}, isTrial=${isTrial}, isExternal=${isExternalUser}, hasFullInfo=${hasFullUserInfo}`,
-    );
-
-    // Generate email using syncing team ID (not user's home team)
-    // If we don't have full user info, always use synthetic email
-    const email = userInfo?.profile?.email || `${slackUserId}@${syncingTeamId}.slack.iterate.com`;
-
-    if (!estate) {
-      logger.error(`[JIT Sync] Estate ${estateId} not found during JIT sync`);
+    if (!response.ok) {
+      logger.warn("Slack auth.revoke HTTP error", { status: response.status });
       return false;
     }
 
-    logger.info(
-      `[JIT Sync] Creating user with email=${email}, name=${userInfo?.real_name || userInfo?.name || `User ${slackUserId}`}`,
-    );
+    const data = (await response.json()) as { ok: boolean; revoked?: boolean; error?: string };
 
-    // Sync user in transaction
-    await db.transaction(async (tx) => {
-      // Create user if doesn't exist
-      await tx
-        .insert(schema.user)
-        .values({
-          name: userInfo?.real_name || userInfo?.name || `User ${slackUserId}`,
-          email: email,
-          emailVerified: false,
-          image: userInfo?.profile?.image_192,
-          isBot: userInfo?.is_bot ?? false,
-        })
-        .onConflictDoNothing();
-
-      // Get the user (either just created or already exists)
-      const user = await tx.query.user.findFirst({
-        where: eq(schema.user.email, email),
-      });
-
-      if (!user) {
-        throw new Error(`User not found after insert for email ${email}`);
+    if (!data.ok) {
+      // Token might already be invalid/revoked - that's fine
+      if (data.error === "invalid_auth" || data.error === "token_revoked") {
+        return true;
       }
+      logger.warn("Slack auth.revoke API error", { error: data.error });
+      return false;
+    }
 
-      // Create provider mapping
-      await tx
-        .insert(schema.providerUserMapping)
-        .values({
-          providerId: "slack-bot",
-          internalUserId: user.id,
-          externalId: slackUserId,
-          estateId: estateId,
-          externalUserTeamId: isExternalUser && userHomeTeamId ? userHomeTeamId : null,
-          providerMetadata: {
-            ...(userInfo || {}),
-            sourceTeamId: userHomeTeamId,
-            isSlackConnect: isExternalUser,
-            jitSynced: true,
-            limitedUserInfo: !hasFullUserInfo,
-          },
-        })
-        .onConflictDoUpdate({
-          target: [
-            schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
-            schema.providerUserMapping.externalId,
-          ],
-          set: {
-            providerMetadata: sql`excluded.provider_metadata`,
-          },
-        });
-
-      const existingMembership = await tx.query.organizationUserMembership.findFirst({
-        where: and(
-          eq(schema.organizationUserMembership.userId, user.id),
-          eq(schema.organizationUserMembership.organizationId, estate.organizationId),
-        ),
-      });
-
-      const role = isTrial
-        ? "member"
-        : existingMembership
-          ? existingMembership.role
-          : isExternalUser
-            ? "external"
-            : userInfo?.is_ultra_restricted || userInfo?.is_restricted
-              ? "guest"
-              : "member";
-
-      if (!existingMembership) {
-        await tx
-          .insert(schema.organizationUserMembership)
-          .values({
-            organizationId: estate.organizationId,
-            userId: user.id,
-            role: role as "guest" | "member" | "external",
-          })
-          .onConflictDoNothing();
-      } else if (isTrial && existingMembership.role !== "member") {
-        await tx
-          .update(schema.organizationUserMembership)
-          .set({ role: "member" })
-          .where(
-            and(
-              eq(schema.organizationUserMembership.userId, user.id),
-              eq(schema.organizationUserMembership.organizationId, estate.organizationId),
-            ),
-          );
-      }
-    });
-
-    logger.info(
-      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for estate ${estateId}`,
-    );
     return true;
   } catch (error) {
-    logger.error(
-      `[JIT Sync] Error syncing user ${slackUserId} for estate ${estateId}:`,
-      error instanceof Error ? error.message : error,
-    );
+    logger.error("Failed to revoke Slack token", error);
     return false;
   }
 }
 
+export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+
+/**
+ * Slack OAuth callback handler
+ * Handles the redirect from Slack after the user authorizes the app
+ */
+slackApp.get(
+  "/callback",
+  zValidator(
+    "query",
+    z.object({
+      state: z.string().optional(),
+      code: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  ),
+  async (c) => {
+    if (!c.var.session) return c.json({ error: "Unauthorized" }, 401);
+
+    const { state, code, error } = c.req.valid("query");
+
+    // Handle OAuth denial/error from Slack
+    if (error) {
+      logger.warn("Slack OAuth error", { error });
+      return c.redirect("/?error=slack_oauth_denied");
+    }
+
+    if (!state || !code) {
+      logger.warn("Slack callback received without state or code");
+      return c.redirect("/");
+    }
+
+    const verification = await c.var.db.query.verification.findFirst({
+      where: eq(schema.verification.identifier, state),
+    });
+
+    await c.var.db.delete(schema.verification).where(eq(schema.verification.identifier, state));
+
+    if (!verification || verification.expiresAt < new Date()) {
+      return c.json({ error: "Invalid state or state has expired" }, 400);
+    }
+
+    const stateData = z
+      .object({
+        projectId: z.string(),
+        userId: z.string(),
+        callbackURL: z.string().optional(),
+      })
+      .parse(JSON.parse(verification.value));
+
+    const { projectId, userId, callbackURL } = stateData;
+
+    if (c.var.session.user.id !== userId) {
+      logger.warn("Slack callback user mismatch", {
+        sessionUserId: c.var.session.user.id,
+        stateUserId: userId,
+      });
+      return c.json({ error: "User mismatch - please restart the Slack connection flow" }, 403);
+    }
+
+    // Use WebClient for proper OAuth v2 token exchange
+    // arctic.Slack uses OpenID Connect which doesn't work with bot scopes
+    const redirectUri = `${c.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
+    const slackClient = new WebClient();
+
+    let tokens;
+    try {
+      tokens = await slackClient.oauth.v2.access({
+        client_id: c.env.SLACK_CLIENT_ID,
+        client_secret: c.env.SLACK_CLIENT_SECRET,
+        code,
+        redirect_uri: redirectUri,
+      });
+    } catch (error) {
+      logger.error("Failed to exchange Slack authorization code", error);
+      return c.json({ error: "Failed to validate authorization code" }, 400);
+    }
+
+    if (!tokens.ok || !tokens.access_token || !tokens.team?.id) {
+      logger.error("Slack oauth.v2.access failed", tokens.error);
+      return c.json({ error: "Failed to get tokens from Slack" }, 400);
+    }
+
+    const accessToken = tokens.access_token;
+    const teamData = {
+      id: tokens.team.id,
+      name: tokens.team.name ?? "Unknown",
+      domain: (tokens as { team: { domain?: string } }).team.domain ?? tokens.team.id,
+    };
+
+    const encryptedAccessToken = await encrypt(accessToken);
+
+    let project;
+    try {
+      project = await c.var.db.transaction(async (tx) => {
+        // Check if this project already has a Slack connection
+        const existingProjectConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "slack")),
+        });
+
+        // Check if this Slack workspace is already connected to another project
+        const existingWorkspaceConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamData.id)),
+          with: { project: true },
+        });
+
+        if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
+          throw new Error(
+            `workspace_already_connected:${existingWorkspaceConnection.project?.name || "another project"}`,
+          );
+        }
+
+        if (existingProjectConnection) {
+          await tx
+            .update(schema.projectConnection)
+            .set({
+              externalId: teamData.id,
+              providerData: {
+                teamId: teamData.id,
+                teamName: teamData.name,
+                teamDomain: teamData.domain,
+                encryptedAccessToken,
+              },
+            })
+            .where(eq(schema.projectConnection.id, existingProjectConnection.id));
+        } else {
+          await tx.insert(schema.projectConnection).values({
+            projectId,
+            provider: "slack",
+            externalId: teamData.id,
+            scope: "project",
+            userId,
+            providerData: {
+              teamId: teamData.id,
+              teamName: teamData.name,
+              teamDomain: teamData.domain,
+              encryptedAccessToken,
+            },
+          });
+        }
+
+        return tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
+          },
+        });
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
+        const projectName = error.message.split(":")[1];
+        const redirectPath = callbackURL || "/";
+        return c.redirect(
+          `${redirectPath}?error=slack_workspace_already_connected&project=${encodeURIComponent(projectName)}`,
+        );
+      }
+      throw error;
+    }
+
+    const redirectPath =
+      callbackURL ||
+      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
+    return c.redirect(redirectPath);
+  },
+);
+
+/**
+ * Slack webhook handler
+ * - Verifies Slack signature
+ * - Handles url_verification challenge
+ * - Saves events to the events table
+ */
 slackApp.post("/webhook", async (c) => {
-  const { db } = c.var;
+  const body = await c.req.text();
 
-  // Get raw request body for signature verification
-  const rawBody = await c.req.text();
-  const signature = c.req.header("x-slack-signature");
-  const requestTimestamp = c.req.header("x-slack-request-timestamp");
-  if (!signature || !requestTimestamp) {
-    return c.text("Slack webhook received without required signature headers", 400);
+  logger.info("[Slack Webhook] Received webhook request");
+
+  // Verify Slack signature
+  const isValid = await verifySlackSignature(
+    c.env.SLACK_SIGNING_SECRET,
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
+    body,
+  );
+
+  if (!isValid) {
+    logger.warn("[Slack Webhook] Invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
   }
-  const signingSecret = c.env.SLACK_SIGNING_SECRET;
-  if (!signingSecret) {
-    return c.text("SLACK_SIGNING_SECRET not configured", 500);
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    logger.warn("[Slack Webhook] Invalid JSON body");
+    return c.json({ error: "Invalid JSON" }, 400);
   }
-  const verification = verifySlackRequest({
-    signingSecret,
-    body: rawBody,
-    headers: {
-      "x-slack-signature": signature,
-      "x-slack-request-timestamp": requestTimestamp,
-    },
+
+  if (typeof payload !== "object" || payload === null) {
+    logger.warn("[Slack Webhook] Invalid payload structure");
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+
+  const p = payload as Record<string, unknown>;
+
+  // Log the full payload for debugging
+  logger.info("[Slack Webhook] Payload received", {
+    type: p.type,
+    event_type: (p.event as Record<string, unknown>)?.type,
+    team_id: p.team_id,
   });
-  if (!verification.success) {
-    logger.warn("Slack webhook signature verification failed", verification);
-    return c.text(
-      verification.errorMessage ?? "Slack webhook signature verification failed",
-      verification.httpStatusCode,
-    );
+
+  // Handle URL verification challenge
+  if (p.type === "url_verification") {
+    logger.info("[Slack Webhook] URL verification challenge received");
+    return c.json({ challenge: p.challenge });
   }
 
-  // Parse the verified body
-  const body = JSON.parse(rawBody) as SlackWebhookPayload;
-  // Slack types say this doesn't exist but it was here in v1...
-  if ("type" in body && body.type === "url_verification" && "challenge" in body) {
-    return c.text(body.challenge as string);
-  }
-  // First we get a slack team ID
-  if (!body.team_id || !body.event) {
-    logger.warn("Slack webhook received without a team ID", body);
+  // Get team ID from payload
+  const teamId =
+    (p.team_id as string) ||
+    ((p.team as Record<string, unknown>)?.id as string) ||
+    ((p.event as Record<string, unknown>)?.team as string);
+
+  if (!teamId) {
+    logger.warn("[Slack Webhook] No team_id in payload");
     return c.text("ok");
   }
 
-  const messageMetadata = await getMessageMetadata(body.event, db);
+  // Find the project associated with this Slack team
+  const db = c.var.db;
 
-  const processInstruction = await determineEstateIdsToProcess({
-    db,
-    body,
-    messageMetadata,
+  // Try to find a project linked to this Slack team
+  const connection = await db.query.projectConnection.findFirst({
+    where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
   });
 
-  // Process the webhook for each estate independently
-  await Promise.all(
-    processInstruction.estateIds.map((estateId) =>
-      processWebhookForEstate({
-        db,
-        body,
-        messageMetadata,
-        estateId,
-        instruction: processInstruction.instruction,
-      }),
-    ),
-  );
+  const projectId = connection?.projectId;
+
+  if (!projectId) {
+    logger.warn("[Slack Webhook] No project found for team", { teamId });
+    return c.text("ok");
+  }
+
+  // Save event to database
+  const eventType = getSlackEventType(payload);
+  logger.info("[Slack Webhook] Saving event", { eventType, projectId, teamId });
+
+  try {
+    await db.insert(schema.event).values({
+      type: eventType,
+      payload: payload as Record<string, unknown>,
+      projectId,
+    });
+    logger.info("[Slack Webhook] Event saved successfully");
+  } catch (error) {
+    logger.error("[Slack Webhook] Failed to save event", error);
+  }
 
   return c.text("ok");
 });
 
-async function determineEstateIdsToProcess({
-  db,
-  body,
-  messageMetadata,
-}: {
-  db: DB;
-  body: SlackWebhookPayload;
-  messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-  // todo: remove the `estateId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the estate?
-}): Promise<{ estateIds: string[]; instruction: "process" | "store-webhooks" }> {
-  if (!body.event) {
-    return { estateIds: [], instruction: "process" };
-  }
-
-  if (messageMetadata.threadTs) {
-    const existingRoutes = await db.query.agentInstance.findMany({
-      where: sql`${schema.agentInstance.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstance.routingKey} LIKE ${"%-slack-%"}`,
-    });
-    if (existingRoutes.length > 0) {
-      const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
-      return { estateIds, instruction: "process" };
-    }
-  }
-
-  // Channel overrides (for trial estates) take priority over bot mention routing
-  if (messageMetadata.channel && body.team_id) {
-    const channelOverrideEstateId = await slackTeamIdToEstateId({
-      db,
-      teamId: body.team_id,
-      channelId: messageMetadata.channel,
-    });
-
-    if (channelOverrideEstateId) {
-      const channelOverride = await db.query.slackChannelEstateOverride.findFirst({
-        where: and(
-          eq(schema.slackChannelEstateOverride.slackChannelId, messageMetadata.channel),
-          eq(schema.slackChannelEstateOverride.slackTeamId, body.team_id),
-        ),
-      });
-
-      if (channelOverride) {
-        return { estateIds: [channelOverrideEstateId], instruction: "process" };
-      }
-    }
-  }
-
-  const mentionedBotIds =
-    body.event.type === "message" || body.event.type === "app_mention"
-      ? "text" in body.event && body.event.text
-        ? getMentionedExternalUserIds(body.event.text)
-        : []
-      : [];
-
-  if (mentionedBotIds.length > 0) {
-    const mentionedBotEstates = await Promise.all(
-      mentionedBotIds.map((botId: string) => botUserIdToEstateId(db, botId)),
-    );
-
-    const validEstateIds = [
-      ...new Set(mentionedBotEstates.filter((id): id is string => id !== null)),
-    ];
-
-    if (validEstateIds.length > 0) {
-      return { estateIds: validEstateIds, instruction: "process" };
-    }
-  }
-
-  if (!body.team_id) {
-    return { estateIds: [], instruction: "process" };
-  }
-
-  const estateId = await slackTeamIdToEstateId({
-    db,
-    teamId: body.team_id,
-    channelId: messageMetadata.channel,
-  });
-
-  if (estateId) {
-    const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-    return { estateIds: [estateId], instruction: isDM ? "process" : "store-webhooks" };
-  }
-
-  return { estateIds: [], instruction: "process" };
-}
-
-async function processWebhookForEstate({
-  db,
-  body,
-  messageMetadata,
-  estateId,
-  instruction,
-}: {
-  db: DB;
-  body: SlackWebhookPayload;
-  messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-  estateId: string;
-  instruction: "process" | "store-webhooks";
-}) {
-  if (!body.event) {
-    return;
-  }
-
-  waitUntil(
-    db
-      .insert(schema.slackWebhookEvent)
-      .values({
-        data: body.event,
-        ts: messageMetadata.ts,
-        thread_ts: messageMetadata.threadTs,
-        type: "type" in body.event ? body.event.type : null,
-        subtype: "subtype" in body.event ? body.event.subtype : null,
-        user: extractUserId(body.event),
-        channel: messageMetadata.channel,
-        estateId: estateId,
-      })
-      .returning(),
-  );
-
-  if (instruction === "store-webhooks") {
-    return;
-  }
-
-  if (
-    body.event.type === "message" &&
-    "subtype" in body.event &&
-    body.event.subtype === "channel_join" &&
-    "channel" in body.event &&
-    body.event.channel
-  ) {
-    const joinedUserId = body.event.user;
-    const botUserId = extractBotUserIdFromAuthorizations(body);
-
-    if (joinedUserId === botUserId && botUserId && body.team_id) {
-      waitUntil(
-        handleBotChannelJoin({
-          db,
-          estateId,
-          channelId: body.event.channel,
-          botUserId,
-          teamId: body.team_id,
-        }),
-      );
-    }
-  }
-
-  waitUntil(
-    getSlackAccessTokenForEstate(db, estateId).then(async (slackAccount) => {
-      if (slackAccount) {
-        await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
-      }
-    }),
-  );
-
-  if (!messageMetadata.threadTs) {
-    return;
-  }
-
-  const routingKey = getRoutingKey({
-    estateId: estateId,
-    threadTs: messageMetadata.threadTs,
-  });
-
-  const details = { type: body.event.type, ...messageMetadata };
-  const agentStub = await getOrCreateAgentStubByRoute("SlackAgent", {
-    db,
-    estateId,
-    route: routingKey,
-    reason: `Slack webhook received: ${new URLSearchParams(details)}`,
-  });
-
-  waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
-}
-
+/**
+ * Slack interactive endpoint (for future use)
+ * Handles interactive components like buttons, menus, etc.
+ */
 slackApp.post("/interactive", async (c) => {
-  return c.text("ok");
+  const body = await c.req.text();
+
+  // Verify Slack signature
+  const isValid = await verifySlackSignature(
+    c.env.SLACK_SIGNING_SECRET,
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
+    body,
+  );
+
+  if (!isValid) {
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  // Parse the payload (interactive payloads are URL-encoded with a payload field)
+  const formData = new URLSearchParams(body);
+  const payloadStr = formData.get("payload");
+
+  if (!payloadStr) {
+    return c.json({ error: "Missing payload" }, 400);
+  }
+
+  try {
+    JSON.parse(payloadStr);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  return c.json({ ok: true });
 });
 
-export function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
-  const suffix = `slack-${estateId}`;
-  return `ts-${threadTs}-${suffix}`;
-}
-
-export async function reactToSlackWebhook(
-  slackWebhookPayload: SlackWebhookPayload,
-  slackAPI: WebClient,
-  messageMetadata: { channel?: string; ts?: string },
-) {
-  const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
-
-  if (!botUserId || !slackWebhookPayload.event) {
-    return;
-  }
-
-  const event = slackWebhookPayload.event;
-
-  if (
-    !messageMetadata.channel ||
-    !messageMetadata.ts ||
-    !("user" in event) ||
-    event.user === botUserId
-  ) {
-    return;
-  }
-
-  const shouldReact =
-    event.type === "app_mention" ||
-    (event.type === "message" && isBotMentionedInMessage(event, botUserId));
-
-  if (shouldReact) {
-    await slackAPI.reactions
-      .add({
-        channel: messageMetadata.channel,
-        timestamp: messageMetadata.ts,
-        name: "eyes",
-      })
-      .catch((error) => {
-        if (!(error instanceof Error && error.message.includes("already_reacted"))) {
-          logger.error("[SlackAgent] Failed to add eyes reaction", error);
-        }
-      });
-  }
-}
-
 /**
- * Syncs Slack channels for an estate.
- * Returns array of all channels and Set of shared channel IDs.
+ * Slack slash commands endpoint (for future use)
  */
-export async function syncSlackChannels(
-  db: DB,
-  botToken: string,
-  estateId: string,
-): Promise<{
-  allChannels: Array<{ id: string; name: string; isShared: boolean; isExtShared: boolean }>;
-  sharedChannelIds: Set<string>;
-}> {
-  try {
-    const authedWebClient = new WebClient(botToken);
+slackApp.post("/commands", async (c) => {
+  const body = await c.req.text();
 
-    const accumulatedChannels = [];
-    let cursor: string | undefined;
-
-    do {
-      const channelsResponse = await authedWebClient.conversations.list({
-        types: "public_channel,private_channel",
-        exclude_archived: false,
-        limit: 200, // Max per page
-        cursor,
-      });
-
-      if (!channelsResponse.ok || !channelsResponse.channels) {
-        logger.error(
-          "Failed to fetch Slack channels:",
-          channelsResponse.error || "No channels returned",
-        );
-        return { allChannels: [], sharedChannelIds: new Set() };
-      }
-
-      accumulatedChannels.push(...channelsResponse.channels);
-      cursor = channelsResponse.response_metadata?.next_cursor;
-    } while (cursor);
-
-    const channels = accumulatedChannels.filter((c) => c.id && c.name);
-
-    if (channels.length === 0) {
-      logger.info("No valid Slack channels to sync");
-      return { allChannels: [], sharedChannelIds: new Set() };
-    }
-
-    await db.transaction(async (tx) => {
-      const channelMappings = channels.map((channel) => ({
-        estateId: estateId,
-        externalId: channel.id!,
-        name: channel.name!,
-        isShared: channel.is_shared ?? false,
-        isExtShared: channel.is_ext_shared ?? false,
-        isPrivate: channel.is_private ?? false,
-        isArchived: channel.is_archived ?? false,
-        providerMetadata: channel,
-      }));
-
-      if (channelMappings.length > 0) {
-        await tx
-          .insert(schema.slackChannel)
-          .values(channelMappings)
-          .onConflictDoUpdate({
-            target: [schema.slackChannel.estateId, schema.slackChannel.externalId],
-            set: {
-              name: sql`excluded.name`,
-              isShared: sql`excluded.is_shared`,
-              isExtShared: sql`excluded.is_ext_shared`,
-              isPrivate: sql`excluded.is_private`,
-              isArchived: sql`excluded.is_archived`,
-              providerMetadata: sql`excluded.provider_metadata`,
-            },
-          });
-      }
-
-      logger.info(`Synced ${channelMappings.length} Slack channels for estate ${estateId}`);
-    });
-
-    const allChannels = channels.map((c) => ({
-      id: c.id!,
-      name: c.name!,
-      isShared: c.is_shared ?? false,
-      isExtShared: c.is_ext_shared ?? false,
-    }));
-
-    const sharedChannelIds = new Set(
-      allChannels.filter((c) => c.isShared || c.isExtShared).map((c) => c.id),
-    );
-
-    return { allChannels, sharedChannelIds };
-  } catch (error) {
-    logger.error("Error syncing Slack channels:", error instanceof Error ? error.message : error);
-    throw error;
-  }
-}
-
-/**
- * Represents the minimal Slack member data needed for syncing users.
- * This matches the structure returned by Slack's users.list API.
- */
-export type SlackMemberData = {
-  id: string;
-  deleted?: boolean;
-  name?: string;
-  real_name?: string;
-  is_bot?: boolean;
-  is_restricted?: boolean;
-  is_ultra_restricted?: boolean;
-  team_id?: string;
-  profile?: {
-    email?: string;
-    image_192?: string;
-  };
-};
-
-/**
- * Options for saving Slack users to database.
- */
-export type SaveSlackUsersOptions = {
-  /** If true, skip creating Slackbot user. Default: false */
-  skipSlackbot?: boolean;
-};
-
-/**
- * Saves Slack users to the database, creating user records, provider mappings,
- * and organization memberships.
- *
- * Email handling strategy:
- * - Regular users with email: Use their actual Slack profile email
- * - Users without emails: Generate synthetic email scoped to the syncing team: {slackUserId}@{teamId}.slack.iterate.com
- * - Slackbot: Generate team-specific email: slackbot@{teamId}.slack.iterate.com
- *
- * This ensures that the same Slack user synced from different teams gets unique emails and separate iterate user records.
- *
- * @returns Set of Slack user IDs that were saved
- */
-export async function saveSlackUsersToDatabase(
-  db: DB,
-  members: SlackMemberData[],
-  estateId: string,
-  teamId: string,
-  options: SaveSlackUsersOptions = {},
-): Promise<Set<string>> {
-  const { skipSlackbot = false } = options;
-
-  // Filter out invalid members upfront
-  // Include bots by allowing members without emails (we'll create synthetic emails for them)
-  const validMembers = members.filter(
-    (member) => member.id && !member.deleted && (member.profile?.email || member.is_bot),
+  // Verify Slack signature
+  const isValid = await verifySlackSignature(
+    c.env.SLACK_SIGNING_SECRET,
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
+    body,
   );
 
-  if (validMembers.length === 0) {
-    logger.info("No valid Slack members to sync");
-    return new Set();
+  if (!isValid) {
+    return c.json({ error: "Invalid signature" }, 401);
   }
 
-  await db.transaction(async (tx) => {
-    // Get the organization ID from the estate
-    const estate = await tx.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
-      columns: {
-        organizationId: true,
-      },
-    });
-
-    if (!estate) {
-      logger.error(`Estate ${estateId} not found`);
-      return;
-    }
-
-    // Create emails for all members
-    // Strategy: Always use syncing team ID for synthetic emails to ensure uniqueness per estate
-    // - Regular users with email: Use actual email (globally unique across Slack)
-    // - Users without email: Generate team-scoped synthetic email {userId}@{teamId}.slack.iterate.com
-    // - Slackbot: Generate team-specific email slackbot@{teamId}.slack.iterate.com
-    //
-    // This means: If estate A and estate B both sync the same external user without email,
-    // they will get different iterate user records (different emails), which is the desired behavior.
-    const memberEmails = validMembers.map((m) => {
-      if (m.id === "USLACKBOT") {
-        // Special case: Team-scoped Slackbot email
-        return `slackbot@${teamId}.slack.iterate.com`;
-      }
-      if (m.profile?.email) {
-        return m.profile.email;
-      }
-      // Synthetic email scoped to the syncing team (not user's home team)
-      return `${m.id}@${teamId}.slack.iterate.com`;
-    });
-
-    // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
-    try {
-      await tx
-        .insert(schema.user)
-        .values(
-          validMembers.map((member, index) => ({
-            name: member.real_name || member.name || "",
-            email: memberEmails[index],
-            image: member.profile?.image_192,
-            emailVerified: false,
-            isBot: member.is_bot ?? false,
-          })),
-        )
-        .onConflictDoNothing();
-    } catch (error) {
-      logger.error("Error creating users (will continue with existing ones):", error);
-    }
-
-    // Step 2: Fetch ALL users (both existing and newly created)
-    const allUsers = await tx.query.user.findMany({
-      where: inArray(schema.user.email, memberEmails),
-    });
-    const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
-
-    // Step 3: Upsert all provider mappings at once
-    const mappingsToUpsert = [];
-    const organizationMembershipsToUpsert = [];
-
-    for (let i = 0; i < validMembers.length; i++) {
-      const member = validMembers[i];
-      const memberEmail = memberEmails[i];
-      const user = usersByEmail.get(memberEmail);
-
-      if (!user) {
-        logger.error(`User not found for email ${memberEmail}`);
-        continue;
-      }
-
-      mappingsToUpsert.push({
-        providerId: "slack-bot" as const,
-        internalUserId: user.id,
-        externalId: member.id!,
-        estateId: estateId,
-        externalUserTeamId: null, // Internal users have no external team
-        providerMetadata: {
-          ...member,
-          sourceTeamId: teamId,
-        },
-      });
-
-      // Determine role based on Slack restrictions
-      const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
-
-      organizationMembershipsToUpsert.push({
-        organizationId: estate.organizationId,
-        userId: user.id,
-        role: role as "guest" | "member",
-      });
-    }
-
-    logger.info(`Upserting ${mappingsToUpsert.length} provider mappings`);
-
-    if (mappingsToUpsert.length > 0) {
-      await tx
-        .insert(schema.providerUserMapping)
-        .values(mappingsToUpsert)
-        .onConflictDoUpdate({
-          target: [
-            schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
-            schema.providerUserMapping.externalId,
-          ],
-          set: {
-            providerMetadata: sql`excluded.provider_metadata`,
-          },
-        });
-    }
-
-    // Step 4: Upsert organization memberships
-    // Note: We use onConflictDoUpdate to ensure roles are updated when re-syncing
-    // This is important for trial upgrades where users may have different roles in the new workspace
-    // However, we must preserve owner/admin roles as these are set by the app, not inferred from Slack
-    logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
-
-    if (organizationMembershipsToUpsert.length > 0) {
-      await tx
-        .insert(schema.organizationUserMembership)
-        .values(organizationMembershipsToUpsert)
-        .onConflictDoUpdate({
-          target: [
-            schema.organizationUserMembership.organizationId,
-            schema.organizationUserMembership.userId,
-          ],
-          set: {
-            // Only update role if current role is not owner/admin
-            // Owner and admin roles are managed through the app, not inferred from Slack
-            role: sql`
-              CASE 
-                              WHEN ${schema.organizationUserMembership.role} IN ('owner', 'admin') 
-                              THEN ${schema.organizationUserMembership.role}
-                              ELSE excluded.role 
-                            END
-            `,
-          },
-        });
-    }
-
-    // Log sync results
-    const botCount = validMembers.filter((m) => m.is_bot).length;
-    logger.info(
-      `Slack sync complete: ${validMembers.length} members processed (${botCount} bots), ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
-    );
-
-    // Proactively ensure Slackbot exists (it may not be in members list)
-    if (!skipSlackbot) {
-      const slackbotEmail = `slackbot@${teamId}.slack.iterate.com`;
-      const slackbotExists = validMembers.some((m) => m.id === "USLACKBOT");
-
-      if (!slackbotExists) {
-        logger.info("Proactively creating Slackbot user record");
-
-        // Create Slackbot user
-        await tx
-          .insert(schema.user)
-          .values({
-            name: "Slackbot",
-            email: slackbotEmail,
-            emailVerified: true,
-            isBot: true,
-          })
-          .onConflictDoNothing();
-
-        // Get the Slackbot user
-        const slackbotUser = await tx.query.user.findFirst({
-          where: eq(schema.user.email, slackbotEmail),
-        });
-
-        if (slackbotUser) {
-          // Create provider mapping for Slackbot
-          await tx
-            .insert(schema.providerUserMapping)
-            .values({
-              providerId: "slack-bot",
-              internalUserId: slackbotUser.id,
-              externalId: "USLACKBOT",
-              estateId: estateId,
-              externalUserTeamId: null, // Slackbot is internal to the workspace
-              providerMetadata: {
-                isSlackbot: true,
-                sourceTeamId: teamId,
-                proactivelyCreated: true,
-              },
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.providerUserMapping.providerId,
-                schema.providerUserMapping.estateId,
-                schema.providerUserMapping.externalId,
-              ],
-              set: {
-                providerMetadata: sql`excluded.provider_metadata`,
-              },
-            });
-
-          // Add Slackbot to organization (as a bot member)
-          await tx
-            .insert(schema.organizationUserMembership)
-            .values({
-              organizationId: estate.organizationId,
-              userId: slackbotUser.id,
-              role: "member",
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.organizationUserMembership.organizationId,
-                schema.organizationUserMembership.userId,
-              ],
-              set: {
-                role: sql`excluded.role`,
-              },
-            });
-
-          logger.info("Slackbot user record created proactively");
-        }
-      }
-    }
+  return c.json({
+    response_type: "ephemeral",
+    text: "Command received! This feature is coming soon.",
   });
-
-  // Return Set of all valid user IDs
-  // Include USLACKBOT explicitly if not skipped
-  const allUserIds = new Set(validMembers.map((m) => m.id!));
-  if (!skipSlackbot) {
-    allUserIds.add("USLACKBOT");
-  }
-  return allUserIds;
-}
-
-/**
- * Syncs internal Slack workspace users for an estate.
- * Fetches users from Slack API and saves them to the database.
- * Returns Set of Slack user IDs that are internal to the workspace.
- *
- * This is a convenience wrapper that:
- * 1. Fetches all users from Slack API with pagination
- * 2. Calls saveSlackUsersToDatabase to persist them
- */
-export async function syncSlackUsersInBackground(
-  db: DB,
-  botToken: string,
-  estateId: string,
-  teamId: string,
-): Promise<Set<string>> {
-  try {
-    const authedWebClient = new WebClient(botToken);
-
-    // Paginate through all users
-    const allMembers: SlackMemberData[] = [];
-    let cursor: string | undefined;
-
-    do {
-      const userListResponse = await authedWebClient.users.list({
-        cursor,
-        limit: 200,
-      });
-
-      if (!userListResponse.ok || !userListResponse.members) {
-        logger.error(
-          "Failed to fetch Slack users:",
-          userListResponse.error || "No members returned",
-        );
-        return new Set();
-      }
-
-      // Cast to SlackMemberData - the Slack API response is compatible
-      allMembers.push(...(userListResponse.members as SlackMemberData[]));
-      cursor = userListResponse.response_metadata?.next_cursor;
-    } while (cursor);
-
-    return await saveSlackUsersToDatabase(db, allMembers, estateId, teamId);
-  } catch (error) {
-    logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
-    throw error;
-  }
-}
-
-/**
- * Orchestrates complete Slack sync for an estate:
- * 1. Syncs channels (parallel with users)
- * 2. Syncs internal workspace users (parallel with channels)
- * 3. Syncs external Slack Connect users from shared channels (sequential)
- */
-export async function syncSlackForEstateInBackground(
-  db: DB,
-  botToken: string,
-  estateId: string,
-  teamId: string,
-): Promise<{
-  channels: { count: number; sharedCount: number };
-  users: { internalCount: number; externalCount: number };
-  errors: string[];
-}> {
-  try {
-    logger.info(`Starting complete Slack sync for estate ${estateId}`);
-
-    // Phase 1: Sync channels and internal users in parallel
-    const [channelsResult, internalUserIds] = await Promise.all([
-      syncSlackChannels(db, botToken, estateId),
-      syncSlackUsersInBackground(db, botToken, estateId, teamId),
-    ]);
-
-    const { sharedChannelIds } = channelsResult;
-
-    // Phase 2: Sync external users from shared channels (needs internal user IDs)
-    const externalUsersResult = await syncSlackConnectUsers(
-      db,
-      botToken,
-      estateId,
-      teamId,
-      sharedChannelIds,
-      internalUserIds,
-    );
-
-    logger.info(
-      `Complete Slack sync finished for estate ${estateId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
-    );
-
-    return {
-      channels: {
-        count: channelsResult.allChannels.length,
-        sharedCount: sharedChannelIds.size,
-      },
-      users: {
-        internalCount: internalUserIds.size,
-        externalCount: externalUsersResult.externalUserCount,
-      },
-      errors: externalUsersResult.errors,
-    };
-  } catch (error) {
-    logger.error("Error in syncSlackForEstateInBackground:", error);
-    throw error;
-  }
-}
-
-/**
- * Syncs Slack Connect (external) users from shared channels.
- * Creates user records and marks them as "external" in organization membership.
- *
- * Email handling strategy:
- * - External users with email: Use their actual Slack profile email (globally unique)
- * - External users without email: Generate synthetic email scoped to the syncing team: {slackUserId}@{iterateTeamId}.slack.iterate.com
- *
- * Note: We use iterateTeamId (the syncing team) not externalUserTeamId (user's home team) for synthetic emails.
- * This ensures the same external user appears as different iterate users when synced from different estates.
- */
-export async function syncSlackConnectUsers(
-  db: DB,
-  botToken: string,
-  estateId: string,
-  iterateTeamId: string,
-  sharedChannelIds: Set<string>,
-  internalUserIds: Set<string>,
-): Promise<{ externalUserCount: number; errors: string[] }> {
-  if (sharedChannelIds.size === 0) {
-    logger.info("No shared channels to sync external users from");
-    return { externalUserCount: 0, errors: [] };
-  }
-
-  const authedWebClient = new WebClient(botToken);
-  const errors: string[] = [];
-  const externalUsersByIdMap = new Map<
-    string,
-    { userInfo: any; externalUserTeamId?: string; discoveredInChannels: string[] }
-  >();
-
-  // Fetch members for each shared channel in parallel (with pagination)
-  const channelMemberResults = await Promise.allSettled(
-    Array.from(sharedChannelIds).map(async (channelId) => {
-      try {
-        const allMembers: string[] = [];
-        let cursor: string | undefined;
-
-        // Paginate through all members of the channel
-        do {
-          const membersResponse = await authedWebClient.conversations.members({
-            channel: channelId,
-            cursor,
-            limit: 1000,
-          });
-
-          if (!membersResponse.ok || !membersResponse.members) {
-            throw new Error(
-              `Failed to fetch members for channel ${channelId}: ${membersResponse.error}`,
-            );
-          }
-
-          allMembers.push(...membersResponse.members);
-          cursor = membersResponse.response_metadata?.next_cursor;
-        } while (cursor);
-
-        return { channelId, members: allMembers };
-      } catch (error) {
-        const errorMsg = `Error fetching members for channel ${channelId}: ${error instanceof Error ? error.message : error}`;
-        logger.error(errorMsg);
-        errors.push(errorMsg);
-        return null;
-      }
-    }),
-  );
-
-  // Identify external users (not in internal user list)
-  for (const result of channelMemberResults) {
-    if (result.status === "fulfilled" && result.value) {
-      const { channelId, members } = result.value;
-
-      for (const memberId of members) {
-        if (!internalUserIds.has(memberId)) {
-          // This is an external user
-          if (externalUsersByIdMap.has(memberId)) {
-            // Already found in another channel
-            externalUsersByIdMap.get(memberId)!.discoveredInChannels.push(channelId);
-          } else {
-            externalUsersByIdMap.set(memberId, {
-              userInfo: null, // Will fetch later
-              discoveredInChannels: [channelId],
-            });
-          }
-        }
-      }
-    }
-  }
-
-  if (externalUsersByIdMap.size === 0) {
-    logger.info("No external Slack Connect users found in shared channels");
-    return { externalUserCount: 0, errors };
-  }
-
-  // Fetch user info for all external users in parallel
-  const userInfoResults = await Promise.allSettled(
-    Array.from(externalUsersByIdMap.keys()).map(async (userId) => {
-      try {
-        const userInfoResponse = await authedWebClient.users.info({ user: userId });
-        if (!userInfoResponse.ok || !userInfoResponse.user) {
-          throw new Error(`Failed to fetch user info: ${userInfoResponse.error}`);
-        }
-        // Extract team_id from user info - this is the external user's home team
-        const externalUserTeamId = userInfoResponse.user.team_id;
-        if (!externalUserTeamId) {
-          throw new Error(`No team_id found for external user ${userId}`);
-        }
-        return { userId, userInfo: userInfoResponse.user, externalUserTeamId };
-      } catch (error) {
-        const errorMsg = `Error fetching user info for ${userId}: ${error instanceof Error ? error.message : error}`;
-        logger.error(errorMsg);
-        errors.push(errorMsg);
-        return null;
-      }
-    }),
-  );
-
-  // Update map with fetched user info and team ID
-  for (const result of userInfoResults) {
-    if (result.status === "fulfilled" && result.value) {
-      const { userId, userInfo, externalUserTeamId } = result.value;
-      const existing = externalUsersByIdMap.get(userId)!;
-      existing.userInfo = userInfo;
-      existing.externalUserTeamId = externalUserTeamId;
-    }
-  }
-
-  // Insert/update external users in database
-  await db.transaction(async (tx) => {
-    const estate = await tx.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
-      columns: { organizationId: true },
-    });
-
-    if (!estate) {
-      throw new Error(`Estate ${estateId} not found`);
-    }
-
-    for (const [
-      externalUserId,
-      { userInfo, externalUserTeamId, discoveredInChannels },
-    ] of externalUsersByIdMap) {
-      if (!userInfo) {
-        logger.warn(`Skipping external user ${externalUserId} - no user info available`);
-        continue;
-      }
-
-      if (!externalUserTeamId) {
-        logger.error(`Skipping external user ${externalUserId} - no team ID available`);
-        continue;
-      }
-
-      // Use actual email from Slack profile, or generate synthetic email scoped to the syncing team
-      // Pattern: {slackUserId}@{iterateTeamId}.slack.iterate.com
-      // This ensures external users get unique emails per syncing estate
-      const email =
-        userInfo.profile?.email || `${externalUserId}@${iterateTeamId}.slack.iterate.com`;
-
-      // Create or get user
-      try {
-        await tx
-          .insert(schema.user)
-          .values({
-            name: userInfo.real_name || userInfo.name || "External User",
-            email: email,
-            emailVerified: false,
-            image: userInfo.profile?.image_192,
-            isBot: userInfo.is_bot ?? false,
-          })
-          .onConflictDoNothing();
-      } catch (error) {
-        logger.error(`Error creating external user ${externalUserId}:`, error);
-        continue;
-      }
-
-      // Get the user we just created/found
-      const user = await tx.query.user.findFirst({
-        where: eq(schema.user.email, email),
-      });
-
-      if (!user) {
-        logger.error(`User not found after insert for email ${email}`);
-        continue;
-      }
-
-      // Upsert provider mapping
-      await tx
-        .insert(schema.providerUserMapping)
-        .values({
-          providerId: "slack-bot",
-          internalUserId: user.id,
-          externalId: externalUserId,
-          estateId: estateId, // The estate that discovered this external user
-          externalUserTeamId, // Their actual home team
-          providerMetadata: {
-            ...userInfo,
-            sourceTeamId: externalUserTeamId,
-            isSlackConnect: true,
-            discoveredInChannels: discoveredInChannels.map((channelId) => ({
-              channelId,
-              teamId: iterateTeamId,
-            })),
-          },
-        })
-        .onConflictDoUpdate({
-          target: [
-            schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
-            schema.providerUserMapping.externalId,
-          ],
-          set: {
-            providerMetadata: sql`excluded.provider_metadata`,
-          },
-        });
-
-      // Create organization membership with "external" role
-      await tx
-        .insert(schema.organizationUserMembership)
-        .values({
-          organizationId: estate.organizationId,
-          userId: user.id,
-          role: "external",
-        })
-        .onConflictDoNothing(); // Don't override if already a member with different role
-    }
-
-    logger.info(
-      `Synced ${externalUsersByIdMap.size} external Slack Connect users for estate ${estateId}`,
-    );
-  });
-
-  return { externalUserCount: externalUsersByIdMap.size, errors };
-}
-
-async function handleBotChannelJoin(params: {
-  db: DB;
-  estateId: string;
-  channelId: string;
-  botUserId: string;
-  teamId: string;
-}) {
-  const { db, estateId, channelId, botUserId } = params;
-
-  const slackAccount = await getSlackAccessTokenForEstate(db, estateId);
-  if (!slackAccount) {
-    logger.error("No Slack token available for channel join handling");
-    return;
-  }
-
-  const slackAPI = new WebClient(slackAccount.accessToken);
-
-  const history = await slackAPI.conversations.history({
-    channel: channelId,
-    limit: 5,
-  });
-
-  if (!history.ok || !history.messages) {
-    logger.error("Failed to fetch channel history");
-    return;
-  }
-
-  const validMessages = history.messages.filter((m) => m.ts);
-  const threadsByTs = R.groupBy(validMessages, (m) => m.thread_ts || m.ts!);
-
-  const threadEntries = Object.entries(threadsByTs);
-  const threadRepliesResults = await Promise.allSettled(
-    threadEntries.map(async ([threadTs]) => {
-      const threadHistory = await slackAPI.conversations.replies({
-        channel: channelId,
-        ts: threadTs,
-        inclusive: true,
-        limit: 100,
-      });
-
-      if (!threadHistory.ok || !threadHistory.messages) {
-        throw new Error(`Failed to fetch thread history for ${threadTs}`);
-      }
-
-      return { threadTs, threadHistory };
-    }),
-  );
-
-  const threadsWithMentions = R.pipe(
-    threadRepliesResults,
-    R.filter(
-      (
-        result,
-      ): result is PromiseFulfilledResult<{
-        threadTs: string;
-        threadHistory: ConversationsRepliesResponse;
-      }> => result.status === "fulfilled",
-    ),
-    R.map((result) => result.value),
-    R.filter(
-      ({ threadHistory }) =>
-        // Check if any message mentions the bot (passes single botUserId, function accepts string | string[])
-        threadHistory.messages?.some((m) => isBotMentionedInMessage(m, botUserId)) ?? false,
-    ),
-  );
-
-  await Promise.allSettled(
-    threadsWithMentions.map(async ({ threadTs, threadHistory }) => {
-      const routingKey = getRoutingKey({ estateId, threadTs });
-
-      const threadContext = R.pipe(
-        threadHistory.messages ?? [],
-        R.filter((msg): msg is SlackMessage => Boolean(msg.user && msg.text && msg.ts && msg.type)),
-        R.sortBy((msg) => parseFloat(msg.ts!)),
-        R.map((msg) => ({
-          user: msg.user!,
-          text: msg.text!,
-          ts: msg.ts!,
-          type: msg.type!,
-          timestamp: new Date(parseFloat(msg.ts!) * 1000).toISOString(),
-        })),
-      );
-
-      const contextEvents: AgentCoreEvent[] = [
-        {
-          type: "CORE:LLM_INPUT_ITEM",
-          data: {
-            type: "message",
-            role: "developer",
-            content: [
-              {
-                type: "input_text",
-                text: `The bot was just added to this Slack channel and is joining an existing thread where it was mentioned. Here is the thread history:\n\n${JSON.stringify(threadContext, null, 2)}\n\nThe bot should acknowledge it's joining an existing conversation and respond helpfully to any questions or requests in the thread above.`,
-              },
-            ],
-          },
-          triggerLLMRequest: true,
-        },
-      ];
-
-      const mentionMessage = R.pipe(
-        threadHistory.messages ?? [],
-        R.reverse(),
-        R.find((m) => isBotMentionedInMessage(m, botUserId)),
-      );
-
-      const [agentStub] = await Promise.allSettled([
-        getOrCreateAgentStubByRoute("SlackAgent", {
-          db,
-          estateId,
-          route: routingKey,
-          reason: "Bot joined channel with existing mention",
-        }) as unknown as Promise<SlackAgent>,
-        mentionMessage?.ts
-          ? slackAPI.reactions
-              .add({
-                channel: channelId,
-                timestamp: mentionMessage.ts,
-                name: "eyes",
-              })
-              .catch((error) => {
-                logger.error("[SlackAgent] Failed to add reaction:", error);
-              })
-          : Promise.resolve(),
-      ]);
-
-      if (agentStub.status === "fulfilled") {
-        const initEvents = await agentStub.value.initSlack(channelId, threadTs);
-
-        const participantEvents = mentionMessage?.user
-          ? await agentStub.value.getParticipantJoinedEvents(mentionMessage.user, botUserId)
-          : [];
-
-        await agentStub.value.addEvents([...initEvents, ...participantEvents, ...contextEvents]);
-      } else {
-        logger.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
-      }
-    }),
-  );
-}
-
-/**
- * Verifies the signature of an incoming request from Slack.
- * Returns a structured result and avoids throwing for control flow.
- */
-export function verifySlackRequest(options: {
-  signingSecret: string;
-  body: string;
-  headers: {
-    "x-slack-signature": string;
-    "x-slack-request-timestamp": number | string;
-  };
-  nowMilliseconds?: number;
-}): { success: true } | { success: false; httpStatusCode: 400 | 401; errorMessage: string } {
-  const verifyErrorPrefix = "Slack request verification";
-  const requestTimestampRaw = options.headers["x-slack-request-timestamp"];
-  const requestTimestampSec =
-    typeof requestTimestampRaw === "string"
-      ? parseInt(requestTimestampRaw, 10)
-      : requestTimestampRaw;
-  const signature = options.headers["x-slack-signature"];
-
-  if (Number.isNaN(requestTimestampSec)) {
-    return {
-      success: false,
-      httpStatusCode: 400,
-      errorMessage: `${verifyErrorPrefix}: header x-slack-request-timestamp did not have the expected type (${requestTimestampRaw})`,
-    };
-  }
-
-  // Calculate time-dependent values
-  const nowMs = options.nowMilliseconds ?? Date.now();
-  const requestTimestampMaxDeltaMin = 5;
-  const fiveMinutesAgoSec = Math.floor(nowMs / 1000) - 60 * requestTimestampMaxDeltaMin;
-
-  // Rule 1: Check staleness
-  if (requestTimestampSec < fiveMinutesAgoSec) {
-    return {
-      success: false,
-      httpStatusCode: 401,
-      errorMessage: `${verifyErrorPrefix}: x-slack-request-timestamp must differ from system time by no more than ${requestTimestampMaxDeltaMin} minutes or request is stale`,
-    };
-  }
-
-  // Rule 2: Check signature
-  const [signatureVersion, signatureHash] = signature.split("=");
-  if (signatureVersion !== "v0") {
-    return {
-      success: false,
-      httpStatusCode: 401,
-      errorMessage: `${verifyErrorPrefix}: unknown signature version`,
-    };
-  }
-
-  const hmac = createHmac("sha256", options.signingSecret);
-  hmac.update(`${signatureVersion}:${requestTimestampSec}:${options.body}`);
-  const ourSignatureHash = hmac.digest("hex");
-  if (
-    !signatureHash ||
-    !timingSafeEqual(Buffer.from(signatureHash), Buffer.from(ourSignatureHash))
-  ) {
-    return {
-      success: false,
-      httpStatusCode: 401,
-      errorMessage: `${verifyErrorPrefix}: signature mismatch`,
-    };
-  }
-
-  return { success: true };
-}
+});
