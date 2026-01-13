@@ -2,7 +2,7 @@ import { test as base } from "./test-helpers.ts";
 
 const test = base.extend<{ baseURL: string }>({
   baseURL: async ({ baseURL }, use) => {
-    const newURL = baseURL.includes("//localhost:5173") ? "http://localhost:3000" : baseURL;
+    const newURL = baseURL.replace("localhost:5173", "localhost:3000");
     await use(newURL);
   },
 });
