@@ -21,9 +21,9 @@ exec 4>&3
 } &
 
 # Example service B: depends on service A
-# Health check will fail until service A is ready (checks A's /ping endpoint)
+# Health check will fail until service A is ready (checks A's /health endpoint)
 exec node --experimental-strip-types test-daemon.ts \
   --name service-b \
   --port 3002 \
   --startup-delay 0 \
-  --upstream http://localhost:3001/ping
+  --upstream http://localhost:3001/health
