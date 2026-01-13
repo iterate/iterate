@@ -41,6 +41,37 @@ export interface LocalDockerConfig {
   findAvailablePort: () => Promise<number>;
 }
 
+export function createLocalVanillaProvider(): MachineProvider {
+  return {
+    type: "local-vanilla",
+    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      return { externalId: machineConfig.machineId };
+    },
+    async start(_externalId: string): Promise<void> {
+      return;
+    },
+    async stop(_externalId: string): Promise<void> {
+      return;
+    },
+    async restart(_externalId: string): Promise<void> {
+      return;
+    },
+    async archive(_externalId: string): Promise<void> {
+      return;
+    },
+    async delete(_externalId: string): Promise<void> {
+      return;
+    },
+    getPreviewUrl(
+      _externalId: string,
+      _metadata?: Record<string, unknown>,
+      _port?: number,
+    ): string {
+      return `http://localhost:${3000}`;
+    },
+  };
+}
+
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
   const { imageName, findAvailablePort } = config;
 

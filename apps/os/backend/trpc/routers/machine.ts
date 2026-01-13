@@ -378,6 +378,10 @@ export const machineRouter = router({
           const hostPort = port === 3000 ? metadata.port : metadata.port + 1;
           return `http://localhost:${hostPort}`;
         }
+        // why aren't we using the provider.getPreviewUrl() here?
+        if (machineRecord.type === "local-vanilla") {
+          return `http://localhost:${3000}`;
+        }
         return null;
       };
 

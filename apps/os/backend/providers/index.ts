@@ -2,7 +2,7 @@ import type { MachineType } from "../db/schema.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
-import { createLocalDockerProvider } from "./local-docker.ts";
+import { createLocalDockerProvider, createLocalVanillaProvider } from "./local-docker.ts";
 
 export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
@@ -27,7 +27,8 @@ export function createMachineProvider(
         imageName: "iterate-sandbox:local",
         findAvailablePort: options.findAvailablePort,
       });
-
+    case "local-vanilla":
+      return createLocalVanillaProvider();
     default: {
       const _exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${_exhaustiveCheck}`);

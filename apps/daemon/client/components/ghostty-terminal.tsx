@@ -169,6 +169,10 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
         if (termRef.current && typeof termRef.current.dispose === "function") {
           termRef.current.dispose();
         }
+        // Clear any leftover DOM content to prevent showing old terminal output
+        if (containerRef.current) {
+          containerRef.current.innerHTML = "";
+        }
       };
     }, [wsBase, tmuxSessionName]);
 

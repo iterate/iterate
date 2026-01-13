@@ -102,7 +102,7 @@ export function MachineTable({
     if (result.nativeDaemonUrl) {
       window.open(result.nativeDaemonUrl, "_blank");
     } else {
-      toast.error("Native URL not available");
+      toast.error("Native URL not available" + JSON.stringify(result));
     }
   };
 
@@ -261,8 +261,8 @@ export function MachineTable({
                   }
                 >
                   {machine.type === "local-docker"
-                    ? `Local :${machine.metadata?.port ?? "?"}`
-                    : "Daytona"}
+                    ? `local :${machine.metadata?.port ?? "?"}`
+                    : machine.type}
                 </Badge>
               </TableCell>
               <TableCell>
@@ -315,6 +315,12 @@ export function MachineTable({
                           Daemon (Iterate proxy)
                         </DropdownMenuItem>
                       </>
+                    )}
+                    {machine.type === "local-vanilla" && (
+                      <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
+                        <Monitor className="h-4 w-4 mr-2" />
+                        Daemon (localhost)
+                      </DropdownMenuItem>
                     )}
                     {machine.type === "local-docker" && (
                       <>

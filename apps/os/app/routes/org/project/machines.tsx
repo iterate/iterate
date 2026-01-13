@@ -25,7 +25,7 @@ import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
 import { isNonProd } from "../../../../env-client.ts";
 
-type MachineType = "daytona" | "local-docker";
+type MachineType = "daytona" | "local-docker" | "local-vanilla";
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
@@ -170,6 +170,7 @@ function ProjectMachinesPage() {
                   <SelectContent>
                     <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
                     <SelectItem value="local-docker">Local Docker</SelectItem>
+                    <SelectItem value="local-vanilla">Local Vanilla</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -98,6 +98,7 @@ const copyFromLocalMount = () => {
  * Clones or pulls the iterate repo from GitHub (for Daytona/production use).
  */
 const cloneOrPullFromGit = () => {
+  // todo: pull from my branch, not just main every time.
   if (!existsSync(ITERATE_REPO)) {
     console.log("");
     console.log("Cloning iterate repo...");
@@ -180,7 +181,7 @@ const startS6Svscan = (): ChildProcess => {
   console.log("Starting s6-svscan");
   console.log("========================================");
   console.log("");
-
+  //
   const svscan = spawn("s6-svscan", [S6_DAEMONS_PATH], {
     stdio: "inherit",
     env: {
