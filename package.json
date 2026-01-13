@@ -68,10 +68,5 @@
     "overrides": {
       "baseline-browser-mapping": "^2.9.14"
     }
-  },
-  "lint-staged": {
-    "*": [
-      "prettier --write --ignore-unknown"
-    ]
   }
 }

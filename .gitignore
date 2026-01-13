@@ -45,3 +45,6 @@ opensrc/
 
 # opencode sessions
 session-ses*.md
+
+# local lint-staged config
+lint-staged.local.js
