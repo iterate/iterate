@@ -15,8 +15,5 @@ test.describe("machine list sync", () => {
     await page.getByRole("button", { name: "Create" }).click();
 
     await page.getByText(machineName).waitFor();
-
-    // todo: remove this deliberate failure before merging the pr that introduces it
-    await page.getByTestId("this-thing-does-not-exist").waitFor();
   });
 });
