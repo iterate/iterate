@@ -1,4 +1,4 @@
-import { login, createOrganization, createProject, test, sidebarButton } from "./test-helpers.ts";
+import { login, createOrganization, createProject, test, sidebarClick } from "./test-helpers.ts";
 
 test.describe("shell navigation", () => {
   test("connectors and team pages render", async ({ page }) => {
@@ -6,14 +6,13 @@ test.describe("shell navigation", () => {
     await login(page, testEmail);
 
     await createOrganization(page);
-    const project = await createProject(page);
-    await project.click();
+    await createProject(page);
 
-    await sidebarButton(page, "Connectors").click();
+    await sidebarClick(page, "Connectors");
     await page.getByText("Project connections").waitFor();
     await page.getByText("Your connections").waitFor();
 
-    await sidebarButton(page, "Team").click();
+    await sidebarClick(page, "Team");
     await page.getByLabel("Email").waitFor();
   });
 

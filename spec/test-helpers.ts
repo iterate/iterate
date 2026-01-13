@@ -43,17 +43,19 @@ export async function createOrganization(page: Page, orgName = `E2E Org ${Date.n
   await page.getByLabel("Organization name").fill(orgName);
   await page.getByRole("button", { name: "Create organization" }).click();
 
-  // make sure the org switcher eventually shows up
+  await ensureSidebarOpen(page);
   await page.locator("[data-component='OrgSwitcher']", { hasText: orgName }).waitFor();
+  await closeSidebar(page);
 }
 
 export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
   await page.getByText("Create project").click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  const projectItem = page.locator("[data-slot='item']", { hasText: projectName });
-  await projectItem.waitFor();
-  return projectItem;
+  await page.waitForURL(/\/projects\//);
+  await ensureSidebarOpen(page);
+  await page.locator("[data-sidebar='group-label']").getByText("Project:").waitFor();
+  await closeSidebar(page);
 }
 
 export function getProjectBasePath(page: Page) {
@@ -65,6 +67,24 @@ export function getOrganizationSlug(pathname: string) {
   const parts = pathname.split("/").filter(Boolean);
   const orgIndex = parts.indexOf("orgs");
   return orgIndex >= 0 ? parts[orgIndex + 1] : "";
+}
+
+const openSidebarParentSelector = `[data-slot='sidebar'][data-state='open']`;
+const triggerOpenButtonSelector = `main:not(:has(${openSidebarParentSelector})) [data-slot='sidebar-trigger']`;
+const alreadyOpenNoopSelector = `${openSidebarParentSelector} [data-sidebar='group-label']`;
+
+export async function ensureSidebarOpen(page: Page) {
+  await page.locator(`${triggerOpenButtonSelector}, ${alreadyOpenNoopSelector}`).click();
+}
+
+export async function closeSidebar(page: Page) {
+  await page.keyboard.press("Escape"); // close the sidebar if it's closeable
+}
+
+export async function sidebarClick(page: Page, text: string) {
+  await ensureSidebarOpen(page);
+  await sidebarButton(page, text).click();
+  await page.keyboard.press("Escape"); // close the sidebar if it's closeable
 }
 
 export function sidebarButton(page: Page, text: string) {

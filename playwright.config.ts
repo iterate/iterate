@@ -19,7 +19,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["iPhone 15"] },
     },
   ],
   webServer: {
