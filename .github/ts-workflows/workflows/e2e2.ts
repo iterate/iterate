@@ -33,7 +33,7 @@ export default workflow({
           "working-directory": "e2e",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
         },
-        { run: "pnpm os2 e2e" },
+        { run: "pnpm e2e" },
         {
           name: "upload e2e logs",
           if: "failure()",

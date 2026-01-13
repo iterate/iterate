@@ -22,7 +22,7 @@ jobs:
       - name: Install Playwright browsers
         working-directory: e2e
         run: pnpm exec playwright install && pnpm exec playwright install-deps
-      - run: pnpm os2 e2e
+      - run: pnpm e2e
       - name: upload e2e logs
         if: failure()
         run: ls -A ./e2e
