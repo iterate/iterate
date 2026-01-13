@@ -121,9 +121,14 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
             setConnectionStatus("disconnected");
           };
 
-          ws.onclose = () => {
+          ws.onclose = (event) => {
             if (cancelled) return;
             setConnectionStatus("disconnected");
+
+            const NO_RECONNECT_CODE = 4000;
+            if (event.code === NO_RECONNECT_CODE) {
+              return;
+            }
 
             reconnectTimeout = setTimeout(() => {
               if (cancelled) return;
