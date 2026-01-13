@@ -107,8 +107,7 @@ export default {
               fi
             }
 
-            write_git_changes apps/os 'apps/os changes'
-            write_git_changes ':!apps/os' 'other changes'
+            write_git_changes '.' 'changes'
 
             add_to_changelog "Triggered by: @\${{ github.actor }}"
 
@@ -140,19 +139,8 @@ export default {
         },
       ],
     },
-    e2e: {
-      if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
-      uses: "./.github/workflows/e2e.yml",
-      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
-      secrets: "inherit",
-      needs: ["variables", "deploy"],
-      with: {
-        worker_url: "${{ needs.deploy.outputs.worker_url || 'some_garbage' }}",
-        stage: "${{ needs.variables.outputs.stage }}",
-      },
-    },
     slack_failure: {
-      needs: ["variables", "deploy", "e2e", "release"],
+      needs: ["variables", "deploy", "release"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       env: { NEEDS: "${{ toJson(needs) }}" },
@@ -168,10 +156,6 @@ export default {
           const { release_name, ...outputs } = needs.variables?.outputs as Record<string, string>;
           const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
-          if (failedJobs.includes("e2e")) {
-            message +=
-              " <https://artifact.ci/artifact/view/${{ github.repository }}/run/${{ github.run_id }}.${{ github.run_attempt }}/e2e-logs|View Artifacts>.";
-          }
           message +=
             " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
           await slack.chat.postMessage({

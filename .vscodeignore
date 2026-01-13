@@ -1,5 +1,2 @@
-# Deprecated apps/os - use apps/os2 instead
-apps/os/**
-
 # Legacy SDK package
 packages/sdk/**
