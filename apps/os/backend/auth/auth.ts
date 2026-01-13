@@ -46,7 +46,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
             const email = user.email.trim().toLowerCase();
             if (!matchesEmailPattern(email, allowSignupFromEmails)) {
               throw new APIError("FORBIDDEN", {
-                message: "Sign up is not available for this email address" + allowSignupFromEmails,
+                message: "Sign up is not available for this email address",
               });
             }
             return { data: user };
