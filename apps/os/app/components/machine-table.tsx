@@ -102,7 +102,7 @@ export function MachineTable({
     if (result.nativeDaemonUrl) {
       window.open(result.nativeDaemonUrl, "_blank");
     } else {
-      toast.error("Native URL not available" + JSON.stringify(result));
+      toast.error("Native URL not available");
     }
   };
 
