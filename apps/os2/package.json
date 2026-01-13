@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "build": "doppler run -- vite build",
-    "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-dev-${ITERATE_USER}}\"",
-    "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER",
+    "deploy": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-dev-$ITERATE_USER}\"'",
+    "dev": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER'",
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "vitest",

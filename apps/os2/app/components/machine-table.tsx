@@ -7,22 +7,14 @@ import {
   RotateCcw,
   Monitor,
   ScrollText,
-  Copy,
-  Check,
   SquareTerminal,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
+import { TypeId } from "./type-id.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { ConfirmDialog } from "./ui/confirm-dialog.tsx";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,7 +51,6 @@ export function MachineTable({
   onDelete,
   isLoading,
 }: MachineTableProps) {
-  const [logsDialogMachine, setLogsDialogMachine] = useState<Machine | null>(null);
   const [deleteConfirmMachine, setDeleteConfirmMachine] = useState<Machine | null>(null);
 
   if (isLoading) {
@@ -92,11 +83,33 @@ export function MachineTable({
     window.open(result.terminalUrl, "_blank");
   };
 
+  const copyLogsCommand = async (machine: Machine, type: "daemon" | "entry") => {
+    const containerId = (machine.metadata as { containerId?: string })?.containerId;
+    if (!containerId) {
+      toast.error("Container ID not found");
+      return;
+    }
+
+    const command =
+      type === "daemon"
+        ? `docker exec ${containerId} tail -f /var/log/iterate-server/current`
+        : `docker logs -f ${containerId}`;
+
+    await navigator.clipboard.writeText(command);
+    toast.success(
+      <div className="space-y-1">
+        <div>Copied to clipboard:</div>
+        <code className="block text-xs font-mono bg-muted px-2 py-1 rounded">{command}</code>
+      </div>,
+    );
+  };
+
   return (
     <>
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead>ID</TableHead>
             <TableHead>Name</TableHead>
             <TableHead>Snapshot</TableHead>
             <TableHead>Type</TableHead>
@@ -108,6 +121,9 @@ export function MachineTable({
         <TableBody>
           {machines.map((machine) => (
             <TableRow key={machine.id}>
+              <TableCell>
+                <TypeId id={machine.id} />
+              </TableCell>
               <TableCell className="font-medium">{machine.name}</TableCell>
               <TableCell className="text-muted-foreground text-xs font-mono">
                 {machine.metadata?.snapshotName ?? "-"}
@@ -145,10 +161,16 @@ export function MachineTable({
                       Open Daemon
                     </DropdownMenuItem>
                     {machine.type === "local-docker" && (
-                      <DropdownMenuItem onClick={() => setLogsDialogMachine(machine)}>
-                        <ScrollText className="h-4 w-4 mr-2" />
-                        View Logs
-                      </DropdownMenuItem>
+                      <>
+                        <DropdownMenuItem onClick={() => copyLogsCommand(machine, "daemon")}>
+                          <ScrollText className="h-4 w-4 mr-2" />
+                          Copy daemon logs command
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => copyLogsCommand(machine, "entry")}>
+                          <ScrollText className="h-4 w-4 mr-2" />
+                          Copy entry.ts logs command
+                        </DropdownMenuItem>
+                      </>
                     )}
                     {machine.type === "daytona" && (
                       <DropdownMenuItem onClick={() => openTerminal(machine.id)}>
@@ -182,8 +204,6 @@ export function MachineTable({
         </TableBody>
       </Table>
 
-      <LogsDialog machine={logsDialogMachine} onClose={() => setLogsDialogMachine(null)} />
-
       <ConfirmDialog
         open={!!deleteConfirmMachine}
         onOpenChange={(open) => !open && setDeleteConfirmMachine(null)}
@@ -194,41 +214,5 @@ export function MachineTable({
         destructive
       />
     </>
-  );
-}
-
-function LogsDialog({ machine, onClose }: { machine: Machine | null; onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const containerId = (machine?.metadata as { containerId?: string })?.containerId;
-  const command = containerId ? `docker logs -f ${containerId}` : "Container ID not found";
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <Dialog open={!!machine} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>View Container Logs</DialogTitle>
-          <DialogDescription>
-            Run this command in your terminal to tail the logs for {machine?.name}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <code className="flex-1 bg-muted px-3 py-2 rounded text-sm font-mono break-all">
-              {command}
-            </code>
-            <Button variant="outline" size="icon" onClick={handleCopy}>
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }

@@ -21,7 +21,10 @@ import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import superjson from "superjson";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import type { TRPCRouter } from "../../../daemon2/server/trpc/router.ts";
 import { dockerApi, DOCKER_API_URL } from "../backend/providers/local-docker.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +35,17 @@ const CONTAINER_NAME = `sandbox-integration-test-${Date.now()}`;
 const ITERATE_SERVER_HOST_PORT = 13000 + Math.floor(Math.random() * 1000);
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
+
+function createDaemonTrpcClient(port: number) {
+  return createTRPCClient<TRPCRouter>({
+    links: [
+      httpBatchLink({
+        url: `http://localhost:${port}/api/trpc`,
+        transformer: superjson,
+      }),
+    ],
+  });
+}
 
 async function getContainerLogs(containerId: string): Promise<string> {
   const response = await fetch(
@@ -314,5 +328,161 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
     const repoRootReadme = await execInContainer(containerId, ["cat", "/iterate-repo/README.md"]);
     const hostRootReadme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
     expect(repoRootReadme).toBe(hostRootReadme);
+  });
+
+  // ============ Tmux + PTY tests ============
+
+  test("tmux is installed in container", async () => {
+    const result = await execInContainer(containerId, ["which", "tmux"]);
+    expect(result.trim()).toBe("/usr/bin/tmux");
+  });
+
+  test("can create and list tmux sessions via tRPC", async () => {
+    const trpc = createDaemonTrpcClient(ITERATE_SERVER_HOST_PORT);
+    const testSessionName = `test-session-${Date.now()}`;
+
+    // Create a tmux session via tRPC
+    const createResult = await trpc.ensureTmuxSession.mutate({
+      sessionName: testSessionName,
+      command: "bash",
+    });
+    expect(createResult.created).toBe(true);
+
+    // List sessions and verify it exists
+    const sessions = await trpc.listTmuxSessions.query();
+    expect(sessions.some((s) => s.name === testSessionName)).toBe(true);
+  }, 30000);
+
+  test("can create tmux session directly in container and verify it exists", async () => {
+    const sessionName = `direct-test-${Date.now()}`;
+
+    // Create tmux session directly via exec (bypassing daemon)
+    const createResult = await execInContainer(containerId, [
+      "tmux",
+      "new-session",
+      "-d",
+      "-s",
+      sessionName,
+    ]);
+    // tmux returns empty on success
+    expect(createResult.trim()).toBe("");
+
+    // Verify the session exists
+    const listResult = await execInContainer(containerId, ["tmux", "list-sessions"]);
+    expect(listResult).toContain(sessionName);
+
+    // Clean up
+    await execInContainer(containerId, ["tmux", "kill-session", "-t", sessionName]);
+  }, 30000);
+
+  test("PTY endpoint route exists", async () => {
+    // Node's fetch can't do WebSocket upgrades, so just verify the route exists
+    // by making a regular GET request - should get 400 Bad Request (not 404)
+    const response = await fetch(
+      `http://localhost:${ITERATE_SERVER_HOST_PORT}/api/pty/ws?cols=80&rows=24`,
+    );
+    // Route should exist (not 404) - will likely be 400 or 426 since it expects WebSocket
+    expect(response.status).not.toBe(404);
+  });
+
+  // ============ Client asset serving tests ============
+
+  test("daemon serves index.html at root", async () => {
+    const response = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}/`);
+    expect(response.ok).toBe(true);
+    expect(response.headers.get("content-type")).toContain("text/html");
+
+    const html = await response.text();
+    expect(html.toLowerCase()).toContain("<!doctype html>");
+    expect(html).toContain("<title>");
+    // Should reference the built JS bundle
+    expect(html).toMatch(/src="\/assets\/index-[a-zA-Z0-9]+\.js"/);
+  });
+
+  test("daemon serves CSS bundle", async () => {
+    // First get index.html to find the actual CSS filename
+    const indexResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}/`);
+    const html = await indexResponse.text();
+
+    // Extract CSS filename from the HTML (e.g., /assets/index-B298OPQd.css)
+    const cssMatch = html.match(/href="(\/assets\/index-[a-zA-Z0-9]+\.css)"/);
+    expect(cssMatch).not.toBeNull();
+
+    const cssPath = cssMatch![1];
+    const cssResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}${cssPath}`);
+    expect(cssResponse.ok).toBe(true);
+    expect(cssResponse.headers.get("content-type")).toContain("text/css");
+
+    const css = await cssResponse.text();
+    expect(css.length).toBeGreaterThan(1000); // Should be a substantial CSS file
+  });
+
+  test("daemon serves JS bundle", async () => {
+    // First get index.html to find the actual JS filename
+    const indexResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}/`);
+    const html = await indexResponse.text();
+
+    // Extract JS filename from the HTML (e.g., /assets/index-ZAeYHw86.js)
+    const jsMatch = html.match(/src="(\/assets\/index-[a-zA-Z0-9]+\.js)"/);
+    expect(jsMatch).not.toBeNull();
+
+    const jsPath = jsMatch![1];
+    const jsResponse = await fetch(`http://localhost:${ITERATE_SERVER_HOST_PORT}${jsPath}`);
+    expect(jsResponse.ok).toBe(true);
+    expect(jsResponse.headers.get("content-type")).toContain("javascript");
+
+    const js = await jsResponse.text();
+    expect(js.length).toBeGreaterThan(10000); // Should be a substantial JS bundle
+  });
+
+  // ============ Proxy compatibility tests ============
+  // These verify that all paths the os2 worker proxy would forward to work correctly
+
+  test("all proxy-forwarded routes respond correctly", async () => {
+    const baseUrl = `http://localhost:${ITERATE_SERVER_HOST_PORT}`;
+    const trpc = createDaemonTrpcClient(ITERATE_SERVER_HOST_PORT);
+
+    // 1. Root path (index.html) - used when accessing /org/.../proxy/3000/
+    const rootResponse = await fetch(`${baseUrl}/`);
+    expect(rootResponse.ok).toBe(true);
+    expect(rootResponse.headers.get("content-type")).toContain("text/html");
+
+    // 2. Health endpoint - used by proxy health checks
+    const healthResponse = await fetch(`${baseUrl}/api/health`);
+    expect(healthResponse.ok).toBe(true);
+    const healthBody = await healthResponse.text();
+    expect(healthBody).toMatch(/ok|healthy/i);
+
+    // 3. tRPC endpoints - the main API surface
+    const serverCwd = await trpc.getServerCwd.query();
+    expect(serverCwd.cwd).toBe("/iterate-repo/apps/daemon2");
+    expect(serverCwd.homeDir).toBe("/home/node");
+
+    // 4. Static assets with cache-busted filenames
+    const indexHtml = await (await fetch(`${baseUrl}/`)).text();
+    const cssMatch = indexHtml.match(/href="(\/assets\/[^"]+\.css)"/);
+    const jsMatch = indexHtml.match(/src="(\/assets\/[^"]+\.js)"/);
+
+    if (cssMatch) {
+      const cssResponse = await fetch(`${baseUrl}${cssMatch[1]}`);
+      expect(cssResponse.ok).toBe(true);
+    }
+
+    if (jsMatch) {
+      const jsResponse = await fetch(`${baseUrl}${jsMatch[1]}`);
+      expect(jsResponse.ok).toBe(true);
+    }
+
+    // 5. Favicon/logo
+    const logoResponse = await fetch(`${baseUrl}/logo.svg`);
+    expect(logoResponse.ok).toBe(true);
+    expect(logoResponse.headers.get("content-type")).toContain("svg");
+
+    // 6. SPA fallback - non-existent paths should return index.html for client-side routing
+    const spaResponse = await fetch(`${baseUrl}/agents/some-agent-id`);
+    expect(spaResponse.ok).toBe(true);
+    expect(spaResponse.headers.get("content-type")).toContain("text/html");
+    const spaHtml = await spaResponse.text();
+    expect(spaHtml).toContain("<title>");
   });
 });

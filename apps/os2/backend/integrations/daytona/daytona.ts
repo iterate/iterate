@@ -143,7 +143,8 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     if (!hostPort) {
       return c.json({ error: "Local docker machine has no port mapping" }, 500);
     }
-    const targetUrl = `http://host.docker.internal:${hostPort}${path}`;
+    // Use localhost since the container's port is bound to the host
+    const targetUrl = `http://localhost:${hostPort}${path}`;
     const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
     const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);

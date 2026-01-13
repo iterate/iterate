@@ -33,6 +33,24 @@ const isDevMode = () => process.env.ITERATE_DEV === "true";
 
 const getRepoPath = (owner: string, name: string) => join(SRC_BASE, owner, name);
 
+// Configure git for the current runtime user (handles both node and daytona users)
+const configureGitForCurrentUser = () => {
+  try {
+    // Check if git is already configured for iterate
+    const existingName = execSync("git config --global user.name", { encoding: "utf-8" }).trim();
+    if (existingName === "iterate") {
+      console.log("Git already configured for iterate");
+      return;
+    }
+  } catch {
+    // Git config not set, proceed to set it
+  }
+
+  console.log("Configuring git for current user...");
+  execSync('git config --global user.name "iterate"');
+  execSync('git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"');
+};
+
 const setupGoStyleSymlink = () => {
   // Atomically check and create symlink to avoid TOCTOU race
   const parentDir = dirname(GO_STYLE_ITERATE_PATH);
@@ -144,7 +162,9 @@ const cloneUserRepos = () => {
   }
 };
 
-const cloneAndSetupIterateRepo = () => {
+const cloneAndSetupIterateRepo = (): boolean => {
+  let codeChanged = false;
+
   if (!existsSync(ITERATE_REPO_PATH)) {
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
     const parentDir = dirname(ITERATE_REPO_PATH);
@@ -153,34 +173,85 @@ const cloneAndSetupIterateRepo = () => {
     }
     try {
       execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
+      codeChanged = true;
     } catch (err) {
       console.error(`Failed to clone repository: ${(err as Error).message}`);
       throw new Error(`Git clone failed for ${ITERATE_REPO_URL}`);
     }
+  } else if (!isDevMode()) {
+    // In non-dev mode (e.g. Daytona), pull latest code since the image might be stale
+    console.log("Pulling latest code from origin...");
+    try {
+      const headBefore = execSync("git rev-parse HEAD", {
+        cwd: ITERATE_REPO_PATH,
+        encoding: "utf-8",
+      }).trim();
+
+      execSync("git fetch origin main && git reset --hard origin/main", {
+        cwd: ITERATE_REPO_PATH,
+        stdio: "inherit",
+      });
+
+      const headAfter = execSync("git rev-parse HEAD", {
+        cwd: ITERATE_REPO_PATH,
+        encoding: "utf-8",
+      }).trim();
+
+      codeChanged = headBefore !== headAfter;
+      if (codeChanged) {
+        console.log(`Updated from ${headBefore.slice(0, 8)} to ${headAfter.slice(0, 8)}`);
+      } else {
+        console.log("Already at latest commit");
+      }
+    } catch (err) {
+      console.error(`Failed to pull latest code: ${(err as Error).message}`);
+      throw new Error("Git pull failed");
+    }
+  } else {
+    console.log("Dev mode: using local code, skipping git pull");
   }
 
-  console.log("Running pnpm install...");
-  try {
-    execSync("pnpm install", {
-      cwd: ITERATE_REPO_PATH,
-      stdio: "inherit",
-      env: { ...process.env, CI: "true" },
-    });
-  } catch (err) {
-    console.error(`Failed to install dependencies: ${(err as Error).message}`);
-    throw new Error("pnpm install failed");
+  const nodeModulesPath = join(ITERATE_REPO_PATH, "node_modules");
+  const shouldInstall = codeChanged || isDevMode() || !existsSync(nodeModulesPath);
+
+  if (shouldInstall) {
+    const reason = codeChanged ? "code updated" : isDevMode() ? "dev mode" : "no node_modules";
+    console.log(`Running pnpm install (${reason})...`);
+    try {
+      execSync("pnpm install", {
+        cwd: ITERATE_REPO_PATH,
+        stdio: "inherit",
+        env: { ...process.env, CI: "true" },
+      });
+    } catch (err) {
+      console.error(`Failed to install dependencies: ${(err as Error).message}`);
+      throw new Error("pnpm install failed");
+    }
+  } else {
+    console.log("Code unchanged and dependencies installed, skipping pnpm install");
   }
+
+  return codeChanged;
 };
 
-const buildDaemonIfNeeded = () => {
+const buildDaemonIfNeeded = (codeChanged: boolean) => {
   const distPath = join(DAEMON2_PATH, "dist");
 
+  // In local dev mode, always rebuild to pick up local code changes
   if (isDevMode()) {
-    console.log("Dev mode: rebuilding daemon2 with Linux native modules...");
+    console.log("Dev mode: rebuilding daemon2 frontend...");
     execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
     return;
   }
 
+  // If code changed (git pull brought new commits), rebuild even if dist exists
+  if (codeChanged) {
+    console.log("Code changed: rebuilding daemon2 frontend...");
+    execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
+    return;
+  }
+
+  // For Daytona/production: use pre-built frontend from image/snapshot
   if (existsSync(distPath)) {
     console.log(`Daemon2 already built at ${distPath}, skipping build`);
     return;
@@ -268,11 +339,12 @@ const startS6Svscan = (): ChildProcess => {
 const SHUTDOWN_TIMEOUT_MS = 10000; // 10 seconds for graceful shutdown
 
 const main = () => {
+  configureGitForCurrentUser();
   setupGoStyleSymlink();
-  cloneAndSetupIterateRepo();
+  const codeChanged = cloneAndSetupIterateRepo();
   cloneUserRepos();
   ensureIterateServerRunScript();
-  buildDaemonIfNeeded();
+  buildDaemonIfNeeded(codeChanged);
   cleanupS6RuntimeState();
 
   const svscan = startS6Svscan();

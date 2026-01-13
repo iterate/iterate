@@ -39,8 +39,14 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const port = await findAvailablePort();
 
+      // Add ITERATE_DEV=true for local-docker so entry.ts uses the right code path
+      const envVarsWithDev = {
+        ...machineConfig.envVars,
+        ITERATE_DEV: "true",
+      };
+
       // Sanitize env vars to prevent injection attacks
-      const envArray = Object.entries(machineConfig.envVars).map(([key, value]) => {
+      const envArray = Object.entries(envVarsWithDev).map(([key, value]) => {
         // Validate key contains only safe characters
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
           throw new Error(`Invalid environment variable name: ${key}`);
@@ -57,13 +63,16 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         },
       };
 
-      const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
-        Image: imageName,
-        name: machineConfig.machineId,
-        Env: envArray,
-        ExposedPorts: { "3000/tcp": {} },
-        HostConfig: hostConfig,
-      });
+      const createResponse = await dockerApi<{ Id: string }>(
+        "POST",
+        `/containers/create?name=${encodeURIComponent(machineConfig.machineId)}`,
+        {
+          Image: imageName,
+          Env: envArray,
+          ExposedPorts: { "3000/tcp": {} },
+          HostConfig: hostConfig,
+        },
+      );
 
       const containerId = createResponse.Id;
 

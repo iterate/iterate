@@ -25,12 +25,27 @@ const trpc = createTRPCOptionsProxy({
   queryClient,
 });
 
+// Detect basepath from <base href> tag (injected by proxy) or default to "/"
+const getBasepath = (): string => {
+  if (typeof document === "undefined") return "/";
+  const baseEl = document.querySelector("base");
+  if (!baseEl?.href) return "/";
+  try {
+    const baseUrl = new URL(baseEl.href);
+    // Remove trailing slash for consistency with TanStack Router expectations
+    return baseUrl.pathname.replace(/\/$/, "") || "/";
+  } catch {
+    return "/";
+  }
+};
+
 export const router = createRouter({
   routeTree,
   context: {
     queryClient,
     trpc,
   },
+  basepath: getBasepath(),
   defaultPreload: "intent",
   Wrap: ({ children }: { children: ReactNode }) => (
     <Provider queryClient={queryClient}>{children}</Provider>
