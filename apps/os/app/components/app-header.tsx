@@ -117,7 +117,9 @@ export function AppHeader({
               {organizationSlug && (
                 <BreadcrumbItem>
                   {isOrgHome && !currentPageName ? (
-                    <BreadcrumbPage>{orgName || organizationSlug}</BreadcrumbPage>
+                    <BreadcrumbPage data-organization={organizationSlug}>
+                      {orgName || organizationSlug}
+                    </BreadcrumbPage>
                   ) : (
                     <BreadcrumbLink asChild>
                       <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
@@ -146,12 +148,13 @@ export function AppHeader({
                     <ProjectBreadcrumbDropdown
                       currentName={projectName || projectSlug}
                       currentId={currentProjectId}
+                      currentSlug={projectSlug}
                       organizationSlug={organizationSlug}
                       items={projects}
                       isCurrentPage={isProjectHome && !currentPageName}
                     />
                   ) : (
-                    <BreadcrumbItem>
+                    <BreadcrumbItem data-project={projectSlug}>
                       {isProjectHome && !currentPageName ? (
                         <BreadcrumbPage>{projectName || projectSlug}</BreadcrumbPage>
                       ) : (

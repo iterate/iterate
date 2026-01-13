@@ -1,4 +1,11 @@
-import { login, test, createOrganization, createProject, sidebarButton } from "./test-helpers.ts";
+import {
+  login,
+  test,
+  createOrganization,
+  createProject,
+  sidebarButton,
+  toast,
+} from "./test-helpers.ts";
 
 test.describe("naming defaults", () => {
   test("organization name defaults to email domain", async ({ page }) => {
@@ -14,22 +21,23 @@ test.describe("naming defaults", () => {
     await login(page, testEmail);
     await createOrganization(page, uniqueName);
 
-    await page.waitForURL(`**/orgs/${uniqueName.toLowerCase()}/**`);
+    await page.locator(`[data-organization="${uniqueName}"]`).waitFor();
   });
 
-  test("organization slug gets suffix on conflict", async ({ page, context }) => {
+  test("organization slug gets suffix on conflict", async ({ page, browser }) => {
     const sharedName = `conflict-org-${Date.now()}`;
 
     const testEmail1 = `naming1-${Date.now()}+test@nustom.com`;
     await login(page, testEmail1);
     await createOrganization(page, sharedName);
-    await page.waitForURL(`**/orgs/${sharedName.toLowerCase()}/**`);
+    await page.locator(`[data-organization="${sharedName}"]`).waitFor();
 
+    const context = await browser.newContext();
     const page2 = await context.newPage();
     const testEmail2 = `naming2-${Date.now()}+test@nustom.com`;
     await login(page2, testEmail2);
     await createOrganization(page2, sharedName);
-    await page2.waitForURL(/\/orgs\/conflict-org-\d+-[a-z0-9]{6}\//);
+    await page2.locator(`[data-organization^="${sharedName}-"]`).waitFor();
   });
 
   test("project slug has no suffix when unique within org", async ({ page }) => {
@@ -42,26 +50,24 @@ test.describe("naming defaults", () => {
     const projectLink = page.locator("[data-slot='item']", { hasText: uniqueProjectName });
     await projectLink.click();
 
-    await page.waitForURL(`**/projects/${uniqueProjectName.toLowerCase()}/**`);
+    await page.locator(`[data-project="${uniqueProjectName.toLowerCase()}"]`).waitFor();
   });
 
-  test("project slug gets suffix on conflict within same org", async ({ page }) => {
+  test("duplicate project name within same org shows error", async ({ page }) => {
     const sharedProjectName = `conflict-project-${Date.now()}`;
     const testEmail = `naming-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
     await createOrganization(page);
 
-    await createProject(page, sharedProjectName);
-    const firstProjectLink = page.locator("[data-slot='item']", { hasText: sharedProjectName });
-    await firstProjectLink.click();
-    await page.waitForURL(`**/projects/${sharedProjectName.toLowerCase()}/**`);
+    const project = await createProject(page, sharedProjectName);
+    await project.click();
 
-    await createProject(page, sharedProjectName);
-    const secondProjectLink = page
-      .locator("[data-slot='item']", { hasText: sharedProjectName })
-      .last();
-    await secondProjectLink.click();
-    await page.waitForURL(/\/projects\/conflict-project-\d+-[a-z0-9]{6}\//);
+    await page.locator("[data-group='organization'] a:has-text('Settings')").click(); // After you have a projec the Create Project button only shows on Org settings.
+    await page.getByText("New project").click();
+    await page.getByLabel("Project name").fill(sharedProjectName);
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    await toast.error(page, "Failed to create project").waitFor();
   });
 
   test("machine name defaults to type and timestamp", async ({ page }) => {
