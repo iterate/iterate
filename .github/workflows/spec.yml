@@ -24,7 +24,11 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Install Playwright browsers
         run: pnpm exec playwright install && pnpm exec playwright install-deps
-      - run: pnpm spec
+      - name: Run specs
+        run: |-
+          mkdir -p test-results
+          # tee everything to a log file but filter out WebServer logs which are noisy
+          pnpm spec | tee test-results/spec.log | grep -v WebServer
       - name: upload logs
         if: failure()
         uses: actions/upload-artifact@v4
