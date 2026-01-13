@@ -22,10 +22,7 @@ export const organizationRouter = router({
 
       const [newOrg] = await ctx.db
         .insert(organization)
-        .values({
-          name: input.name,
-          slug,
-        })
+        .values({ name: input.name, slug })
         .returning();
 
       if (!newOrg) {

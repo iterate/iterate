@@ -51,11 +51,7 @@ export const projectRouter = router({
 
       const [newProject] = await ctx.db
         .insert(project)
-        .values({
-          name: input.name,
-          slug,
-          organizationId: ctx.organization.id,
-        })
+        .values({ name: input.name, slug, organizationId: ctx.organization.id })
         .returning();
 
       if (!newProject) {
