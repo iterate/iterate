@@ -32,6 +32,9 @@ export async function createMachineProvider(
       });
     }
     case "local-vanilla": {
+      if (!import.meta.env.DEV) {
+        throw new Error("local-vanilla provider only available in development");
+      }
       const { createLocalVanillaProvider } = await import("./local-docker.ts");
       return createLocalVanillaProvider();
     }
