@@ -7,13 +7,13 @@ import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../../components/ui/dialog.tsx";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "../../../components/ui/sheet.tsx";
 import {
   Select,
   SelectContent,
@@ -23,6 +23,7 @@ import {
 } from "../../../components/ui/select.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
+import { HeaderActions } from "../../../components/header-actions.tsx";
 import { isNonProd } from "../../../../env-client.ts";
 
 type MachineType = "daytona" | "local-docker";
@@ -135,15 +136,15 @@ function ProjectMachinesPage() {
     }
   };
 
-  const createDialog = (
-    <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-      <DialogContent>
-        <form onSubmit={handleCreateMachine}>
-          <DialogHeader>
-            <DialogTitle>Create Machine</DialogTitle>
-            <DialogDescription>Create a new machine in this project.</DialogDescription>
-          </DialogHeader>
-          <div className="py-4 space-y-4">
+  const createSheet = (
+    <Sheet open={createSheetOpen} onOpenChange={setCreateSheetOpen}>
+      <SheetContent>
+        <form onSubmit={handleCreateMachine} className="flex flex-col h-full">
+          <SheetHeader>
+            <SheetTitle>Create Machine</SheetTitle>
+            <SheetDescription>Create a new machine in this project.</SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 space-y-4 p-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -179,11 +180,11 @@ function ProjectMachinesPage() {
               </div>
             )}
           </div>
-          <DialogFooter>
+          <SheetFooter>
             <Button
               type="button"
               variant="outline"
-              onClick={() => setCreateDialogOpen(false)}
+              onClick={() => setCreateSheetOpen(false)}
               disabled={createMachine.isPending}
             >
               Cancel
@@ -191,36 +192,35 @@ function ProjectMachinesPage() {
             <Button type="submit" disabled={!newMachineName.trim() || createMachine.isPending}>
               {createMachine.isPending ? "Creating..." : "Create"}
             </Button>
-          </DialogFooter>
+          </SheetFooter>
         </form>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 
   if (machines.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        {createDialog}
+        {createSheet}
         <EmptyState
           icon={<Server className="h-12 w-12" />}
           title="No machines yet"
           description="Create your first machine to get started."
-          action={<Button onClick={() => setCreateDialogOpen(true)}>Create Machine</Button>}
+          action={<Button onClick={() => setCreateSheetOpen(true)}>Create Machine</Button>}
         />
       </div>
     );
   }
 
   return (
-    <div className="p-8">
-      {createDialog}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Machines</h1>
-        <Button onClick={() => setCreateDialogOpen(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          New Machine
+    <div className="p-4 md:p-8">
+      <HeaderActions>
+        <Button onClick={() => setCreateSheetOpen(true)} size="sm">
+          <Plus className="h-4 w-4" />
+          <span className="sr-only">New Machine</span>
         </Button>
-      </div>
+      </HeaderActions>
+      {createSheet}
       <MachineTable
         machines={machines}
         organizationSlug={params.organizationSlug}

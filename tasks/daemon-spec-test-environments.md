@@ -8,9 +8,9 @@ tags:
   - infrastructure
 ---
 
-# Daemon E2E Tests Across Multiple Environments
+# Daemon Spec Tests Across Multiple Environments
 
-We should be able to run full Playwright-based e2e tests against the daemon app in multiple environments:
+We should be able to run full Playwright-based spec tests against the daemon app in multiple environments:
 
 1. **Local dev server** (`pnpm dev` from `apps/daemon`)
 2. **Local Docker container** (via `local-docker` provider)
@@ -20,7 +20,7 @@ We should be able to run full Playwright-based e2e tests against the daemon app 
 
 - `apps/os/sandbox/local-docker.test.ts` has basic integration tests that verify the Docker container works (s6, iterate-daemon, tmux, PTY endpoints)
 - These tests use `expect.poll()` and direct HTTP/WebSocket calls rather than Playwright
-- No proper Playwright e2e tests exist for the daemon UI
+- No proper Playwright spec tests exist for the daemon UI
 
 ## Goals
 
@@ -33,7 +33,7 @@ We should be able to run full Playwright-based e2e tests against the daemon app 
 2. Make these tests runnable against any of the three environments above by parameterizing the base URL
 
 3. Consider whether to:
-   - Add a new `e2e/daemon/` directory similar to `e2e/os/`
+   - Add a new `spec/daemon/` directory similar to `spec/`
    - Or extend the existing `apps/os/sandbox/local-docker.test.ts` with Playwright
 
 ## Implementation Notes
@@ -48,4 +48,4 @@ We should be able to run full Playwright-based e2e tests against the daemon app 
 - `apps/daemon/` - The daemon app
 - `apps/os/sandbox/local-docker.test.ts` - Existing integration tests
 - `apps/os/sandbox/Dockerfile` - Container image definition
-- `e2e/` - Existing e2e test infrastructure
+- `spec/` - Existing spec test infrastructure

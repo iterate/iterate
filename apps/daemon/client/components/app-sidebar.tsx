@@ -1,13 +1,6 @@
 import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Plus,
-  MoreHorizontal,
-  Trash2Icon,
-  ArchiveIcon,
-  TerminalIcon,
-  ActivityIcon,
-} from "lucide-react";
+import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, ActivityIcon } from "lucide-react";
 
 import type { Agent } from "@server/db/schema.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
@@ -38,14 +31,6 @@ export function AppSidebar({ agents }: { agents: Agent[] }) {
   const currentPath = location.pathname;
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const clearAllMutation = useMutation(
-    trpc.clearAllAgents.mutationOptions({
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-        navigate({ to: "/" });
-      },
-    }),
-  );
 
   const archiveAgentMutation = useMutation(
     trpc.archiveAgent.mutationOptions({
@@ -130,18 +115,6 @@ export function AppSidebar({ agents }: { agents: Agent[] }) {
                       <MoreHorizontal className="text-sidebar-foreground/70" />
                       <span>View all</span>
                     </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-              {visibleAgents.length > 0 && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    className="text-sidebar-foreground/70"
-                    onClick={() => clearAllMutation.mutate()}
-                    disabled={clearAllMutation.isPending}
-                  >
-                    <Trash2Icon className="text-sidebar-foreground/70" />
-                    <span>Clear all</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               )}

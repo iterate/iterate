@@ -11,56 +11,6 @@ const DAEMON_PATH = join(ITERATE_REPO, "apps", "daemon");
 const LOCAL_REPO_MOUNT = "/local-iterate-repo";
 
 // ============================================
-// Coding tools installation
-// ============================================
-
-const installCodingTools = () => {
-  console.log("");
-  console.log("========================================");
-  console.log("Installing coding tools");
-  console.log("========================================");
-
-  // pi-coding-agent
-  console.log("");
-  console.log("--- pi-coding-agent ---");
-  try {
-    execSync("which pi", { stdio: "pipe" });
-    console.log("Already installed");
-  } catch {
-    console.log("Installing...");
-    execSync("npm install -g @mariozechner/pi-coding-agent@0.44.0", { stdio: "inherit" });
-  }
-
-  // opencode
-  console.log("");
-  console.log("--- opencode --- (skipping because slow)");
-  // try {
-  //   execSync("which opencode", { stdio: "pipe" });
-  //   console.log("Already installed");
-  // } catch {
-  //   console.log("Installing...");
-  //   execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit" });
-  // }
-
-  // Claude Code
-  console.log("");
-  console.log("--- Claude Code (skipping because slow) ---");
-  // try {
-  //   execSync("which claude", { stdio: "pipe" });
-  //   console.log("Already installed");
-  // } catch {
-  //   console.log("Installing...");
-  //   try {
-  //     execSync("curl -fsSL https://claude.ai/install.sh | bash", { stdio: "inherit" });
-  //   } catch {
-  //     console.log("Claude install failed (may hang in non-interactive mode)");
-  //   }
-  // }
-
-  console.log("");
-};
-
-// ============================================
 // Repository setup
 // ============================================
 
@@ -96,19 +46,27 @@ const copyFromLocalMount = () => {
 
 /**
  * Clones or pulls the iterate repo from GitHub (for Daytona/production use).
+ * Use ITERATE_GIT_REF env var to specify a branch/ref (defaults to "main").
  */
 const cloneOrPullFromGit = () => {
+  const gitRef = process.env.ITERATE_GIT_REF || "main";
+
   if (!existsSync(ITERATE_REPO)) {
     console.log("");
-    console.log("Cloning iterate repo...");
-    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, { stdio: "inherit" });
-    execSync("git clone https://github.com/iterate/iterate.git " + ITERATE_REPO, {
+    console.log(`Cloning iterate repo (ref: ${gitRef})...`);
+    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, {
       stdio: "inherit",
     });
+    execSync(
+      `git clone --branch ${gitRef} https://github.com/iterate/iterate.git ${ITERATE_REPO}`,
+      {
+        stdio: "inherit",
+      },
+    );
   } else {
     console.log("");
-    console.log("Pulling latest code...");
-    execSync("git fetch origin main && git reset --hard origin/main", {
+    console.log(`Pulling latest code (ref: ${gitRef})...`);
+    execSync(`git fetch origin ${gitRef} && git reset --hard origin/${gitRef}`, {
       cwd: ITERATE_REPO,
       stdio: "inherit",
     });
@@ -213,7 +171,6 @@ const main = () => {
   console.log("# iterate sandbox entry point");
   console.log("########################################");
 
-  installCodingTools();
   setupIterateRepo();
   buildDaemon();
   cleanupS6RuntimeState();

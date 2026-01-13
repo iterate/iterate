@@ -38,6 +38,19 @@ const isPreview =
 
 const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
 
+/**
+ * Get the current git branch name for dev mode.
+ * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
+ */
+function getCurrentGitRef(): string | undefined {
+  if (!isDevelopment) return undefined;
+  try {
+    return execSync("git branch --show-current", { encoding: "utf-8", cwd: repoRoot }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureLocalDockerImage() {
   const result = spawnSync("docker", ["images", "-q", LOCAL_DOCKER_IMAGE_NAME], {
     encoding: "utf-8",
@@ -191,7 +204,6 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-
     await migrate(role.connectionUrl.unencrypted);
 
     return {
@@ -261,6 +273,8 @@ async function deployWorker() {
     },
   );
 
+  const devGitRef = getCurrentGitRef();
+
   const worker = await TanStackStart("os", {
     bindings: {
       ...(await setupDatabase()),
@@ -268,6 +282,8 @@ async function deployWorker() {
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
+      // In dev, pass the current git branch for Daytona sandboxes
+      ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {

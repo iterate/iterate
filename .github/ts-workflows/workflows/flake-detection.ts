@@ -18,23 +18,19 @@ export default workflow({
         {
           name: "Install Playwright Browsers",
           run: "pnpm exec playwright install chromium --with-deps",
-          "working-directory": "e2e",
         },
         {
-          name: "Run E2E Tests with Repeats",
-          id: "e2e",
+          name: "Run Tests with Repeats",
           "continue-on-error": true,
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm e2e --repeat-each=10 --reporter=json > e2e-results.json 2>&1 || true",
-          "working-directory": "e2e",
+          run: "doppler run -- pnpm spec --repeat-each=10 --reporter=json > spec-results.json 2>&1 || true",
         },
         {
           name: "Generate Flaky Test Report",
           id: "report",
-          run: "node analyze-flaky-tests.cjs e2e-results.json flaky-report.md",
-          "working-directory": "e2e",
+          run: "node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md",
         },
         {
           name: "Upload Flaky Test Report",
@@ -42,7 +38,7 @@ export default workflow({
           uses: "actions/upload-artifact@v4",
           with: {
             name: "flaky-test-report",
-            path: "e2e/flaky-report.md",
+            path: "spec/flaky-report.md",
             "retention-days": 30,
           },
         },

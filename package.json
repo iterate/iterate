@@ -10,7 +10,7 @@
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
-    "e2e": "playwright test",
+    "spec": "playwright test",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
@@ -68,10 +68,5 @@
     "overrides": {
       "baseline-browser-mapping": "^2.9.14"
     }
-  },
-  "lint-staged": {
-    "*": [
-      "prettier --write --ignore-unknown"
-    ]
   }
 }

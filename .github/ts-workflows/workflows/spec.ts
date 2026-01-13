@@ -2,7 +2,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "e2e",
+  name: "run specs",
   on: {
     push: {},
   },
@@ -32,24 +32,18 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
         },
-
-        {
-          name: "make sure doppler is working",
-          run: "doppler run -- printenv | grep GITHUB_APP_ID",
-        },
         {
           name: "Install Playwright browsers",
-          "working-directory": "e2e",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
         },
-        { run: "pnpm e2e" },
+        { run: "pnpm spec" },
         {
-          name: "upload e2e logs",
+          name: "upload logs",
           if: "failure()",
-          run: "ls -A ./e2e",
+          run: "ls -A ./spec",
           // uses("actions/upload-artifact@v4", {
-          //   name: "e2e-logs",
-          //   path: "apps/os/e2e-ignoreme",
+          //   name: "spec-logs",
+          //   path: "spec/ignoreme",
           // }),
         },
       ],
