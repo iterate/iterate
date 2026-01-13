@@ -120,13 +120,16 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
 
           {/* Mobile navigation - back button and current location */}
           <div className="flex items-center gap-2 md:hidden">
-            <Link
-              to="/agents"
-              className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="Go back"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-            </Link>
+            {/* Only show back button when not on the agents list (home) */}
+            {(agent || isNewAgentRoute || isTerminalRoute || isBtopRoute) && (
+              <Link
+                to="/agents"
+                className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Go back"
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            )}
             <span className="text-sm font-medium truncate max-w-[200px]">{mobileDisplayName}</span>
           </div>
 
