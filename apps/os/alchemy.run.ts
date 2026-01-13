@@ -129,9 +129,6 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URI: Optional,
   SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
-  STRIPE_SECRET_KEY: Required,
-  STRIPE_WEBHOOK_SECRET: Required,
-  STRIPE_METERED_PRICE_ID: Required,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>>);
 
 async function setupEnvironmentVariables() {

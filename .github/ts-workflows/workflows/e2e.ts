@@ -1,8 +1,8 @@
-import { uses, workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "e2e2",
+  name: "e2e",
   on: {
     push: {},
   },
@@ -38,10 +38,10 @@ export default workflow({
           name: "upload e2e logs",
           if: "failure()",
           run: "ls -A ./e2e",
-          //   ...uses("actions/upload-artifact@v4", {
-          //     name: "e2e-logs",
-          //     path: "apps/os/e2e-ignoreme",
-          //   }),
+          // uses("actions/upload-artifact@v4", {
+          //   name: "e2e-logs",
+          //   path: "apps/os/e2e-ignoreme",
+          // }),
         },
       ],
     },
