@@ -1,6 +1,6 @@
 #!/bin/sh
 exec 2>&1
-cd "$ITERATE_REPO/apps/daemon2"
+cd "$ITERATE_REPO/apps/daemon"
 
 # Set up FIFO for health check notification
 NOTIFY_FIFO="/tmp/s6-notify-iterate-server-$$"

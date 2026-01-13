@@ -1,4 +1,4 @@
-# Daemon2
+# Daemon
 
 A local daemon for managing coding agents with a web UI. Built with Hono (server) and React + TanStack Router (client).
 
@@ -47,7 +47,7 @@ A local daemon for managing coding agents with a web UI. Built with Hono (server
 ## Directory Structure
 
 ```
-apps/daemon2/
+apps/daemon/
 ├── client/              # React SPA (TanStack Router)
 │   ├── components/      # UI components
 │   ├── hooks/           # React hooks

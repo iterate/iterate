@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const DAEMON2_URL = process.env.DAEMON2_URL || "http://localhost:3000";
+const DAEMON_URL = process.env.DAEMON_URL || "http://localhost:3000";
 const OS2_URL = process.env.OS2_URL || "http://localhost:5173";
 
 export default defineConfig({
@@ -27,11 +27,11 @@ export default defineConfig({
       },
     },
     {
-      name: "daemon2",
+      name: "daemon",
       testDir: "./os2",
       use: {
         ...devices["Desktop Chrome"],
-        baseURL: DAEMON2_URL,
+        baseURL: DAEMON_URL,
       },
     },
   ],

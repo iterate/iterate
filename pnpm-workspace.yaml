@@ -1,6 +1,6 @@
 packages:
   - apps/cli
-  - apps/daemon2
+  - apps/daemon
   - apps/iterate-com
   - apps/mcp-mock-server
   - apps/os2

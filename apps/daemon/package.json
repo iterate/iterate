@@ -1,10 +1,10 @@
 {
-  "name": "@iterate-com/daemon2",
+  "name": "@iterate-com/daemon",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @iterate-com/daemon2 --reporter-hide-prefix --color --parallel /dev:/",
+    "dev": "pnpm --filter @iterate-com/daemon --reporter-hide-prefix --color --parallel /dev:/",
     "dev:client": "doppler run -- vite",
     "dev:server": "doppler run -- drizzle-kit migrate && doppler run -- tsx watch --clear-screen=false ./server.ts",
     "build:client": "doppler run -- vite build",
