@@ -1,10 +1,10 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 
-export function useEnsureAgentStarted(slug: string) {
+export function useEnsureSessionStarted(slug: string) {
   useSuspenseQuery({
-    queryKey: ["ensureAgentStarted", slug],
-    queryFn: () => trpcClient.startAgent.mutate({ slug }),
+    queryKey: ["ensureSessionStarted", slug],
+    queryFn: () => trpcClient.startSession.mutate({ slug }),
     staleTime: Infinity,
   });
 }

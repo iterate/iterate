@@ -91,4 +91,7 @@ PTY terminal WebSocket endpoint for interactive terminal sessions.
 ## Data Storage
 
 - SQLite database at `./db.sqlite`
-- Tmux socket at `./.iterate/tmux.sock`
+- Tmux sessions use vanilla tmux (default socket)
+- Session persistence via tmux-resurrect (saves to `~/.tmux/resurrect/`)
+
+See [`docs/tmux-session-architecture.md`](/docs/tmux-session-architecture.md) for details on the session management flow.

@@ -1,16 +1,14 @@
-import { existsSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
 
 /**
- * Tmux session management using a dedicated socket for crash recovery.
+ * Tmux session management using vanilla tmux (default socket).
  *
- * Uses .iterate/tmux.sock relative to cwd so sessions persist across daemon restarts.
- * The daemon can reconnect to orphaned sessions on startup.
+ * Sessions persist across daemon restarts. The daemon can reconnect to
+ * orphaned sessions on startup.
+ *
+ * Session naming convention: agent:{slug}
  */
 
-const ITERATE_DIR = join(process.cwd(), ".iterate");
-const TMUX_SOCKET = join(ITERATE_DIR, "tmux.sock");
 const DEFAULT_HISTORY_LIMIT = 50000;
 
 export const ENV_VARS_TO_PROPAGATE = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] as const;
@@ -27,15 +25,8 @@ export interface PaneInfo {
   command: string;
 }
 
-function ensureIterateDir(): void {
-  if (!existsSync(ITERATE_DIR)) {
-    mkdirSync(ITERATE_DIR, { recursive: true });
-  }
-}
-
 function runTmuxCommand(args: string[]): { stdout: string; success: boolean } {
-  ensureIterateDir();
-  const result = spawnSync("tmux", ["-S", TMUX_SOCKET, ...args], { encoding: "utf8" });
+  const result = spawnSync("tmux", args, { encoding: "utf8" });
   return {
     stdout: (result.stdout || "").trim(),
     success: result.status === 0,
@@ -190,50 +181,43 @@ export async function gracefulStop(sessionName: string, timeoutMs = 2000): Promi
   return killTmuxSession(sessionName);
 }
 
-export function getTmuxSocketPath(): string {
-  return TMUX_SOCKET;
+/**
+ * Trigger tmux-resurrect save. Call this after session changes.
+ */
+export function triggerResurrectSave(): boolean {
+  const { success } = runTmuxCommand([
+    "run-shell",
+    "~/.tmux/plugins/tmux-resurrect/scripts/save.sh quiet",
+  ]);
+  return success;
 }
 
-// Legacy class for backwards compatibility with existing routes
-// TODO: Remove after migrating all consumers to function-based API
-export class TmuxControlMode {
-  private tmuxSessions: Map<string, TmuxSession> = new Map();
+/**
+ * Trigger tmux-resurrect restore. Call on daemon startup.
+ */
+export function triggerResurrectRestore(): boolean {
+  const { success } = runTmuxCommand([
+    "run-shell",
+    "~/.tmux/plugins/tmux-resurrect/scripts/restore.sh",
+  ]);
+  return success;
+}
 
-  static async getInstance(): Promise<TmuxControlMode> {
-    const instance = new TmuxControlMode();
-    await instance.connect();
-    return instance;
-  }
+/**
+ * Build a tmux session name from an agent slug.
+ * Uses underscore instead of colon since colon is the tmux window/pane separator.
+ */
+export function buildSessionName(slug: string): string {
+  return `agent_${slug}`;
+}
 
-  async connect(): Promise<void> {
-    await this.refreshTmuxSessions();
+/**
+ * Parse a slug from a tmux session name.
+ * Returns null if the session name doesn't match the agent_ prefix.
+ */
+export function parseSlugFromSessionName(sessionName: string): string | null {
+  if (!sessionName.startsWith("agent_")) {
+    return null;
   }
-
-  isConnected(): boolean {
-    return isTmuxInstalled();
-  }
-
-  async listTmuxSessions(): Promise<TmuxSession[]> {
-    return Array.from(this.tmuxSessions.values());
-  }
-
-  async refreshTmuxSessions(): Promise<void> {
-    const sessions = listTmuxSessions();
-    this.tmuxSessions.clear();
-    for (const session of sessions) {
-      this.tmuxSessions.set(session.name, session);
-    }
-  }
-
-  async createTmuxSession(name?: string): Promise<string> {
-    const sessionName = name || `agent-${Date.now()}`;
-    createTmuxSession(sessionName);
-    await this.refreshTmuxSessions();
-    return sessionName;
-  }
-
-  async killTmuxSession(name: string): Promise<void> {
-    killTmuxSession(name);
-    await this.refreshTmuxSessions();
-  }
+  return sessionName.slice(6); // Remove "agent_" prefix
 }

@@ -163,6 +163,33 @@ const startS6Svscan = (): ChildProcess => {
 };
 
 // ============================================
+// Tmux setup
+// ============================================
+
+const setupTmux = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up tmux");
+  console.log("========================================");
+  console.log("");
+
+  // Restore previous tmux sessions if they exist
+  // This uses tmux-resurrect which was installed in the Dockerfile
+  console.log("Restoring tmux sessions...");
+  try {
+    execSync("tmux start-server", { stdio: "inherit" });
+    execSync("tmux run-shell ~/.tmux/plugins/tmux-resurrect/scripts/restore.sh", {
+      stdio: "inherit",
+    });
+    console.log("Tmux sessions restored (or none to restore)");
+  } catch {
+    console.log("No previous tmux sessions to restore (this is normal on first run)");
+  }
+
+  console.log("");
+};
+
+// ============================================
 // Main
 // ============================================
 
@@ -174,6 +201,7 @@ const main = () => {
 
   setupIterateRepo();
   buildDaemon();
+  setupTmux();
   cleanupS6RuntimeState();
 
   const svscan = startS6Svscan();

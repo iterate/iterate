@@ -2,7 +2,7 @@ import { useState, useEffect, Suspense } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Loader2Icon } from "lucide-react";
-import type { AgentType } from "@server/db/schema.ts";
+import type { HarnessType } from "@server/db/schema.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
@@ -116,7 +116,7 @@ export const Route = createFileRoute("/_app/agents/new")({
   component: NewAgentPage,
 });
 
-const agentTypeOptions: { value: AgentType; label: string }[] = [
+const agentTypeOptions: { value: HarnessType; label: string }[] = [
   { value: "claude-code", label: "Claude Code" },
   { value: "opencode", label: "OpenCode" },
   { value: "pi", label: "Pi" },
@@ -156,29 +156,30 @@ function NewAgentForm() {
   const { cwd: defaultCwd, homeDir } = serverInfo;
 
   const [slug, setSlug] = useState(initialName ?? "");
-  const [harnessType, setHarnessType] = useState<AgentType>("claude-code");
+  const [harnessType, setHarnessType] = useState<HarnessType>("claude-code");
   const [workingDirectory, setWorkingDirectory] = useState(defaultCwd);
 
   useEffect(() => {
     if (!initialName && !slug) {
       setSlug(generateRandomName());
     }
-  }, [initialName, slug]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only run on mount or when initialName changes
+  }, [initialName]);
 
   const displayPath = (path: string) =>
     path.startsWith(homeDir) ? path.replace(homeDir, "~") : path;
 
   const expandPath = (path: string) => (path.startsWith("~") ? path.replace("~", homeDir) : path);
 
-  const createAgent = useMutation({
+  const createSession = useMutation({
     mutationFn: () =>
-      trpcClient.createAgent.mutate({
+      trpcClient.createSession.mutate({
         slug: slugify(slug),
         harnessType,
         workingDirectory,
       }),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       navigate({ to: "/agents/$slug", params: { slug: result.slug } });
     },
   });
@@ -186,7 +187,7 @@ function NewAgentForm() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!slug.trim()) return;
-    createAgent.mutate();
+    createSession.mutate();
   }
 
   const slugPreview = slugify(slug);
@@ -210,7 +211,7 @@ function NewAgentForm() {
       </div>
       <div className="grid gap-2">
         <Label htmlFor="harnessType">Agent Type</Label>
-        <Select value={harnessType} onValueChange={(v) => setHarnessType(v as AgentType)}>
+        <Select value={harnessType} onValueChange={(v) => setHarnessType(v as HarnessType)}>
           <SelectTrigger id="harnessType">
             <SelectValue />
           </SelectTrigger>
@@ -237,8 +238,8 @@ function NewAgentForm() {
         />
       </div>
       <div className="flex gap-2 pt-2">
-        <Button type="submit" disabled={!slug.trim() || createAgent.isPending}>
-          {createAgent.isPending ? "Creating..." : "Create Agent"}
+        <Button type="submit" disabled={!slug.trim() || createSession.isPending}>
+          {createSession.isPending ? "Creating..." : "Create Agent"}
         </Button>
         <Button type="button" variant="outline" onClick={() => navigate({ to: "/agents" })}>
           Cancel

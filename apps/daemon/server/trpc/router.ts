@@ -1,14 +1,15 @@
-import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod/v4";
-import { eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
+  buildSessionName,
   createTmuxSession,
   gracefulStop,
   hasTmuxSession,
   listTmuxSessions,
   propagateApiKeysToTmux,
   respawnPane,
+  triggerResurrectSave,
   type TmuxSession,
 } from "../tmux-control.ts";
 
@@ -16,10 +17,10 @@ propagateApiKeysToTmux();
 import { getHarness, getCommandString } from "../agent-harness.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { type Agent, agentTypes } from "../db/schema.ts";
+import { type Session, harnessTypes } from "../db/schema.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
-const AgentType = z.enum(agentTypes);
+const HarnessType = z.enum(harnessTypes);
 
 export const trpcRouter = createTRPCRouter({
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
@@ -48,245 +49,215 @@ export const trpcRouter = createTRPCRouter({
       return { created: true };
     }),
 
-  // ============ Agent CRUD ============
+  // ============ Session CRUD ============
 
-  listAgents: publicProcedure.query(async (): Promise<Agent[]> => {
-    return db
-      .select()
-      .from(schema.agents)
-      .where(isNull(schema.agents.archivedAt))
-      .orderBy(schema.agents.createdAt);
+  listSessions: publicProcedure.query(async (): Promise<Session[]> => {
+    return db.select().from(schema.sessions).orderBy(schema.sessions.createdAt);
   }),
 
-  getAgent: publicProcedure
+  getSession: publicProcedure
     .input(z.object({ slug: z.string() }))
-    .query(async ({ input }): Promise<Agent | null> => {
+    .query(async ({ input }): Promise<Session | null> => {
       const result = await db
         .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
+        .from(schema.sessions)
+        .where(eq(schema.sessions.slug, input.slug))
         .limit(1);
-      const agent = result[0];
-      if (!agent || agent.archivedAt !== null) {
-        return null;
-      }
-      return agent;
+      return result[0] ?? null;
     }),
 
-  createAgent: publicProcedure
+  createSession: publicProcedure
     .input(
       z.object({
         slug: z
           .string()
           .min(1)
           .regex(/^[a-z0-9-]+$/),
-        harnessType: AgentType,
+        harnessType: HarnessType,
         workingDirectory: z.string().min(1),
         initialPrompt: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }): Promise<Agent> => {
-      const id = randomUUID();
-      const tmuxSession = `agent-${id.slice(0, 8)}`;
-
-      const [agent] = await db
-        .insert(schema.agents)
+    .mutation(async ({ input }): Promise<Session> => {
+      const [session] = await db
+        .insert(schema.sessions)
         .values({
-          id,
           slug: input.slug,
           harnessType: input.harnessType,
-          tmuxSession,
           workingDirectory: input.workingDirectory,
           status: "stopped",
           initialPrompt: input.initialPrompt,
         })
         .returning();
 
-      return agent;
+      return session;
     }),
 
-  deleteAgent: publicProcedure
+  deleteSession: publicProcedure
     .input(z.object({ slug: z.string() }))
     .mutation(async ({ input }): Promise<{ success: boolean }> => {
-      const [agent] = await db
+      const [session] = await db
         .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
+        .from(schema.sessions)
+        .where(eq(schema.sessions.slug, input.slug))
         .limit(1);
-      if (!agent) {
+      if (!session) {
         return { success: false };
       }
 
-      if (agent.tmuxSession && hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
+      const tmuxSession = buildSessionName(input.slug);
+      if (hasTmuxSession(tmuxSession)) {
+        await gracefulStop(tmuxSession);
       }
 
-      await db.delete(schema.agents).where(eq(schema.agents.slug, input.slug));
+      await db.delete(schema.sessions).where(eq(schema.sessions.slug, input.slug));
+      triggerResurrectSave();
       return { success: true };
     }),
 
-  archiveAgent: publicProcedure
-    .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
-      const [agent] = await db
-        .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
-        .limit(1);
-      if (!agent) {
-        return { success: false };
-      }
+  clearAllSessions: publicProcedure.mutation(async (): Promise<{ deletedCount: number }> => {
+    const activeSessions = await db.select().from(schema.sessions);
 
-      if (agent.tmuxSession && hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
-      }
-
-      await db
-        .update(schema.agents)
-        .set({ archivedAt: new Date(), status: "stopped" })
-        .where(eq(schema.agents.slug, input.slug));
-
-      return { success: true };
-    }),
-
-  clearAllAgents: publicProcedure.mutation(async (): Promise<{ archivedCount: number }> => {
-    const activeAgents = await db
-      .select()
-      .from(schema.agents)
-      .where(isNull(schema.agents.archivedAt));
-
-    for (const agent of activeAgents) {
-      if (agent.tmuxSession) {
-        try {
-          if (hasTmuxSession(agent.tmuxSession)) {
-            await gracefulStop(agent.tmuxSession);
-          }
-        } catch {
-          // Best effort - ignore tmux cleanup failures
+    for (const session of activeSessions) {
+      const tmuxSession = buildSessionName(session.slug);
+      try {
+        if (hasTmuxSession(tmuxSession)) {
+          await gracefulStop(tmuxSession);
         }
+      } catch {
+        // Best effort - ignore tmux cleanup failures
       }
     }
 
-    const now = new Date();
-    await db
-      .update(schema.agents)
-      .set({ archivedAt: now, status: "stopped" })
-      .where(isNull(schema.agents.archivedAt));
+    await db.delete(schema.sessions);
+    triggerResurrectSave();
 
-    return { archivedCount: activeAgents.length };
+    return { deletedCount: activeSessions.length };
   }),
 
-  // ============ Agent Lifecycle ============
+  // ============ Session Lifecycle ============
 
-  startAgent: publicProcedure
+  startSession: publicProcedure
     .input(z.object({ slug: z.string() }))
     .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
-      const [agent] = await db
+      const [session] = await db
         .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
+        .from(schema.sessions)
+        .where(eq(schema.sessions.slug, input.slug))
         .limit(1);
-      if (!agent) {
-        return { success: false, error: "Agent not found" };
+      if (!session) {
+        return { success: false, error: "Session not found" };
       }
 
-      if (!agent.tmuxSession) {
-        return { success: false, error: "Agent has no tmux session configured" };
+      if (!session.workingDirectory) {
+        return { success: false, error: "Session has no working directory configured" };
       }
 
-      if (hasTmuxSession(agent.tmuxSession)) {
+      const tmuxSession = buildSessionName(input.slug);
+
+      if (hasTmuxSession(tmuxSession)) {
         await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
+          .update(schema.sessions)
+          .set({ status: "running", updatedAt: new Date() })
+          .where(eq(schema.sessions.slug, input.slug));
         return { success: true };
       }
 
-      const harness = getHarness(agent.harnessType);
-      const command = harness.getStartCommand(agent.workingDirectory, {
-        prompt: agent.initialPrompt ?? undefined,
+      const harness = getHarness(session.harnessType);
+      const command = harness.getStartCommand(session.workingDirectory, {
+        prompt: session.initialPrompt ?? undefined,
       });
 
-      const wrapperCommand = buildTmuxCommand(command, agent.workingDirectory);
-      const success = createTmuxSession(agent.tmuxSession, wrapperCommand);
+      const wrapperCommand = buildTmuxCommand(command, session.workingDirectory);
+      const success = createTmuxSession(tmuxSession, wrapperCommand);
 
       if (success) {
         await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
+          .update(schema.sessions)
+          .set({ status: "running", updatedAt: new Date() })
+          .where(eq(schema.sessions.slug, input.slug));
+        triggerResurrectSave();
       } else {
         await db
-          .update(schema.agents)
-          .set({ status: "error" })
-          .where(eq(schema.agents.slug, input.slug));
+          .update(schema.sessions)
+          .set({ status: "error", updatedAt: new Date() })
+          .where(eq(schema.sessions.slug, input.slug));
       }
 
       return { success };
     }),
 
-  stopAgent: publicProcedure
+  stopSession: publicProcedure
     .input(z.object({ slug: z.string() }))
     .mutation(async ({ input }): Promise<{ success: boolean }> => {
-      const [agent] = await db
+      const [session] = await db
         .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
+        .from(schema.sessions)
+        .where(eq(schema.sessions.slug, input.slug))
         .limit(1);
-      if (!agent || !agent.tmuxSession) {
+      if (!session) {
         return { success: false };
       }
 
-      if (hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
+      const tmuxSession = buildSessionName(input.slug);
+
+      if (hasTmuxSession(tmuxSession)) {
+        await gracefulStop(tmuxSession);
+        triggerResurrectSave();
       }
 
+      // Always update DB status after initiating stop, regardless of gracefulStop result
+      // The tmux hook will reconcile the actual state
       await db
-        .update(schema.agents)
-        .set({ status: "stopped" })
-        .where(eq(schema.agents.slug, input.slug));
+        .update(schema.sessions)
+        .set({ status: "stopped", updatedAt: new Date() })
+        .where(eq(schema.sessions.slug, input.slug));
+
       return { success: true };
     }),
 
-  resetAgent: publicProcedure
+  resetSession: publicProcedure
     .input(z.object({ slug: z.string() }))
     .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
-      const [agent] = await db
+      const [session] = await db
         .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.slug, input.slug))
+        .from(schema.sessions)
+        .where(eq(schema.sessions.slug, input.slug))
         .limit(1);
-      if (!agent) {
-        return { success: false, error: "Agent not found" };
+      if (!session) {
+        return { success: false, error: "Session not found" };
       }
 
-      if (!agent.tmuxSession) {
-        return { success: false, error: "Agent not properly configured" };
+      if (!session.workingDirectory) {
+        return { success: false, error: "Session not properly configured" };
       }
 
-      const harness = getHarness(agent.harnessType);
-      const command = harness.getStartCommand(agent.workingDirectory, {
-        prompt: agent.initialPrompt ?? undefined,
+      const harness = getHarness(session.harnessType);
+      const command = harness.getStartCommand(session.workingDirectory, {
+        prompt: session.initialPrompt ?? undefined,
       });
-      const wrapperCommand = buildTmuxCommand(command, agent.workingDirectory);
+      const wrapperCommand = buildTmuxCommand(command, session.workingDirectory);
 
-      if (!hasTmuxSession(agent.tmuxSession)) {
-        const success = createTmuxSession(agent.tmuxSession, wrapperCommand);
+      const tmuxSession = buildSessionName(input.slug);
+      if (!hasTmuxSession(tmuxSession)) {
+        const success = createTmuxSession(tmuxSession, wrapperCommand);
         if (success) {
           await db
-            .update(schema.agents)
-            .set({ status: "running" })
-            .where(eq(schema.agents.slug, input.slug));
+            .update(schema.sessions)
+            .set({ status: "running", updatedAt: new Date() })
+            .where(eq(schema.sessions.slug, input.slug));
+          triggerResurrectSave();
         }
         return { success };
       }
 
-      const success = respawnPane(agent.tmuxSession, wrapperCommand);
+      const success = respawnPane(tmuxSession, wrapperCommand);
       if (success) {
         await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
+          .update(schema.sessions)
+          .set({ status: "running", updatedAt: new Date() })
+          .where(eq(schema.sessions.slug, input.slug));
+        triggerResurrectSave();
       }
       return { success };
     }),

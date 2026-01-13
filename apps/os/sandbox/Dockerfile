@@ -18,3 +18,14 @@ RUN npm install -g pnpm@10.24.0 tsx@4.20.6 opencode-ai@1.1.17 @anthropic-ai/clau
 COPY apps/os/sandbox/entry.ts /app/entry.ts
 
 ENTRYPOINT [ "tsx", "entry.ts" ]
+
+# =============================================================================
+# TMUX SETUP
+# =============================================================================
+# tmux-resurrect: saves/restores tmux sessions across server restarts
+# Clone directly (no plugin manager needed since we only use one plugin)
+
+RUN git clone https://github.com/tmux-plugins/tmux-resurrect /root/.tmux/plugins/tmux-resurrect
+
+# Copy tmux config with resurrect setup and sync hooks
+COPY apps/os/sandbox/tmux.conf /root/.tmux.conf

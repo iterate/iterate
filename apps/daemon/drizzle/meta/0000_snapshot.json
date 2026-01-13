@@ -1,23 +1,16 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "212fc630-b6bc-434f-a178-fe9e32f0d512",
+  "id": "e080c822-f51b-446c-b5d8-50fecbedba45",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
-    "agents": {
-      "name": "agents",
+    "sessions": {
+      "name": "sessions",
       "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
         "slug": {
           "name": "slug",
           "type": "text",
-          "primaryKey": false,
+          "primaryKey": true,
           "notNull": true,
           "autoincrement": false
         },
@@ -26,27 +19,14 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
-        },
-        "harness_session_id": {
-          "name": "harness_session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "tmux_session": {
-          "name": "tmux_session",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": "'claude-code'"
         },
         "working_directory": {
           "name": "working_directory",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "status": {
@@ -55,7 +35,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'stopped'"
+          "default": "'running'"
         },
         "initial_prompt": {
           "name": "initial_prompt",
@@ -79,22 +59,9 @@
           "notNull": false,
           "autoincrement": false,
           "default": "(unixepoch())"
-        },
-        "archived_at": {
-          "name": "archived_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
-      "indexes": {
-        "agents_slug_unique": {
-          "name": "agents_slug_unique",
-          "columns": ["slug"],
-          "isUnique": true
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
