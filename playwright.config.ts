@@ -27,5 +27,6 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: true,
     timeout: 30_000,
+    stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
   },
 });
