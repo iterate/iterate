@@ -164,7 +164,7 @@ export default defineConfig([
   },
   {
     name: "playwright-rules",
-    files: ["e2e/**/*"],
+    files: ["spec/**/*"],
     rules: {
       "react-hooks/rules-of-hooks": "off",
       "no-console": "off",
@@ -492,7 +492,7 @@ export default defineConfig([
   {
     name: "backend-no-console",
     files: ["apps/*/backend/**/*.ts"],
-    ignores: ["**/*test*/**", "**/*test*", "**/*e2e*"],
+    ignores: ["**/*test*/**", "**/*test*", "spec/**/*"],
     rules: {
       "no-console": "error",
     },
