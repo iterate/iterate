@@ -55,14 +55,14 @@ export function AppHeader({
   const pathParts = location.pathname.split("/").filter(Boolean);
   const lastPart = pathParts[pathParts.length - 1];
 
-  // Check if we're on a project sub-page (not the project home)
+  // Check if we're on a home page (not a sub-page)
+  // Use path structure to avoid edge case where slug matches a PAGE_NAMES key
+  // Org home: /orgs/{orgSlug} → 2 parts
+  // Project home: /orgs/{orgSlug}/projects/{projectSlug} → 4 parts
   const isProjectRoute = Boolean(projectSlug);
-  const isProjectHome =
-    isProjectRoute && (lastPart === projectSlug || location.pathname.endsWith(`/${projectSlug}/`));
+  const isProjectHome = isProjectRoute && pathParts.length === 4;
   const isOrgRoute = Boolean(organizationSlug) && !isProjectRoute;
-  const isOrgHome =
-    isOrgRoute &&
-    (lastPart === organizationSlug || location.pathname.endsWith(`/${organizationSlug}/`));
+  const isOrgHome = isOrgRoute && pathParts.length === 2;
 
   // Get the current page name (only if we're on a sub-page, not a home page)
   // This prevents slugs matching PAGE_NAMES keys from being treated as sub-pages
@@ -87,8 +87,18 @@ export function AppHeader({
         <div className="flex items-center gap-2 md:hidden">
           {(organizationSlug || projectSlug) && (
             <Link
-              to={projectSlug && organizationSlug ? "/orgs/$organizationSlug" : "/"}
-              params={projectSlug && organizationSlug ? { organizationSlug } : undefined}
+              to={
+                projectSlug && organizationSlug
+                  ? "/orgs/$organizationSlug"
+                  : organizationSlug && !isOrgHome
+                    ? "/orgs/$organizationSlug"
+                    : "/"
+              }
+              params={
+                (projectSlug && organizationSlug) || (organizationSlug && !isOrgHome)
+                  ? { organizationSlug }
+                  : undefined
+              }
               className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Go back"
             >
