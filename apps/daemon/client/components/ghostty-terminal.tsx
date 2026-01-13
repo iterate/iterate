@@ -89,8 +89,12 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
         function connectWebSocket() {
           if (cancelled) return;
 
-          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-          const base = wsBase || `${protocol}//${window.location.host}`;
+          // Use document.baseURI to respect the <base> tag injected by the proxy
+          // This ensures WebSocket URLs work when the app is served through a proxy path
+          const baseUri = new URL(document.baseURI);
+          const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
+          const base =
+            wsBase || `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
 
           const params = new URLSearchParams({
             cols: String(terminal.cols),

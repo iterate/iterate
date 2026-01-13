@@ -1,6 +1,12 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
 export const DOCKER_API_URL = "http://127.0.0.1:2375";
+
+// Repo root is ../../../../ from apps/os/backend/providers/
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
 export async function dockerApi<T>(
   method: string,
@@ -62,10 +68,14 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         return `${key}=${sanitizedValue}`;
       });
 
+      // Mount local repo for development (allows code changes without rebuilding image)
+      const binds = [`${REPO_ROOT}:/local-iterate-repo:ro`];
+
       const hostConfig: Record<string, unknown> = {
         PortBindings: {
           "3000/tcp": [{ HostPort: String(port) }],
         },
+        Binds: binds,
       };
 
       const createResponse = await dockerApi<{ Id: string }>(
@@ -99,6 +109,10 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       } catch {
         // Container might already be stopped
       }
+    },
+
+    async restart(externalId: string): Promise<void> {
+      await dockerApi("POST", `/containers/${externalId}/restart`, {});
     },
 
     async archive(externalId: string): Promise<void> {

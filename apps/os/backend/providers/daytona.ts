@@ -33,6 +33,14 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       }
     },
 
+    async restart(externalId: string): Promise<void> {
+      const sandbox = await daytona.get(externalId);
+      if (sandbox.state === "started") {
+        await sandbox.stop();
+      }
+      await sandbox.start();
+    },
+
     async archive(externalId: string): Promise<void> {
       const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {

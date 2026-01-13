@@ -66,7 +66,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona sandbox integration", () => {
     }
   }, 180_000);
 
-  test("iterate-server health check responds OK via preview URL", async () => {
+  test("iterate-daemon health check responds OK via preview URL", async () => {
     if (!preview) {
       throw new Error("Preview URL not initialized");
     }

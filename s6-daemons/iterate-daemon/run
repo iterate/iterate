@@ -3,7 +3,7 @@ exec 2>&1
 cd "$ITERATE_REPO/apps/daemon"
 
 # Set up FIFO for health check notification
-NOTIFY_FIFO="/tmp/s6-notify-iterate-server-$$"
+NOTIFY_FIFO="/tmp/s6-notify-iterate-daemon-$$"
 mkfifo "$NOTIFY_FIFO"
 
 # Health checker polls endpoint, writes to FIFO when ready
@@ -20,4 +20,5 @@ exec 4>&3
   rm -f "$NOTIFY_FIFO"
 } &
 
+pnpm db:migrate
 exec env HOSTNAME=0.0.0.0 PORT=3000 tsx server.ts
