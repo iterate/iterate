@@ -76,18 +76,8 @@ const image = Image.fromDockerfile(dockerfileTargetPath);
 const snapshot = await (async () => {
   try {
     return await daytona.snapshot.create(
-      {
-        name: snapshotName,
-        image,
-        resources: {
-          cpu: 4,
-          memory: 4,
-          disk: 10,
-        },
-      },
-      {
-        onLogs: console.log,
-      },
+      { name: snapshotName, image, resources: { cpu: 4, memory: 4, disk: 10 } },
+      { onLogs: console.log },
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

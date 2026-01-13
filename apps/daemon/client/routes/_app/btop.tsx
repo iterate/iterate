@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_app/btop")({
 });
 
 function BtopPage() {
-  useEnsureTmuxSession("btop", "btop");
+  useEnsureTmuxSession({ sessionName: "btop", command: "btop --utf-force" });
 
   return <GhosttyTerminal key="btop" tmuxSessionName="btop" />;
 }

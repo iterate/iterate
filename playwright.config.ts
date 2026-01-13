@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.APP_URL || "http://localhost:5173";
 
 export default defineConfig({
-  testDir: ".",
+  testDir: "e2e",
   testMatch: "**/*.e2e.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
@@ -22,10 +22,11 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // webServer: {
-  //   command: "cd .. && pnpm dev", // todo: uncomment when dev script runs os and daemon
-  //   url: baseURL,
-  //   reuseExistingServer: true,
-  //   timeout: 120_000,
-  // },
+  webServer: {
+    command: "pnpm dev", // todo: uncomment when dev script runs os and daemon
+    url: baseURL,
+    reuseExistingServer: true,
+    timeout: 180_000,
+    stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
+  },
 });

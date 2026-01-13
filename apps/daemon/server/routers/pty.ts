@@ -6,7 +6,12 @@ import type { IPty } from "@lydell/node-pty";
 import type { WSContext } from "hono/ws";
 import type { WebSocket } from "ws";
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
 import { upgradeWebSocket } from "../utils/hono.ts";
+import { hasTmuxSession } from "../tmux-control.ts";
+import { db } from "../db/index.ts";
+import * as schema from "../db/schema.ts";
+import { getHarness, getCommandString } from "../agent-harness.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 
@@ -29,7 +34,7 @@ ptyRouter.get(
     const tmuxSessionName = url.searchParams.get("tmuxSession");
 
     return {
-      onOpen(_event, ws) {
+      async onOpen(_event, ws) {
         console.log(
           `[PTY] New connection: ${cols}x${rows}${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}`,
         );
@@ -37,6 +42,26 @@ ptyRouter.get(
         let ptyProcess: IPty;
         try {
           if (tmuxSessionName) {
+            if (!hasTmuxSession(tmuxSessionName)) {
+              let commandInfo = "";
+              const [agent] = await db
+                .select()
+                .from(schema.agents)
+                .where(eq(schema.agents.tmuxSession, tmuxSessionName))
+                .limit(1);
+              if (agent) {
+                const harness = getHarness(agent.harnessType);
+                const cmd = harness.getStartCommand(agent.workingDirectory, {
+                  prompt: agent.initialPrompt ?? undefined,
+                });
+                commandInfo = `\r\n\r\nCommand: cd "${agent.workingDirectory}" && ${getCommandString(cmd)}`;
+              }
+              const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.${commandInfo}\r\n\r\nThe session may have exited or was never created.\r\nTry restarting the agent or check if the command failed to start.`;
+              ws.send(`\x1b[31m${errorMsg}\x1b[0m\r\n`);
+              ws.close(4000, "Session does not exist");
+              return;
+            }
+
             spawnSync("tmux", [
               "-S",
               TMUX_SOCKET,
@@ -111,17 +136,18 @@ ptyRouter.get(
         });
 
         ptyProcess.onExit(({ exitCode }) => {
-          const logs = outputBuffer.join("");
-          console.log(
-            `[PTY] Process exited! (code: ${exitCode}), captured ${logs.length} bytes of output`,
-          );
-          // TODO: Do something with logs (e.g., store, send to client, etc.)
-
-          const exitMessage = tmuxSessionName
-            ? `Tmux session detached/exited! (code: ${exitCode})\n\n${logs}`
-            : `Shell exited (code: ${exitCode})`;
-          ws.send(`\r\n\x1b[33m${exitMessage}\x1b[0m\r\n`);
-          ws.close(1000, `Process exited with code ${exitCode}`);
+          console.log(`[PTY] Process exited: code=${exitCode}`);
+          if (exitCode === 0) {
+            const exitMessage = tmuxSessionName ? `Tmux session detached` : `Shell exited`;
+            ws.send(`\r\n\x1b[33m${exitMessage}\x1b[0m\r\n`);
+            ws.close(1000, "Process exited normally");
+          } else {
+            const exitMessage = tmuxSessionName
+              ? `Tmux session exited (code: ${exitCode})`
+              : `Shell exited (code: ${exitCode})`;
+            ws.send(`\r\n\x1b[31m${exitMessage}\x1b[0m\r\n`);
+            ws.close(4000, `Process exited with code ${exitCode}`);
+          }
         });
       },
 

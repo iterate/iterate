@@ -293,7 +293,9 @@ export const trpcRouter = createTRPCRouter({
 });
 
 function buildTmuxCommand(agentCommand: string[], workingDirectory: string): string {
-  return `cd "${workingDirectory}" && ${getCommandString(agentCommand)}`;
+  const cmd = getCommandString(agentCommand);
+  const script = `cd "${workingDirectory}" && ${cmd}; exit_code=$?; if [ $exit_code -ne 0 ]; then echo ""; echo "Process exited with code: $exit_code"; echo "Press Enter to close..."; read; fi`;
+  return `bash -c ${JSON.stringify(script)}`;
 }
 
 export type TRPCRouter = typeof trpcRouter;
