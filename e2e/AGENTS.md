@@ -8,11 +8,9 @@ Import `test` from `./test-helpers.ts`, NOT `@playwright/test`. Enables spinner 
 
 ## Spinner Waiter
 
-Auto-waits for loading states. Detects `data-spinner` attrs and "loading..." text. See `spinner-waiter.ts`.
+Auto-waits for loading states. Detects `aria-label-"Loading"` attrs and "loading..." text. See `spinner-waiter.ts`.
 
-Skip per-action: `element.click({ skipSpinnerCheck: true })`
-
-Add to UI: `<Spinner data-spinner />`
+If slowness is expected, add some progress UI to buy time for the assertion: `<div>Loading...</div>` or `<div aria-label="Loading" className="tailwind-whatever" />` or similar.
 
 ## Helpers (test-helpers.ts)
 

@@ -263,7 +263,6 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
-      DAYTONA_SNAPSHOT_PREFIX: `${app.stage}--`,
       REALTIME_PUSHER,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,

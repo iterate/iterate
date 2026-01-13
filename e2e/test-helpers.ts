@@ -48,10 +48,12 @@ export async function createOrganization(page: Page, orgName = `E2E Org ${Date.n
 }
 
 export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
-  await page.getByText("Add project").click();
+  await page.getByText("Create project").click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  await page.locator("[data-component='ProjectHomePage']", { hasText: projectName }).waitFor();
+  const projectItem = page.locator("[data-slot='item']", { hasText: projectName });
+  await projectItem.waitFor();
+  return projectItem;
 }
 
 export function getProjectBasePath(page: Page) {

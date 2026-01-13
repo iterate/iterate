@@ -13,7 +13,7 @@ export namespace spinnerWaiter {
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
 const defaults: spinnerWaiter.Settings = {
-  spinnerSelector: `[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  spinnerSelector: `[aria-label="Loading"],[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
   spinnerTimeout: 30_000,
   disabled: false,
   log: () => {},
@@ -97,7 +97,7 @@ function setup(page: Page) {
         }
 
         settings.log(
-          `${this} not visible. racing between ${this}.${method}(...) and ${spinnerLocator} being hidden`,
+          `${this} not visible, but the spinner is. racing between ${this}.${method}(...) and ${spinnerLocator} being hidden.\n\n${await page.evaluate(() => document.querySelector(`[aria-label="Loading"],[data-spinner='true']`)?.outerHTML)}\n\n`,
         );
 
         const race = await Promise.race([
