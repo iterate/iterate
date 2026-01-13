@@ -19,6 +19,7 @@ export default workflow({
             cache: "pnpm",
           },
         },
+        { run: "pnpm docker:up" },
         { run: "pnpm install" },
         { uses: "dopplerhq/cli-action@v2" },
         {

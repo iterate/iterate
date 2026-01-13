@@ -26,7 +26,7 @@ export default defineConfig({
     command: "pnpm dev", // todo: uncomment when dev script runs os and daemon
     url: baseURL,
     reuseExistingServer: true,
-    timeout: 30_000,
+    timeout: 180_000,
     stdout: "pipe", // without this on startup failure it just says "Couldn't start. Exit code 1."
   },
 });

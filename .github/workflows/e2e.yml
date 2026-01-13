@@ -13,6 +13,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - run: pnpm docker:up
       - run: pnpm install
       - uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
