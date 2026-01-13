@@ -36,8 +36,7 @@ jobs:
         run: doppler run -- pnpm spec --repeat-each=10 --reporter=json > spec-results.json 2>&1 || true
       - name: Generate Flaky Test Report
         id: report
-        run: node analyze-flaky-tests.cjs spec-results.json flaky-report.md
-        working-directory: spec
+        run: node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md
       - name: Upload Flaky Test Report
         if: always()
         uses: actions/upload-artifact@v4

@@ -30,8 +30,7 @@ export default workflow({
         {
           name: "Generate Flaky Test Report",
           id: "report",
-          run: "node analyze-flaky-tests.cjs spec-results.json flaky-report.md",
-          "working-directory": "spec",
+          run: "node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md",
         },
         {
           name: "Upload Flaky Test Report",
