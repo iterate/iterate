@@ -4,7 +4,7 @@ name: Flake Detection
 on:
   push:
     branches:
-      - "**/*ciflak*"
+      - "**/*flak*"
   workflow_dispatch: {}
 jobs:
   flake-detection:

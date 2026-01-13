@@ -5,7 +5,7 @@ export default workflow({
   name: "Flake Detection",
   on: {
     push: {
-      branches: ["**/*ciflak*"],
+      branches: ["**/*flak*"],
     },
     workflow_dispatch: {},
   },
