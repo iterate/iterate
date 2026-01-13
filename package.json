@@ -9,7 +9,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
-    "daemon": "cd apps/daemon2 && pnpm",
+    "daemon": "cd apps/daemon && pnpm",
     "e2e": "pnpm --filter @iterate-com/e2e e2e",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
@@ -35,8 +35,7 @@
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate",
-    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate"
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
