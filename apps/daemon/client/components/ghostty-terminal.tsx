@@ -42,6 +42,7 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
     useEffect(() => {
       if (!containerRef.current) return;
 
+      const container = containerRef.current;
       let cancelled = false;
       let term: TerminalLike | undefined;
       let ws: WebSocket | undefined;
@@ -175,8 +176,8 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
           termRef.current.dispose();
         }
         // Clear any leftover DOM content to prevent showing old terminal output
-        if (containerRef.current) {
-          containerRef.current.innerHTML = "";
+        if (container) {
+          container.innerHTML = "";
         }
       };
     }, [wsBase, tmuxSessionName]);
