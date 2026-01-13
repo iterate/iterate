@@ -31,7 +31,7 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
 
   return (
     <>
-      <SidebarGroup>
+      <SidebarGroup data-group="organization">
         <SidebarGroupLabel>Organization</SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>

@@ -3,10 +3,9 @@ import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, protectedMutation, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
 import { organization, organizationUserMembership, UserRole, user } from "../../db/schema.ts";
-import { generateSlug } from "../../utils/slug.ts";
+import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
-  // Create a new organization
   create: protectedMutation
     .input(
       z.object({
@@ -14,14 +13,16 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const slug = generateSlug(input.name);
+      const baseSlug = slugify(input.name);
+      const existing = await ctx.db.query.organization.findFirst({
+        where: eq(organization.slug, baseSlug),
+      });
+
+      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
 
       const [newOrg] = await ctx.db
         .insert(organization)
-        .values({
-          name: input.name,
-          slug,
-        })
+        .values({ name: input.name, slug })
         .returning();
 
       if (!newOrg) {
@@ -31,7 +32,6 @@ export const organizationRouter = router({
         });
       }
 
-      // Add creator as owner
       await ctx.db.insert(organizationUserMembership).values({
         organizationId: newOrg.id,
         userId: ctx.user.id,

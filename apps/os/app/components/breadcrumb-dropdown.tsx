@@ -20,7 +20,7 @@ interface DropdownItem {
   slug: string;
 }
 
-interface BreadcrumbDropdownProps {
+interface BreadcrumbDropdownProps extends React.ComponentProps<"li"> {
   /** Display name of the currently selected item */
   currentName: string;
   /** ID of the currently selected item (for aria-current) */
@@ -48,9 +48,10 @@ export function BreadcrumbDropdown({
   getItemLinkProps,
   addAction,
   ariaLabel,
+  ...liProps
 }: BreadcrumbDropdownProps) {
   return (
-    <BreadcrumbItem>
+    <BreadcrumbItem {...liProps}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
@@ -151,6 +152,7 @@ export function OrgBreadcrumbDropdown({
 interface ProjectBreadcrumbDropdownProps {
   currentName: string;
   currentId: string;
+  currentSlug: string;
   organizationSlug: string;
   items: DropdownItem[];
   isCurrentPage?: boolean;
@@ -159,12 +161,14 @@ interface ProjectBreadcrumbDropdownProps {
 export function ProjectBreadcrumbDropdown({
   currentName,
   currentId,
+  currentSlug,
   organizationSlug,
   items,
   isCurrentPage = false,
 }: ProjectBreadcrumbDropdownProps) {
   return (
     <BreadcrumbDropdown
+      data-project={currentSlug}
       currentName={currentName}
       currentId={currentId}
       items={items}

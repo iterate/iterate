@@ -26,6 +26,7 @@ jobs:
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
         run: |-
+          set -o pipefail
           mkdir -p test-results
           # tee everything to a log file but filter out WebServer logs which are noisy
           pnpm spec | tee test-results/spec.log | grep -v WebServer
