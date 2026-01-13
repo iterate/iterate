@@ -29,8 +29,6 @@ pnpm-lock.yaml
 # Workspace file
 pnpm-workspace.yaml
 
-apps/os/
-
 # Other generated or temporary files
 **/.repomix-*
 **/.alchemy

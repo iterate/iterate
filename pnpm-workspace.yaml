@@ -2,9 +2,7 @@ packages:
   - apps/cli
   - apps/daemon
   - apps/iterate-com
-  - apps/mcp-mock-server
   - apps/os2
-  - apps/tanstack-template
   - packages/*
   - e2e
   - .github/ts-workflows

@@ -37,7 +37,6 @@ export default defineConfig([
     "**/.claude/",
     "**/.cursor/",
     "**/.alchemy/",
-    "**/apps/os/**",
     "**/components/ui/",
     "**/components/ai-elements/",
     "**/logs.json",
