@@ -13,7 +13,7 @@ export namespace spinnerWaiter {
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
 const defaults: spinnerWaiter.Settings = {
-  spinnerSelector: `[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  spinnerSelector: `[aria-label="Loading"],[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
   spinnerTimeout: 30_000,
   disabled: false,
   log: () => {},
@@ -59,9 +59,16 @@ function setup(page: Page) {
         const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
         settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
+        let called = false;
 
-        const callOriginal = async (argsList: unknown[]) =>
-          (this[`${method}_original`] as Function)(...argsList);
+        const callOriginal = async (argsList: unknown[]) => {
+          if (called) {
+            throw new Error("callOriginal called more than once, this is a bug in spinner-waiter");
+          }
+          const options = argsList.at(-1) as { trial?: boolean } | undefined;
+          called = !options?.trial;
+          return (this[`${method}_original`] as Function)(...argsList);
+        };
 
         if (skipSpinnerCheck) {
           return await callOriginal(args).catch((e) => {
@@ -71,7 +78,7 @@ function setup(page: Page) {
         }
 
         const spinnerLocator = this.page().locator(settings.spinnerSelector) as LocatorWithOriginal;
-        const union = this.or(spinnerLocator) as LocatorWithOriginal;
+        const union = this.or(spinnerLocator).first() as LocatorWithOriginal;
 
         settings.log(`waiting for union ${union}`);
 
@@ -97,13 +104,13 @@ function setup(page: Page) {
         }
 
         settings.log(
-          `${this} not visible. racing between ${this}.${method}(...) and ${spinnerLocator} being hidden`,
+          `${this} not visible, but the spinner is. racing between ${this}.${method}(...) and ${spinnerLocator} being hidden`,
         );
 
         const race = await Promise.race([
           callOriginal([
             ...args.slice(0, -1),
-            { ..._options, timeout: settings.spinnerTimeout - 1000 },
+            { ..._options, timeout: settings.spinnerTimeout - 1000, trial: true },
           ])
             .then((result) => ({ outcome: "success" as const, result }))
             .catch((e) => ({ outcome: "error" as const, error: e })),
@@ -123,7 +130,10 @@ function setup(page: Page) {
         }
 
         if (race.outcome === "success") {
-          return race.result;
+          return await callOriginal(args).catch((e) => {
+            adjustError(e as Error);
+            throw e;
+          });
         }
 
         if (race.outcome === "spinner-hidden") {

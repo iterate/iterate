@@ -1,11 +1,4 @@
-import {
-  login,
-  createOrganization,
-  createProject,
-  getProjectBasePath,
-  getOrganizationSlug,
-  test,
-} from "./test-helpers.ts";
+import { login, createOrganization, createProject, test, sidebarButton } from "./test-helpers.ts";
 
 test.describe("shell navigation", () => {
   test("connectors and team pages render", async ({ page }) => {
@@ -13,16 +6,14 @@ test.describe("shell navigation", () => {
     await login(page, testEmail);
 
     await createOrganization(page);
-    await createProject(page);
+    const project = await createProject(page);
+    await project.click();
 
-    const basePath = getProjectBasePath(page);
-
-    await page.goto(`${basePath}/connectors`);
+    await sidebarButton(page, "Connectors").click();
     await page.getByText("Project connections").waitFor();
     await page.getByText("Your connections").waitFor();
 
-    const orgSlug = getOrganizationSlug(basePath);
-    await page.goto(`/orgs/${orgSlug}/team`);
+    await sidebarButton(page, "Team").click();
     await page.getByLabel("Email").waitFor();
   });
 

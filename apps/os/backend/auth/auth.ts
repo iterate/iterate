@@ -23,9 +23,7 @@ function matchesEmailPattern(email: string, patterns: string[]) {
 }
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
-  const allowSignupFromEmails = parseEmailPatterns(
-    envParam.ALLOW_SIGNUP_FROM_EMAILS ?? "*@example.com",
-  );
+  const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -48,7 +46,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
             const email = user.email.trim().toLowerCase();
             if (!matchesEmailPattern(email, allowSignupFromEmails)) {
               throw new APIError("FORBIDDEN", {
-                message: "Sign up is not available for this email address",
+                message: "Sign up is not available for this email address" + allowSignupFromEmails,
               });
             }
             return { data: user };

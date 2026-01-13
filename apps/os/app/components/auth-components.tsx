@@ -202,6 +202,7 @@ function EmailOtpSignIn() {
         placeholder="you@example.com"
         defaultValue={email}
         disabled={isDisabled}
+        aria-label={isDisabled ? "Loading" : undefined}
         required
         autoFocus
         data-testid="email-input"
