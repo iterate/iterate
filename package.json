@@ -9,7 +9,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "os2": "cd apps/os2 && pnpm",
-    "daemon2": "cd apps/daemon2 && pnpm",
+    "daemon": "cd apps/daemon && pnpm",
     "e2e": "pnpm --filter @iterate-com/e2e e2e",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",

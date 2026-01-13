@@ -28,7 +28,7 @@ Reorder to copy package files first, install dependencies, then copy source:
 ```dockerfile
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/os2/package.json apps/os2/
-COPY apps/daemon2/package.json apps/daemon2/
+COPY apps/daemon/package.json apps/daemon/
 # ... other package.json files
 RUN pnpm install --frozen-lockfile
 COPY . .
