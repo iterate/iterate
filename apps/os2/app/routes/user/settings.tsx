@@ -1,11 +1,25 @@
 import { useState, type FormEvent, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.tsx";
 
 export const Route = createFileRoute("/_auth.layout/user/settings")({
   component: UserSettingsRoute,
@@ -62,6 +76,7 @@ type UserSettingsFormProps = {
 
 function UserSettingsForm({ user, isSaving, onSubmit }: UserSettingsFormProps) {
   const [name, setName] = useState(user.name);
+  const { theme, setTheme } = useTheme();
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -98,6 +113,25 @@ function UserSettingsForm({ user, isSaving, onSubmit }: UserSettingsFormProps) {
           </Field>
         </FieldGroup>
       </form>
+
+      <FieldGroup>
+        <FieldSet>
+          <Field>
+            <FieldLabel htmlFor="theme">Theme</FieldLabel>
+            <Select value={theme} onValueChange={setTheme}>
+              <SelectTrigger id="theme">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="light">Light</SelectItem>
+                <SelectItem value="dark">Dark</SelectItem>
+                <SelectItem value="system">System</SelectItem>
+              </SelectContent>
+            </Select>
+            <FieldDescription>Changes are saved automatically</FieldDescription>
+          </Field>
+        </FieldSet>
+      </FieldGroup>
     </div>
   );
 }

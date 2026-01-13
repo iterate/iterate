@@ -5,6 +5,7 @@ import {
   HeadContent,
   Scripts,
   useRouter,
+  useRouterState,
 } from "@tanstack/react-router";
 import { PostHogProvider as _PostHogProvider, usePostHog } from "posthog-js/react";
 import posthog from "posthog-js";
@@ -75,6 +76,20 @@ function PostHogPageviewTracker() {
   return null;
 }
 
+function RouterProgress() {
+  const isTransitioning = useRouterState({
+    select: (s) => s.isTransitioning,
+  });
+
+  if (!isTransitioning) return null;
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-primary/20">
+      <div className="h-full bg-primary animate-progress" />
+    </div>
+  );
+}
+
 export const Route = createRootRouteWithContext<TanstackRouterContext>()({
   head: () => ({
     meta: [
@@ -118,6 +133,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
+        <RouterProgress />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
