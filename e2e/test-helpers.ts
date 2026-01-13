@@ -15,7 +15,7 @@ export const test = base.extend<TestInputs>({
   spinnerWaiter,
 });
 
-export async function login(page: Page, email: string) {
+export async function login(page: Page, email: string, _baseURL?: string) {
   await page.goto("/login");
 
   const emailInput = page.getByTestId("email-input");
@@ -44,14 +44,54 @@ export async function createOrganization(page: Page, orgName = `E2E Org ${Date.n
   await page.getByRole("button", { name: "Create organization" }).click();
 
   // make sure the org switcher eventually shows up
-  await page.locator("[data-component='OrgSwitcher']", { hasText: orgName }).waitFor();
+  await page
+    .locator("[data-component='OrgSwitcher']", { hasText: orgName })
+    .waitFor({ timeout: 10000 });
 }
 
 export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
-  await page.getByText("Add project").click();
+  // Look for either "New project" link or "Create project" link (empty state)
+  const newProjectLink = page.getByRole("link", { name: "New project" });
+  const createProjectLink = page.getByRole("link", { name: "Create project" });
+
+  await newProjectLink.or(createProjectLink).first().waitFor({ timeout: 10000 });
+  await newProjectLink.or(createProjectLink).first().click();
+
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  await page.locator("[data-component='ProjectHomePage']", { hasText: projectName }).waitFor();
+
+  // Wait for the project to appear in the sidebar, then click to navigate to it
+  const projectLink = page
+    .locator("[data-slot='sidebar']")
+    .getByRole("link", { name: projectName });
+  await projectLink.waitFor({ timeout: 10000 });
+  await projectLink.click();
+
+  // Wait for the project page to load
+  await page
+    .locator("[data-component='ProjectHomePage']", { hasText: projectName })
+    .waitFor({ timeout: 10000 });
+}
+
+export async function ensureOrganization(page: Page, orgName = `E2E Org ${Date.now()}`) {
+  // After login, check if we're at the create organization page
+  const createOrgHeading = page.locator("h1").filter({ hasText: "Create organization" });
+  if (await createOrgHeading.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await createOrganization(page, orgName);
+  }
+}
+
+export async function ensureProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
+  // Check if we need to create a project (no projects exist yet)
+  const addProjectButton = page.getByText("Add project");
+  const projectHomePage = page.locator("[data-component='ProjectHomePage']");
+
+  // If we're not on a project page, create one
+  if (await addProjectButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (!(await projectHomePage.isVisible({ timeout: 500 }).catch(() => false))) {
+      await createProject(page, projectName);
+    }
+  }
 }
 
 export function getProjectBasePath(page: Page) {
