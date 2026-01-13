@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- TRPC client setup requires exporting both component and utilities */
 import type * as React from "react";
 import superjson from "superjson";
 import { type TRPCClient, createTRPCClient, httpBatchStreamLink } from "@trpc/client";
