@@ -9,6 +9,12 @@ import { trpcClient, trpc } from "../lib/trpc.tsx";
 
 export const Route = createFileRoute("/_auth/new-organization")({
   component: NewOrganizationPage,
+  loader: async ({ context }) => {
+    const user = await trpcClient.user.me.query();
+    const defaultName = user.email.split("@").at(-1) ?? "";
+    const suggestion = await trpcClient.organization.suggestName.mutate({ name: defaultName });
+    return { suggestedName: suggestion.name };
+  },
 });
 
 type Organization = {
@@ -22,7 +28,8 @@ type Organization = {
 function NewOrganizationPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
+  const { suggestedName } = Route.useLoaderData();
+  const [name, setName] = useState(suggestedName);
 
   const createOrg = useMutation({
     mutationFn: async (name: string) => {

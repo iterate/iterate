@@ -6,6 +6,20 @@ import { organization, organizationUserMembership, UserRole, user } from "../../
 import { generateSlug } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
+  suggestName: protectedMutation
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.query.organization.findFirst({
+        where: eq(organization.name, input.name),
+      });
+      if (!existing) {
+        return { name: input.name };
+      }
+      const dateSuffix = new Date().toISOString().split("T")[0];
+      const nameWithDate = `${input.name}-${dateSuffix}`;
+      return { name: nameWithDate };
+    }),
+
   // Create a new organization
   create: protectedMutation
     .input(

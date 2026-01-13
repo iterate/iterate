@@ -16,7 +16,7 @@ function NewProjectPage() {
     from: "/_auth/orgs/$organizationSlug/new-project",
   });
   const navigate = useNavigate();
-  const [name, setName] = useState("");
+  const [name, setName] = useState("main");
 
   const createProject = useMutation({
     mutationFn: async (projectName: string) => {

@@ -39,8 +39,8 @@ function ProjectMachinesPage() {
   });
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newMachineName, setNewMachineName] = useState("");
   const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
+  const [newMachineName, setNewMachineName] = useState(`${newMachineType}-${Date.now()}`);
 
   const machineListQueryKey = trpc.machine.list.queryKey({
     organizationSlug: params.organizationSlug,
@@ -67,8 +67,8 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       setCreateDialogOpen(false);
-      setNewMachineName("");
       setNewMachineType("daytona");
+      setNewMachineName(`daytona-${Date.now()}`);
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
@@ -161,7 +161,11 @@ function ProjectMachinesPage() {
                 <label className="text-sm font-medium">Machine Type</label>
                 <Select
                   value={newMachineType}
-                  onValueChange={(v) => setNewMachineType(v as MachineType)}
+                  onValueChange={(v) => {
+                    const type = v as MachineType;
+                    setNewMachineType(type);
+                    setNewMachineName(`${type}-${Date.now()}`);
+                  }}
                   disabled={createMachine.isPending}
                 >
                   <SelectTrigger>
