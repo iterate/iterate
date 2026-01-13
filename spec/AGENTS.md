@@ -1,6 +1,6 @@
-# E2E Testing
+# Spec Testing
 
-Playwright tests. Run: `pnpm e2e`
+Playwright tests. Run: `pnpm spec`
 
 ## Critical
 
@@ -46,8 +46,8 @@ test("creates machine", async ({ page }) => {
 
 ## Examples
 
-- `machine-sync.e2e.ts` - Concise test with helpers
-- `spinner-waiter.e2e.ts` - Minimal spinner demo
+- `machine-sync.spec.ts` - Concise test with helpers
+- `spinner-waiter.spec.ts` - Minimal spinner demo
 
 ## Config
 

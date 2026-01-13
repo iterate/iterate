@@ -47,7 +47,7 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - Use pnpm
 - Use remeda for utilities, dedent for template strings
 - Unit tests: `*.test.ts` next to source
-- E2E tests: `e2e/*.e2e.ts`
+- Spec tests: `spec/*.spec.ts`
 
 ## Task system
 
@@ -62,7 +62,7 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - Website (iterate.com): `apps/iterate-com`
 - Frontend: `apps/os/app/AGENTS.md`
 - Backend: `apps/os/backend/AGENTS.md`
-- E2E: `e2e/AGENTS.md`
+- Spec: `spec/AGENTS.md`
 - Design system: `docs/design-system.md`
 - Vitest patterns: `docs/vitest-patterns.md`
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
