@@ -95,7 +95,7 @@ export function MachineTable({
 
     const command =
       type === "daemon"
-        ? `docker exec ${containerId} tail -f /var/log/iterate-server/current`
+        ? `docker exec ${containerId} tail -f /var/log/iterate-daemon/current`
         : `docker logs -f ${containerId}`;
 
     await navigator.clipboard.writeText(command);

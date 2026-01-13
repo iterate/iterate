@@ -14,7 +14,7 @@ s6-daemons/example-service-a/
 Full service with logs:
 
 ```
-s6-daemons/iterate-server/
+s6-daemons/iterate-daemon/
 ├── run
 ├── finish
 ├── notification-fd
@@ -28,7 +28,7 @@ s6-daemons/iterate-server/
 
 | Service                        | Port | Logs                         | Description                    |
 | ------------------------------ | ---- | ---------------------------- | ------------------------------ |
-| iterate-server                 | 3000 | `/var/log/iterate-server`    | Main daemon + web UI           |
+| iterate-daemon                 | 3000 | `/var/log/iterate-daemon`    | Main daemon + web UI           |
 | example-service-a              | 3001 | stdout                       | Test daemon (2s startup delay) |
 | example-service-b-depends-on-a | 3002 | `/var/log/example-service-b` | Test daemon proxying service-a |
 
@@ -44,7 +44,7 @@ export S6DIR=/root/src/github.com/iterate/iterate/s6-daemons
 
 ```bash
 # Single service status
-s6-svstat $S6DIR/iterate-server
+s6-svstat $S6DIR/iterate-daemon
 # Output: up (pid 563) 471 seconds, ready 471 seconds
 
 # All services status
@@ -55,27 +55,27 @@ for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done
 
 ```bash
 # Send SIGTERM and restart (graceful restart)
-s6-svc -t $S6DIR/iterate-server
+s6-svc -t $S6DIR/iterate-daemon
 
 # Hard restart: stop then start
-s6-svc -d $S6DIR/iterate-server  # stop (down)
-s6-svc -u $S6DIR/iterate-server  # start (up)
+s6-svc -d $S6DIR/iterate-daemon  # stop (down)
+s6-svc -u $S6DIR/iterate-daemon  # start (up)
 ```
 
 ### Other Service Controls
 
 ```bash
 # Stop a service (stays down until manually started)
-s6-svc -d $S6DIR/iterate-server
+s6-svc -d $S6DIR/iterate-daemon
 
 # Start a stopped service
-s6-svc -u $S6DIR/iterate-server
+s6-svc -u $S6DIR/iterate-daemon
 
 # Send SIGKILL (force kill)
-s6-svc -k $S6DIR/iterate-server
+s6-svc -k $S6DIR/iterate-daemon
 
 # Wait for service to be up and ready (5s timeout)
-s6-svwait -U -t 5000 $S6DIR/iterate-server
+s6-svwait -U -t 5000 $S6DIR/iterate-daemon
 ```
 
 ### Quick Reference
@@ -93,7 +93,7 @@ s6-svwait -U -t 5000 $S6DIR/iterate-server
 
 ```bash
 docker logs <container-id>
-docker exec <container-id> tail -f /var/log/iterate-server/current
+docker exec <container-id> tail -f /var/log/iterate-daemon/current
 ```
 
 ## Health Checks
