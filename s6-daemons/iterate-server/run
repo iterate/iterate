@@ -20,4 +20,5 @@ exec 4>&3
   rm -f "$NOTIFY_FIFO"
 } &
 
+pnpm db:migrate
 exec env HOSTNAME=0.0.0.0 PORT=3000 tsx server.ts

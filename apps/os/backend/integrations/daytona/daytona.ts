@@ -167,7 +167,7 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
     const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
-    return rewriteBaseTag(response, proxyBasePath);
+    return rewriteHTMLUrls(response, proxyBasePath);
   }
 
   // Daytona machine handling
@@ -213,7 +213,7 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     }
   }
 
-  return rewriteBaseTag(response, proxyBasePath);
+  return rewriteHTMLUrls(response, proxyBasePath);
 });
 
 /**
@@ -402,29 +402,45 @@ async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): P
 }
 
 /**
- * Rewrite the <base> tag in HTML responses to use the proxy base path.
- * Uses simple string replacement for maximum performance.
- * The daemon app uses relative URLs with base: "./" in Vite config,
- * so we just need to update the base href.
+ * Streaming HTML rewriter using Cloudflare's HTMLRewriter.
+ * Rewrites absolute paths in HTML to work through the proxy:
+ * - <base href="/"> → <base href="${proxyBasePath}/">
+ * - src="/path" → src="${proxyBasePath}/path"
+ * - href="/path" → href="${proxyBasePath}/path"
+ *
+ * Benefits over string replacement:
+ * - No memory buffering (streams as data arrives)
+ * - Better TTFB for large documents
+ * - Works with any document size
  */
-async function rewriteBaseTag(response: Response, proxyBasePath: string): Promise<Response> {
+function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     return response;
   }
 
-  const html = await response.text();
+  class URLRewriter implements HTMLRewriterElementContentHandlers {
+    constructor(private attr: string) {}
+    element(element: Element) {
+      const value = element.getAttribute(this.attr);
+      if (value?.startsWith("/") && !value.startsWith("//")) {
+        element.setAttribute(this.attr, `${proxyBasePath}${value}`);
+      }
+    }
+  }
 
-  // Replace <base href="/"> or <base href="/" /> with proxy base path
-  // This handles the daemon's existing <base href="/" /> tag
-  const rewritten = html.replace(
-    /<base\s+href=["']\/["']\s*\/?>/i,
-    `<base href="${proxyBasePath}/">`,
-  );
+  class BaseRewriter implements HTMLRewriterElementContentHandlers {
+    element(element: Element) {
+      const href = element.getAttribute("href");
+      if (href === "/") {
+        element.setAttribute("href", `${proxyBasePath}/`);
+      }
+    }
+  }
 
-  return new Response(rewritten, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new HTMLRewriter()
+    .on("base", new BaseRewriter())
+    .on("[src]", new URLRewriter("src"))
+    .on("[href]:not(base)", new URLRewriter("href"))
+    .transform(response);
 }

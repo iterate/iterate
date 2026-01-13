@@ -9,6 +9,8 @@ import {
   Monitor,
   ScrollText,
   SquareTerminal,
+  Terminal,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
@@ -100,9 +102,48 @@ export function MachineTable({
     toast.success(
       <div className="space-y-1">
         <div>Copied to clipboard:</div>
-        <code className="block text-xs font-mono bg-muted px-2 py-1 rounded">{command}</code>
+        <code className="block text-xs font-mono bg-black/10 dark:bg-white/10 px-2 py-1.5 rounded border border-black/10 dark:border-white/10">
+          {command}
+        </code>
+        {type === "daemon" && (
+          <div className="text-xs text-muted-foreground mt-2">
+            Note: Won't work until entry.ts has finished starting daemons
+          </div>
+        )}
       </div>,
     );
+  };
+
+  const copyShellCommand = async (machine: Machine) => {
+    const containerId = (machine.metadata as { containerId?: string })?.containerId;
+    if (!containerId) {
+      toast.error("Container ID not found");
+      return;
+    }
+
+    const command = `docker exec -it ${containerId} /bin/bash`;
+    await navigator.clipboard.writeText(command);
+    toast.success(
+      <div className="space-y-1">
+        <div>Copied to clipboard:</div>
+        <code className="block text-xs font-mono bg-black/10 dark:bg-white/10 px-2 py-1.5 rounded border border-black/10 dark:border-white/10">
+          {command}
+        </code>
+      </div>,
+    );
+  };
+
+  const restartMachine = async (machineId: string) => {
+    try {
+      await trpcClient.machine.restart.mutate({
+        organizationSlug,
+        projectSlug,
+        machineId,
+      });
+      toast.success("Machine restarting...");
+    } catch (err) {
+      toast.error(`Failed to restart: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   return (
@@ -169,11 +210,26 @@ export function MachineTable({
                       <Monitor className="h-4 w-4 mr-2" />
                       Open Daemon
                     </DropdownMenuItem>
+                    {machine.state === "started" && (
+                      <DropdownMenuItem onClick={() => restartMachine(machine.id)}>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Restart
+                      </DropdownMenuItem>
+                    )}
                     {machine.type === "local-docker" && (
                       <>
+                        <DropdownMenuItem onClick={() => copyShellCommand(machine)}>
+                          <Terminal className="h-4 w-4 mr-2" />
+                          Copy shell command
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => copyLogsCommand(machine, "daemon")}>
                           <ScrollText className="h-4 w-4 mr-2" />
-                          Copy daemon logs command
+                          <span>
+                            Copy daemon logs command
+                            <span className="block text-xs text-muted-foreground">
+                              Won't work until entry.ts starts daemons
+                            </span>
+                          </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => copyLogsCommand(machine, "entry")}>
                           <ScrollText className="h-4 w-4 mr-2" />

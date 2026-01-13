@@ -7,6 +7,9 @@ const ITERATE_REPO = join(homedir(), "src", "github.com", "iterate", "iterate");
 const S6_DAEMONS_PATH = join(ITERATE_REPO, "s6-daemons");
 const DAEMON_PATH = join(ITERATE_REPO, "apps", "daemon");
 
+// Path where local repo is mounted in local-docker mode
+const LOCAL_REPO_MOUNT = "/local-iterate-repo";
+
 // ============================================
 // Coding tools installation
 // ============================================
@@ -30,29 +33,29 @@ const installCodingTools = () => {
 
   // opencode
   console.log("");
-  console.log("--- opencode ---");
-  try {
-    execSync("which opencode", { stdio: "pipe" });
-    console.log("Already installed");
-  } catch {
-    console.log("Installing...");
-    execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit" });
-  }
+  console.log("--- opencode --- (skipping because slow)");
+  // try {
+  //   execSync("which opencode", { stdio: "pipe" });
+  //   console.log("Already installed");
+  // } catch {
+  //   console.log("Installing...");
+  //   execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit" });
+  // }
 
   // Claude Code
   console.log("");
-  console.log("--- Claude Code ---");
-  try {
-    execSync("which claude", { stdio: "pipe" });
-    console.log("Already installed");
-  } catch {
-    console.log("Installing...");
-    try {
-      execSync("curl -fsSL https://claude.ai/install.sh | bash", { stdio: "inherit" });
-    } catch {
-      console.log("Claude install failed (may hang in non-interactive mode)");
-    }
-  }
+  console.log("--- Claude Code (skipping because slow) ---");
+  // try {
+  //   execSync("which claude", { stdio: "pipe" });
+  //   console.log("Already installed");
+  // } catch {
+  //   console.log("Installing...");
+  //   try {
+  //     execSync("curl -fsSL https://claude.ai/install.sh | bash", { stdio: "inherit" });
+  //   } catch {
+  //     console.log("Claude install failed (may hang in non-interactive mode)");
+  //   }
+  // }
 
   console.log("");
 };
@@ -61,12 +64,40 @@ const installCodingTools = () => {
 // Repository setup
 // ============================================
 
-const setupIterateRepo = () => {
+/**
+ * Copies files from the mounted local repo, excluding git-ignored files.
+ * Uses rsync with common exclusions (node_modules, .git, etc.)
+ */
+const copyFromLocalMount = () => {
   console.log("");
-  console.log("========================================");
-  console.log("Setting up iterate repo");
-  console.log("========================================");
+  console.log("Copying from mounted local repo...");
 
+  execSync(`mkdir -p ${ITERATE_REPO}`, { stdio: "inherit" });
+
+  // Use rsync to copy, excluding common gitignored patterns
+  // The mounted repo is read-only, so we copy to the target location
+  execSync(
+    `rsync -av --delete \
+      --exclude='node_modules' \
+      --exclude='.git' \
+      --exclude='dist' \
+      --exclude='.turbo' \
+      --exclude='.cache' \
+      --exclude='*.log' \
+      --exclude='.next' \
+      --exclude='.wrangler' \
+      --exclude='.alchemy' \
+      --exclude='coverage' \
+      --exclude='.env*' \
+      ${LOCAL_REPO_MOUNT}/ ${ITERATE_REPO}/`,
+    { stdio: "inherit" },
+  );
+};
+
+/**
+ * Clones or pulls the iterate repo from GitHub (for Daytona/production use).
+ */
+const cloneOrPullFromGit = () => {
   if (!existsSync(ITERATE_REPO)) {
     console.log("");
     console.log("Cloning iterate repo...");
@@ -81,6 +112,21 @@ const setupIterateRepo = () => {
       cwd: ITERATE_REPO,
       stdio: "inherit",
     });
+  }
+};
+
+const setupIterateRepo = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up iterate repo");
+  console.log("========================================");
+
+  // Use mounted local repo if available (local-docker dev mode)
+  // Otherwise clone/pull from GitHub (Daytona mode)
+  if (existsSync(LOCAL_REPO_MOUNT)) {
+    copyFromLocalMount();
+  } else {
+    cloneOrPullFromGit();
   }
 
   console.log("");
