@@ -32,6 +32,7 @@ export const routes = rootRoute("root.tsx", [
         index("org/project/index.tsx"),
         route("/access-tokens", "org/project/access-tokens.tsx"),
         route("/machines", "org/project/machines.tsx"),
+        route("/machines/$machineId", "org/project/machines.$machineId.tsx"),
         route("/repo", "org/project/repo.tsx"),
         route("/connectors", "org/project/connectors.tsx"),
         route("/env-vars", "org/project/env-vars.tsx"),

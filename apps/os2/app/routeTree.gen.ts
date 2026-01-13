@@ -34,6 +34,7 @@ import { Route as orgProjectEnvVarsRouteImport } from './routes/org/project/env-
 import { Route as orgProjectConnectorsRouteImport } from './routes/org/project/connectors.tsx'
 import { Route as orgProjectAgentsRouteImport } from './routes/org/project/agents.tsx'
 import { Route as orgProjectAccessTokensRouteImport } from './routes/org/project/access-tokens.tsx'
+import { Route as orgProjectMachinesDotmachineIdRouteImport } from './routes/org/project/machines.$machineId.tsx'
 
 const loginRoute = loginRouteImport.update({
   id: '/login',
@@ -159,6 +160,12 @@ const orgProjectAccessTokensRoute = orgProjectAccessTokensRouteImport.update({
   path: '/access-tokens',
   getParentRoute: () => orgProjectLayoutRoute,
 } as any)
+const orgProjectMachinesDotmachineIdRoute =
+  orgProjectMachinesDotmachineIdRouteImport.update({
+    id: '/$machineId',
+    path: '/$machineId',
+    getParentRoute: () => orgProjectMachinesRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/dev': typeof devRoute
@@ -181,10 +188,11 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof orgProjectIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachinesDotmachineIdRoute
 }
 export interface FileRoutesByTo {
   '/dev': typeof devRoute
@@ -204,10 +212,11 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachinesDotmachineIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -232,10 +241,11 @@ export interface FileRoutesById {
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/': typeof orgProjectIndexRoute
+  '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachinesDotmachineIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -264,6 +274,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/dev'
@@ -287,6 +298,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   id:
     | '__root__'
     | '/_auth.layout'
@@ -314,6 +326,7 @@ export interface FileRouteTypes {
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/'
+    | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -499,6 +512,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgProjectAccessTokensRouteImport
       parentRoute: typeof orgProjectLayoutRoute
     }
+    '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': {
+      id: '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
+      path: '/$machineId'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
+      preLoaderRoute: typeof orgProjectMachinesDotmachineIdRouteImport
+      parentRoute: typeof orgProjectMachinesRoute
+    }
   }
 }
 
@@ -518,12 +538,23 @@ const adminLayoutRouteWithChildren = adminLayoutRoute._addFileChildren(
   adminLayoutRouteChildren,
 )
 
+interface orgProjectMachinesRouteChildren {
+  orgProjectMachinesDotmachineIdRoute: typeof orgProjectMachinesDotmachineIdRoute
+}
+
+const orgProjectMachinesRouteChildren: orgProjectMachinesRouteChildren = {
+  orgProjectMachinesDotmachineIdRoute: orgProjectMachinesDotmachineIdRoute,
+}
+
+const orgProjectMachinesRouteWithChildren =
+  orgProjectMachinesRoute._addFileChildren(orgProjectMachinesRouteChildren)
+
 interface orgProjectLayoutRouteChildren {
   orgProjectAccessTokensRoute: typeof orgProjectAccessTokensRoute
   orgProjectAgentsRoute: typeof orgProjectAgentsRoute
   orgProjectConnectorsRoute: typeof orgProjectConnectorsRoute
   orgProjectEnvVarsRoute: typeof orgProjectEnvVarsRoute
-  orgProjectMachinesRoute: typeof orgProjectMachinesRoute
+  orgProjectMachinesRoute: typeof orgProjectMachinesRouteWithChildren
   orgProjectRepoRoute: typeof orgProjectRepoRoute
   orgProjectSettingsRoute: typeof orgProjectSettingsRoute
   orgProjectIndexRoute: typeof orgProjectIndexRoute
@@ -534,7 +565,7 @@ const orgProjectLayoutRouteChildren: orgProjectLayoutRouteChildren = {
   orgProjectAgentsRoute: orgProjectAgentsRoute,
   orgProjectConnectorsRoute: orgProjectConnectorsRoute,
   orgProjectEnvVarsRoute: orgProjectEnvVarsRoute,
-  orgProjectMachinesRoute: orgProjectMachinesRoute,
+  orgProjectMachinesRoute: orgProjectMachinesRouteWithChildren,
   orgProjectRepoRoute: orgProjectRepoRoute,
   orgProjectSettingsRoute: orgProjectSettingsRoute,
   orgProjectIndexRoute: orgProjectIndexRoute,

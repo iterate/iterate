@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
 import {
   MoreHorizontal,
@@ -108,7 +109,15 @@ export function MachineTable({
         <TableBody>
           {machines.map((machine) => (
             <TableRow key={machine.id}>
-              <TableCell className="font-medium">{machine.name}</TableCell>
+              <TableCell className="font-medium">
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId"
+                  params={{ organizationSlug, projectSlug, machineId: machine.id }}
+                  className="hover:underline"
+                >
+                  {machine.name}
+                </Link>
+              </TableCell>
               <TableCell className="text-muted-foreground text-xs font-mono">
                 {machine.metadata?.snapshotName ?? "-"}
               </TableCell>
