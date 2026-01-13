@@ -1,6 +1,6 @@
 const fs = require("fs");
 
-const resultsFile = process.argv[2] || "e2e-results.json";
+const resultsFile = process.argv[2] || "spec-results.json";
 const outputFile = process.argv[3] || "flaky-report.md";
 
 let results;
@@ -10,7 +10,7 @@ try {
   const jsonLine = lines.find((l) => l.startsWith("{"));
   results = jsonLine ? JSON.parse(jsonLine) : null;
 } catch (err) {
-  console.log("Failed to parse e2e results:", err.message);
+  console.log("Failed to parse results:", err.message);
   fs.writeFileSync(
     outputFile,
     "# Flaky Test Detection Report\n\nNo results to analyze (JSON parse failed).\n",

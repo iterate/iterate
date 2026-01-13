@@ -4,7 +4,6 @@ packages:
   - apps/iterate-com
   - apps/os
   - packages/*
-  - e2e
   - .github/ts-workflows
 
 minimumReleaseAge: 1440

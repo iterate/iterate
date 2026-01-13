@@ -1,10 +1,10 @@
 {
-  "name": "@iterate-com/e2e",
+  "name": "@iterate-com/spec",
   "type": "module",
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "e2e": "playwright test"
+    "spec": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
