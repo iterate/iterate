@@ -6,6 +6,9 @@ export default workflow({
   on: {
     push: {},
   },
+  env: {
+    SLACK_CLIENT_ID: "fake123",
+  },
   jobs: {
     run: {
       ...utils.runsOn,

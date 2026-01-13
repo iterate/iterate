@@ -3,6 +3,8 @@
 name: e2e
 on:
   push: {}
+env:
+  SLACK_CLIENT_ID: fake123
 jobs:
   run:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
