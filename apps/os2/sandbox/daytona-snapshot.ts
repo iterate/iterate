@@ -80,6 +80,8 @@ const snapshot = await (async () => {
         name: snapshotName,
         image,
         resources: {
+          cpu: 4,
+          memory: 4,
           disk: 10,
         },
       },

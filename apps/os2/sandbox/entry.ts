@@ -115,6 +115,10 @@ const buildDaemon2 = () => {
 // ============================================
 
 const cleanupS6RuntimeState = () => {
+  if (!existsSync(S6_DAEMONS_PATH)) {
+    return;
+  }
+
   rmSync(join(S6_DAEMONS_PATH, ".s6-svscan"), { recursive: true, force: true });
 
   for (const entry of readdirSync(S6_DAEMONS_PATH, { withFileTypes: true })) {

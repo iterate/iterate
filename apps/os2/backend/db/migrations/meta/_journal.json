@@ -43,13 +43,6 @@
       "when": 1736700000000,
       "tag": "0005_billing_account",
       "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1768259708633,
-      "tag": "0006_drop_stripe_event",
-      "breakpoints": true
     }
   ]
 }
