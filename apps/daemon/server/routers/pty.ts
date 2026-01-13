@@ -18,7 +18,6 @@ const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 interface PtyConnection {
   ptyProcess: IPty;
   tmuxSessionName: string | null;
-  outputBuffer: string[];
 }
 
 const ptyConnections = new Map<WSContext<WebSocket>, PtyConnection>();
@@ -118,21 +117,10 @@ ptyRouter.get(
           return;
         }
 
-        const outputBuffer: string[] = [];
-        const MAX_BUFFER_SIZE = 100_000; // ~100KB of output
-        let bufferSize = 0;
-
-        ptyConnections.set(ws, { ptyProcess, tmuxSessionName, outputBuffer });
+        ptyConnections.set(ws, { ptyProcess, tmuxSessionName });
 
         ptyProcess.onData((data) => {
           ws.send(data);
-          outputBuffer.push(data);
-          bufferSize += data.length;
-          // Trim buffer if it exceeds max size
-          while (bufferSize > MAX_BUFFER_SIZE && outputBuffer.length > 1) {
-            const removed = outputBuffer.shift()!;
-            bufferSize -= removed.length;
-          }
         });
 
         ptyProcess.onExit(({ exitCode }) => {
