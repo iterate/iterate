@@ -11,7 +11,7 @@ import {
 } from "../trpc.ts";
 import { project, verification, projectRepo, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
-import { generateSlug } from "../../utils/slug.ts";
+import { slugifyWithSuffix } from "../../utils/slug.ts";
 import {
   listInstallationRepositories,
   deleteGitHubInstallation,
@@ -43,7 +43,7 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const slug = generateSlug(input.name);
+      const slug = slugifyWithSuffix(input.name);
 
       const [newProject] = await ctx.db
         .insert(project)
