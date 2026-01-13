@@ -6,8 +6,7 @@ test.describe("shell navigation", () => {
     await login(page, testEmail);
 
     await createOrganization(page);
-    const project = await createProject(page);
-    await project.click();
+    await createProject(page);
 
     await sidebarButton(page, "Connectors").click();
     await page.getByText("Project connections").waitFor();

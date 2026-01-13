@@ -47,9 +47,6 @@ test.describe("naming defaults", () => {
     await createOrganization(page);
     await createProject(page, uniqueProjectName);
 
-    const projectLink = page.locator("[data-slot='item']", { hasText: uniqueProjectName });
-    await projectLink.click();
-
     await page.locator(`[data-project="${uniqueProjectName.toLowerCase()}"]`).waitFor();
   });
 
@@ -59,10 +56,9 @@ test.describe("naming defaults", () => {
     await login(page, testEmail);
     await createOrganization(page);
 
-    const project = await createProject(page, sharedProjectName);
-    await project.click();
+    await createProject(page, sharedProjectName);
 
-    await page.locator("[data-group='organization'] a:has-text('Settings')").click(); // After you have a projec the Create Project button only shows on Org settings.
+    await page.locator("[data-group='organization']").getByText("Settings").click();
     await page.getByText("New project").click();
     await page.getByLabel("Project name").fill(sharedProjectName);
     await page.getByRole("button", { name: "Create project" }).click();
@@ -74,8 +70,7 @@ test.describe("naming defaults", () => {
     const testEmail = `naming-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
     await createOrganization(page);
-    const projectItem = await createProject(page);
-    await projectItem.click();
+    await createProject(page);
     await sidebarButton(page, "Machines").click();
 
     await page.getByRole("button", { name: "Create Machine" }).click();

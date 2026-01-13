@@ -5,8 +5,7 @@ test.describe("machine list sync", () => {
     const testEmail = `machine-sync-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
     await createOrganization(page);
-    const projectItem = await createProject(page);
-    await projectItem.click();
+    await createProject(page);
     await sidebarButton(page, "Machines").click();
 
     const machineName = `E2E Machine ${Date.now()}`;

@@ -1,22 +1,30 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpcClient } from "../../lib/trpc.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
+  loader: async ({ context, params }) => {
+    const org = await context.queryClient.ensureQueryData(
+      trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
+    );
+    return { defaultName: org?.projects?.length ? "" : "main" };
+  },
 });
 
 function NewProjectPage() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/new-project",
   });
+  const { defaultName } = Route.useLoaderData();
   const navigate = useNavigate();
-  const [name, setName] = useState("main");
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(defaultName);
 
   const createProject = useMutation({
     mutationFn: async (projectName: string) => {
@@ -25,7 +33,12 @@ function NewProjectPage() {
         name: projectName,
       });
     },
-    onSuccess: (project) => {
+    onSuccess: async (project) => {
+      await queryClient.invalidateQueries({
+        queryKey: trpc.organization.withProjects.queryKey({
+          organizationSlug: params.organizationSlug,
+        }),
+      });
       toast.success("Project created");
       navigate({
         to: "/orgs/$organizationSlug/projects/$projectSlug",

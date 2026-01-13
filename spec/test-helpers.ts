@@ -51,9 +51,7 @@ export async function createProject(page: Page, projectName = `E2E Project ${Dat
   await sidebarButton(page, /^(Create|New) project$/).click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  const projectItem = page.locator("[data-slot='item']", { hasText: projectName });
-  await projectItem.waitFor();
-  return projectItem;
+  await page.locator(`[data-project]`).waitFor();
 }
 
 export function getProjectBasePath(page: Page) {
