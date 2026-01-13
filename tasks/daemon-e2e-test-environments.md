@@ -18,7 +18,7 @@ We should be able to run full Playwright-based e2e tests against the daemon app 
 
 ## Current State
 
-- `apps/os/sandbox/local-docker.test.ts` has basic integration tests that verify the Docker container works (s6, iterate-server, tmux, PTY endpoints)
+- `apps/os/sandbox/local-docker.test.ts` has basic integration tests that verify the Docker container works (s6, iterate-daemon, tmux, PTY endpoints)
 - These tests use `expect.poll()` and direct HTTP/WebSocket calls rather than Playwright
 - No proper Playwright e2e tests exist for the daemon UI
 
@@ -41,7 +41,7 @@ We should be able to run full Playwright-based e2e tests against the daemon app 
 - The ghostty terminal uses WebSocket connections to `/api/pty/ws`
 - Tmux sessions are created via tRPC (`ensureTmuxSession`, `listTmuxSessions`)
 - The daemon UI is at the root `/` path, not nested under a route prefix
-- For Docker containers, need to wait for iterate-server to be healthy before running tests
+- For Docker containers, need to wait for iterate-daemon to be healthy before running tests
 
 ## Related Files
 

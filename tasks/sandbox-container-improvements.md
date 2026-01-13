@@ -135,7 +135,7 @@ if (stats.isSymbolicLink()) {
 
 ### Current State
 
-Only `iterate-server` and `example-service-b-depends-on-a` have log services.
+Only `iterate-daemon` and `example-service-b-depends-on-a` have log services.
 `example-service-a` logs go to stdout (inherited from s6-svscan).
 
 ### Fix
