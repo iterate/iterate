@@ -49,6 +49,7 @@ const copyFromLocalMount = () => {
  * Use ITERATE_GIT_REF env var to specify a branch/ref (defaults to "main").
  */
 const cloneOrPullFromGit = () => {
+  // todo: pull from my branch, not just main every time.
   const gitRef = process.env.ITERATE_GIT_REF || "main";
 
   if (!existsSync(ITERATE_REPO)) {
@@ -138,7 +139,7 @@ const startS6Svscan = (): ChildProcess => {
   console.log("Starting s6-svscan");
   console.log("========================================");
   console.log("");
-
+  //
   const svscan = spawn("s6-svscan", [S6_DAEMONS_PATH], {
     stdio: "inherit",
     env: {

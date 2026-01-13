@@ -27,4 +27,7 @@ jobs:
       - run: pnpm spec
       - name: upload logs
         if: failure()
-        run: ls -A ./spec
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-results
+          path: test-results

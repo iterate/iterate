@@ -265,6 +265,12 @@ export function MachineTable({
           </DropdownMenuItem>
         </>
       )}
+      {machine.type === "local-vanilla" && (
+        <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
+          <Monitor className="h-4 w-4 mr-2" />
+          Daemon (localhost)
+        </DropdownMenuItem>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
         <ScrollText className="h-4 w-4 mr-2" />
@@ -310,7 +316,10 @@ export function MachineTable({
 
   const getTypeLabel = (machine: Machine) => {
     if (machine.type === "local-docker") {
-      return `Local :${machine.metadata?.port ?? "?"}`;
+      return `Local Docker :${machine.metadata?.port ?? "?"}`;
+    }
+    if (machine.type === "local-vanilla") {
+      return "Local Vanilla";
     }
     return "Daytona";
   };

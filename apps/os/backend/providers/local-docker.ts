@@ -17,13 +17,18 @@ export async function dockerApi<T>(
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
+  }).catch((e: unknown) => {
+    throw new Error(
+      `Docker API error: ${e}. ` +
+        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
+    );
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
+    const error = await response.json().catch(() => ({ message: response.status }));
     throw new Error(
-      `Docker API error: ${(error as { message?: string }).message ?? response.statusText}. ` +
-        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375.`,
+      `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
+        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
     );
   }
 
@@ -34,6 +39,37 @@ export async function dockerApi<T>(
 export interface LocalDockerConfig {
   imageName: string;
   findAvailablePort: () => Promise<number>;
+}
+
+export function createLocalVanillaProvider(): MachineProvider {
+  return {
+    type: "local-vanilla",
+    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      return { externalId: machineConfig.machineId };
+    },
+    async start(_externalId: string): Promise<void> {
+      return;
+    },
+    async stop(_externalId: string): Promise<void> {
+      return;
+    },
+    async restart(_externalId: string): Promise<void> {
+      return;
+    },
+    async archive(_externalId: string): Promise<void> {
+      return;
+    },
+    async delete(_externalId: string): Promise<void> {
+      return;
+    },
+    getPreviewUrl(
+      _externalId: string,
+      _metadata?: Record<string, unknown>,
+      _port?: number,
+    ): string {
+      return `http://localhost:${3000}`;
+    },
+  };
 }
 
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
