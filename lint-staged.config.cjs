@@ -6,6 +6,6 @@ try {
 }
 
 module.exports = {
-  "*": localConfig["*"] ?? ["prettier --write --ignore-unknown"],
+  "*": ["prettier --write --ignore-unknown"],
   ...localConfig,
 };
