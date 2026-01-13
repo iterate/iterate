@@ -367,12 +367,30 @@ export const machineRouter = router({
 
       const metadata = machineRecord.metadata as { containerId?: string; port?: number };
 
+      // Build native URLs based on machine type
+      const buildNativeUrl = (port: number) => {
+        if (machineRecord.type === "daytona" && machineRecord.externalId) {
+          return `https://${port}-${machineRecord.externalId}.proxy.daytona.works`;
+        }
+        if (machineRecord.type === "local-docker" && metadata.port) {
+          // For local-docker, map internal port to host port offset
+          // Internal 3000 -> host metadata.port, internal 22222 -> metadata.port + 1
+          const hostPort = port === 3000 ? metadata.port : metadata.port + 1;
+          return `http://localhost:${hostPort}`;
+        }
+        return null;
+      };
+
       return {
         url: buildProxyUrl(3000),
         daemonUrl: buildProxyUrl(3000),
         terminalUrl: buildProxyUrl(22222),
+        // Native URLs (bypassing our proxy)
+        nativeDaemonUrl: buildNativeUrl(3000),
+        nativeTerminalUrl: machineRecord.type === "daytona" ? buildNativeUrl(22222) : null,
         machineType: machineRecord.type,
         containerId: metadata.containerId,
+        hostPort: metadata.port,
       };
     }),
 });
