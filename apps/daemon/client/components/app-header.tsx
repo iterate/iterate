@@ -1,10 +1,18 @@
-import { Link, useLocation } from "@tanstack/react-router";
-import { ChevronDownIcon, RotateCcwIcon, SquareIcon, Trash2Icon } from "lucide-react";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import {
+  ChevronDownIcon,
+  ChevronLeft,
+  PlusIcon,
+  RotateCcwIcon,
+  SquareIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import type { Agent } from "@server/db/schema.ts";
 import type { TmuxSession } from "@server/tmux-control.ts";
+import { cn } from "@/lib/utils.ts";
 import { Separator } from "@/components/ui/separator.tsx";
 import { SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -26,12 +34,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
 import { trpcClient, useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { HEADER_ACTIONS_ID } from "@/components/header-actions-constants.ts";
 
 interface AppHeaderProps {
   agent?: Agent | null;
+  agents?: Agent[];
 }
 
-export function AppHeader({ agent }: AppHeaderProps) {
+export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const location = useLocation();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -84,119 +94,224 @@ export function AppHeader({ agent }: AppHeaderProps) {
     },
   });
 
+  // Determine display name for mobile
+  const mobileDisplayName = agent?.slug
+    ? agent.slug
+    : isNewAgentRoute
+      ? "New Agent"
+      : isTerminalRoute
+        ? "Terminal"
+        : isBtopRoute
+          ? "System"
+          : isAgentRoute
+            ? "Agents"
+            : "Home";
+
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-2 px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-      <div className="flex items-center gap-2">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mr-2 h-4" />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink asChild>
-                <Link to="/">iterate</Link>
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            {(isAgentRoute || isNewAgentRoute) && (
-              <>
-                <BreadcrumbSeparator className="hidden md:block" />
-                <BreadcrumbItem>
-                  {agent || isNewAgentRoute ? (
-                    <BreadcrumbLink asChild>
-                      <Link to="/agents">Agents</Link>
-                    </BreadcrumbLink>
-                  ) : (
-                    <BreadcrumbPage>Agents</BreadcrumbPage>
-                  )}
-                </BreadcrumbItem>
-              </>
-            )}
-            {agent && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage className="max-w-[150px] truncate sm:max-w-[200px]">
-                    {agent.slug}
-                  </BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-            {isNewAgentRoute && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>New</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-            {isTerminalRoute && (
-              <>
-                <BreadcrumbSeparator className="hidden md:block" />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>Terminal</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-            {isBtopRoute && (
-              <>
-                <BreadcrumbSeparator className="hidden md:block" />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>System Utilisation</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
-      {isTerminalRoute && (
-        <TerminalShortcutsDropdown tmuxSessions={tmuxSessions} onCommand={sendTerminalCommand} />
-      )}
-      {agent && (
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => resetAgent.mutate()}
-                disabled={resetAgent.isPending}
-              >
-                <RotateCcwIcon className="size-4" />
-                <span className="sr-only">Reset Agent</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Reset agent session</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => stopAgent.mutate()}
-                disabled={stopAgent.isPending || agent.status !== "running"}
-              >
-                <SquareIcon className="size-4" />
-                <span className="sr-only">Stop Agent</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Stop agent</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => deleteAgent.mutate()}
-                disabled={deleteAgent.isPending}
-              >
-                <Trash2Icon className="size-4" />
-                <span className="sr-only">Delete Agent</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Delete agent</TooltipContent>
-          </Tooltip>
+    <header
+      aria-label="Site header"
+      className="flex h-16 shrink-0 items-center border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12"
+    >
+      <div className="flex w-full items-center justify-between gap-2 px-4">
+        {/* Left side - breadcrumbs with max-width constraint */}
+        <div className="flex max-w-md items-center gap-2">
+          <SidebarTrigger className="-ml-1" aria-label="Toggle sidebar" />
+          <Separator orientation="vertical" className="mr-2 hidden h-4 md:block" />
+
+          {/* Mobile navigation - back button and current location */}
+          <div className="flex items-center gap-2 md:hidden">
+            <Link
+              to="/agents"
+              className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </Link>
+            <span className="text-sm font-medium truncate max-w-[200px]">{mobileDisplayName}</span>
+          </div>
+
+          {/* Desktop breadcrumbs */}
+          <Breadcrumb className="hidden md:flex">
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/">iterate</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              {(isAgentRoute || isNewAgentRoute) && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    {agent || isNewAgentRoute ? (
+                      <BreadcrumbLink asChild>
+                        <Link to="/agents">Agents</Link>
+                      </BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage>Agents</BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                </>
+              )}
+              {agent && (
+                <>
+                  <BreadcrumbSeparator />
+                  <AgentBreadcrumbDropdown currentAgent={agent} agents={agents} />
+                </>
+              )}
+              {isNewAgentRoute && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>New</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              )}
+              {isTerminalRoute && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>Terminal</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              )}
+              {isBtopRoute && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>System Utilisation</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              )}
+            </BreadcrumbList>
+          </Breadcrumb>
         </div>
-      )}
+
+        {/* Right side - actions without max-width, pushed to far right */}
+        <div id={HEADER_ACTIONS_ID} className="flex items-center gap-2">
+          {isTerminalRoute && (
+            <TerminalShortcutsDropdown
+              tmuxSessions={tmuxSessions}
+              onCommand={sendTerminalCommand}
+            />
+          )}
+          {agent && (
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => resetAgent.mutate()}
+                    disabled={resetAgent.isPending}
+                  >
+                    <RotateCcwIcon className="size-4" />
+                    <span className="sr-only">Reset Agent</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reset agent session</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => stopAgent.mutate()}
+                    disabled={stopAgent.isPending || agent.status !== "running"}
+                  >
+                    <SquareIcon className="size-4" />
+                    <span className="sr-only">Stop Agent</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Stop agent</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => deleteAgent.mutate()}
+                    disabled={deleteAgent.isPending}
+                  >
+                    <Trash2Icon className="size-4" />
+                    <span className="sr-only">Delete Agent</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete agent</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+        </div>
+      </div>
     </header>
+  );
+}
+
+// Dropdown trigger styling - matches apps/os pattern
+const DROPDOWN_TRIGGER_CLASSES =
+  "flex items-center gap-1 rounded-sm px-1 -mx-1 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1";
+
+interface AgentBreadcrumbDropdownProps {
+  currentAgent: Agent;
+  agents: Agent[];
+}
+
+function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdownProps) {
+  const navigate = useNavigate();
+
+  return (
+    <BreadcrumbItem>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={`${currentAgent.slug}, switch agent`}
+            aria-haspopup="menu"
+            className={cn(DROPDOWN_TRIGGER_CLASSES, "font-normal text-foreground")}
+          >
+            <BreadcrumbPage className="pointer-events-none max-w-[150px] truncate sm:max-w-[200px]">
+              {currentAgent.slug}
+            </BreadcrumbPage>
+            <ChevronDownIcon className="h-3 w-3 opacity-60" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-48">
+          {agents.map((agentItem) => {
+            const isCurrent = agentItem.id === currentAgent.id;
+            return (
+              <DropdownMenuItem
+                key={agentItem.id}
+                className="gap-2"
+                aria-current={isCurrent ? "true" : undefined}
+                onClick={() => navigate({ to: "/agents/$slug", params: { slug: agentItem.slug } })}
+              >
+                <div
+                  className="flex size-5 items-center justify-center rounded-sm border bg-muted/50"
+                  aria-hidden="true"
+                >
+                  <span className="text-xs font-medium">
+                    {agentItem.slug.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <span className="truncate">{agentItem.slug}</span>
+                {isCurrent && <span className="sr-only">(current)</span>}
+              </DropdownMenuItem>
+            );
+          })}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild className="gap-2">
+            <Link to="/agents/new" search={{ name: undefined }}>
+              <div
+                className="flex size-5 items-center justify-center rounded-sm border border-dashed"
+                aria-hidden="true"
+              >
+                <PlusIcon className="size-3" aria-hidden="true" />
+              </div>
+              <span className="text-muted-foreground">New agent</span>
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </BreadcrumbItem>
   );
 }
 

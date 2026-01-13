@@ -16,6 +16,7 @@ import {
 } from "../../components/ui/card.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
+import { HeaderActions } from "../../components/header-actions.tsx";
 
 const Search = z.object({
   success: z.string().optional(),
@@ -107,20 +108,20 @@ function BillingContent() {
     hasActiveSubscription || isPastDue || isPaused || isCanceled || isIncomplete || isUnpaid;
 
   return (
-    <div className="p-8 max-w-4xl space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Billing</h1>
-        {hasAnySubscription && (
+    <div className="p-4 md:p-8 space-y-6">
+      {hasAnySubscription && (
+        <HeaderActions>
           <Button
             variant="outline"
+            size="sm"
             onClick={() => createPortal.mutate()}
             disabled={createPortal.isPending}
           >
-            <ExternalLink className="mr-2 h-4 w-4" />
-            Manage Subscription
+            <ExternalLink className="h-4 w-4" />
+            <span className="sr-only">Manage Subscription</span>
           </Button>
-        )}
-      </div>
+        </HeaderActions>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card>

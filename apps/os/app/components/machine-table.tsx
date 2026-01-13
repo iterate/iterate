@@ -12,11 +12,11 @@ import {
   Terminal,
   RefreshCw,
   Activity,
+  Circle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
 import { TypeId } from "./type-id.tsx";
-import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { ConfirmDialog } from "./ui/confirm-dialog.tsx";
 import {
@@ -26,7 +26,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.tsx";
 
 interface Machine {
   id: string;
@@ -178,7 +177,6 @@ export function MachineTable({
         "Run in your local terminal",
       );
     } else {
-      // For Daytona, entry logs go to stdout which isn't easily accessible
       toast.info("Entry logs for Daytona machines go to container stdout");
     }
   };
@@ -221,166 +219,163 @@ export function MachineTable({
     }
   };
 
+  // === Dropdown menu (shared between layouts) ===
+  const renderDropdownContent = (machine: Machine) => (
+    <DropdownMenuContent align="end" className="w-56">
+      {machine.type === "daytona" && (
+        <>
+          <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
+            <SquareTerminal className="h-4 w-4 mr-2" />
+            Terminal (Daytona native)
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
+            <SquareTerminal className="h-4 w-4 mr-2" />
+            Terminal (Iterate proxy)
+          </DropdownMenuItem>
+        </>
+      )}
+      {machine.type === "local-docker" && (
+        <DropdownMenuItem onClick={() => copyTerminalCommand(machine)}>
+          <Terminal className="h-4 w-4 mr-2" />
+          Copy terminal command
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuSeparator />
+      {machine.type === "daytona" && (
+        <>
+          <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
+            <Monitor className="h-4 w-4 mr-2" />
+            Daemon (Daytona native)
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
+            <Monitor className="h-4 w-4 mr-2" />
+            Daemon (Iterate proxy)
+          </DropdownMenuItem>
+        </>
+      )}
+      {machine.type === "local-docker" && (
+        <>
+          <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
+            <Monitor className="h-4 w-4 mr-2" />
+            Daemon (localhost)
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
+            <Monitor className="h-4 w-4 mr-2" />
+            Daemon (Iterate proxy)
+          </DropdownMenuItem>
+        </>
+      )}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
+        <ScrollText className="h-4 w-4 mr-2" />
+        Copy daemon logs command
+      </DropdownMenuItem>
+      {machine.type === "local-docker" && (
+        <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
+          <ScrollText className="h-4 w-4 mr-2" />
+          Copy entry.ts logs command
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
+        <Activity className="h-4 w-4 mr-2" />
+        Copy s6 service status command
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      {machine.state === "started" && (
+        <DropdownMenuItem onClick={() => restartMachine(machine.id)}>
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Restart
+        </DropdownMenuItem>
+      )}
+      {machine.state === "started" ? (
+        <DropdownMenuItem onClick={() => onArchive(machine.id)}>
+          <Archive className="h-4 w-4 mr-2" />
+          Archive
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuItem onClick={() => onUnarchive(machine.id)}>
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Restore
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem
+        onClick={() => setDeleteConfirmMachine(machine)}
+        className="text-destructive"
+      >
+        <Trash2 className="h-4 w-4 mr-2" />
+        Delete
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  );
+
+  const getTypeLabel = (machine: Machine) => {
+    if (machine.type === "local-docker") {
+      return `Local :${machine.metadata?.port ?? "?"}`;
+    }
+    return "Daytona";
+  };
+
   return (
     <>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>ID</TableHead>
-            <TableHead>Name</TableHead>
-            <TableHead>Snapshot</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>State</TableHead>
-            <TableHead>Created</TableHead>
-            <TableHead className="w-[50px]"></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {machines.map((machine) => (
-            <TableRow key={machine.id}>
-              <TableCell>
-                <TypeId id={machine.id} />
-              </TableCell>
-              <TableCell className="font-medium">
+      <div className="space-y-3">
+        {machines.map((machine) => (
+          <div
+            key={machine.id}
+            className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card"
+          >
+            <div className="min-w-0 flex-1 space-y-1">
+              {/* Name + State indicator */}
+              <div className="flex items-center gap-2">
+                <Circle
+                  className={`h-2 w-2 shrink-0 ${
+                    machine.state === "started"
+                      ? "fill-green-500 text-green-500"
+                      : "fill-muted text-muted"
+                  }`}
+                />
                 <Link
                   to="/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId"
                   params={{ organizationSlug, projectSlug, machineId: machine.id }}
-                  className="hover:underline"
+                  className="font-medium hover:underline truncate"
                 >
                   {machine.name}
                 </Link>
-              </TableCell>
-              <TableCell className="text-muted-foreground text-xs font-mono">
-                {machine.metadata?.snapshotName ?? "-"}
-              </TableCell>
-              <TableCell>
-                <Badge
-                  variant="outline"
-                  className={
-                    machine.type === "local-docker" ? "border-orange-500 text-orange-600" : ""
-                  }
-                >
-                  {machine.type === "local-docker"
-                    ? `Local :${machine.metadata?.port ?? "?"}`
-                    : "Daytona"}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <Badge variant={machine.state === "started" ? "success" : "secondary"}>
-                  {machine.state}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
-              </TableCell>
-              <TableCell>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    {/* === Terminal === */}
-                    {machine.type === "daytona" && (
-                      <>
-                        <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
-                          <SquareTerminal className="h-4 w-4 mr-2" />
-                          Terminal (Daytona native)
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
-                          <SquareTerminal className="h-4 w-4 mr-2" />
-                          Terminal (Iterate proxy)
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                    {machine.type === "local-docker" && (
-                      <DropdownMenuItem onClick={() => copyTerminalCommand(machine)}>
-                        <Terminal className="h-4 w-4 mr-2" />
-                        Copy terminal command
-                      </DropdownMenuItem>
-                    )}
+              </div>
 
-                    <DropdownMenuSeparator />
+              {/* Meta info */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                <span className={machine.type === "local-docker" ? "text-orange-600" : ""}>
+                  {getTypeLabel(machine)}
+                </span>
+                <span>·</span>
+                <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
+                {machine.metadata?.snapshotName && (
+                  <>
+                    <span className="hidden sm:inline">·</span>
+                    <span className="hidden sm:inline font-mono text-xs">
+                      {machine.metadata.snapshotName}
+                    </span>
+                  </>
+                )}
+              </div>
 
-                    {/* === Daemon === */}
-                    {machine.type === "daytona" && (
-                      <>
-                        <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
-                          <Monitor className="h-4 w-4 mr-2" />
-                          Daemon (Daytona native)
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
-                          <Monitor className="h-4 w-4 mr-2" />
-                          Daemon (Iterate proxy)
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                    {machine.type === "local-docker" && (
-                      <>
-                        <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
-                          <Monitor className="h-4 w-4 mr-2" />
-                          Daemon (localhost)
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
-                          <Monitor className="h-4 w-4 mr-2" />
-                          Daemon (Iterate proxy)
-                        </DropdownMenuItem>
-                      </>
-                    )}
+              {/* ID */}
+              <div className="pt-1">
+                <TypeId id={machine.id} />
+              </div>
+            </div>
 
-                    <DropdownMenuSeparator />
-
-                    {/* === Diagnostic commands === */}
-                    <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
-                      <ScrollText className="h-4 w-4 mr-2" />
-                      Copy daemon logs command
-                    </DropdownMenuItem>
-                    {machine.type === "local-docker" && (
-                      <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
-                        <ScrollText className="h-4 w-4 mr-2" />
-                        Copy entry.ts logs command
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
-                      <Activity className="h-4 w-4 mr-2" />
-                      Copy s6 service status command
-                    </DropdownMenuItem>
-
-                    <DropdownMenuSeparator />
-
-                    {/* === Actions === */}
-                    {machine.state === "started" && (
-                      <DropdownMenuItem onClick={() => restartMachine(machine.id)}>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Restart
-                      </DropdownMenuItem>
-                    )}
-                    {machine.state === "started" ? (
-                      <DropdownMenuItem onClick={() => onArchive(machine.id)}>
-                        <Archive className="h-4 w-4 mr-2" />
-                        Archive
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onClick={() => onUnarchive(machine.id)}>
-                        <RotateCcw className="h-4 w-4 mr-2" />
-                        Restore
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      onClick={() => setDeleteConfirmMachine(machine)}
-                      className="text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="shrink-0">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              {renderDropdownContent(machine)}
+            </DropdownMenu>
+          </div>
+        ))}
+      </div>
 
       <ConfirmDialog
         open={!!deleteConfirmMachine}
