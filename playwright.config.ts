@@ -3,8 +3,10 @@ import { defineConfig, devices } from "@playwright/test";
 const DAEMON_URL = process.env.DAEMON_URL || "http://localhost:3000";
 const OS_URL = process.env.OS_URL || "http://localhost:5173";
 
+const baseURL = OS_URL;
+
 export default defineConfig({
-  testDir: ".",
+  testDir: "e2e",
   testMatch: "**/*.e2e.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
@@ -19,27 +21,13 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "os",
-      testDir: ".",
-      testIgnore: ["os/**"],
-      use: {
-        ...devices["Desktop Chrome"],
-        baseURL: OS_URL,
-      },
-    },
-    {
-      name: "daemon",
-      testDir: "./os",
-      use: {
-        ...devices["Desktop Chrome"],
-        baseURL: DAEMON_URL,
-      },
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
   webServer: {
-    command: "cd .. && pnpm dev2", // todo: uncomment when dev script runs os and daemon
+    command: "pnpm dev", // todo: uncomment when dev script runs os and daemon
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: true,
     timeout: 30_000,
   },
 });
