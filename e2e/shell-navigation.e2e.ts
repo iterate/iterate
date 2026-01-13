@@ -1,12 +1,4 @@
-import {
-  login,
-  createOrganization,
-  createProject,
-  getProjectBasePath,
-  getOrganizationSlug,
-  test,
-  sidebarButton,
-} from "./test-helpers.ts";
+import { login, createOrganization, createProject, test, sidebarButton } from "./test-helpers.ts";
 
 test.describe("shell navigation", () => {
   test("connectors and team pages render", async ({ page }) => {
