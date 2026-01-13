@@ -2,10 +2,9 @@
 
 name: Flake Detection
 on:
-  branch:
-    - "**/*flake*"
-  schedule:
-    - cron: 0 6 * * *
+  push:
+    branches:
+      - "**/*ciflak*"
   workflow_dispatch: {}
 jobs:
   flake-detection:
