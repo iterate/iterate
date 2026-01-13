@@ -1,5 +1,5 @@
 import { type ReactNode, useMemo, useState } from "react";
-import { ClientOnly, Link } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { Box, ChevronsUpDown, LogOut, Settings, UserCog } from "lucide-react";
 import { usePostHog } from "posthog-js/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -38,7 +38,6 @@ import {
   SidebarMenuItem,
 } from "./ui/sidebar.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
-import { ThemeSwitcher } from "./theme-switcher.tsx";
 
 interface User {
   name: string;
@@ -287,9 +286,6 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
       <SidebarHeader>{header}</SidebarHeader>
       <SidebarContent>{children}</SidebarContent>
       <SidebarFooter>
-        <ClientOnly>
-          <ThemeSwitcher />
-        </ClientOnly>
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
@@ -303,17 +299,17 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
                         isImpersonating && "border-2 border-destructive",
                       )}
                     >
-                      <Avatar className="h-8 w-8 rounded-lg">
+                      <Avatar className="h-8 w-8 shrink-0 rounded-lg">
                         <AvatarImage src={user.image ?? undefined} alt={user.name} />
                         <AvatarFallback className="rounded-lg">
                           {getInitials(user.name)}
                         </AvatarFallback>
                       </Avatar>
-                      <div className="grid flex-1 text-left text-sm leading-tight">
+                      <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
                         <span className="truncate font-medium">{user.name}</span>
                         <span className="truncate text-xs">{user.email}</span>
                       </div>
-                      <ChevronsUpDown className="ml-auto size-4" />
+                      <ChevronsUpDown className="ml-auto size-4 shrink-0" />
                     </SidebarMenuButton>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -321,8 +317,8 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
               </Tooltip>
               <DropdownMenuContent
                 className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
-                side="right"
-                align="end"
+                side="top"
+                align="start"
                 sideOffset={4}
               >
                 {isAdmin && !isImpersonating && (
