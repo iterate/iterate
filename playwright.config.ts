@@ -9,12 +9,23 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
-  reporter: "list",
+  outputDir: "test-results/output",
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "test-results/html", open: "never" }],
+    ["json", { outputFile: "test-results/json/results.json" }],
+  ],
   timeout: 120_000,
   use: {
     actionTimeout: 1_000,
     baseURL,
     trace: process.env.CI ? "on-first-retry" : "on",
+    video: {
+      mode: "retain-on-failure",
+    },
+    screenshot: {
+      mode: "only-on-failure",
+    },
   },
   projects: [
     {
