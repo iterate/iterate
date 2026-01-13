@@ -13,7 +13,7 @@ import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
-import { daytonaProxyApp } from "./integrations/daytona/daytona.ts";
+import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./routes/posthog-proxy.ts";
 import { logger } from "./tag-logger.ts";
@@ -98,8 +98,8 @@ app.get("/api/ws/realtime", (c) => {
 // Mount PostHog reverse proxy (for ad-blocker bypass)
 app.route("", posthogProxyApp);
 
-// Mount Daytona preview proxy
-app.route("", daytonaProxyApp);
+// Mount machine proxy (Daytona, local-docker, etc.)
+app.route("", machineProxyApp);
 
 export type RequestContext = {
   cloudflare: {
