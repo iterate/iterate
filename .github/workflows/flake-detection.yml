@@ -3,7 +3,7 @@
 name: Flake Detection
 on:
   branch:
-    - "**/*ciflak*"
+    - "**/*flake*"
   schedule:
     - cron: 0 6 * * *
   workflow_dispatch: {}

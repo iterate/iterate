@@ -4,7 +4,7 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "Flake Detection",
   on: {
-    branch: ["**/*ciflak*"],
+    branch: ["**/*flake*"],
     schedule: [
       // Run daily at 6am UTC (7am UK winter / 8am UK summer)
       { cron: "0 6 * * *" },
