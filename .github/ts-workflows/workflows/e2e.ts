@@ -23,10 +23,15 @@ export default workflow({
         { uses: "dopplerhq/cli-action@v2" },
         {
           name: "Setup Doppler",
-          run: "doppler setup --project os2 --config dev",
+          run: "doppler setup --project os --config dev",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
+        },
+
+        {
+          name: "make sure doppler is working",
+          run: "doppler run -- printenv | grep GITHUB_APP_ID",
         },
         {
           name: "Install Playwright browsers",
