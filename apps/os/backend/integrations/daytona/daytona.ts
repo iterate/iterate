@@ -4,7 +4,6 @@ import { Daytona } from "@daytonaio/sdk";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
-import { encrypt, decrypt } from "../../utils/encryption.ts";
 import { logger } from "../../tag-logger.ts";
 import type { DB } from "../../db/client.ts";
 
@@ -30,7 +29,7 @@ export async function getPreviewToken(
   });
 
   if (cached) {
-    return decrypt(cached.encryptedToken);
+    return cached.token;
   }
 
   return refreshPreviewToken(deps, machineId, sandboxId, port);
@@ -48,19 +47,17 @@ export async function refreshPreviewToken(
   const sandbox = await deps.daytona.get(sandboxId);
   const previewInfo = await sandbox.getPreviewLink(port);
 
-  const encryptedToken = await encrypt(previewInfo.token);
-
   await deps.db
     .insert(schema.daytonaPreviewToken)
     .values({
       machineId,
       port: String(port),
-      encryptedToken,
+      token: previewInfo.token,
     })
     .onConflictDoUpdate({
       target: [schema.daytonaPreviewToken.machineId, schema.daytonaPreviewToken.port],
       set: {
-        encryptedToken,
+        token: previewInfo.token,
         updatedAt: new Date(),
       },
     });
@@ -69,6 +66,54 @@ export async function refreshPreviewToken(
 }
 
 export const daytonaProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+
+/**
+ * Single query to resolve org -> project -> machine and check membership.
+ * Returns machine data if user has access, null otherwise.
+ */
+async function resolveProxyAccess(
+  db: DB,
+  orgSlug: string,
+  projectSlug: string,
+  machineId: string,
+  userId: string,
+  isSystemAdmin: boolean,
+): Promise<{
+  machine: typeof schema.machine.$inferSelect;
+} | null> {
+  // Single query with JOINs to get machine + verify access
+  const result = await db
+    .select({
+      machine: schema.machine,
+      membershipId: schema.organizationUserMembership.id,
+    })
+    .from(schema.machine)
+    .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
+    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
+    .leftJoin(
+      schema.organizationUserMembership,
+      and(
+        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
+        eq(schema.organizationUserMembership.userId, userId),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.organization.slug, orgSlug),
+        eq(schema.project.slug, projectSlug),
+        eq(schema.machine.id, machineId),
+      ),
+    )
+    .limit(1);
+
+  const row = result[0];
+  if (!row) return null;
+
+  // Check access: must be member OR system admin
+  if (!row.membershipId && !isSystemAdmin) return null;
+
+  return { machine: row.machine };
+}
 
 /**
  * Proxy route: /org/:org/proj/:project/:machine/proxy/:port/*
@@ -89,50 +134,24 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return c.json({ error: "Invalid port" }, 400);
   }
 
-  // 3. Resolve organization
-  const organization = await db.query.organization.findFirst({
-    where: eq(schema.organization.slug, org),
-  });
-  if (!organization) {
-    return c.json({ error: "Organization not found" }, 404);
+  // 3. Single query to resolve machine + check access
+  const access = await resolveProxyAccess(
+    db,
+    org,
+    project,
+    machine,
+    c.var.session.user.id,
+    c.var.session.user.role === "admin",
+  );
+
+  if (!access) {
+    return c.json({ error: "Not found or forbidden" }, 404);
   }
 
-  // 4. Check user membership (allow if member OR system admin)
-  // Note: user.role === "admin" refers to system-wide admin from better-auth's admin plugin,
-  // not the organization-level role in organizationUserMembership
-  const membership = await db.query.organizationUserMembership.findFirst({
-    where: and(
-      eq(schema.organizationUserMembership.organizationId, organization.id),
-      eq(schema.organizationUserMembership.userId, c.var.session.user.id),
-    ),
-  });
-
-  if (!membership && c.var.session.user.role !== "admin") {
-    return c.json({ error: "Forbidden" }, 403);
-  }
-
-  // 5. Resolve project
-  const proj = await db.query.project.findFirst({
-    where: and(
-      eq(schema.project.organizationId, organization.id),
-      eq(schema.project.slug, project),
-    ),
-  });
-  if (!proj) {
-    return c.json({ error: "Project not found" }, 404);
-  }
-
-  // 6. Resolve machine (machine param is the full TypeID like mach_abc123xyz)
-  const machineRecord = await db.query.machine.findFirst({
-    where: and(eq(schema.machine.id, machine), eq(schema.machine.projectId, proj.id)),
-  });
-  if (!machineRecord) {
-    return c.json({ error: "Machine not found" }, 404);
-  }
-
+  const machineRecord = access.machine;
   const externalId = machineRecord.externalId;
 
-  // 7. Build target URL based on machine type
+  // 4. Build target URL based on machine type
   const url = new URL(c.req.url);
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
@@ -383,11 +402,16 @@ async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): P
 }
 
 /**
- * Rewrite absolute URLs in HTML responses to include the proxy base path.
- * This fixes issues where proxied pages reference assets with absolute paths
- * (e.g., /xterm.js) that would otherwise resolve to the wrong domain.
+ * Streaming HTML rewriter using Cloudflare's HTMLRewriter.
+ * Rewrites absolute paths in HTML to work through the proxy:
+ * - <base href="/"> → <base href="${proxyBasePath}/">
+ * - src="/path" → src="${proxyBasePath}/path"
+ * - href="/path" → href="${proxyBasePath}/path"
  *
- * Also injects a <base> tag and WebSocket interceptor to handle JavaScript-constructed URLs.
+ * Benefits over string replacement:
+ * - No memory buffering (streams as data arrives)
+ * - Better TTFB for large documents
+ * - Works with any document size
  */
 function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
   const contentType = response.headers.get("content-type") ?? "";
@@ -395,73 +419,28 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
     return response;
   }
 
-  class URLRewriter {
-    private attr: string;
-    constructor(attr: string) {
-      this.attr = attr;
-    }
-
+  class URLRewriter implements HTMLRewriterElementContentHandlers {
+    constructor(private attr: string) {}
     element(element: Element) {
       const value = element.getAttribute(this.attr);
-      if (value && value.startsWith("/") && !value.startsWith("//")) {
+      if (value?.startsWith("/") && !value.startsWith("//")) {
         element.setAttribute(this.attr, `${proxyBasePath}${value}`);
       }
     }
   }
 
-  class HeadInjector {
+  class BaseRewriter implements HTMLRewriterElementContentHandlers {
     element(element: Element) {
-      // Inject a <base> tag so relative URLs resolve correctly
-      element.prepend(`<base href="${proxyBasePath}/">`, { html: true });
-      // Inject a WebSocket interceptor to rewrite WebSocket URLs
-      // This handles cases where JS constructs WebSocket URLs with absolute paths
-      element.append(
-        `<script>
-(function() {
-  const proxyBase = ${JSON.stringify(proxyBasePath)};
-  const OriginalWebSocket = window.WebSocket;
-  window.WebSocket = function(url, protocols) {
-    let newUrl = url;
-    if (typeof url === 'string') {
-      try {
-        const parsed = new URL(url, window.location.origin);
-        // If the WebSocket path doesn't start with the proxy base, prepend it
-        if (!parsed.pathname.startsWith(proxyBase)) {
-          parsed.pathname = proxyBase + parsed.pathname;
-          newUrl = parsed.toString();
-        }
-      } catch (e) {
-        // If URL parsing fails, try simple string manipulation
-        if (url.startsWith('/') && !url.startsWith('//') && !url.startsWith(proxyBase)) {
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          newUrl = protocol + '//' + window.location.host + proxyBase + url;
-        }
+      const href = element.getAttribute("href");
+      if (href === "/") {
+        element.setAttribute("href", `${proxyBasePath}/`);
       }
-    }
-    return new OriginalWebSocket(newUrl, protocols);
-  };
-  window.WebSocket.prototype = OriginalWebSocket.prototype;
-  window.WebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
-  window.WebSocket.OPEN = OriginalWebSocket.OPEN;
-  window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
-  window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
-})();
-</script>`,
-        { html: true },
-      );
     }
   }
 
   return new HTMLRewriter()
-    .on("head", new HeadInjector())
-    .on("script[src]", new URLRewriter("src"))
-    .on("link[href]", new URLRewriter("href"))
-    .on("img[src]", new URLRewriter("src"))
-    .on("a[href]", new URLRewriter("href"))
-    .on("form[action]", new URLRewriter("action"))
-    .on("source[src]", new URLRewriter("src"))
-    .on("video[src]", new URLRewriter("src"))
-    .on("audio[src]", new URLRewriter("src"))
-    .on("iframe[src]", new URLRewriter("src"))
+    .on("base", new BaseRewriter())
+    .on("[src]", new URLRewriter("src"))
+    .on("[href]:not(base)", new URLRewriter("href"))
     .transform(response);
 }

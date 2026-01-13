@@ -318,7 +318,7 @@ export const daytonaPreviewToken = pgTable(
       .notNull()
       .references(() => machine.id, { onDelete: "cascade" }),
     port: t.text().notNull(),
-    encryptedToken: t.text().notNull(),
+    token: t.text().notNull(),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.machineId, t.port), index().on(t.machineId)],

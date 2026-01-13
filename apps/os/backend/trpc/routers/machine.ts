@@ -9,18 +9,24 @@ import { decrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
+import { dockerApi } from "../../providers/local-docker.ts";
 
-// Helper to find an available port for local-docker machines
-async function findAvailablePort(db: DB): Promise<number> {
-  const machines = await db.query.machine.findMany({
-    where: eq(schema.machine.type, "local-docker"),
-  });
+interface DockerContainer {
+  Ports?: Array<{ PublicPort?: number }>;
+}
 
-  const usedPorts = new Set(
-    machines
-      .map((m) => (m.metadata as { port?: number })?.port)
-      .filter((p): p is number => p !== undefined),
-  );
+// Helper to find an available port for local-docker machines by querying Docker directly
+async function findAvailablePort(): Promise<number> {
+  const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
+
+  const usedPorts = new Set<number>();
+  for (const container of containers) {
+    for (const port of container.Ports ?? []) {
+      if (port.PublicPort) {
+        usedPorts.add(port.PublicPort);
+      }
+    }
+  }
 
   for (let port = 10000; port <= 11000; port++) {
     if (!usedPorts.has(port)) return port;
@@ -47,7 +53,7 @@ async function getProviderForMachine(
   }
 
   const provider = createMachineProvider(machine.type, cloudflareEnv, {
-    findAvailablePort: () => findAvailablePort(db),
+    findAvailablePort,
   });
 
   return { provider, machine };
@@ -113,7 +119,7 @@ export const machineRouter = router({
 
       // Create provider for the specified type
       const provider = createMachineProvider(input.type, ctx.env, {
-        findAvailablePort: () => findAvailablePort(ctx.db),
+        findAvailablePort,
       });
 
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
@@ -270,6 +276,31 @@ export const machineRouter = router({
       });
 
       return updated;
+    }),
+
+  // Restart a machine
+  restart: projectProtectedMutation
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      await provider.restart(machine.externalId).catch((err) => {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+
+      return { success: true };
     }),
 
   // Delete a machine permanently
