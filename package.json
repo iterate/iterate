@@ -24,7 +24,6 @@
     "docker:clean": "docker compose down -v",
     "snapshot:daytona": "pnpm os snapshot:daytona",
     "snapshot:local-docker": "pnpm os snapshot:local-docker",
-    "sandbox:local-rebuild": "pnpm snapshot:local-docker",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",

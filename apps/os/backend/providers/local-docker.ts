@@ -11,13 +11,18 @@ export async function dockerApi<T>(
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
+  }).catch((e: unknown) => {
+    throw new Error(
+      `Docker API error: ${e}. ` +
+        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
+    );
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
+    const error = await response.json().catch(() => ({ message: response.status }));
     throw new Error(
-      `Docker API error: ${(error as { message?: string }).message ?? response.statusText}. ` +
-        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375.`,
+      `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
+        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
     );
   }
 

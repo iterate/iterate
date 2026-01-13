@@ -13,6 +13,7 @@ const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 interface PtyConnection {
   ptyProcess: IPty;
   tmuxSessionName: string | null;
+  outputBuffer: string[];
 }
 
 const ptyConnections = new Map<WSContext<WebSocket>, PtyConnection>();
@@ -92,15 +93,32 @@ ptyRouter.get(
           return;
         }
 
-        ptyConnections.set(ws, { ptyProcess, tmuxSessionName });
+        const outputBuffer: string[] = [];
+        const MAX_BUFFER_SIZE = 100_000; // ~100KB of output
+        let bufferSize = 0;
+
+        ptyConnections.set(ws, { ptyProcess, tmuxSessionName, outputBuffer });
 
         ptyProcess.onData((data) => {
           ws.send(data);
+          outputBuffer.push(data);
+          bufferSize += data.length;
+          // Trim buffer if it exceeds max size
+          while (bufferSize > MAX_BUFFER_SIZE && outputBuffer.length > 1) {
+            const removed = outputBuffer.shift()!;
+            bufferSize -= removed.length;
+          }
         });
 
         ptyProcess.onExit(({ exitCode }) => {
+          const logs = outputBuffer.join("");
+          console.log(
+            `[PTY] Process exited! (code: ${exitCode}), captured ${logs.length} bytes of output`,
+          );
+          // TODO: Do something with logs (e.g., store, send to client, etc.)
+
           const exitMessage = tmuxSessionName
-            ? `Tmux session detached/exited (code: ${exitCode})`
+            ? `Tmux session detached/exited! (code: ${exitCode})\n\n${logs}`
             : `Shell exited (code: ${exitCode})`;
           ws.send(`\r\n\x1b[33m${exitMessage}\x1b[0m\r\n`);
           ws.close(1000, `Process exited with code ${exitCode}`);
