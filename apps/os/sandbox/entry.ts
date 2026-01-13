@@ -96,19 +96,27 @@ const copyFromLocalMount = () => {
 
 /**
  * Clones or pulls the iterate repo from GitHub (for Daytona/production use).
+ * Use ITERATE_GIT_REF env var to specify a branch/ref (defaults to "main").
  */
 const cloneOrPullFromGit = () => {
+  const gitRef = process.env.ITERATE_GIT_REF || "main";
+
   if (!existsSync(ITERATE_REPO)) {
     console.log("");
-    console.log("Cloning iterate repo...");
-    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, { stdio: "inherit" });
-    execSync("git clone https://github.com/iterate/iterate.git " + ITERATE_REPO, {
+    console.log(`Cloning iterate repo (ref: ${gitRef})...`);
+    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, {
       stdio: "inherit",
     });
+    execSync(
+      `git clone --branch ${gitRef} https://github.com/iterate/iterate.git ${ITERATE_REPO}`,
+      {
+        stdio: "inherit",
+      },
+    );
   } else {
     console.log("");
-    console.log("Pulling latest code...");
-    execSync("git fetch origin main && git reset --hard origin/main", {
+    console.log(`Pulling latest code (ref: ${gitRef})...`);
+    execSync(`git fetch origin ${gitRef} && git reset --hard origin/${gitRef}`, {
       cwd: ITERATE_REPO,
       stdio: "inherit",
     });

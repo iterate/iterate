@@ -152,6 +152,10 @@ export const machineRouter = router({
           envVars: {
             ...envVars,
             ...githubEnvVars,
+            // In dev, use the current git branch for Daytona sandboxes
+            ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
+              ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
+              : {}),
           },
         })
         .catch((err) => {
