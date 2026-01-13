@@ -1,23 +1,15 @@
-/**
- * Generate a URL-safe slug from a name with a random suffix
- *
- * @example
- * generateSlug("My Organization") // "my-organization-a1b2c3"
- * generateSlug("Test Instance") // "test-instance-x9y8z7"
- */
-export function generateSlug(name: string): string {
-  // Convert to lowercase and replace non-alphanumeric chars with hyphens
-  const base = name
+export function slugify(name: string): string {
+  const slug = name
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") // Remove leading/trailing hyphens
-    .slice(0, 50); // Limit base length
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  return slug || "unnamed";
+}
 
-  // Generate a random 6-character suffix
-  const suffix = generateRandomSuffix(6);
-
-  return `${base}-${suffix}`;
+export function slugifyWithSuffix(name: string): string {
+  return `${slugify(name)}-${generateRandomSuffix(6)}`;
 }
 
 /**
@@ -38,5 +30,5 @@ function generateRandomSuffix(length: number): string {
  * Validate that a slug is URL-safe
  */
 export function isValidSlug(slug: string): boolean {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
+  return slugify(slug) === slug;
 }

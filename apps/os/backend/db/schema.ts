@@ -168,7 +168,7 @@ export const project = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.organizationId, t.slug)],
+  (t) => [uniqueIndex().on(t.organizationId, t.slug), uniqueIndex().on(t.organizationId, t.name)],
 );
 
 export const projectRelations = relations(project, ({ one, many }) => ({

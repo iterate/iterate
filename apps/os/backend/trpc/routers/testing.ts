@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, publicMutation, protectedProcedure } from "../trpc.ts";
 import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
-import { generateSlug } from "../../utils/slug.ts";
+import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
 
 /**
@@ -78,7 +78,7 @@ export const testingRouter = router({
           message: "Testing endpoints are not available in production",
         });
       }
-      const orgSlug = generateSlug(input.name);
+      const orgSlug = slugifyWithSuffix(input.name);
 
       const [newOrg] = await ctx.db
         .insert(organization)
@@ -98,7 +98,7 @@ export const testingRouter = router({
         role: "owner",
       });
 
-      const projSlug = generateSlug(input.projectName || "default");
+      const projSlug = slugifyWithSuffix(input.projectName || "default");
       const [newProject] = await ctx.db
         .insert(project)
         .values({

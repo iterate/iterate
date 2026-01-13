@@ -48,12 +48,10 @@ export async function createOrganization(page: Page, orgName = `E2E Org ${Date.n
 }
 
 export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
-  await page.getByText("Create project").click();
+  await sidebarButton(page, /^(Create|New) project$/).click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  const projectItem = page.locator("[data-slot='item']", { hasText: projectName });
-  await projectItem.waitFor();
-  return projectItem;
+  await page.locator(`[data-project]`).waitFor();
 }
 
 export function getProjectBasePath(page: Page) {
@@ -67,6 +65,15 @@ export function getOrganizationSlug(pathname: string) {
   return orgIndex >= 0 ? parts[orgIndex + 1] : "";
 }
 
-export function sidebarButton(page: Page, text: string) {
+export function sidebarButton(page: Page, text: string | RegExp) {
   return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
 }
+
+function toastLocator(page: Page, type: "error" | "success", text?: string | RegExp) {
+  return page.locator(`[data-sonner-toast][data-type="${type}"]`, { hasText: text || "" });
+}
+
+export const toast = {
+  error: (page: Page, text?: string | RegExp) => toastLocator(page, "error", text),
+  success: (page: Page, text?: string | RegExp) => toastLocator(page, "success", text),
+};

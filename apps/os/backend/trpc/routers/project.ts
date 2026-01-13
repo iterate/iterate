@@ -11,7 +11,7 @@ import {
 } from "../trpc.ts";
 import { project, verification, projectRepo, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
-import { generateSlug } from "../../utils/slug.ts";
+import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 import {
   listInstallationRepositories,
   deleteGitHubInstallation,
@@ -35,7 +35,6 @@ export const projectRouter = router({
     return ctx.project;
   }),
 
-  // Create a new project
   create: orgAdminMutation
     .input(
       z.object({
@@ -43,15 +42,16 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const slug = generateSlug(input.name);
+      const baseSlug = slugify(input.name);
+      const existing = await ctx.db.query.project.findFirst({
+        where: and(eq(project.organizationId, ctx.organization.id), eq(project.slug, baseSlug)),
+      });
+
+      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
 
       const [newProject] = await ctx.db
         .insert(project)
-        .values({
-          name: input.name,
-          slug,
-          organizationId: ctx.organization.id,
-        })
+        .values({ name: input.name, slug, organizationId: ctx.organization.id })
         .returning();
 
       if (!newProject) {
