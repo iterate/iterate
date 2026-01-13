@@ -2,7 +2,7 @@ packages:
   - apps/cli
   - apps/daemon
   - apps/iterate-com
-  - apps/os2
+  - apps/os
   - packages/*
   - e2e
   - .github/ts-workflows

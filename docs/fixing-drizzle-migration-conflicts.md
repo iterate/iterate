@@ -36,7 +36,7 @@ Journal references a file that doesn't exist (wrong tag name).
 ### Step 1: Reset Journal to Main
 
 ```bash
-git checkout main -- apps/os2/backend/db/migrations/meta/_journal.json
+git checkout main -- apps/os/backend/db/migrations/meta/_journal.json
 ```
 
 ### Step 2: Delete Your Branch's Migration Files
@@ -44,14 +44,14 @@ git checkout main -- apps/os2/backend/db/migrations/meta/_journal.json
 Remove the SQL file and snapshot your branch added:
 
 ```bash
-rm apps/os2/backend/db/migrations/XXXX_your_migration.sql
-rm apps/os2/backend/db/migrations/meta/XXXX_snapshot.json
+rm apps/os/backend/db/migrations/XXXX_your_migration.sql
+rm apps/os/backend/db/migrations/meta/XXXX_snapshot.json
 ```
 
 ### Step 3: Regenerate Migration
 
 ```bash
-cd apps/os2
+cd apps/os
 pnpm drizzle-kit generate --name your_migration_name
 ```
 
@@ -102,10 +102,10 @@ The `tag` must exactly match the filename: `0005_billing_account.sql`
 
 ```bash
 # List all SQL migrations
-ls apps/os2/backend/db/migrations/*.sql
+ls apps/os/backend/db/migrations/*.sql
 
 # Check journal entries
-cat apps/os2/backend/db/migrations/meta/_journal.json | jq '.entries[].tag'
+cat apps/os/backend/db/migrations/meta/_journal.json | jq '.entries[].tag'
 ```
 
 ### Verify Tags Match Files

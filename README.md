@@ -5,13 +5,13 @@
 ```bash
 pnpm install
 pnpm docker:up
-pnpm os2 db:migrate
-pnpm os2 dev
+pnpm os db:migrate
+pnpm os dev
 ```
 
 ## Repository Structure
 
-- `apps/os2/` - Primary application (React + Cloudflare Workers)
+- `apps/os/` - Primary application (React + Cloudflare Workers)
 - `apps/daemon/` - Local daemon for durable streams and agent orchestration
 - `apps/iterate-com` - iterate.com website
 - `docs/` - Detailed documentation and patterns
@@ -20,7 +20,7 @@ pnpm os2 dev
 
 ```bash
 pnpm dev          # Run all apps in parallel
-pnpm os2 dev      # Run apps/os2 only
+pnpm os dev       # Run apps/os only
 pnpm daemon dev   # Run apps/daemon only
 pnpm test         # Run all tests
 pnpm typecheck    # Type check all packages

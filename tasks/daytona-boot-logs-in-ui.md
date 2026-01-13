@@ -2,22 +2,22 @@
 state: next
 tags:
   - daytona
-  - os2
+  - os
   - infrastructure
 priority: medium
 certainty: low
 size: medium
 ---
 
-# Daytona machine boot logs in OS2 UI
+# Daytona machine boot logs in OS UI
 
-When a Daytona machine boots, we should be able to see logs of the boot process and entry point running in the OS2 UI.
+When a Daytona machine boots, we should be able to see logs of the boot process and entry point running in the OS UI.
 
 ## What we need
 
 - Stream/display logs from Daytona machine boot process
 - Show entry point execution logs
-- Make this visible somewhere sensible in the OS2 UI
+- Make this visible somewhere sensible in the OS UI
 
 ## Open questions (needs design chat)
 
