@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -26,15 +26,16 @@ import {
 } from "../../../components/ui/card.tsx";
 
 export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
 )({
   component: MachineDetailPage,
 });
 
 function MachineDetailPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId",
   });
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
@@ -106,6 +107,13 @@ function MachineDetailPage() {
     onSuccess: () => {
       toast.success("Machine deleted!");
       queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      navigate({
+        to: "/orgs/$organizationSlug/projects/$projectSlug/machines",
+        params: {
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        },
+      });
     },
     onError: (error) => {
       toast.error("Failed to delete machine: " + error.message);

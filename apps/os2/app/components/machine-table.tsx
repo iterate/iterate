@@ -111,7 +111,7 @@ export function MachineTable({
             <TableRow key={machine.id}>
               <TableCell className="font-medium">
                 <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId"
+                  to="/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId"
                   params={{ organizationSlug, projectSlug, machineId: machine.id }}
                   className="hover:underline"
                 >
