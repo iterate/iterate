@@ -1,10 +1,30 @@
+import { PostHog } from "posthog-node";
 import type { CloudflareEnv } from "../../env.ts";
 
-const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
+let posthogClient: PostHog | null = null;
 
 /**
- * Capture a server-side event via PostHog HTTP API.
- * Returns a Promise that resolves when the event is sent.
+ * Get or create the PostHog client singleton.
+ * Uses posthog-node SDK for better error tracking and batching.
+ */
+export function getPostHogClient(env: CloudflareEnv): PostHog | null {
+  const apiKey = env.POSTHOG_KEY;
+  if (!apiKey) return null;
+
+  if (!posthogClient) {
+    posthogClient = new PostHog(apiKey, {
+      host: "https://eu.i.posthog.com",
+      // Flush immediately in serverless - no batching
+      flushAt: 1,
+      flushInterval: 0,
+    });
+  }
+
+  return posthogClient;
+}
+
+/**
+ * Capture a server-side event via PostHog.
  * Use with waitUntil() in Cloudflare Workers to ensure delivery.
  */
 export async function captureServerEvent(
@@ -16,32 +36,49 @@ export async function captureServerEvent(
     groups?: Record<string, string>;
   },
 ): Promise<void> {
-  const apiKey = env.POSTHOG_KEY;
+  const client = getPostHogClient(env);
+  if (!client) return;
 
-  if (!apiKey) return;
-
-  const body = {
-    api_key: apiKey,
+  client.capture({
+    distinctId: params.distinctId,
     event: params.event,
-    distinct_id: params.distinctId,
     properties: {
       ...params.properties,
       $environment: env.VITE_APP_STAGE,
-      $lib: "posthog-fetch",
       ...(params.groups && { $groups: params.groups }),
     },
-    timestamp: new Date().toISOString(),
-  };
-
-  const response = await fetch(POSTHOG_CAPTURE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+    groups: params.groups,
   });
 
-  if (!response.ok) {
-    throw new Error(`PostHog capture failed: ${response.status} ${response.statusText}`);
-  }
+  await client.flush();
+}
+
+/**
+ * Capture an exception to PostHog error tracking.
+ * Includes stack trace and additional context.
+ */
+export async function captureServerException(
+  env: CloudflareEnv,
+  params: {
+    distinctId: string;
+    error: Error;
+    properties?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const client = getPostHogClient(env);
+  if (!client) return;
+
+  client.capture({
+    distinctId: params.distinctId,
+    event: "$exception",
+    properties: {
+      $exception_type: params.error.name,
+      $exception_message: params.error.message,
+      $exception_stack_trace_raw: params.error.stack,
+      $environment: env.VITE_APP_STAGE,
+      ...params.properties,
+    },
+  });
+
+  await client.flush();
 }

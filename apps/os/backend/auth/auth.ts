@@ -7,6 +7,7 @@ import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
+import { captureServerEvent } from "../lib/posthog.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -52,6 +53,19 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
               });
             }
             return { data: user };
+          },
+          after: async (user) => {
+            // Track user_signed_up event in PostHog
+            await captureServerEvent(envParam, {
+              distinctId: user.id,
+              event: "user_signed_up",
+              properties: {
+                email: user.email,
+                name: user.name,
+                signup_method: "oauth", // Could be refined based on context
+              },
+            });
+            logger.info("User signed up", { userId: user.id, email: user.email });
           },
         },
       },

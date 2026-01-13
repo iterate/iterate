@@ -7,12 +7,16 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { PostHogProvider as _PostHogProvider, usePostHog } from "posthog-js/react";
+import {
+  PostHogProvider as _PostHogProvider,
+  PostHogErrorBoundary as _PostHogErrorBoundary,
+  usePostHog,
+} from "posthog-js/react";
 import posthog from "posthog-js";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import appCss from "../styles.css?url";
-import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
+import { AppErrorFallback } from "../components/app-error-fallback.tsx";
 import { useRealtimePusher } from "../hooks/use-realtime-pusher.ts";
 import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx";
 import type { TanstackRouterContext } from "../router.tsx";
@@ -25,14 +29,35 @@ const shouldEnablePostHog = () => {
   return true;
 };
 
+// Get cross-domain tracking IDs from URL params (from iterate.com)
+const getBootstrapConfig = () => {
+  if (typeof window === "undefined") return undefined;
+  const urlParams = new URLSearchParams(window.location.search);
+  const distinctId = urlParams.get("ph_distinct_id");
+  const sessionId = urlParams.get("ph_session_id");
+  if (!distinctId) return undefined;
+  return {
+    distinctID: distinctId,
+    sessionID: sessionId ?? undefined,
+  };
+};
+
 // Initialize PostHog client-side with enhanced configuration
 if (shouldEnablePostHog()) {
   posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY!, {
     api_host: import.meta.env.VITE_POSTHOG_PROXY_URI || "/ingest",
     ui_host: "https://eu.posthog.com",
+    // Bootstrap with cross-domain IDs if present (from iterate.com)
+    bootstrap: getBootstrapConfig(),
     // Disable automatic pageview - we'll track manually with router
     capture_pageview: false,
     capture_pageleave: true,
+    // Exception autocapture - catches unhandled errors and promise rejections
+    capture_exceptions: {
+      capture_unhandled_errors: true,
+      capture_unhandled_rejections: true,
+      capture_console_errors: false,
+    },
     // Session replay configuration - mask passwords for security
     session_recording: {
       maskAllInputs: false,
@@ -50,6 +75,10 @@ if (shouldEnablePostHog()) {
 
 const PostHogProvider = shouldEnablePostHog()
   ? _PostHogProvider
+  : ({ children }: PropsWithChildren) => <>{children}</>;
+
+const PostHogErrorBoundary = shouldEnablePostHog()
+  ? _PostHogErrorBoundary
   : ({ children }: PropsWithChildren) => <>{children}</>;
 
 // Component that tracks pageviews on navigation
@@ -111,7 +140,7 @@ function RootComponent() {
 
   return (
     <RootDocument>
-      <AppErrorBoundary>
+      <PostHogErrorBoundary fallback={<AppErrorFallback />}>
         <Suspense
           fallback={
             <div className="flex min-h-screen items-center justify-center">
@@ -121,7 +150,7 @@ function RootComponent() {
         >
           <Outlet />
         </Suspense>
-      </AppErrorBoundary>
+      </PostHogErrorBoundary>
     </RootDocument>
   );
 }

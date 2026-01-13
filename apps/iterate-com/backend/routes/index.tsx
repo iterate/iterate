@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { usePostHog } from "posthog-js/react";
 import SiteHeader from "../components/site-header.tsx";
 import SiteFooter from "../components/site-footer.tsx";
 import Member from "../components/member.tsx";
@@ -17,7 +18,7 @@ import slackIcon from "../assets/slack.svg?url";
 export default function Home() {
   const addToSlackRef = useRef<HTMLButtonElement>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  // const [setShowSlackButton] = useState(false);
+  const posthog = usePostHog();
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -32,8 +33,16 @@ export default function Home() {
   }, []);
 
   const handleAddToSlack = () => {
-    // Redirect to the OS app endpoint which will handle the OAuth flow
-    window.location.href = "https://os.iterate.com/login?autoSignin=slack";
+    const url = new URL("https://os.iterate.com/login");
+    url.searchParams.set("autoSignin", "slack");
+
+    // Pass PostHog IDs for cross-domain tracking
+    const distinctId = posthog?.get_distinct_id();
+    const sessionId = posthog?.get_session_id();
+    if (distinctId) url.searchParams.set("ph_distinct_id", distinctId);
+    if (sessionId) url.searchParams.set("ph_session_id", sessionId);
+
+    window.location.href = url.toString();
   };
 
   return (
