@@ -12,7 +12,7 @@ dependsOn:
 
 # s6 Daemon UI Integration
 
-Expose s6-supervised daemons in the apps/os2 UI with full control and visibility.
+Expose s6-supervised daemons in the apps/os UI with full control and visibility.
 
 ## Background
 

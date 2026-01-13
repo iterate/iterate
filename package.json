@@ -8,26 +8,26 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "os2": "cd apps/os2 && pnpm",
+    "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
     "e2e": "pnpm --filter @iterate-com/e2e e2e",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "is-ci || husky",
-    "vitest": "pnpm os2 test",
+    "vitest": "pnpm os test",
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:clean": "docker compose down -v",
-    "snapshot:daytona": "pnpm os2 snapshot:daytona",
-    "snapshot:local-docker": "pnpm os2 snapshot:local-docker",
+    "snapshot:daytona": "pnpm os snapshot:daytona",
+    "snapshot:local-docker": "pnpm os snapshot:local-docker",
     "sandbox:local-rebuild": "pnpm snapshot:local-docker",
-    "db:migrate": "pnpm os2 db:migrate",
-    "db:generate": "pnpm os2 db:generate",
-    "db:studio": "pnpm os2 db:studio",
+    "db:migrate": "pnpm os db:migrate",
+    "db:generate": "pnpm os db:generate",
+    "db:studio": "pnpm os db:studio",
     "db:studio:staging": "PSCALE_DATABASE_URL=$(doppler secrets --config stg get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "db:query": "docker exec -it postgres-iterate psql -U postgres -d iterate",
@@ -35,8 +35,8 @@
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate",
-    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate"
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate",
+    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -70,7 +70,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs,cjs}": [
-      "eslint --fix --max-warnings=-1"
+      "eslint --fix --max-warnings=0"
     ],
     "*": [
       "prettier --write --ignore-unknown"

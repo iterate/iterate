@@ -7,8 +7,8 @@ on:
     branches:
       - main
     paths:
-      - apps/os2/sandbox/Dockerfile
-      - apps/os2/sandbox/entry.ts
+      - apps/os/sandbox/Dockerfile
+      - apps/os/sandbox/entry.ts
       - pnpm-lock.yaml
 permissions:
   contents: read
@@ -38,4 +38,4 @@ jobs:
       - name: Build and push Daytona snapshot
         env:
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
-        run: pnpm tsx apps/os2/sandbox/snapshot.ts
+        run: pnpm tsx apps/os/sandbox/snapshot.ts

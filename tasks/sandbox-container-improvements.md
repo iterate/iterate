@@ -27,7 +27,7 @@ Reorder to copy package files first, install dependencies, then copy source:
 
 ```dockerfile
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/os2/package.json apps/os2/
+COPY apps/os/package.json apps/os/
 COPY apps/daemon/package.json apps/daemon/
 # ... other package.json files
 RUN pnpm install --frozen-lockfile
@@ -46,8 +46,8 @@ COPY . .
 
 Multiple `process.env` accesses without validation:
 
-- `apps/os2/sandbox/daytona-snapshot.ts:27` - `DAYTONA_API_KEY` passed without check
-- `apps/os2/sandbox/entry.ts` - Various env vars accessed without guards
+- `apps/os/sandbox/daytona-snapshot.ts:27` - `DAYTONA_API_KEY` passed without check
+- `apps/os/sandbox/entry.ts` - Various env vars accessed without guards
 
 ### Fix
 

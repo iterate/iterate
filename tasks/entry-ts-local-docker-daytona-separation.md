@@ -9,7 +9,7 @@ tags:
 
 # Clean up entry.ts to separate local-docker and Daytona codepaths
 
-The `apps/os2/sandbox/entry.ts` file handles container startup for both local-docker (dev) and Daytona (production) scenarios. The codepaths are intertwined and could be clearer.
+The `apps/os/sandbox/entry.ts` file handles container startup for both local-docker (dev) and Daytona (production) scenarios. The codepaths are intertwined and could be clearer.
 
 ## Current issues
 
@@ -28,4 +28,4 @@ The `apps/os2/sandbox/entry.ts` file handles container startup for both local-do
 
 ## Files
 
-- `apps/os2/sandbox/entry.ts`
+- `apps/os/sandbox/entry.ts`

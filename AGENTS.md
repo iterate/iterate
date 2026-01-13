@@ -20,7 +20,7 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- tsx apps/os2/sandbox/daytona-snapshot.ts
+doppler run --config dev -- tsx apps/os/sandbox/daytona-snapshot.ts
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR
@@ -30,7 +30,7 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 
 ## Critical rules
 
-- No `console` in backend — use `apps/os2/backend/tag-logger.ts`
+- No `console` in backend — use `apps/os/backend/tag-logger.ts`
 - No `useEffect` for data fetching — use `useSuspenseQuery`
 - No inline error/success messages — use toast notifications
 
@@ -60,8 +60,8 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
 - Website (iterate.com): `apps/iterate-com`
-- Frontend: `apps/os2/app/AGENTS.md`
-- Backend: `apps/os2/backend/AGENTS.md`
+- Frontend: `apps/os/app/AGENTS.md`
+- Backend: `apps/os/backend/AGENTS.md`
 - E2E: `e2e/AGENTS.md`
 - Design system: `docs/design-system.md`
 - Vitest patterns: `docs/vitest-patterns.md`

@@ -468,7 +468,7 @@ export default defineConfig([
   },
   {
     name: "iterate-no-direct-waituntil",
-    files: ["apps/os2/**/*.ts", "apps/os2/**/*.tsx"],
+    files: ["apps/os/**/*.ts", "apps/os/**/*.tsx"],
     rules: {
       "iterate/no-direct-waituntil-import": "error",
     },

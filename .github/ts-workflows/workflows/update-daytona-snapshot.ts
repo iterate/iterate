@@ -7,7 +7,7 @@ export default {
     workflow_dispatch: {}, // Manual trigger
     push: {
       branches: ["main"],
-      paths: ["apps/os2/sandbox/Dockerfile", "apps/os2/sandbox/entry.ts", "pnpm-lock.yaml"],
+      paths: ["apps/os/sandbox/Dockerfile", "apps/os/sandbox/entry.ts", "pnpm-lock.yaml"],
     },
   },
   permissions: {
@@ -26,7 +26,7 @@ export default {
           env: {
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
           },
-          run: "pnpm tsx apps/os2/sandbox/snapshot.ts",
+          run: "pnpm tsx apps/os/sandbox/snapshot.ts",
         },
       ],
     },
