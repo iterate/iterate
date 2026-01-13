@@ -11,56 +11,6 @@ const DAEMON_PATH = join(ITERATE_REPO, "apps", "daemon");
 const LOCAL_REPO_MOUNT = "/local-iterate-repo";
 
 // ============================================
-// Coding tools installation
-// ============================================
-
-const installCodingTools = () => {
-  console.log("");
-  console.log("========================================");
-  console.log("Installing coding tools");
-  console.log("========================================");
-
-  // pi-coding-agent
-  console.log("");
-  console.log("--- pi-coding-agent ---");
-  try {
-    execSync("which pi", { stdio: "pipe" });
-    console.log("Already installed");
-  } catch {
-    console.log("Installing...");
-    execSync("npm install -g @mariozechner/pi-coding-agent@0.44.0", { stdio: "inherit" });
-  }
-
-  // opencode
-  console.log("");
-  console.log("--- opencode --- (skipping because slow)");
-  // try {
-  //   execSync("which opencode", { stdio: "pipe" });
-  //   console.log("Already installed");
-  // } catch {
-  //   console.log("Installing...");
-  //   execSync("curl -fsSL https://opencode.ai/install | bash", { stdio: "inherit" });
-  // }
-
-  // Claude Code
-  console.log("");
-  console.log("--- Claude Code (skipping because slow) ---");
-  // try {
-  //   execSync("which claude", { stdio: "pipe" });
-  //   console.log("Already installed");
-  // } catch {
-  //   console.log("Installing...");
-  //   try {
-  //     execSync("curl -fsSL https://claude.ai/install.sh | bash", { stdio: "inherit" });
-  //   } catch {
-  //     console.log("Claude install failed (may hang in non-interactive mode)");
-  //   }
-  // }
-
-  console.log("");
-};
-
-// ============================================
 // Repository setup
 // ============================================
 
@@ -221,7 +171,6 @@ const main = () => {
   console.log("# iterate sandbox entry point");
   console.log("########################################");
 
-  installCodingTools();
   setupIterateRepo();
   buildDaemon();
   cleanupS6RuntimeState();
