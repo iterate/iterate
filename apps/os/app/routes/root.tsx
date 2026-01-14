@@ -1,4 +1,11 @@
-import { Suspense, useEffect, type PropsWithChildren, type ReactNode } from "react";
+import {
+  Suspense,
+  useEffect,
+  Component,
+  type PropsWithChildren,
+  type ReactNode,
+  type ErrorInfo,
+} from "react";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -77,9 +84,33 @@ const PostHogProvider = shouldEnablePostHog()
   ? _PostHogProvider
   : ({ children }: PropsWithChildren) => <>{children}</>;
 
-const PostHogErrorBoundary = shouldEnablePostHog()
-  ? _PostHogErrorBoundary
-  : ({ children }: PropsWithChildren) => <>{children}</>;
+// Fallback error boundary for when PostHog is disabled
+class FallbackErrorBoundary extends Component<
+  PropsWithChildren<{ fallback: ReactNode }>,
+  { hasError: boolean }
+> {
+  constructor(props: PropsWithChildren<{ fallback: ReactNode }>) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_error: Error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("React error boundary caught:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+const PostHogErrorBoundary = shouldEnablePostHog() ? _PostHogErrorBoundary : FallbackErrorBoundary;
 
 // Component that tracks pageviews on navigation
 function PostHogPageviewTracker() {

@@ -53,8 +53,9 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
             return { data: user };
           },
           after: async (user) => {
-            // Track user_signed_up event in PostHog
-            await captureServerEvent(envParam, {
+            logger.info("User signed up", { userId: user.id, email: user.email });
+            // Track user_signed_up event in PostHog (fire-and-forget to avoid blocking signup)
+            captureServerEvent(envParam, {
               distinctId: user.id,
               event: "user_signed_up",
               properties: {
@@ -62,8 +63,9 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 name: user.name,
                 signup_method: "oauth", // Could be refined based on context
               },
+            }).catch((error) => {
+              logger.error("Failed to track user_signed_up event", { error, userId: user.id });
             });
-            logger.info("User signed up", { userId: user.id, email: user.email });
           },
         },
       },
