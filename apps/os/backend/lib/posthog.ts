@@ -1,4 +1,5 @@
 import type { CloudflareEnv } from "../../env.ts";
+import { logger } from "../tag-logger.ts";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
 
@@ -18,7 +19,12 @@ export async function captureServerEvent(
 ): Promise<void> {
   const apiKey = env.POSTHOG_KEY;
 
-  if (!apiKey) return;
+  if (!apiKey) {
+    if (env.VITE_APP_STAGE !== "prd") {
+      logger.warn("POSTHOG_KEY not configured, skipping event capture", { event: params.event });
+    }
+    return;
+  }
 
   const body = {
     api_key: apiKey,
@@ -61,7 +67,12 @@ export async function captureServerException(
 ): Promise<void> {
   const apiKey = env.POSTHOG_KEY;
 
-  if (!apiKey) return;
+  if (!apiKey) {
+    if (env.VITE_APP_STAGE !== "prd") {
+      logger.warn("POSTHOG_KEY not configured, skipping exception capture");
+    }
+    return;
+  }
 
   const body = {
     api_key: apiKey,

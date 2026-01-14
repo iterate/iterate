@@ -11,6 +11,26 @@ import { getStripe } from "./stripe.ts";
 
 export const stripeWebhookApp = new Hono<{ Bindings: CloudflareEnv }>();
 
+/**
+ * Track a billing event in PostHog for an organization.
+ * Uses org:{organizationId} as distinctId since billing events are org-level,
+ * not user-level, and shouldn't be attributed to any specific user.
+ */
+async function trackBillingEvent(
+  env: CloudflareEnv,
+  organizationId: string,
+  event: string,
+  properties: Record<string, unknown>,
+): Promise<void> {
+  await captureServerEvent(env, {
+    // Use org prefix for org-level events to avoid attributing to a specific user
+    distinctId: `org:${organizationId}`,
+    event,
+    properties,
+    groups: { organization: organizationId },
+  });
+}
+
 stripeWebhookApp.post("/", async (c) => {
   const stripe = getStripe();
 
@@ -117,23 +137,11 @@ async function handleSubscriptionCreated(
   });
 
   if (billingAccount) {
-    // Get the first org member to use as distinct_id (billing is org-level)
-    const orgMember = await db.query.organizationUserMembership.findFirst({
-      where: eq(schema.organizationUserMembership.organizationId, billingAccount.organizationId),
+    await trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
+      subscription_id: subscription.id,
+      status: subscription.status,
+      customer_id: customerId,
     });
-
-    if (orgMember) {
-      await captureServerEvent(env, {
-        distinctId: orgMember.userId,
-        event: "subscription_started",
-        properties: {
-          subscription_id: subscription.id,
-          status: subscription.status,
-          customer_id: customerId,
-        },
-        groups: { organization: billingAccount.organizationId },
-      });
-    }
   }
 
   logger.info("Subscription created", {
@@ -218,22 +226,11 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
   });
 
   if (billingAccount) {
-    const orgMember = await db.query.organizationUserMembership.findFirst({
-      where: eq(schema.organizationUserMembership.organizationId, billingAccount.organizationId),
+    await trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
+      invoice_id: invoice.id,
+      amount: invoice.amount_paid,
+      currency: invoice.currency,
     });
-
-    if (orgMember) {
-      await captureServerEvent(env, {
-        distinctId: orgMember.userId,
-        event: "invoice_paid",
-        properties: {
-          invoice_id: invoice.id,
-          amount: invoice.amount_paid,
-          currency: invoice.currency,
-        },
-        groups: { organization: billingAccount.organizationId },
-      });
-    }
   }
 
   logger.info("Invoice paid", {
@@ -263,22 +260,11 @@ async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice):
   });
 
   if (billingAccount) {
-    const orgMember = await db.query.organizationUserMembership.findFirst({
-      where: eq(schema.organizationUserMembership.organizationId, billingAccount.organizationId),
+    await trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
+      invoice_id: invoice.id,
+      amount: invoice.amount_due,
+      currency: invoice.currency,
     });
-
-    if (orgMember) {
-      await captureServerEvent(env, {
-        distinctId: orgMember.userId,
-        event: "payment_failed",
-        properties: {
-          invoice_id: invoice.id,
-          amount: invoice.amount_due,
-          currency: invoice.currency,
-        },
-        groups: { organization: billingAccount.organizationId },
-      });
-    }
   }
 
   logger.info("Payment failed", {
