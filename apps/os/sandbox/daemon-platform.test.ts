@@ -1,9 +1,9 @@
 /**
  * Daemon Platform Endpoint Tests
  *
- * These tests verify the /platform/* endpoints used for machine bootstrap:
- * - POST /platform/env-vars - inject environment variables
- * - POST /platform/cloned-repos - trigger repo cloning
+ * These tests verify the platform tRPC endpoints used for machine bootstrap:
+ * - platform.setEnvVars - inject environment variables
+ * - platform.cloneRepos - trigger repo cloning
  *
  * REQUIREMENTS:
  * - Docker with TCP API enabled on port 2375 (OrbStack has this by default)
@@ -16,8 +16,20 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { createTRPCClient, httpLink } from "@trpc/client";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
 import { dockerApi, execInContainer, waitForFileLogPattern } from "./test-helpers.ts";
+
+function createDaemonTrpcClient(port: number) {
+  return createTRPCClient<TRPCRouter>({
+    links: [
+      httpLink({
+        url: `http://localhost:${port}/api/trpc`,
+      }),
+    ],
+  });
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
@@ -90,37 +102,29 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
     }
   });
 
-  test("POST /platform/env-vars injects environment variables", async () => {
-    const baseUrl = `http://localhost:${DAEMON_PORT}`;
+  test("platform.setEnvVars injects environment variables", async () => {
+    const client = createDaemonTrpcClient(DAEMON_PORT);
     const uniqueValue = `test_value_${Date.now()}`;
 
-    const response = await fetch(`${baseUrl}/platform/env-vars`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vars: { TEST_VAR: uniqueValue, ANOTHER_VAR: "another_value" } }),
+    const result = await client.platform.setEnvVars.mutate({
+      vars: { TEST_VAR: uniqueValue, ANOTHER_VAR: "another_value" },
     });
 
-    expect(response.ok).toBe(true);
-    const body = (await response.json()) as {
-      success: boolean;
-      injectedCount: number;
-      envFilePath: string;
-    };
-    expect(body.success).toBe(true);
-    expect(body.injectedCount).toBe(2);
-    expect(body.envFilePath).toContain(".iterate-platform-env");
+    expect(result.success).toBe(true);
+    expect(result.injectedCount).toBe(2);
+    expect(result.envFilePath).toContain(".iterate-platform-env");
 
     // Verify the env file was written with correct content
     const envFileContent = await execInContainer(containerId, [
       "cat",
       "/root/.iterate-platform-env",
     ]);
-    expect(envFileContent).toContain(`export TEST_VAR="${uniqueValue}"`);
-    expect(envFileContent).toContain('export ANOTHER_VAR="another_value"');
+    expect(envFileContent).toContain(`export TEST_VAR=${uniqueValue}`);
+    expect(envFileContent).toContain("export ANOTHER_VAR=another_value");
   });
 
-  test("POST /platform/env-vars makes vars available in tmux sessions", async () => {
-    const baseUrl = `http://localhost:${DAEMON_PORT}`;
+  test("platform.setEnvVars makes vars available in tmux sessions", async () => {
+    const client = createDaemonTrpcClient(DAEMON_PORT);
     const uniqueValue = `tmux_test_${Date.now()}`;
 
     // First create a tmux session
@@ -128,12 +132,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
     await execInContainer(containerId, ["tmux", "new-session", "-d", "-s", sessionName]);
 
     // Inject env var (this should send source command to tmux)
-    const response = await fetch(`${baseUrl}/platform/env-vars`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vars: { TMUX_TEST_VAR: uniqueValue } }),
+    const result = await client.platform.setEnvVars.mutate({
+      vars: { TMUX_TEST_VAR: uniqueValue },
     });
-    expect(response.ok).toBe(true);
+    expect(result.success).toBe(true);
 
     // Give tmux a moment to source the file
     await new Promise((r) => setTimeout(r, 500));
@@ -166,71 +168,40 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
     await execInContainer(containerId, ["tmux", "kill-session", "-t", sessionName]);
   }, 30000);
 
-  test("POST /platform/env-vars rejects invalid input", async () => {
-    const baseUrl = `http://localhost:${DAEMON_PORT}`;
+  test("platform.setEnvVars rejects invalid input", async () => {
+    const client = createDaemonTrpcClient(DAEMON_PORT);
 
-    const response = await fetch(`${baseUrl}/platform/env-vars`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-
-    expect(response.status).toBe(400);
+    // @ts-expect-error - intentionally passing invalid input
+    await expect(client.platform.setEnvVars.mutate({})).rejects.toThrow();
   });
 
-  test("POST /platform/cloned-repos clones a real repository", async () => {
-    const baseUrl = `http://localhost:${DAEMON_PORT}`;
+  test("platform.cloneRepos clones a real repository", async () => {
+    const client = createDaemonTrpcClient(DAEMON_PORT);
     const repoPath = "/root/src/github.com/octocat/Hello-World";
 
     // Request clone of a real public repo
-    const response = await fetch(`${baseUrl}/platform/cloned-repos`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        repos: [
-          {
-            url: "https://github.com/octocat/Hello-World.git",
-            branch: "master",
-            path: repoPath,
-            owner: "octocat",
-            name: "Hello-World",
-          },
-        ],
-      }),
+    const result = await client.platform.cloneRepos.mutate({
+      repos: [
+        {
+          url: "https://github.com/octocat/Hello-World.git",
+          branch: "master",
+          path: repoPath,
+          owner: "octocat",
+          name: "Hello-World",
+        },
+      ],
     });
 
-    expect(response.ok).toBe(true);
-    const body = (await response.json()) as {
-      success: boolean;
-      repos: Array<{ owner: string; name: string; status: string }>;
-    };
-    expect(body.success).toBe(true);
-    expect(body.repos).toHaveLength(1);
-    expect(body.repos[0]).toMatchObject({ owner: "octocat", name: "Hello-World" });
+    expect(result.success).toBe(true);
+    expect(result.repos).toHaveLength(1);
+    expect(result.repos[0]).toMatchObject({ owner: "octocat", name: "Hello-World" });
 
-    // Poll filesystem until clone completes (check for .git directory)
-    const pollForCloneComplete = async () => {
-      const maxAttempts = 30;
-      for (let i = 0; i < maxAttempts; i++) {
-        try {
-          const result = await execInContainer(containerId, ["test", "-d", `${repoPath}/.git`]);
-          // If test command succeeds (no error), .git exists
-          if (result !== undefined) {
-            return;
-          }
-        } catch {
-          // .git doesn't exist yet, keep polling
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      throw new Error("Clone did not complete in time");
-    };
-
-    await pollForCloneComplete();
-
-    // Verify the repo actually exists on disk
-    const lsOutput = await execInContainer(containerId, ["ls", "-la", repoPath]);
-    expect(lsOutput).toContain("README");
+    // Poll filesystem until clone completes (wait for README to appear)
+    await vi.waitFor(async () => {
+      expect(await execInContainer(containerId, ["test", "-d", `${repoPath}/.git`])).toBeDefined();
+      const lsOutput = await execInContainer(containerId, ["ls", "-la", repoPath]);
+      expect(lsOutput).toContain("README");
+    });
 
     // Verify it's a git repo
     const gitOutput = await execInContainer(containerId, ["git", "-C", repoPath, "remote", "-v"]);

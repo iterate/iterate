@@ -10,8 +10,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import type { Agent } from "@server/db/schema.ts";
-import type { TmuxSession } from "@server/tmux-control.ts";
+import type { SerializedAgent, SerializedTmuxSession } from "@server/trpc/router.ts";
 import { cn } from "@/lib/utils.ts";
 import { Separator } from "@/components/ui/separator.tsx";
 import { SidebarTrigger } from "@/components/ui/sidebar.tsx";
@@ -37,8 +36,8 @@ import { trpcClient, useTRPC } from "@/integrations/tanstack-query/trpc-client.t
 import { HEADER_ACTIONS_ID } from "@/components/header-actions-constants.ts";
 
 interface AppHeaderProps {
-  agent?: Agent | null;
-  agents?: Agent[];
+  agent?: SerializedAgent | null;
+  agents?: SerializedAgent[];
 }
 
 export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
@@ -254,8 +253,8 @@ const DROPDOWN_TRIGGER_CLASSES =
   "flex items-center gap-1 rounded-sm px-1 -mx-1 transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1";
 
 interface AgentBreadcrumbDropdownProps {
-  currentAgent: Agent;
-  agents: Agent[];
+  currentAgent: SerializedAgent;
+  agents: SerializedAgent[];
 }
 
 function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdownProps) {
@@ -347,7 +346,7 @@ const TERMINAL_SHORTCUTS: TerminalShortcut[] = [
 ];
 
 interface TerminalShortcutsDropdownProps {
-  tmuxSessions: TmuxSession[];
+  tmuxSessions: SerializedTmuxSession[];
   onCommand: (command: string) => void;
 }
 

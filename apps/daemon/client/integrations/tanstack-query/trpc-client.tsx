@@ -1,4 +1,3 @@
-import superjson from "superjson";
 import type { TRPCClient } from "@trpc/client";
 import { createTRPCClient, httpBatchStreamLink } from "@trpc/client";
 import { createTRPCContext } from "@trpc/tanstack-react-query";
@@ -22,7 +21,6 @@ export const useTRPC = context.useTRPC;
 export const trpcClient = createTRPCClient<TRPCRouter>({
   links: [
     httpBatchStreamLink({
-      transformer: superjson,
       url: "api/trpc",
       methodOverride: "POST",
     }),
