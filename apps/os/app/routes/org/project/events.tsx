@@ -66,7 +66,7 @@ function EventsContent() {
   }
 
   return (
-    <div className="p-4 md:p-8">
+    <div className="p-4">
       <HeaderActions>
         <Button onClick={handleRefresh} size="sm" variant="outline" disabled={isFetching}>
           <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />

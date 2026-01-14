@@ -5,14 +5,9 @@ import { createDaytonaProvider } from "./daytona.ts";
 
 export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
-export interface CreateProviderOptions {
-  findAvailablePort?: () => Promise<number>;
-}
-
 export async function createMachineProvider(
   type: MachineType,
   env: CloudflareEnv,
-  options?: CreateProviderOptions,
 ): Promise<MachineProvider> {
   switch (type) {
     case "daytona":
@@ -22,14 +17,8 @@ export async function createMachineProvider(
       if (!import.meta.env.DEV) {
         throw new Error("local-docker provider only available in development");
       }
-      if (!options?.findAvailablePort) {
-        throw new Error("findAvailablePort function required for local-docker provider");
-      }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
-      return createLocalDockerProvider({
-        imageName: "iterate-sandbox:local",
-        findAvailablePort: options.findAvailablePort,
-      });
+      return createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
     }
 
     case "local":

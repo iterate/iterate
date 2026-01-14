@@ -35,7 +35,7 @@ function ProjectHomePage() {
   );
 
   return (
-    <div className="p-4 md:p-8 space-y-6" data-component="ProjectHomePage">
+    <div className="p-4 space-y-6" data-component="ProjectHomePage">
       <p className="text-muted-foreground">
         Welcome to your project. Use the sidebar to navigate to different sections.
       </p>

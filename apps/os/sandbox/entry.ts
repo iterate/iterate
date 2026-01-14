@@ -105,6 +105,33 @@ const setupIterateRepo = () => {
 };
 
 // ============================================
+// Agent configuration setup
+// ============================================
+
+/**
+ * Copies default agent configs (Claude Code, OpenCode, Pi) to $HOME.
+ * Done at runtime so config changes take effect on machine restart without rebuilding the image.
+ */
+const setupAgentConfigs = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up agent configurations");
+  console.log("========================================");
+  console.log("");
+
+  const homeSkeletonPath = join(ITERATE_REPO, "apps", "os", "sandbox", "home-skeleton");
+  const home = homedir();
+
+  if (!existsSync(homeSkeletonPath)) {
+    console.log("Warning: home-skeleton not found, skipping agent config setup");
+    return;
+  }
+
+  execSync(`rsync -av ${homeSkeletonPath}/ ${home}/`, { stdio: "inherit" });
+  console.log("");
+};
+
+// ============================================
 // Daemon frontend build
 // ============================================
 
@@ -178,6 +205,7 @@ const main = () => {
   console.log("########################################");
 
   setupIterateRepo();
+  setupAgentConfigs();
   buildDaemon();
   cleanupS6RuntimeState();
 

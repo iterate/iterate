@@ -78,7 +78,7 @@ export const opencodeHarness: AgentHarness = {
     // Create tmux session running opencode attach (for terminal UI)
     // If session already exists, we'll reuse it
     if (!hasTmuxSession(tmuxSession)) {
-      const attachCommand = `opencode attach --dir ${workingDirectory}`;
+      const attachCommand = `opencode attach ${OPENCODE_BASE_URL} --session ${harnessSessionId} --dir ${workingDirectory}`;
       const success = createTmuxSession(tmuxSession, attachCommand);
       if (!success) {
         throw new Error(`Failed to create tmux session: ${tmuxSession}`);

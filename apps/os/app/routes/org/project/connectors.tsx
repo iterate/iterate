@@ -158,7 +158,7 @@ function ProjectConnectorsContent() {
     !explicitTarget && availableMachines.length > 0 ? availableMachines[0] : null;
 
   return (
-    <div className="p-4 md:p-8 space-y-8">
+    <div className="p-4 space-y-8">
       <section className="space-y-4">
         <div className="space-y-1">
           <h2 className="text-lg font-semibold">Project connections</h2>

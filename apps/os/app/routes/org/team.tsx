@@ -102,7 +102,7 @@ function OrgTeamPage() {
   const canManageMembers = currentUserRole === "owner" || currentUserRole === "admin";
 
   return (
-    <div className="p-4 md:p-8 space-y-6">
+    <div className="p-4 space-y-6">
       {canManageMembers && (
         <form
           onSubmit={(event) => {

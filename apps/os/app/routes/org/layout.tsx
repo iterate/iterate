@@ -9,6 +9,7 @@ import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
 import { SidebarInset, SidebarProvider } from "../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../components/app-header.tsx";
+import { HeaderActionsProvider, useHeaderActions } from "../../components/header-actions.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
@@ -28,6 +29,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
 function OrgLayout() {
   const params = useParams({ from: "/_auth/orgs/$organizationSlug" });
   const { user } = useSessionUser();
+  const [headerActions, setHeaderActions] = useHeaderActions();
 
   // Check if we're rendering a project child route - if so, just pass through to Outlet
   const projectMatch = useMatch({
@@ -105,26 +107,26 @@ function OrgLayout() {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex min-h-screen w-full">
-        <SidebarShell
-          header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
-          user={userProps}
-        >
-          <OrgSidebarNav orgSlug={currentOrg.slug} projects={projects} />
-        </SidebarShell>
-        <SidebarInset>
-          <AppHeader
-            orgName={currentOrg.name}
-            organizationSlug={params.organizationSlug}
-            projects={projects}
-          />
-          <main className="flex-1 overflow-auto">
-            <div className="max-w-md">
-              <Outlet />
-            </div>
-          </main>
-        </SidebarInset>
-      </div>
+      <SidebarShell
+        header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
+        user={userProps}
+      >
+        <OrgSidebarNav orgSlug={currentOrg.slug} projects={projects} />
+      </SidebarShell>
+      <SidebarInset>
+        <AppHeader
+          orgName={currentOrg.name}
+          organizationSlug={params.organizationSlug}
+          organizations={orgsList}
+          projects={projects}
+          actions={headerActions}
+        />
+        <main className="w-full max-w-3xl flex-1 overflow-auto">
+          <HeaderActionsProvider onActionsChange={setHeaderActions}>
+            <Outlet />
+          </HeaderActionsProvider>
+        </main>
+      </SidebarInset>
     </SidebarProvider>
   );
 }

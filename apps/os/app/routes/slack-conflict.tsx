@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
 import { Button } from "../components/ui/button.tsx";
@@ -99,56 +99,72 @@ function SlackConflictContent() {
 
   return (
     <CenteredLayout>
-      <div className="w-full max-w-lg space-y-6">
+      <div className="w-full max-w-2xl space-y-6">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/10">
             <AlertTriangle className="h-6 w-6 text-amber-500" />
           </div>
-          <div>
-            <h1 className="text-xl font-semibold">Slack workspace already connected</h1>
-          </div>
+          <h1 className="text-2xl font-semibold">Slack workspace already connected</h1>
         </div>
 
-        <div className="space-y-4 rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-3">
-            <MessageSquare className="h-5 w-5 text-muted-foreground" />
-            <div>
-              <div className="font-medium">{search.teamName}</div>
-              <div className="text-sm text-muted-foreground">Slack workspace</div>
+        <p className="text-muted-foreground">
+          The Slack workspace <span className="font-medium text-foreground">{search.teamName}</span>{" "}
+          is already connected to an Iterate project. Choose which project should receive messages
+          from this Slack workspace.
+        </p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Button
+            variant="outline"
+            className="h-auto flex-col items-start gap-3 p-4 text-left"
+            onClick={handleKeepExisting}
+          >
+            <span className="text-sm font-medium">Keep current connection</span>
+            <div className="w-full space-y-1 text-xs text-muted-foreground">
+              <div className="flex justify-between">
+                <span>Slack workspace</span>
+                <span className="font-mono text-foreground">{search.teamName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Iterate organization</span>
+                <span className="font-mono text-foreground">{search.existingOrgName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Iterate project</span>
+                <span className="font-mono text-foreground">{search.existingProjectSlug}</span>
+              </div>
             </div>
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            This Slack workspace is currently connected to{" "}
-            <span className="font-medium text-foreground">{search.existingProjectName}</span> in{" "}
-            <span className="font-medium text-foreground">{search.existingOrgName}</span>.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <p className="text-sm font-medium">
-            Choose which project your Slack workspace should be connected to
-          </p>
-          <p className="text-sm text-muted-foreground">
-            @iterate's behavior in your Slack will be determined by the project you pick. If you
-            switch to the new project, agents in the other project will no longer respond to
-            messages to @iterate.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <Button variant="outline" className="w-full justify-start" onClick={handleKeepExisting}>
-            Keep connected to{" "}
-            <span className="ml-1 font-mono text-xs">{search.existingProjectSlug}</span>
           </Button>
 
           <Button
-            className="w-full justify-start"
+            className="h-auto flex-col items-start gap-3 p-4 text-left"
             onClick={() => transferConnection.mutate()}
             disabled={transferConnection.isPending}
           >
-            {transferConnection.isPending && <Spinner className="mr-2" />}
-            Switch to <span className="ml-1 font-mono text-xs">{newProject.slug}</span>
+            {transferConnection.isPending ? (
+              <div className="flex items-center gap-2">
+                <Spinner className="h-4 w-4" />
+                <span className="text-sm font-medium">Switching...</span>
+              </div>
+            ) : (
+              <span className="text-sm font-medium">Switch to new project</span>
+            )}
+            <div className="w-full space-y-1 text-xs text-primary-foreground/70">
+              <div className="flex justify-between">
+                <span>Slack workspace</span>
+                <span className="font-mono text-primary-foreground">{search.teamName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Iterate organization</span>
+                <span className="font-mono text-primary-foreground">
+                  {newProject.organizationName}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Iterate project</span>
+                <span className="font-mono text-primary-foreground">{newProject.slug}</span>
+              </div>
+            </div>
           </Button>
         </div>
       </div>

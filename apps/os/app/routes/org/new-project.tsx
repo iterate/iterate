@@ -22,7 +22,7 @@ function NewProjectPage() {
     from: "/_auth/orgs/$organizationSlug/new-project",
   });
   const { defaultName } = Route.useLoaderData();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [name, setName] = useState(defaultName);
 

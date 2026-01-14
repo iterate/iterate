@@ -50,33 +50,42 @@ function buildMachineForwardUrl(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   switch (machine.type) {
-    case "local":
+    case "local": {
       // Local machine: forward to configured host:port
-      if (!metadata?.host || !metadata?.port) {
+      const host = metadata?.host as string | undefined;
+      // Support both new format (ports map) and legacy (single port)
+      const ports = metadata?.ports as Record<string, number> | undefined;
+      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
+      if (!host || !port) {
         logger.warn("[Slack Webhook] Local machine missing host/port config", {
           machineId: machine.id,
         });
         return null;
       }
       // SSRF protection: block internal IPs
-      if (isBlockedHost(String(metadata.host))) {
+      if (isBlockedHost(host)) {
         logger.warn("[Slack Webhook] Blocked internal IP", {
-          host: metadata.host,
+          host,
           machineId: machine.id,
         });
         return null;
       }
-      return `http://${metadata.host}:${metadata.port}${path}`;
+      return `http://${host}:${port}${path}`;
+    }
 
-    case "local-docker":
+    case "local-docker": {
       // Local docker: forward to localhost with mapped port
-      if (!metadata?.port) {
+      // Support both new format (ports map) and legacy (single port)
+      const ports = metadata?.ports as Record<string, number> | undefined;
+      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
+      if (!port) {
         logger.warn("[Slack Webhook] Local docker machine missing port", {
           machineId: machine.id,
         });
         return null;
       }
-      return `http://localhost:${metadata.port}${path}`;
+      return `http://localhost:${port}${path}`;
+    }
 
     case "daytona":
       // Daytona: use external proxy URL
