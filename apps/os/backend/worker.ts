@@ -18,6 +18,7 @@ import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./routes/posthog-proxy.ts";
 import { machineStatusApp } from "./routes/machine-status.ts";
 import { logger } from "./tag-logger.ts";
+import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 
 export type Variables = {
@@ -59,6 +60,22 @@ app.use("*", async (c, next) => {
 
 app.onError((err, c) => {
   logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
+
+  // Capture exception to PostHog with user context
+  const error = err instanceof Error ? err : new Error(String(err));
+  const distinctId = c.var.session?.user?.id ?? "anonymous";
+  c.executionCtx?.waitUntil(
+    captureServerException(c.env, {
+      distinctId,
+      error,
+      properties: {
+        path: c.req.path,
+        method: c.req.method,
+        userId: c.var.session?.user?.id,
+      },
+    }),
+  );
+
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
@@ -77,6 +94,20 @@ app.all("/api/trpc/*", (c) => {
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
         logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
+
+        // Capture 5xx errors to PostHog
+        const distinctId = c.var.session?.user?.id ?? "anonymous";
+        c.executionCtx?.waitUntil(
+          captureServerException(c.env, {
+            distinctId,
+            error,
+            properties: {
+              path: procedurePath,
+              trpcProcedure: procedurePath,
+              userId: c.var.session?.user?.id,
+            },
+          }),
+        );
       } else {
         logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
       }

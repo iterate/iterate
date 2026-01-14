@@ -5,10 +5,36 @@ import { getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { SubscriptionStatus } from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import type { CloudflareEnv } from "../../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../../env.ts";
+import { captureServerEvent } from "../../lib/posthog.ts";
 import { getStripe } from "./stripe.ts";
 
 export const stripeWebhookApp = new Hono<{ Bindings: CloudflareEnv }>();
+
+/**
+ * Track a billing event in PostHog for an organization.
+ * Uses org:{organizationId} as distinctId since billing events are org-level,
+ * not user-level, and shouldn't be attributed to any specific user.
+ * Uses waitUntil to ensure delivery without blocking the webhook response.
+ */
+function trackBillingEvent(
+  env: CloudflareEnv,
+  organizationId: string,
+  event: string,
+  properties: Record<string, unknown>,
+): void {
+  waitUntil(
+    captureServerEvent(env, {
+      // Use org prefix for org-level events to avoid attributing to a specific user
+      distinctId: `org:${organizationId}`,
+      event,
+      properties,
+      groups: { organization: organizationId },
+    }).catch((error) => {
+      logger.error("Failed to track billing event in PostHog", { error, event, organizationId });
+    }),
+  );
+}
 
 stripeWebhookApp.post("/", async (c) => {
   const stripe = getStripe();
@@ -29,7 +55,12 @@ stripeWebhookApp.post("/", async (c) => {
 
   try {
     switch (event.type) {
-      case "customer.subscription.created":
+      case "customer.subscription.created": {
+        const subscription = event.data.object as Stripe.Subscription;
+        await handleSubscriptionCreated(c.env, subscription);
+        break;
+      }
+
       case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription;
         await handleSubscriptionUpdate(subscription);
@@ -73,13 +104,13 @@ stripeWebhookApp.post("/", async (c) => {
 
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
-        await handleInvoicePaid(invoice);
+        await handleInvoicePaid(c.env, invoice);
         break;
       }
 
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
-        await handlePaymentFailed(invoice);
+        await handlePaymentFailed(c.env, invoice);
         break;
       }
 
@@ -94,7 +125,51 @@ stripeWebhookApp.post("/", async (c) => {
   return c.json({ received: true });
 });
 
+async function handleSubscriptionCreated(
+  env: CloudflareEnv,
+  subscription: Stripe.Subscription,
+): Promise<void> {
+  const db = getDb();
+  const customerId =
+    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+
+  // Update billing account
+  await updateBillingAccount(subscription);
+
+  // Track subscription_started event in PostHog
+  const billingAccount = await db.query.billingAccount.findFirst({
+    where: eq(schema.billingAccount.stripeCustomerId, customerId),
+  });
+
+  if (billingAccount) {
+    trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
+      subscription_id: subscription.id,
+      status: subscription.status,
+      customer_id: customerId,
+    });
+  }
+
+  logger.info("Subscription created", {
+    customerId,
+    status: subscription.status,
+    subscriptionId: subscription.id,
+  });
+}
+
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Promise<void> {
+  await updateBillingAccount(subscription);
+
+  const customerId =
+    typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
+
+  logger.info("Updated billing account", {
+    customerId,
+    status: subscription.status,
+    subscriptionId: subscription.id,
+  });
+}
+
+async function updateBillingAccount(subscription: Stripe.Subscription): Promise<void> {
   const db = getDb();
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
@@ -115,12 +190,6 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
     })
     .where(eq(schema.billingAccount.stripeCustomerId, customerId));
-
-  logger.info("Updated billing account", {
-    customerId,
-    status: subscription.status,
-    subscriptionId: subscription.id,
-  });
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
@@ -140,7 +209,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
   logger.info("Subscription deleted", { customerId, subscriptionId: subscription.id });
 }
 
-async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
+async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
   const db = getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
@@ -156,6 +225,19 @@ async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
       .where(eq(schema.billingAccount.stripeCustomerId, customerId));
   }
 
+  // Track invoice_paid event in PostHog
+  const billingAccount = await db.query.billingAccount.findFirst({
+    where: eq(schema.billingAccount.stripeCustomerId, customerId),
+  });
+
+  if (billingAccount) {
+    trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
+      invoice_id: invoice.id,
+      amount: invoice.amount_paid,
+      currency: invoice.currency,
+    });
+  }
+
   logger.info("Invoice paid", {
     customerId,
     invoiceId: invoice.id,
@@ -164,7 +246,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
   });
 }
 
-async function handlePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
+async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
   const db = getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
@@ -176,6 +258,19 @@ async function handlePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
       subscriptionStatus: "past_due",
     })
     .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+
+  // Track payment_failed event in PostHog
+  const billingAccount = await db.query.billingAccount.findFirst({
+    where: eq(schema.billingAccount.stripeCustomerId, customerId),
+  });
+
+  if (billingAccount) {
+    trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
+      invoice_id: invoice.id,
+      amount: invoice.amount_due,
+      currency: invoice.currency,
+    });
+  }
 
   logger.info("Payment failed", {
     customerId,

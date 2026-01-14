@@ -11,6 +11,12 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
       capture_pageview: false, // We capture pageviews manually
       capture_pageleave: true, // Enable pageleave capture
       debug: import.meta.env.DEV,
+      // Session replay - match apps/os config for consistency
+      session_recording: {
+        maskAllInputs: false,
+        maskInputOptions: { password: true },
+        maskTextSelector: "",
+      },
     });
   }, []);
 
