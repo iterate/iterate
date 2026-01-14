@@ -45,7 +45,6 @@ export default defineConfig(({ command }) => {
         tunnelName: tunnelConfig?.tunnelName ?? "",
         apiToken: process.env.CLOUDFLARE_API_TOKEN,
         accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-        ssl: "*.dev.iterate.com",
         cleanup: { autoCleanup: false },
       }),
       devtools({
