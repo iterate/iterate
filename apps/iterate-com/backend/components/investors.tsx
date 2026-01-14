@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { cn } from "../utils/cn.ts";
 import { Button } from "./button.tsx";
+import { cn } from "@/lib/utils.ts";
 
 interface Investor {
   name: string;

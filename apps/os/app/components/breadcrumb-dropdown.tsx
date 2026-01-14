@@ -1,6 +1,5 @@
 import { Link, type LinkProps } from "@tanstack/react-router";
 import { ChevronDown, Plus } from "lucide-react";
-import { cn } from "../lib/cn.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { BreadcrumbItem, BreadcrumbLink, BreadcrumbPage } from "./ui/breadcrumb.tsx";
+import { cn } from "@/lib/utils.ts";
 
 // Shared button styling - extracted to eliminate duplication
 const DROPDOWN_TRIGGER_CLASSES =

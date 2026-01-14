@@ -6,7 +6,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fromString } from "typeid-js";
 import { authClient, signOut } from "../lib/auth-client.ts";
-import { cn } from "../lib/cn.ts";
 import { trpc, trpcClient } from "../lib/trpc.tsx";
 import { useDebounce } from "../hooks/use-debounce.ts";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
@@ -38,6 +37,7 @@ import {
   SidebarMenuItem,
 } from "./ui/sidebar.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
+import { cn } from "@/lib/utils.ts";
 
 interface User {
   name: string;

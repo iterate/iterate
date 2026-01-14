@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, Link, notFound } from "@tanstack/react-router";
 import { Shield, Terminal, Info } from "lucide-react";
-import { cn } from "../../lib/cn.ts";
 import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
+import { cn } from "@/lib/utils.ts";
 
 const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
   const session = context.variables.session;

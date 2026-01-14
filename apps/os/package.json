@@ -117,6 +117,7 @@
     "typescript": "^5.9.3",
     "vite": "7.2.4",
     "vite-plugin-cloudflare-tunnel": "^1.0.12",
+    "vite-tsconfig-paths": "^6.0.4",
     "vitest": "4.0.15",
     "wrangler": "^4.51.0",
     "ws": "^8.19.0"

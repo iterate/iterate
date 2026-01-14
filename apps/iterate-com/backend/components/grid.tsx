@@ -1,5 +1,5 @@
 import { type HTMLAttributes } from "react";
-import { cn } from "../utils/cn.ts";
+import { cn } from "@/lib/utils.ts";
 
 interface GridProps extends HTMLAttributes<HTMLDivElement> {
   cols?: 1 | 2 | 3 | 4;
