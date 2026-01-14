@@ -42,13 +42,15 @@ export default workflow({
           run: dedent`
             set -o pipefail
             mkdir -p test-results
+            echo hello > test-results/test1.txt
+            pnpm spec --list | tee test-results/test2.txt | grep -v slow
             # tee everything to a log file but filter out WebServer logs which are noisy
             pnpm spec | tee test-results/spec.log | grep -v WebServer
           `,
         },
         {
           name: "upload logs",
-          if: "failure()",
+          if: "always()",
           ...uses("actions/upload-artifact@v4", {
             name: "spec-results",
             path: "test-results",
