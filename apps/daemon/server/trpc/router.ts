@@ -247,6 +247,11 @@ export const trpcRouter = createTRPCRouter({
             .set({ status: "running", updatedAt: new Date() })
             .where(eq(schema.sessions.slug, input.slug));
           triggerResurrectSave();
+        } else {
+          await db
+            .update(schema.sessions)
+            .set({ status: "error", updatedAt: new Date() })
+            .where(eq(schema.sessions.slug, input.slug));
         }
         return { success };
       }
@@ -258,6 +263,11 @@ export const trpcRouter = createTRPCRouter({
           .set({ status: "running", updatedAt: new Date() })
           .where(eq(schema.sessions.slug, input.slug));
         triggerResurrectSave();
+      } else {
+        await db
+          .update(schema.sessions)
+          .set({ status: "error", updatedAt: new Date() })
+          .where(eq(schema.sessions.slug, input.slug));
       }
       return { success };
     }),

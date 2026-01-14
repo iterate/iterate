@@ -1,4 +1,4 @@
-CREATE TABLE `sessions` (
+CREATE TABLE IF NOT EXISTS `sessions` (
 	`slug` text PRIMARY KEY NOT NULL,
 	`harness_type` text DEFAULT 'claude-code' NOT NULL,
 	`working_directory` text,
