@@ -15,7 +15,9 @@ export const workerContract = oc.router({
     reportStatus: oc
       .input(
         z.object({
-          status: z.enum(["ready", "error"]),
+          status: z
+            .enum(["ready", "error"])
+            .or(z.templateLiteral([z.literal("working:"), z.string()])),
           message: z.string().optional(),
         }),
       )
