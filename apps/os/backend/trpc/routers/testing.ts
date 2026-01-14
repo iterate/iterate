@@ -1,8 +1,20 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, publicMutation, protectedProcedure } from "../trpc.ts";
-import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
+import {
+  router,
+  publicProcedure,
+  publicMutation,
+  protectedProcedure,
+  projectProtectedProcedure,
+} from "../trpc.ts";
+import {
+  user,
+  organization,
+  project,
+  organizationUserMembership,
+  projectConnection,
+} from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
 
@@ -145,5 +157,57 @@ export const testingRouter = router({
       }
 
       return { results };
+    }),
+
+  // Seed Slack project connection for tests
+  seedSlackConnection: projectProtectedProcedure
+    .input(
+      z.object({
+        teamId: z.string().min(1),
+        teamName: z.string().optional(),
+        teamDomain: z.string().optional(),
+        webhookTargetMachineId: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const existingConnection = await ctx.db.query.projectConnection.findFirst({
+        where: (pc, { eq, and }) => and(eq(pc.projectId, ctx.project.id), eq(pc.provider, "slack")),
+      });
+
+      const providerData = {
+        teamId: input.teamId,
+        teamName: input.teamName ?? input.teamId,
+        teamDomain: input.teamDomain ?? input.teamId,
+      };
+
+      if (existingConnection) {
+        await ctx.db
+          .update(projectConnection)
+          .set({
+            externalId: input.teamId,
+            providerData,
+            webhookTargetMachineId: input.webhookTargetMachineId ?? null,
+          })
+          .where(eq(projectConnection.id, existingConnection.id));
+      } else {
+        await ctx.db.insert(projectConnection).values({
+          projectId: ctx.project.id,
+          provider: "slack",
+          externalId: input.teamId,
+          scope: "project",
+          userId: ctx.user.id,
+          providerData,
+          webhookTargetMachineId: input.webhookTargetMachineId ?? null,
+        });
+      }
+
+      return { success: true };
     }),
 });

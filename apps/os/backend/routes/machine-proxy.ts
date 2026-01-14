@@ -120,11 +120,17 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  if (machineRecord.type === "local-vanilla") {
-    return c.json(
-      { error: "Proxy not supported for local-vanilla machines. Use native URL instead." },
-      400,
-    );
+  if (machineRecord.type === "local") {
+    // For local machines, proxy to configured host:port
+    const metadata = machineRecord.metadata as { host?: string; port?: number };
+    if (!metadata.host || !metadata.port) {
+      return c.json({ error: "Local machine missing host or port configuration" }, 500);
+    }
+    const targetUrl = `http://${metadata.host}:${metadata.port}${path}`;
+    const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
+
+    const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
+    return rewriteHTMLUrls(response, proxyBasePath);
   }
 
   // Daytona machine handling

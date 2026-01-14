@@ -45,6 +45,48 @@ interface DockerContainer {
   Ports?: Array<{ PublicPort?: number }>;
 }
 
+const localMetadataSchema = z
+  .object({
+    host: z.string().min(1),
+    port: z.coerce.number().int().min(1).max(65535),
+  })
+  .passthrough();
+
+/**
+ * Create a local machine (DB-only, no provider).
+ * Extracted for consistency with provider-based machine types.
+ */
+async function createLocalMachine(
+  db: DB,
+  projectId: string,
+  machineId: string,
+  name: string,
+  metadata: Record<string, unknown>,
+): Promise<typeof schema.machine.$inferSelect> {
+  const localMetadata = localMetadataSchema.parse(metadata);
+  const [newMachine] = await db
+    .insert(schema.machine)
+    .values({
+      id: machineId,
+      name,
+      type: "local",
+      projectId,
+      state: "started",
+      metadata: localMetadata,
+      externalId: machineId,
+    })
+    .returning();
+
+  if (!newMachine) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to create machine",
+    });
+  }
+
+  return newMachine;
+}
+
 // Helper to find an available port for local-docker machines by querying Docker directly
 // Uses dynamic import to avoid bundling local-docker module in production
 async function findAvailablePort(): Promise<number> {
@@ -148,6 +190,17 @@ export const machineRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const machineId = typeid("mach").toString();
+
+      // Local machines are DB-only (no provider)
+      if (input.type === "local") {
+        return createLocalMachine(
+          ctx.db,
+          ctx.project.id,
+          machineId,
+          input.name,
+          input.metadata ?? {},
+        );
+      }
 
       // Generate API key for machine authentication
       const machineApiKey = generateMachineApiKey(machineId);

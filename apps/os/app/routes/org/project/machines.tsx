@@ -26,7 +26,7 @@ import { MachineTable } from "../../../components/machine-table.tsx";
 import { HeaderActions } from "../../../components/header-actions.tsx";
 import { isNonProd } from "../../../../env-client.ts";
 
-type MachineType = "daytona" | "local-docker" | "local-vanilla";
+type MachineType = "daytona" | "local-docker" | "local";
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
@@ -42,6 +42,8 @@ function ProjectMachinesPage() {
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
   const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
   const [newMachineName, setNewMachineName] = useState(`${newMachineType}-${Date.now()}`);
+  const [newLocalHost, setNewLocalHost] = useState("localhost");
+  const [newLocalPort, setNewLocalPort] = useState("3001");
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
     organizationSlug: params.organizationSlug,
@@ -52,18 +54,29 @@ function ProjectMachinesPage() {
   const { data: machines } = useSuspenseQuery(machineListQueryOptions);
 
   const createMachine = useMutation({
-    mutationFn: async ({ name, type }: { name: string; type: MachineType }) => {
+    mutationFn: async ({
+      name,
+      type,
+      metadata,
+    }: {
+      name: string;
+      type: MachineType;
+      metadata?: Record<string, unknown>;
+    }) => {
       return trpcClient.machine.create.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name,
         type,
+        metadata,
       });
     },
     onSuccess: () => {
       setCreateSheetOpen(false);
       setNewMachineType("daytona");
       setNewMachineName(`daytona-${Date.now()}`);
+      setNewLocalHost("localhost");
+      setNewLocalPort("3001");
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -125,9 +138,29 @@ function ProjectMachinesPage() {
 
   const handleCreateMachine = (e: FormEvent) => {
     e.preventDefault();
-    if (newMachineName.trim()) {
-      createMachine.mutate({ name: newMachineName.trim(), type: newMachineType });
+    const trimmedName = newMachineName.trim();
+    if (!trimmedName) return;
+
+    if (newMachineType === "local") {
+      const host = newLocalHost.trim();
+      const port = Number.parseInt(newLocalPort, 10);
+      if (!host) {
+        toast.error("Host is required for local machines");
+        return;
+      }
+      if (!Number.isFinite(port) || port < 1 || port > 65535) {
+        toast.error("Port must be between 1 and 65535");
+        return;
+      }
+      createMachine.mutate({
+        name: trimmedName,
+        type: newMachineType,
+        metadata: { host, port },
+      });
+      return;
     }
+
+    createMachine.mutate({ name: trimmedName, type: newMachineType });
   };
 
   const createSheet = (
@@ -169,9 +202,38 @@ function ProjectMachinesPage() {
                   <SelectContent>
                     <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
                     <SelectItem value="local-docker">Local Docker</SelectItem>
-                    <SelectItem value="local-vanilla">Local Vanilla</SelectItem>
+                    <SelectItem value="local">Local (Host:Port)</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+            {isNonProd && newMachineType === "local" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Host</label>
+                  <Input
+                    placeholder="localhost"
+                    value={newLocalHost}
+                    onChange={(e) => setNewLocalHost(e.target.value)}
+                    disabled={createMachine.isPending}
+                    autoComplete="off"
+                    data-1p-ignore
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Port</label>
+                  <Input
+                    type="number"
+                    placeholder="3001"
+                    min={1}
+                    max={65535}
+                    value={newLocalPort}
+                    onChange={(e) => setNewLocalPort(e.target.value)}
+                    disabled={createMachine.isPending}
+                    autoComplete="off"
+                    data-1p-ignore
+                  />
+                </div>
               </div>
             )}
           </div>

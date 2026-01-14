@@ -15,6 +15,13 @@
       "when": 1768385687730,
       "tag": "0001_hesitant_abomination",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768400785151,
+      "tag": "0002_brave_karen_page",
+      "breakpoints": true
     }
   ]
 }

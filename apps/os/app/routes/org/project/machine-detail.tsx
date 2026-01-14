@@ -59,6 +59,20 @@ function MachineDetailPage() {
       machineId: params.machineId,
     }),
   );
+  const isLocalDocker = machine.type === "local-docker";
+  const isLocal = machine.type === "local";
+  const host = (machine.metadata as { host?: string })?.host;
+  const port = (machine.metadata as { port?: number })?.port;
+  const typeLabel = isLocalDocker
+    ? `Local Docker :${port ?? "?"}`
+    : isLocal
+      ? `Local ${host ?? "?"}:${port ?? "?"}`
+      : "Daytona";
+  const typeClass = isLocalDocker
+    ? "border-orange-500 text-orange-600"
+    : isLocal
+      ? "border-blue-500 text-blue-600"
+      : "";
 
   const archiveMachine = useMutation({
     mutationFn: async () => {
@@ -171,13 +185,8 @@ function MachineDetailPage() {
           <Badge variant={machine.state === "started" ? "success" : "secondary"}>
             {machine.state}
           </Badge>
-          <Badge
-            variant="outline"
-            className={machine.type === "local-docker" ? "border-orange-500 text-orange-600" : ""}
-          >
-            {machine.type === "local-docker"
-              ? `Local :${(machine.metadata as { port?: number })?.port ?? "?"}`
-              : "Daytona"}
+          <Badge variant="outline" className={typeClass}>
+            {typeLabel}
           </Badge>
         </div>
       </div>
@@ -236,6 +245,14 @@ function MachineDetailPage() {
                 <span className="text-muted-foreground">Snapshot</span>
                 <p className="font-medium font-mono text-xs">
                   {(machine.metadata as { snapshotName?: string }).snapshotName}
+                </p>
+              </div>
+            )}
+            {isLocal && (host || port) && (
+              <div>
+                <span className="text-muted-foreground">Host</span>
+                <p className="font-medium font-mono text-xs">
+                  {host ?? "unknown"}:{port ?? "?"}
                 </p>
               </div>
             )}

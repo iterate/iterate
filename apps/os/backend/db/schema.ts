@@ -12,7 +12,7 @@ export const MachineState = ["started", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona", "local-docker", "local-vanilla"] as const;
+export const MachineType = ["daytona", "local-docker", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 export const withTimestamps = {
@@ -257,9 +257,15 @@ export const projectConnection = pgTable(
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     providerData: t.jsonb().$type<Record<string, unknown>>().notNull().default({}),
     scopes: t.text(),
+    // Webhook target: forward incoming webhooks to this machine's daemon
+    webhookTargetMachineId: t.text().references(() => machine.id, { onDelete: "set null" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId)],
+  (t) => [
+    uniqueIndex().on(t.provider, t.externalId),
+    index().on(t.projectId),
+    index("idx_project_connection_webhook_target_machine").on(t.webhookTargetMachineId),
+  ],
 );
 
 export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({
@@ -270,6 +276,10 @@ export const projectConnectionRelations = relations(projectConnection, ({ one })
   user: one(user, {
     fields: [projectConnection.userId],
     references: [user.id],
+  }),
+  webhookTargetMachine: one(machine, {
+    fields: [projectConnection.webhookTargetMachineId],
+    references: [machine.id],
   }),
 }));
 // #endregion ========== Organization & Project ==========
@@ -338,9 +348,10 @@ export const event = pgTable(
   "event",
   (t) => ({
     id: iterateId("evt"),
-    type: t.text().notNull(), // e.g., "slack.message", "slack.reaction_added"
+    type: t.text().notNull(), // e.g., "slack:webhook-received"
     payload: t.jsonb().$type<SlackEvent | Record<string, unknown>>().notNull(),
     projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
+    externalId: t.text(), // Provider event ID for deduplication (e.g., Slack event_id)
     ...withTimestamps,
   }),
   (t) => [index().on(t.projectId), index().on(t.type)],

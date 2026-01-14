@@ -31,13 +31,13 @@ export async function createMachineProvider(
         findAvailablePort: options.findAvailablePort,
       });
     }
-    case "local-vanilla": {
-      if (!import.meta.env.DEV) {
-        throw new Error("local-vanilla provider only available in development");
-      }
-      const { createLocalVanillaProvider } = await import("./local-docker.ts");
-      return createLocalVanillaProvider();
-    }
+
+    case "local":
+      // Local machines point to already-running services (e.g., local daemon)
+      // They don't need a provider for creation/destruction
+      throw new Error(
+        "Local machines do not require a provider - they reference existing services",
+      );
     default: {
       const _exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${_exhaustiveCheck}`);

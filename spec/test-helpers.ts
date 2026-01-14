@@ -1,6 +1,9 @@
-// eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
-import { type Page, test as base } from "@playwright/test";
+import { createHmac } from "node:crypto";
+// eslint-disable-next-line no-restricted-imports -- This file creates the extended test export
+import { type Page, test as base, expect } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
+
+export { expect };
 
 const TEST_OTP = "424242";
 
@@ -65,6 +68,12 @@ export function getOrganizationSlug(pathname: string) {
   return orgIndex >= 0 ? parts[orgIndex + 1] : "";
 }
 
+export function getProjectSlug(pathname: string) {
+  const parts = pathname.split("/").filter(Boolean);
+  const projectIndex = parts.indexOf("projects");
+  return projectIndex >= 0 ? parts[projectIndex + 1] : "";
+}
+
 export function sidebarButton(page: Page, text: string | RegExp) {
   return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
 }
@@ -77,3 +86,18 @@ export const toast = {
   error: (page: Page, text?: string | RegExp) => toastLocator(page, "error", text),
   success: (page: Page, text?: string | RegExp) => toastLocator(page, "success", text),
 };
+
+export function signSlackRequest(
+  body: string,
+  signingSecret: string | undefined = process.env.SLACK_SIGNING_SECRET,
+) {
+  if (!signingSecret) {
+    throw new Error("SLACK_SIGNING_SECRET is required for Slack webhook tests");
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signatureBase = `v0:${timestamp}:${body}`;
+  const signature = `v0=${createHmac("sha256", signingSecret).update(signatureBase).digest("hex")}`;
+
+  return { signature, timestamp };
+}

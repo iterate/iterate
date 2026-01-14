@@ -130,8 +130,17 @@ export function killTmuxSession(name: string): boolean {
   return success;
 }
 
-export function sendKeys(sessionName: string, keys: string, enter = false): boolean {
-  const args = ["send-keys", "-t", sessionName, keys];
+export function sendKeys(
+  sessionName: string,
+  keys: string,
+  enter = false,
+  literal = false,
+): boolean {
+  const args = ["send-keys", "-t", sessionName];
+  if (literal) {
+    args.push("-l");
+  }
+  args.push(keys);
   if (enter) {
     args.push("Enter");
   }
