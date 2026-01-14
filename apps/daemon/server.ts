@@ -58,7 +58,7 @@ async function reportStatusToPlatform() {
       }
 
       console.error(
-        `[bootstrap] Error reporting status (attempt ${attempt + 1}/${maxRetries}):`,
+        `[bootstrap] Error reporting status to ${baseUrl} (attempt ${attempt + 1}/${maxRetries}):`,
         err,
       );
     }
