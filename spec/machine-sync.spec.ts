@@ -11,8 +11,10 @@ test.describe("machine list sync", () => {
     const machineName = `E2E Machine ${Date.now()}`;
     await page.getByRole("button", { name: "Create Machine" }).click();
     await page.getByPlaceholder("Machine name").fill(machineName);
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByRole("button", { name: "Create", exact: true }).click();
 
-    await page.getByText(machineName).waitFor();
+    await page
+      .locator(`[data-component=MachineTable] [data-machine-name=${JSON.stringify(machineName)}]`)
+      .waitFor();
   });
 });

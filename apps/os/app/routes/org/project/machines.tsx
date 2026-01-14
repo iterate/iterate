@@ -139,7 +139,7 @@ function ProjectMachinesPage() {
   const createSheet = (
     <Sheet open={createSheetOpen} onOpenChange={setCreateSheetOpen}>
       <SheetContent>
-        <form onSubmit={handleCreateMachine} className="flex flex-col h-full">
+        <form onSubmit={handleCreateMachine} className="flex flex-col max-h-[85%]">
           <SheetHeader>
             <SheetTitle>Create Machine</SheetTitle>
             <SheetDescription>Create a new machine in this project.</SheetDescription>
@@ -201,7 +201,7 @@ function ProjectMachinesPage() {
 
   if (machines.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 items-center justify-center pb-8">
         {createSheet}
         <EmptyState
           icon={<Server className="h-12 w-12" />}

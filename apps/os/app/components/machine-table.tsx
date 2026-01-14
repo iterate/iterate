@@ -325,11 +325,13 @@ export function MachineTable({
   };
 
   return (
-    <>
+    <div data-component="MachineTable">
       <div className="space-y-3">
         {machines.map((machine) => (
           <div
             key={machine.id}
+            data-machine-id={machine.id}
+            data-machine-name={machine.name}
             className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card"
           >
             <div className="min-w-0 flex-1 space-y-1">
@@ -395,6 +397,6 @@ export function MachineTable({
         onConfirm={() => deleteConfirmMachine && onDelete(deleteConfirmMachine.id)}
         destructive
       />
-    </>
+    </div>
   );
 }

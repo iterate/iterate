@@ -3,8 +3,8 @@ import {
   test,
   createOrganization,
   createProject,
-  sidebarButton,
   toast,
+  sidebarClick,
 } from "./test-helpers.ts";
 
 test.describe("naming defaults", () => {
@@ -71,7 +71,7 @@ test.describe("naming defaults", () => {
     await login(page, testEmail);
     await createOrganization(page);
     await createProject(page);
-    await sidebarButton(page, "Machines").click();
+    await sidebarClick(page, "Machines");
 
     await page.getByRole("button", { name: "Create Machine" }).click();
 

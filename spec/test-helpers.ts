@@ -49,10 +49,13 @@ export async function createOrganization(page: Page, orgName = `E2E Org ${Date.n
 }
 
 export async function createProject(page: Page, projectName = `E2E Project ${Date.now()}`) {
-  await sidebarButton(page, /^(Create|New) project$/).click();
+  await page
+    .locator("main a", { hasText: /^(Create|New) project$/ })
+    .first()
+    .click();
   await page.getByLabel("Project name").fill(projectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  await page.locator(`[data-project]`).waitFor();
+  await page.getByText(`Welcome to your project`).waitFor();
 }
 
 export function getProjectBasePath(page: Page) {
@@ -87,7 +90,7 @@ export async function sidebarClick(page: Page, text: string | RegExp) {
   await page.keyboard.press("Escape"); // close the sidebar if it's closeable
 }
 
-export function sidebarButton(page: Page, text: string | RegExp) {
+function sidebarButton(page: Page, text: string | RegExp) {
   return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
 }
 
