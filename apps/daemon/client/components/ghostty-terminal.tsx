@@ -19,6 +19,11 @@ interface TerminalLike {
   attachCustomWheelEventHandler: (handler: (event: WheelEvent) => boolean) => void;
 }
 
+interface FitAddonLike {
+  fit: () => void;
+  observeResize: () => void;
+}
+
 export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminalProps>(
   function GhosttyTerminal({ wsBase, tmuxSessionName }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -27,6 +32,7 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
     >("connecting");
     const termRef = useRef<TerminalLike | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    const fitAddonRef = useRef<FitAddonLike | null>(null);
 
     useImperativeHandle(ref, () => ({
       sendText: (text: string) => {
@@ -42,6 +48,7 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
     useEffect(() => {
       if (!containerRef.current) return;
 
+      const container = containerRef.current;
       let cancelled = false;
       let term: TerminalLike | undefined;
       let ws: WebSocket | undefined;
@@ -68,11 +75,21 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
         });
         term = terminal;
 
-        const fit = new FitAddon();
-        terminal.loadAddon(fit);
+        const fitAddon = new FitAddon();
+        fitAddonRef.current = fitAddon;
+        terminal.loadAddon(fitAddon);
         terminal.open(containerRef.current);
-        fit.fit();
-        fit.observeResize();
+
+        // Use requestAnimationFrame to ensure layout is settled before fitting
+        // This is critical for flex-based containers where dimensions may not be
+        // computed immediately
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          fitAddon.fit();
+        });
+
+        // observeResize uses ResizeObserver to auto-fit when container resizes
+        fitAddon.observeResize();
 
         // For tmux sessions: let tmux handle scrolling (tmux mouse mode will be enabled)
         // For plain shells: use local scrollback buffer via custom wheel handler
@@ -112,6 +129,11 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
           ws.onopen = () => {
             if (cancelled) return;
             setConnectionStatus("connected");
+            // Re-fit after connection in case layout changed during connection
+            requestAnimationFrame(() => {
+              if (cancelled) return;
+              fitAddon.fit();
+            });
             terminal.focus();
           };
 
@@ -125,9 +147,14 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
             setConnectionStatus("disconnected");
           };
 
-          ws.onclose = () => {
+          ws.onclose = (event) => {
             if (cancelled) return;
             setConnectionStatus("disconnected");
+
+            const NO_RECONNECT_CODE = 4000;
+            if (event.code === NO_RECONNECT_CODE) {
+              return;
+            }
 
             reconnectTimeout = setTimeout(() => {
               if (cancelled) return;
@@ -169,6 +196,10 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
         if (termRef.current && typeof termRef.current.dispose === "function") {
           termRef.current.dispose();
         }
+        // Clear any leftover DOM content to prevent showing old terminal output
+        if (container) {
+          container.innerHTML = "";
+        }
       };
     }, [wsBase, tmuxSessionName]);
 
@@ -185,20 +216,35 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
       };
     }, []);
 
+    // Window resize handler as fallback for browsers that don't trigger
+    // ResizeObserver on window resize
+    useEffect(() => {
+      const handleWindowResize = () => {
+        fitAddonRef.current?.fit();
+      };
+
+      window.addEventListener("resize", handleWindowResize);
+      return () => {
+        window.removeEventListener("resize", handleWindowResize);
+      };
+    }, []);
+
     const handleContainerClick = () => {
       termRef.current?.focus();
     };
 
     return (
-      <div className="flex flex-col h-full bg-[#1e1e1e]">
-        <div
-          ref={containerRef}
-          data-testid="terminal-container"
-          data-connection-status={connectionStatus}
-          data-tmux-session={tmuxSessionName}
-          className="relative flex-1 p-4 overflow-hidden"
-          onClick={handleContainerClick}
-        />
+      <div className="absolute inset-0 bg-[#1e1e1e]">
+        <div className="mx-auto h-full max-w-5xl">
+          <div
+            ref={containerRef}
+            data-testid="terminal-container"
+            data-connection-status={connectionStatus}
+            data-tmux-session={tmuxSessionName}
+            className="h-full w-full p-4"
+            onClick={handleContainerClick}
+          />
+        </div>
       </div>
     );
   },

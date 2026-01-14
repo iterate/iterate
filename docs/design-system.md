@@ -2,6 +2,90 @@
 
 We use shadcn/ui components with vanilla shadcn style. Install additional components using `npx shadcn@latest add <component>`.
 
+## App Consistency
+
+Layout patterns, component usage, and structural patterns should stay in sync between `apps/os` and `apps/daemon`. When making structural changes to one app (layouts, shared components, navigation patterns), ask the user if they want to update the other app to match.
+
+## Mobile-First Development
+
+**All UI must work on mobile first.** Design for 375px width, then expand to desktop.
+
+### Page Titles
+
+Don't add page titles (h1) - the breadcrumbs in the header provide context. Use `HeaderActions` to place action buttons in the header.
+
+```tsx
+import { HeaderActions } from "@/components/header-actions.tsx";
+
+<HeaderActions>
+  <Button size="sm">
+    <Plus className="h-4 w-4" />
+    <span className="sr-only">New Item</span>
+  </Button>
+</HeaderActions>;
+```
+
+### Responsive Padding
+
+Use `p-4 md:p-8` for page containers, never fixed `p-8`.
+
+### Content Width
+
+Main content is constrained to phone-width (`max-w-md` / 448px) in layouts. The sidebar is separate.
+
+### Data Lists
+
+Use card layout for data lists (not tables). Cards work well on all screen sizes:
+
+```tsx
+<div className="space-y-3">
+  {items.map((item) => (
+    <div className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card">
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center gap-2">
+          <Circle className="h-2 w-2 fill-green-500 text-green-500" />
+          <span className="font-medium truncate">{item.name}</span>
+        </div>
+        <div className="text-sm text-muted-foreground">
+          {item.type} · {item.date}
+        </div>
+      </div>
+      <Button variant="ghost" size="icon" className="shrink-0">
+        ...
+      </Button>
+    </div>
+  ))}
+</div>
+```
+
+Key patterns:
+
+- `space-y-3` for card spacing
+- `flex items-start justify-between gap-4 p-4` for card layout
+- `min-w-0 flex-1` on content to enable truncation
+- Status dots with `Circle` icon + fill color
+- Text metadata instead of badges (cleaner look)
+
+### Sheet over Dialog
+
+Prefer `Sheet` (slides in from side) over `Dialog` (modal popup) for forms and actions. Sheets are more mobile-friendly and feel more native. See `apps/os/app/routes/org/project/machines.tsx` for example.
+
+### Flex Layouts
+
+Use `flex flex-col gap-4 sm:flex-row sm:items-center` for layouts that should stack on mobile.
+
+### Standalone Pages (no sidebar)
+
+Use `CenteredLayout` for pages without the sidebar (login, new-organization, user settings):
+
+```tsx
+import { CenteredLayout } from "@/components/centered-layout.tsx";
+
+<CenteredLayout>
+  <div className="w-full max-w-md space-y-6">{/* content */}</div>
+</CenteredLayout>;
+```
+
 ## Core Principles
 
 - Use theme colors from Tailwind config - no random colors or gradients

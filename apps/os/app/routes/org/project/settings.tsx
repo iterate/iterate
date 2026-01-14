@@ -81,8 +81,7 @@ function ProjectSettingsPage() {
   };
 
   return (
-    <div className="p-8 max-w-2xl space-y-8">
-      <h1 className="text-2xl font-bold">Project settings</h1>
+    <div className="p-4 md:p-8 space-y-8">
       <form onSubmit={handleSubmit}>
         <FieldGroup>
           <FieldSet>

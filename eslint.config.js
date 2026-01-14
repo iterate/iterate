@@ -164,7 +164,7 @@ export default defineConfig([
   },
   {
     name: "playwright-rules",
-    files: ["e2e/**/*"],
+    files: ["spec/**/*"],
     rules: {
       "react-hooks/rules-of-hooks": "off",
       "no-console": "off",
@@ -191,6 +191,10 @@ export default defineConfig([
         {
           selector: `CallExpression[callee.property.name='goto'][arguments.0] TemplateLiteral Identifier[name='baseURL']`,
           message: `Don't use baseURL in goto, it's added as a prefix automatically. e.g. instead of \`await page.goto(\`\${baseURL}/foo/bar}\`)\`, use \`await page.goto("/foo/bar")\``,
+        },
+        {
+          selector: `CallExpression[callee.property.name=waitForURL]`,
+          message: `Don't use waitForURL, use a locator with .waitFor() instead, this accounts for loading UI. If necessary, you can add "data-*" attributes to the product code so you have a concrete, reliable locator.`,
         },
       ],
     },
@@ -492,7 +496,7 @@ export default defineConfig([
   {
     name: "backend-no-console",
     files: ["apps/*/backend/**/*.ts"],
-    ignores: ["**/*test*/**", "**/*test*", "**/*e2e*"],
+    ignores: ["**/*test*/**", "**/*test*", "spec/**/*"],
     rules: {
       "no-console": "error",
     },

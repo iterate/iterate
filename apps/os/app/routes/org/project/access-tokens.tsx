@@ -117,9 +117,7 @@ function ProjectAccessTokensPage() {
   };
 
   return (
-    <div className="p-8 max-w-4xl space-y-6">
-      <h1 className="text-2xl font-bold">Access tokens</h1>
-
+    <div className="p-4 md:p-8 space-y-6">
       {newToken && (
         <Card className="border-amber-200 bg-amber-50">
           <CardHeader>

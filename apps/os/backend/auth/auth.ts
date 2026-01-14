@@ -24,9 +24,7 @@ function matchesEmailPattern(email: string, patterns: string[]) {
 }
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
-  const allowSignupFromEmails = parseEmailPatterns(
-    envParam.ALLOW_SIGNUP_FROM_EMAILS ?? "*@example.com",
-  );
+  const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,

@@ -15,7 +15,7 @@ The entire `deploy-os` job in the deploy workflow, which:
 - Deployed apps/os to Cloudflare Workers using Alchemy
 - Ran with 15 minute timeout
 - Enabled QEMU for multi-platform Docker builds
-- Output `worker_url` that was consumed by e2e tests
+- Output `worker_url` that was consumed by spec tests
 - Ran `pnpm run deploy` in `apps/os` directory
 
 ## Original Job Definition
@@ -59,7 +59,7 @@ The workflow output changed:
 - **Before**: `worker_url: "${{ jobs.deploy-os.outputs.worker_url }}"`
 - **After**: `worker_url: ""` (empty string)
 
-This breaks the e2e workflow which depends on the worker_url output.
+This breaks the spec workflow which depends on the worker_url output.
 
 ## Docker/QEMU Context
 

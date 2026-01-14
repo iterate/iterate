@@ -3,6 +3,7 @@ import { ChevronLeft } from "lucide-react";
 
 import { Separator } from "./ui/separator.tsx";
 import { SidebarTrigger } from "./ui/sidebar.tsx";
+import { HEADER_ACTIONS_ID } from "./header-actions-constants.ts";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -77,107 +78,115 @@ export function AppHeader({
   return (
     <header
       aria-label="Site header"
-      className="flex h-16 shrink-0 items-center gap-2 border-b px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12"
+      className="flex h-16 shrink-0 items-center border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12"
     >
-      <div className="flex items-center gap-2">
-        <SidebarTrigger className="-ml-1" aria-label="Toggle sidebar" />
-        <Separator orientation="vertical" className="mr-2 hidden h-4 md:block" />
+      <div className="flex w-full max-w-md items-center justify-between gap-2 px-4">
+        <div className="flex items-center gap-2">
+          <SidebarTrigger className="-ml-1" aria-label="Toggle sidebar" />
+          <Separator orientation="vertical" className="mr-2 hidden h-4 md:block" />
 
-        {/* Mobile navigation - back button and current location */}
-        <div className="flex items-center gap-2 md:hidden">
-          {(organizationSlug || projectSlug) && (
-            <Link
-              to={
-                projectSlug && organizationSlug
-                  ? "/orgs/$organizationSlug"
-                  : organizationSlug && !isOrgHome
+          {/* Mobile navigation - back button and current location */}
+          <div className="flex items-center gap-2 md:hidden">
+            {(organizationSlug || projectSlug) && (
+              <Link
+                to={
+                  projectSlug && organizationSlug
                     ? "/orgs/$organizationSlug"
-                    : "/"
-              }
-              params={
-                (projectSlug && organizationSlug) || (organizationSlug && !isOrgHome)
-                  ? { organizationSlug }
-                  : undefined
-              }
-              className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="Go back"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-            </Link>
-          )}
-          <span className="text-sm font-medium truncate max-w-[200px]">{mobileDisplayName}</span>
+                    : organizationSlug && !isOrgHome
+                      ? "/orgs/$organizationSlug"
+                      : "/"
+                }
+                params={
+                  (projectSlug && organizationSlug) || (organizationSlug && !isOrgHome)
+                    ? { organizationSlug }
+                    : undefined
+                }
+                className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Go back"
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            )}
+            <span className="text-sm font-medium truncate max-w-[200px]">{mobileDisplayName}</span>
+          </div>
+
+          {/* Desktop breadcrumbs */}
+          <Breadcrumb className="hidden md:flex">
+            <BreadcrumbList>
+              {/* Organization level - simple link, no dropdown */}
+              {organizationSlug && (
+                <BreadcrumbItem>
+                  {isOrgHome && !currentPageName ? (
+                    <BreadcrumbPage data-organization={organizationSlug}>
+                      {orgName || organizationSlug}
+                    </BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink asChild>
+                      <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
+                        {orgName || organizationSlug}
+                      </Link>
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+              )}
+
+              {/* Org-level page (settings, team, new-project) */}
+              {isOrgRoute && currentPageName && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>{currentPageName}</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              )}
+
+              {/* Project level with dropdown */}
+              {projectSlug && organizationSlug && (
+                <>
+                  <BreadcrumbSeparator />
+                  {projects.length > 0 ? (
+                    <ProjectBreadcrumbDropdown
+                      currentName={projectName || projectSlug}
+                      currentId={currentProjectId}
+                      currentSlug={projectSlug}
+                      organizationSlug={organizationSlug}
+                      items={projects}
+                      isCurrentPage={isProjectHome && !currentPageName}
+                    />
+                  ) : (
+                    <BreadcrumbItem data-project={projectSlug}>
+                      {isProjectHome && !currentPageName ? (
+                        <BreadcrumbPage>{projectName || projectSlug}</BreadcrumbPage>
+                      ) : (
+                        <BreadcrumbLink asChild>
+                          <Link
+                            to="/orgs/$organizationSlug/projects/$projectSlug"
+                            params={{ organizationSlug, projectSlug }}
+                          >
+                            {projectName || projectSlug}
+                          </Link>
+                        </BreadcrumbLink>
+                      )}
+                    </BreadcrumbItem>
+                  )}
+                </>
+              )}
+
+              {/* Project-level page (machines, agents, etc.) */}
+              {isProjectRoute && currentPageName && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>{currentPageName}</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
+              )}
+            </BreadcrumbList>
+          </Breadcrumb>
         </div>
 
-        {/* Desktop breadcrumbs */}
-        <Breadcrumb className="hidden md:flex">
-          <BreadcrumbList>
-            {/* Organization level - simple link, no dropdown */}
-            {organizationSlug && (
-              <BreadcrumbItem>
-                {isOrgHome && !currentPageName ? (
-                  <BreadcrumbPage>{orgName || organizationSlug}</BreadcrumbPage>
-                ) : (
-                  <BreadcrumbLink asChild>
-                    <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
-                      {orgName || organizationSlug}
-                    </Link>
-                  </BreadcrumbLink>
-                )}
-              </BreadcrumbItem>
-            )}
-
-            {/* Org-level page (settings, team, new-project) */}
-            {isOrgRoute && currentPageName && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{currentPageName}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-
-            {/* Project level with dropdown */}
-            {projectSlug && organizationSlug && (
-              <>
-                <BreadcrumbSeparator />
-                {projects.length > 0 ? (
-                  <ProjectBreadcrumbDropdown
-                    currentName={projectName || projectSlug}
-                    currentId={currentProjectId}
-                    organizationSlug={organizationSlug}
-                    items={projects}
-                    isCurrentPage={isProjectHome && !currentPageName}
-                  />
-                ) : (
-                  <BreadcrumbItem>
-                    {isProjectHome && !currentPageName ? (
-                      <BreadcrumbPage>{projectName || projectSlug}</BreadcrumbPage>
-                    ) : (
-                      <BreadcrumbLink asChild>
-                        <Link
-                          to="/orgs/$organizationSlug/projects/$projectSlug"
-                          params={{ organizationSlug, projectSlug }}
-                        >
-                          {projectName || projectSlug}
-                        </Link>
-                      </BreadcrumbLink>
-                    )}
-                  </BreadcrumbItem>
-                )}
-              </>
-            )}
-
-            {/* Project-level page (machines, agents, etc.) */}
-            {isProjectRoute && currentPageName && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{currentPageName}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-          </BreadcrumbList>
-        </Breadcrumb>
+        {/* Actions slot - pages can render buttons here via HeaderActions component */}
+        <div id={HEADER_ACTIONS_ID} className="flex items-center gap-2" />
       </div>
     </header>
   );

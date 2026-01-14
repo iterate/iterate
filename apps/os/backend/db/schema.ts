@@ -12,7 +12,7 @@ export const MachineState = ["started", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona", "local-docker"] as const;
+export const MachineType = ["daytona", "local-docker", "local-vanilla"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 export const withTimestamps = {
@@ -168,7 +168,7 @@ export const project = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.organizationId, t.slug)],
+  (t) => [uniqueIndex().on(t.organizationId, t.slug), uniqueIndex().on(t.organizationId, t.name)],
 );
 
 export const projectRelations = relations(project, ({ one, many }) => ({

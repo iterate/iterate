@@ -50,6 +50,13 @@
       "when": 1768273834757,
       "tag": "0006_polite_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1768400000000,
+      "tag": "0007_project_name_unique",
+      "breakpoints": true
     }
   ]
 }

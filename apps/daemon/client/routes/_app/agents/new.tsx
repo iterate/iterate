@@ -124,11 +124,7 @@ const agentTypeOptions: { value: AgentType; label: string }[] = [
 
 function NewAgentPage() {
   return (
-    <div className="h-full p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">New Agent</h1>
-        <p className="text-muted-foreground">Create a new coding agent session.</p>
-      </div>
+    <div className="h-full p-4 md:p-6">
       <Suspense
         fallback={
           <div className="flex items-center justify-center py-8">

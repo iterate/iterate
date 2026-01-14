@@ -38,6 +38,19 @@ const isPreview =
 
 const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
 
+/**
+ * Get the current git branch name for dev mode.
+ * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
+ */
+function getCurrentGitRef(): string | undefined {
+  if (!isDevelopment) return undefined;
+  try {
+    return execSync("git branch --show-current", { encoding: "utf-8", cwd: repoRoot }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureLocalDockerImage() {
   const result = spawnSync("docker", ["images", "-q", LOCAL_DOCKER_IMAGE_NAME], {
     encoding: "utf-8",
@@ -98,11 +111,17 @@ async function verifyDopplerEnvironment() {
   }
 }
 
-const Required = z.string().nonempty();
-const Optional = z.string().optional();
+const NonEmpty = z.string().nonempty();
+const Required = NonEmpty;
+const Optional = NonEmpty.optional();
+const BoolyString = z.enum(["true", "false"]).optional();
+/** needed by the deploy script, but not at runtime */
 const Env = z.object({
+  // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
+
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
+  DAYTONA_SNAPSHOT_PREFIX: Required,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -114,20 +133,20 @@ const Env = z.object({
   GITHUB_APP_SLUG: Required,
   GITHUB_APP_ID: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
-  SERVICE_AUTH_TOKEN: Required,
-  VITE_PUBLIC_URL: Required,
-  VITE_APP_STAGE: Required,
-  ENCRYPTION_SECRET: Required,
-  ITERATE_USER: Optional,
-  VITE_POSTHOG_PUBLIC_KEY: Optional,
-  VITE_POSTHOG_PROXY_URI: Optional,
-  POSTHOG_KEY: Optional,
-  ALLOW_SIGNUP_FROM_EMAILS: z.string().default("*@example.com"),
-  VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
-} satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
+  POSTHOG_KEY: Required,
+  // SERVICE_AUTH_TOKEN: Required,
+  VITE_PUBLIC_URL: Required,
+  VITE_APP_STAGE: Required,
+  ENCRYPTION_SECRET: Required,
+  // ITERATE_USER: Optional,
+  VITE_POSTHOG_PUBLIC_KEY: Optional,
+  VITE_POSTHOG_PROXY_URI: Optional,
+  SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
+} satisfies Record<string, z.ZodType<unknown, string | undefined>>);
 
 async function setupEnvironmentVariables() {
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
@@ -185,7 +204,6 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-
     await migrate(role.connectionUrl.unencrypted);
 
     return {
@@ -255,14 +273,17 @@ async function deployWorker() {
     },
   );
 
+  const devGitRef = getCurrentGitRef();
+
   const worker = await TanStackStart("os", {
     bindings: {
       ...(await setupDatabase()),
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
-      DAYTONA_SNAPSHOT_PREFIX: `${app.stage}--`,
       REALTIME_PUSHER,
+      // In dev, pass the current git branch for Daytona sandboxes
+      ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
