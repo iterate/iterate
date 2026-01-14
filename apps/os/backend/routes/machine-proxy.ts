@@ -16,6 +16,7 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
+import { DAEMON_DEFINITIONS } from "../daemons.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -109,9 +110,27 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   if (machineRecord.type === "local-docker") {
     // For local-docker, proxy to localhost with the container's mapped port
-    const hostPort = (machineRecord.metadata as { port?: number })?.port;
+    const meta = machineRecord.metadata as { ports?: Record<string, number>; port?: number };
+
+    let hostPort: number | undefined;
+
+    // New format: ports is a map of daemonId/terminal -> hostPort
+    if (meta?.ports) {
+      // Find which daemon this internal port corresponds to
+      const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === portNum);
+      if (daemon && meta.ports[daemon.id]) {
+        hostPort = meta.ports[daemon.id];
+      } else if (portNum === 22222 && meta.ports["terminal"]) {
+        // Terminal port
+        hostPort = meta.ports["terminal"];
+      }
+    } else if (meta?.port) {
+      // Legacy fallback: single port field
+      hostPort = portNum === 22222 ? meta.port + 1 : meta.port;
+    }
+
     if (!hostPort) {
-      return c.json({ error: "Local docker machine has no port mapping" }, 500);
+      return c.json({ error: "Local docker machine has no port mapping for port " + portNum }, 500);
     }
     const targetUrl = `http://localhost:${hostPort}${path}`;
     const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
