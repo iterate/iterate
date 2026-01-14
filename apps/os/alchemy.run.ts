@@ -148,30 +148,40 @@ async function setupDevTunnel() {
 
   // Return function to start cloudflared (call after vite is ready)
   return async () => {
-    console.log("Waiting for vite to be ready...");
+    console.log("Waiting for vite to be ready on port 5173...");
     await waitForVite();
 
-    console.log(`Tunnel ready: https://${config.hostname}`);
+    console.log(`Starting cloudflared tunnel: https://${config.hostname}`);
 
     const cloudflared = spawn(
       "cloudflared",
       [
         "tunnel",
         "--loglevel",
-        "warn",
-        "--transport-loglevel",
-        "warn",
+        "info",
         "--no-autoupdate",
         "run",
         "--token",
         tunnel.token.unencrypted,
       ],
-      { stdio: "inherit" },
+      { stdio: ["ignore", "inherit", "inherit"] },
     );
 
     cloudflared.on("error", (err) => {
       console.error("Failed to start cloudflared:", err.message);
       console.error("Make sure cloudflared is installed: brew install cloudflared");
+    });
+
+    cloudflared.on("spawn", () => {
+      console.log(`Cloudflared started (pid ${cloudflared.pid})`);
+    });
+
+    cloudflared.on("exit", (code, signal) => {
+      if (code !== 0 && code !== null) {
+        console.error(`Cloudflared exited with code ${code}`);
+      } else if (signal) {
+        console.log(`Cloudflared killed by signal ${signal}`);
+      }
     });
 
     // Clean up cloudflared when the process exits

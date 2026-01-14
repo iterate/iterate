@@ -29,6 +29,7 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
+    open: false,
     port: 3000,
     proxy: {
       "/api": {
