@@ -42,30 +42,30 @@ function AgentsContent() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { data: agents } = useSuspenseQuery({
-    ...trpc.listAgents.queryOptions(),
+    ...trpc.listSessions.queryOptions(),
     refetchInterval: false,
     refetchOnWindowFocus: false,
   });
   const startAgentMutation = useMutation(
-    trpc.startAgent.mutationOptions({
+    trpc.startSession.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       },
     }),
   );
 
   const stopAgentMutation = useMutation(
-    trpc.stopAgent.mutationOptions({
+    trpc.stopSession.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       },
     }),
   );
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    trpc.deleteSession.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       },
     }),
   );
@@ -101,7 +101,7 @@ function AgentsContent() {
             <TableBody>
               {agents.map((agent) => (
                 <TableRow
-                  key={agent.id}
+                  key={agent.slug}
                   className="cursor-pointer"
                   onClick={() => navigate({ to: "/agents/$slug", params: { slug: agent.slug } })}
                 >

@@ -14,7 +14,7 @@ function AppLayout() {
   const agentSlug = "slug" in params ? (params.slug as string) : undefined;
 
   const trpc = useTRPC();
-  const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
+  const { data: agents = [] } = useQuery(trpc.listSessions.queryOptions());
 
   const currentAgent = agents.find((a) => a.slug === agentSlug);
 

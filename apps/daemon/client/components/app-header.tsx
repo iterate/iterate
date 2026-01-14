@@ -61,9 +61,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   };
 
   const resetAgent = useMutation({
-    mutationFn: () => trpcClient.resetAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => trpcClient.resetSession.mutate({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       toast.success("Agent reset");
     },
     onError: () => {
@@ -72,9 +72,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   });
 
   const stopAgent = useMutation({
-    mutationFn: () => trpcClient.stopAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => trpcClient.stopSession.mutate({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       queryClient.removeQueries({ queryKey: ["ensureAgentStarted", agent!.slug] });
       toast.success("Agent stopped");
     },
@@ -84,9 +84,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   });
 
   const deleteAgent = useMutation({
-    mutationFn: () => trpcClient.deleteAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => trpcClient.deleteSession.mutate({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
       toast.success("Agent deleted");
     },
     onError: () => {
@@ -279,10 +279,10 @@ function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdo
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-48">
           {agents.map((agentItem) => {
-            const isCurrent = agentItem.id === currentAgent.id;
+            const isCurrent = agentItem.slug === currentAgent.slug;
             return (
               <DropdownMenuItem
-                key={agentItem.id}
+                key={agentItem.slug}
                 className="gap-2"
                 aria-current={isCurrent ? "true" : undefined}
                 onClick={() => navigate({ to: "/agents/$slug", params: { slug: agentItem.slug } })}

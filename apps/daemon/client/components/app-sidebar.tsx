@@ -33,9 +33,9 @@ export function AppSidebar({ agents }: { agents: Agent[] }) {
   const queryClient = useQueryClient();
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    trpc.deleteSession.mutationOptions({
       onSuccess: (_data, variables) => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
         if (variables.slug === selectedSlug) {
           navigate({ to: "/agents" });
         }
