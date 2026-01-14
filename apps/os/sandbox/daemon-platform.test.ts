@@ -17,7 +17,7 @@ import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
 import { dockerApi, execInContainer, waitForFileLogPattern } from "./test-helpers.ts";
 
@@ -196,12 +196,29 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
     expect(result.repos).toHaveLength(1);
     expect(result.repos[0]).toMatchObject({ owner: "octocat", name: "Hello-World" });
 
-    // Poll filesystem until clone completes (wait for README to appear)
-    await vi.waitFor(async () => {
-      expect(await execInContainer(containerId, ["test", "-d", `${repoPath}/.git`])).toBeDefined();
-      const lsOutput = await execInContainer(containerId, ["ls", "-la", repoPath]);
-      expect(lsOutput).toContain("README");
-    });
+    // Poll filesystem until clone completes (check for .git directory)
+    const pollForCloneComplete = async () => {
+      const maxAttempts = 30;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          const execResult = await execInContainer(containerId, ["test", "-d", `${repoPath}/.git`]);
+          // If test command succeeds (no error), .git exists
+          if (execResult !== undefined) {
+            return;
+          }
+        } catch {
+          // .git doesn't exist yet, keep polling
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      throw new Error("Clone did not complete in time");
+    };
+
+    await pollForCloneComplete();
+
+    // Verify the repo actually exists on disk
+    const lsOutput = await execInContainer(containerId, ["ls", "-la", repoPath]);
+    expect(lsOutput).toContain("README");
 
     // Verify it's a git repo
     const gitOutput = await execInContainer(containerId, ["git", "-C", repoPath, "remote", "-v"]);

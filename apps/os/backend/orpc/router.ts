@@ -1,11 +1,8 @@
-import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
-import { z } from "zod/v4";
+import { implement } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
-import type { CloudflareEnv } from "../../env.ts";
-import type { Variables } from "../worker.ts";
+import { workerContract } from "../../../daemon/server/orpc/contract.ts";
+import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseMachineIdFromApiKey, verifyMachineApiKey } from "../trpc/routers/machine.ts";
@@ -13,6 +10,15 @@ import { getGitHubInstallationToken, getRepositoryById } from "../integrations/g
 import { createDaytonaProvider } from "../providers/daytona.ts";
 import { createLocalDockerProvider } from "../providers/local-docker.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
+import type { CloudflareEnv } from "../../env.ts";
+
+export type ORPCContext = {
+  db: DB;
+  env: CloudflareEnv;
+  apiKey: string;
+  executionCtx: ExecutionContext;
+};
 
 function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<TRPCRouter>({
@@ -24,108 +30,86 @@ function createDaemonTrpcClient(baseUrl: string) {
   });
 }
 
-export const machineStatusApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+const os = implement(workerContract).$context<ORPCContext>();
 
-/**
- * POST /api/machines/status
- *
- * Called by the daemon when it boots to report that it's ready.
- * The daemon provides its API key in the Authorization header.
- *
- * Flow:
- * 1. Verify API key and extract machine ID
- * 2. Update machine metadata to mark daemon as ready
- * 3. Call back to daemon with env vars and repos to clone
- */
-machineStatusApp.post(
-  "/status",
-  zValidator(
-    "json",
-    z.object({
-      status: z.enum(["ready", "error"]).default("ready"),
-      message: z.string().optional(),
-    }),
-  ),
-  async (c) => {
-    // Extract API key from Authorization header
-    const authHeader = c.req.header("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return c.json({ error: "Missing or invalid Authorization header" }, 401);
-    }
+export const reportStatus = os.machines.reportStatus.handler(async ({ input, context }) => {
+  const { db, env, apiKey, executionCtx } = context;
 
-    const apiKey = authHeader.slice(7); // Remove "Bearer " prefix
-    const machineId = parseMachineIdFromApiKey(apiKey);
+  const machineId = parseMachineIdFromApiKey(apiKey);
+  if (!machineId) {
+    logger.warn("Invalid machine API key format", { apiKey: apiKey.slice(0, 20) + "..." });
+    throw new Error("Invalid API key format");
+  }
 
-    if (!machineId) {
-      logger.warn("Invalid machine API key format", { apiKey: apiKey.slice(0, 20) + "..." });
-      return c.json({ error: "Invalid API key format" }, 401);
-    }
-
-    // Look up machine and verify API key
-    const machine = await c.var.db.query.machine.findFirst({
-      where: eq(schema.machine.id, machineId),
-      with: {
-        project: {
-          with: {
-            organization: true,
-          },
+  // Look up machine and verify API key
+  const machine = await db.query.machine.findFirst({
+    where: eq(schema.machine.id, machineId),
+    with: {
+      project: {
+        with: {
+          organization: true,
         },
       },
-    });
+    },
+  });
 
-    if (!machine) {
-      logger.warn("Machine not found for status report", { machineId });
-      return c.json({ error: "Machine not found" }, 404);
-    }
+  if (!machine) {
+    logger.warn("Machine not found for status report", { machineId });
+    throw new Error("Machine not found");
+  }
 
-    if (!machine.apiKeyHash) {
-      logger.error("Machine has no API key hash", { machineId });
-      return c.json({ error: "Machine not configured for authentication" }, 500);
-    }
+  if (!machine.apiKeyHash) {
+    logger.error("Machine has no API key hash", { machineId });
+    throw new Error("Machine not configured for authentication");
+  }
 
-    const isValid = await verifyMachineApiKey(apiKey, machine.apiKeyHash);
-    if (!isValid) {
-      logger.warn("Invalid API key for machine", { machineId });
-      return c.json({ error: "Invalid API key" }, 401);
-    }
+  const isValid = await verifyMachineApiKey(apiKey, machine.apiKeyHash);
+  if (!isValid) {
+    logger.warn("Invalid API key for machine", { machineId });
+    throw new Error("Invalid API key");
+  }
 
-    const { status, message } = c.req.valid("json");
+  const { status, message } = input;
 
-    // Update machine metadata to mark daemon as ready
-    const updatedMetadata = {
-      ...((machine.metadata as Record<string, unknown>) ?? {}),
-      daemonStatus: status,
-      daemonStatusMessage: message,
-      daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
-    };
+  // Update machine metadata to mark daemon as ready
+  const updatedMetadata = {
+    ...((machine.metadata as Record<string, unknown>) ?? {}),
+    daemonStatus: status,
+    daemonStatusMessage: message,
+    daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
+  };
 
-    await c.var.db
-      .update(schema.machine)
-      .set({ metadata: updatedMetadata })
-      .where(eq(schema.machine.id, machineId));
+  await db
+    .update(schema.machine)
+    .set({ metadata: updatedMetadata })
+    .where(eq(schema.machine.id, machineId));
 
-    logger.info("Machine daemon status updated", { machineId, status });
+  logger.info("Machine daemon status updated", { machineId, status });
 
-    // Broadcast invalidation to update UI in real-time
-    c.executionCtx.waitUntil(
-      broadcastInvalidation(c.env).catch((err) => {
-        logger.error("Failed to broadcast invalidation", err);
+  // Broadcast invalidation to update UI in real-time
+  executionCtx.waitUntil(
+    broadcastInvalidation(env).catch((err) => {
+      logger.error("Failed to broadcast invalidation", err);
+    }),
+  );
+
+  // If daemon is ready, trigger bootstrap callbacks
+  if (status === "ready") {
+    executionCtx.waitUntil(
+      triggerBootstrapCallbacks(env, db, machine).catch((err) => {
+        logger.error("Failed to trigger bootstrap callbacks", err);
       }),
     );
+  }
 
-    // If daemon is ready, trigger bootstrap callbacks
-    if (status === "ready") {
-      // Use waitUntil to run callbacks in the background
-      c.executionCtx.waitUntil(
-        triggerBootstrapCallbacks(c.env, c.var.db, machine).catch((err) => {
-          logger.error("Failed to trigger bootstrap callbacks", err);
-        }),
-      );
-    }
+  return { success: true };
+});
 
-    return c.json({ success: true });
+export const workerRouter = os.router({
+  machines: {
+    reportStatus,
   },
-);
+});
 
 type MachineWithProject = typeof schema.machine.$inferSelect & {
   project: typeof schema.project.$inferSelect & {
@@ -145,11 +129,7 @@ type RepoInfo = {
  * Trigger callbacks to the daemon to inject env vars and clone repos.
  * This runs in the background via waitUntil.
  */
-async function triggerBootstrapCallbacks(
-  env: CloudflareEnv,
-  db: import("../db/client.ts").DB,
-  machine: MachineWithProject,
-) {
+async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: MachineWithProject) {
   const { project } = machine;
 
   // Get the daemon URL using the appropriate provider
