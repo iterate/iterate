@@ -27,18 +27,23 @@ const getSettings = () => {
   return result;
 };
 
+const oneArgMethods = ["fill", "type", "press"] as const;
+type OneArgMethod = (typeof oneArgMethods)[number];
+
 const overrideableMethods = [
   "click",
   "waitFor",
-  "fill",
   "clear",
   "dblclick",
-  "press",
   "blur",
   "focus",
-  "type",
+  ...oneArgMethods,
 ] satisfies (keyof Locator)[];
 type OverrideableMethod = (typeof overrideableMethods)[number];
+
+type Options<M extends OverrideableMethod> = (M extends OneArgMethod
+  ? Parameters<Locator[M]>[1]
+  : Parameters<Locator[M]>[0]) & { skipSpinnerCheck?: boolean };
 
 export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
@@ -54,7 +59,9 @@ function setup(page: Page) {
     locatorPrototype[`${method}_original`] = locatorPrototype[method];
     Object.defineProperty(locatorPrototype, method, {
       value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
-        const _options = args.at(-1) as any;
+        const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
+        const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
+        const argsWithoutOptions = optionIndex >= args.length ? args.slice(0, optionIndex) : args;
         const settings = getSettings();
         const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
@@ -109,7 +116,7 @@ function setup(page: Page) {
 
         const race = await Promise.race([
           callOriginal([
-            ...args.slice(0, -1),
+            ...argsWithoutOptions,
             { ..._options, timeout: settings.spinnerTimeout - 1000, trial: true },
           ])
             .then((result) => ({ outcome: "success" as const, result }))
