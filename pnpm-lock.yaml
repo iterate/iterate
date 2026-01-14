@@ -577,6 +577,9 @@ importers:
       vite:
         specifier: 7.1.12
         version: 7.1.12(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+      vite-tsconfig-paths:
+        specifier: ^6.0.3
+        version: 6.0.3(typescript@5.9.3)(vite@7.1.12(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
 
   apps/os:
     dependencies:
@@ -863,6 +866,9 @@ importers:
       vite-plugin-cloudflare-tunnel:
         specifier: ^1.0.12
         version: 1.0.12(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
+      vite-tsconfig-paths:
+        specifier: ^6.0.4
+        version: 6.0.4(typescript@5.9.3)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
       vitest:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@24.10.1)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
@@ -10058,6 +10064,14 @@ packages:
 
   vite-tsconfig-paths@6.0.3:
     resolution: {integrity: sha512-7bL7FPX/DSviaZGYUKowWF1AiDVWjMjxNbE8lyaVGDezkedWqfGhlnQ4BZXre0ZN5P4kAgIJfAlgFDVyjrCIyg==}
+    peerDependencies:
+      vite: '*'
+    peerDependenciesMeta:
+      vite:
+        optional: true
+
+  vite-tsconfig-paths@6.0.4:
+    resolution: {integrity: sha512-iIsEJ+ek5KqRTK17pmxtgIxXtqr3qDdE6OxrP9mVeGhVDNXRJTKN/l9oMbujTQNzMLe6XZ8qmpztfbkPu2TiFQ==}
     peerDependencies:
       vite: '*'
     peerDependenciesMeta:
@@ -21406,6 +21420,17 @@ snapshots:
       vite: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
       zod: 4.1.13
 
+  vite-tsconfig-paths@6.0.3(typescript@5.9.3)(vite@7.1.12(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)):
+    dependencies:
+      debug: 4.4.3
+      globrex: 0.1.2
+      tsconfck: 3.1.6(typescript@5.9.3)
+    optionalDependencies:
+      vite: 7.1.12(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
   vite-tsconfig-paths@6.0.3(typescript@5.9.3)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)):
     dependencies:
       debug: 4.4.3
@@ -21413,6 +21438,17 @@ snapshots:
       tsconfck: 3.1.6(typescript@5.9.3)
     optionalDependencies:
       vite: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
+  vite-tsconfig-paths@6.0.4(typescript@5.9.3)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)):
+    dependencies:
+      debug: 4.4.3
+      globrex: 0.1.2
+      tsconfck: 3.1.6(typescript@5.9.3)
+    optionalDependencies:
+      vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
     transitivePeerDependencies:
       - supports-color
       - typescript

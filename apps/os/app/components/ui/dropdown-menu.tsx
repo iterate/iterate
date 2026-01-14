@@ -1,7 +1,7 @@
 import * as React from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { Check, ChevronRight, Circle } from "lucide-react";
-import { cn } from "../../lib/cn.ts";
+import { cn } from "@/lib/utils.ts";
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;

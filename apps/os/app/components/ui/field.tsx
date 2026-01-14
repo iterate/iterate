@@ -1,6 +1,6 @@
 import { useMemo, type ComponentProps, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "../../lib/cn.ts";
+import { cn } from "@/lib/utils.ts";
 import { Label } from "./label.tsx";
 import { Separator } from "./separator.tsx";
 

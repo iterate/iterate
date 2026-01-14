@@ -5,6 +5,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
 import { cloudflareTunnel } from "@iterate-com/shared/cloudflare-tunnel";
+import viteTsConfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   resolve: {
@@ -28,6 +29,9 @@ export default defineConfig({
         // Port 0 enables auto-assigned port (default behavior)
         port: 0,
       },
+    }),
+    viteTsConfigPaths({
+      projects: ["./tsconfig.json"],
     }),
     alchemy(),
     tailwindcss(),

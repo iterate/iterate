@@ -1,7 +1,7 @@
 // import { useState } from "react";
 // import { Menu, X } from "lucide-react";
 // import { useLocation } from "react-router";
-// import { cn } from "../utils/cn.ts";
+// import { cn } from "@/lib/utils.ts";
 // import { Link } from "./link.tsx";
 
 export default function MobileNav() {

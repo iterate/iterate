@@ -1,5 +1,5 @@
 import { Link as RouterLink, type LinkProps as RouterLinkProps } from "react-router";
-import { cn } from "../utils/cn.ts";
+import { cn } from "@/lib/utils.ts";
 
 interface LinkProps extends RouterLinkProps {
   external?: boolean;

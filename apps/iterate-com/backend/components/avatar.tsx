@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { cn } from "../utils/cn.ts";
+import { cn } from "@/lib/utils.ts";
 
 interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
   size?: "sm" | "md" | "lg";
