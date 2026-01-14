@@ -48,3 +48,5 @@ session-ses*.md
 
 # local lint-staged config
 lint-staged.local.cjs
+
+opencode.json

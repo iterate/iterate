@@ -137,12 +137,15 @@ importers:
       '@iterate-com/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@slack/web-api':
+        specifier: ^7.13.0
+        version: 7.13.0
       '@trpc/server':
         specifier: ^11.4.3
         version: 11.7.2(typescript@5.9.3)
       trpc-cli:
         specifier: ^0.12.2
-        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13)
+        version: 0.12.2(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13)
       zod:
         specifier: ^4.1.11
         version: 4.1.13
@@ -21106,11 +21109,10 @@ snapshots:
       valibot: 1.1.0(typescript@5.9.3)
       zod: 4.1.13
 
-  trpc-cli@0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13):
+  trpc-cli@0.12.2(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
-      '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@trpc/server': 11.7.2(typescript@5.9.3)
       effect: 3.19.14
       valibot: 1.1.0(typescript@5.9.3)

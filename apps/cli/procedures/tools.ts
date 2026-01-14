@@ -1,44 +1,36 @@
+import { WebClient } from "@slack/web-api";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
+
+function getSlackClient() {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
+  return new WebClient(token);
+}
 
 export const toolsRouter = t.router({
   sendSlackMessage: t.procedure
     .meta({ description: "Send a message to Slack" })
     .input(
       z.object({
-        channel: z.string().describe("Slack channel (e.g. #general)"),
+        channel: z.string().describe("Slack channel (e.g. #general or C1234567890)"),
         message: z.string().describe("Message text to send"),
         threadTs: z.string().optional().describe("Thread timestamp for replies"),
       }),
     )
-    .mutation(({ input }) => {
-      // TODO: implement real Slack integration
-      console.log(`[DUMMY] Would send to ${input.channel}: ${input.message}`);
-      return {
-        success: true,
+    .mutation(async ({ input }) => {
+      const client = getSlackClient();
+      const result = await client.chat.postMessage({
         channel: input.channel,
-        message: input.message,
-        ts: Date.now().toString(),
-      };
-    }),
+        text: input.message,
+        thread_ts: input.threadTs,
+      });
 
-  sendEmail: t.procedure
-    .meta({ description: "Send an email" })
-    .input(
-      z.object({
-        to: z.string().describe("Recipient email address"),
-        subject: z.string().describe("Email subject"),
-        body: z.string().describe("Email body"),
-      }),
-    )
-    .mutation(({ input }) => {
-      // TODO: implement real email sending
-      console.log(`[DUMMY] Would send email to ${input.to}: ${input.subject}`);
       return {
-        success: true,
-        to: input.to,
-        subject: input.subject,
-        messageId: `msg-${Date.now()}`,
+        success: result.ok,
+        channel: result.channel,
+        ts: result.ts,
+        message: input.message,
       };
     }),
 });
