@@ -10,7 +10,6 @@
 
 import { Route as rootRouteImport } from './routes/root.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
-import { Route as devRouteImport } from './routes/dev.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
@@ -39,11 +38,6 @@ import { Route as orgProjectMachineDetailRouteImport } from './routes/org/projec
 const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const devRoute = devRouteImport.update({
-  id: '/dev',
-  path: '/dev',
   getParentRoute: () => rootRouteImport,
 } as any)
 const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
@@ -167,7 +161,6 @@ const orgProjectMachineDetailRoute = orgProjectMachineDetailRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/dev': typeof devRoute
   '/login': typeof loginRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
@@ -194,7 +187,6 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId': typeof orgProjectMachineDetailRoute
 }
 export interface FileRoutesByTo {
-  '/dev': typeof devRoute
   '/login': typeof loginRoute
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
@@ -220,7 +212,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_auth': typeof authRequiredDotlayoutRouteWithChildren
-  '/dev': typeof devRoute
   '/login': typeof loginRoute
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
@@ -249,7 +240,6 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/dev'
     | '/login'
     | '/'
     | '/admin'
@@ -276,7 +266,6 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/dev'
     | '/login'
     | '/'
     | '/new-organization'
@@ -301,7 +290,6 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_auth'
-    | '/dev'
     | '/login'
     | '/_auth/'
     | '/_auth/admin'
@@ -330,7 +318,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
-  devRoute: typeof devRoute
   loginRoute: typeof loginRoute
 }
 
@@ -341,13 +328,6 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof loginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dev': {
-      id: '/dev'
-      path: '/dev'
-      fullPath: '/dev'
-      preLoaderRoute: typeof devRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -609,7 +589,6 @@ const authRequiredDotlayoutRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
-  devRoute: devRoute,
   loginRoute: loginRoute,
 }
 export const routeTree = rootRouteImport

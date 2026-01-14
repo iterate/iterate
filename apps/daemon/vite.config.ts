@@ -1,31 +1,17 @@
-import path from "node:path";
 import { defineConfig } from "vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import cloudflareTunnel from "vite-plugin-cloudflare-tunnel";
-import { getTunnelConfig } from "@iterate-com/shared/dev-utils";
-
-const appName = path.basename(process.cwd());
-const stage =
-  process.env.STAGE ?? (process.env.ITERATE_USER ? `dev-${process.env.ITERATE_USER}` : undefined);
-const tunnelConfig = getTunnelConfig(appName, stage);
+import { cloudflareTunnel } from "@iterate-com/shared/cloudflare-tunnel";
 
 export default defineConfig({
   // Use relative paths for assets so they work when proxied at any base path
   // The proxy injects <base href="..."> which makes relative URLs resolve correctly
   base: "./",
   plugins: [
-    cloudflareTunnel({
-      enabled: !!tunnelConfig,
-      hostname: tunnelConfig?.hostname ?? "",
-      tunnelName: tunnelConfig?.tunnelName ?? "",
-      apiToken: process.env.CLOUDFLARE_API_TOKEN,
-      accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-      cleanup: { autoCleanup: false },
-    }),
+    cloudflareTunnel(import.meta.dirname),
     devtools(),
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],

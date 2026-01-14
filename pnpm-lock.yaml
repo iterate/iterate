@@ -858,7 +858,11 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
-  packages/shared: {}
+  packages/shared:
+    dependencies:
+      vite-plugin-cloudflare-tunnel:
+        specifier: ^1.0.12
+        version: 1.0.12(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
 
 packages:
 

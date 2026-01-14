@@ -1,22 +1,16 @@
-import path from "node:path";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
-import cloudflareTunnel from "vite-plugin-cloudflare-tunnel";
-import { getTunnelConfig } from "@iterate-com/shared/dev-utils";
-
-const appName = path.basename(process.cwd());
-const stage =
-  process.env.STAGE ?? (process.env.ITERATE_USER ? `dev-${process.env.ITERATE_USER}` : undefined);
-const tunnelConfig = getTunnelConfig(appName, stage);
+import { cloudflareTunnel, getTunnelHostname } from "@iterate-com/shared/cloudflare-tunnel";
 
 export default defineConfig(({ command }) => {
   // Set VITE_PUBLIC_URL to Cloudflare Tunnel hostname in dev mode
-  if (tunnelConfig && command === "serve") {
-    process.env.VITE_PUBLIC_URL = `https://${tunnelConfig.hostname}`;
+  const tunnelHostname = getTunnelHostname(import.meta.dirname);
+  if (tunnelHostname && command === "serve") {
+    process.env.VITE_PUBLIC_URL = `https://${tunnelHostname}`;
   }
 
   return {
@@ -35,14 +29,7 @@ export default defineConfig(({ command }) => {
       strictPort: false,
     },
     plugins: [
-      cloudflareTunnel({
-        enabled: !!tunnelConfig,
-        hostname: tunnelConfig?.hostname ?? "",
-        tunnelName: tunnelConfig?.tunnelName ?? "",
-        apiToken: process.env.CLOUDFLARE_API_TOKEN,
-        accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-        cleanup: { autoCleanup: false },
-      }),
+      cloudflareTunnel(import.meta.dirname),
       devtools({
         eventBusConfig: {
           // Port 0 enables auto-assigned port (default behavior)
