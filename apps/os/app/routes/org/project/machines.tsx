@@ -58,7 +58,7 @@ function isDefaultMachineName(name: string) {
   return /^(daytona|local-docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
 }
 
-const searchSchema = z.object({
+const Search = z.object({
   create: z.boolean().optional(),
 });
 
@@ -66,7 +66,7 @@ export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
   component: ProjectMachinesPage,
-  validateSearch: searchSchema,
+  validateSearch: Search,
 });
 
 function ProjectMachinesPage() {
