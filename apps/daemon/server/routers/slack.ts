@@ -32,7 +32,7 @@ slackRouter.post("/webhook", async (c) => {
   try {
     const result = await ensureAgentRunning({
       slug: agentSlug,
-      harnessType: "pi",
+      harnessType: "claude-code",
       workingDirectory: process.cwd(),
       initialPrompt: formattedMessage,
     });

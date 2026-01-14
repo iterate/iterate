@@ -13,6 +13,9 @@ export const routes = rootRoute("root.tsx", [
     // New organization
     route("/new-organization", "new-organization.tsx"),
 
+    // Slack conflict resolution
+    route("/slack-conflict", "slack-conflict.tsx"),
+
     // User settings
     route("/user/settings", "user/settings.tsx"),
 
@@ -38,6 +41,7 @@ export const routes = rootRoute("root.tsx", [
         route("/env-vars", "org/project/env-vars.tsx"),
         route("/settings", "org/project/settings.tsx"),
         route("/agents", "org/project/agents.tsx"),
+        route("/events", "org/project/events.tsx"),
       ]),
     ]),
 

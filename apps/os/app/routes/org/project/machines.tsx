@@ -28,6 +28,21 @@ import { isNonProd } from "../../../../env-client.ts";
 
 type MachineType = "daytona" | "local-docker" | "local";
 
+/** Generate a readable date slug like "jan-14-15h30" */
+function dateSlug() {
+  const d = new Date();
+  const month = d.toLocaleString("en-US", { month: "short" }).toLowerCase();
+  const day = d.getDate();
+  const hour = d.getHours().toString().padStart(2, "0");
+  const min = d.getMinutes().toString().padStart(2, "0");
+  return `${month}-${day}-${hour}h${min}`;
+}
+
+/** Check if name matches auto-generated pattern */
+function isDefaultMachineName(name: string) {
+  return /^(daytona|local-docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
+}
+
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
@@ -40,8 +55,9 @@ function ProjectMachinesPage() {
   });
   const queryClient = useQueryClient();
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
-  const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
-  const [newMachineName, setNewMachineName] = useState(`${newMachineType}-${Date.now()}`);
+  const defaultType: MachineType = isNonProd ? "local-docker" : "daytona";
+  const [newMachineType, setNewMachineType] = useState<MachineType>(defaultType);
+  const [newMachineName, setNewMachineName] = useState(`${defaultType}-${dateSlug()}`);
   const [newLocalHost, setNewLocalHost] = useState("localhost");
   const [newLocalPort, setNewLocalPort] = useState("3001");
 
@@ -73,8 +89,8 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       setCreateSheetOpen(false);
-      setNewMachineType("daytona");
-      setNewMachineName(`daytona-${Date.now()}`);
+      setNewMachineType(defaultType);
+      setNewMachineName(`${defaultType}-${dateSlug()}`);
       setNewLocalHost("localhost");
       setNewLocalPort("3001");
       toast.success("Machine created!");
@@ -136,6 +152,23 @@ function ProjectMachinesPage() {
     },
   });
 
+  const restartMachine = useMutation({
+    mutationFn: async (machineId: string) => {
+      return trpcClient.machine.restart.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Machine restarting...");
+      // Don't refetch - the backend broadcasts invalidation which triggers realtime update
+    },
+    onError: (error) => {
+      toast.error("Failed to restart machine: " + error.message);
+    },
+  });
+
   const handleCreateMachine = (e: FormEvent) => {
     e.preventDefault();
     const trimmedName = newMachineName.trim();
@@ -192,7 +225,10 @@ function ProjectMachinesPage() {
                   onValueChange={(v) => {
                     const type = v as MachineType;
                     setNewMachineType(type);
-                    setNewMachineName(`${type}-${Date.now()}`);
+                    // Only auto-generate name if it looks like a default name
+                    if (isDefaultMachineName(newMachineName)) {
+                      setNewMachineName(`${type}-${dateSlug()}`);
+                    }
                   }}
                   disabled={createMachine.isPending}
                 >
@@ -200,8 +236,8 @@ function ProjectMachinesPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
                     <SelectItem value="local-docker">Local Docker</SelectItem>
+                    <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
                     <SelectItem value="local">Local (Host:Port)</SelectItem>
                   </SelectContent>
                 </Select>
@@ -285,6 +321,7 @@ function ProjectMachinesPage() {
         onArchive={(id) => archiveMachine.mutate(id)}
         onUnarchive={(id) => unarchiveMachine.mutate(id)}
         onDelete={(id) => deleteMachine.mutate(id)}
+        onRestart={(id) => restartMachine.mutate(id)}
       />
     </div>
   );

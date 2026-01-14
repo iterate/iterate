@@ -39,7 +39,7 @@ interface Machine {
     snapshotName?: string;
     containerId?: string;
     port?: number;
-    daemonStatus?: "ready" | "error";
+    daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
   } & Record<string, unknown>;
@@ -52,6 +52,7 @@ interface MachineTableProps {
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onRestart: (id: string) => void;
   isLoading?: boolean;
 }
 
@@ -83,6 +84,15 @@ function DaemonStatus({ machine }: { machine: Machine }) {
     );
   }
 
+  if (daemonStatus === "restarting") {
+    return (
+      <span className="flex items-center gap-1.5 text-orange-600 text-sm">
+        <RefreshCw className="h-3 w-3 animate-spin" />
+        Restarting...
+      </span>
+    );
+  }
+
   return (
     <span
       className="flex items-center gap-1.5 text-green-600 text-sm"
@@ -101,6 +111,7 @@ export function MachineTable({
   onArchive,
   onUnarchive,
   onDelete,
+  onRestart,
   isLoading,
 }: MachineTableProps) {
   const [deleteConfirmMachine, setDeleteConfirmMachine] = useState<Machine | null>(null);
@@ -265,21 +276,6 @@ export function MachineTable({
     }
   };
 
-  // === Actions ===
-
-  const restartMachine = async (machineId: string) => {
-    try {
-      await trpcClient.machine.restart.mutate({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
-      toast.success("Machine restarting...");
-    } catch (err) {
-      toast.error(`Failed to restart: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // === Dropdown menu (shared between layouts) ===
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
@@ -349,7 +345,7 @@ export function MachineTable({
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       {machine.state === "started" && (
-        <DropdownMenuItem onClick={() => restartMachine(machine.id)}>
+        <DropdownMenuItem onClick={() => onRestart(machine.id)}>
           <RefreshCw className="h-4 w-4 mr-2" />
           Restart
         </DropdownMenuItem>

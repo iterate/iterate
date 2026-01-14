@@ -299,12 +299,21 @@ slackApp.get(
         // Check if this Slack workspace is already connected to another project
         const existingWorkspaceConnection = await tx.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamData.id)),
-          with: { project: true },
+          with: { project: { with: { organization: true } } },
         });
 
         if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
+          const existingProject = existingWorkspaceConnection.project;
+          const existingOrg = existingProject?.organization;
           throw new Error(
-            `workspace_already_connected:${existingWorkspaceConnection.project?.name || "another project"}`,
+            `workspace_already_connected:${JSON.stringify({
+              teamId: teamData.id,
+              teamName: teamData.name,
+              existingProjectSlug: existingProject?.slug ?? "",
+              existingProjectName: existingProject?.name ?? "",
+              existingOrgSlug: existingOrg?.slug ?? "",
+              existingOrgName: existingOrg?.name ?? "",
+            })}`,
           );
         }
 
@@ -346,11 +355,26 @@ slackApp.get(
       });
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
-        const projectName = error.message.split(":")[1];
-        const redirectPath = callbackURL || "/";
-        return c.redirect(
-          `${redirectPath}?error=slack_workspace_already_connected&project=${encodeURIComponent(projectName)}`,
-        );
+        const conflictData = JSON.parse(
+          error.message.replace("workspace_already_connected:", ""),
+        ) as {
+          teamId: string;
+          teamName: string;
+          existingProjectSlug: string;
+          existingProjectName: string;
+          existingOrgSlug: string;
+          existingOrgName: string;
+        };
+        const params = new URLSearchParams({
+          teamId: conflictData.teamId,
+          teamName: conflictData.teamName,
+          existingProjectSlug: conflictData.existingProjectSlug,
+          existingProjectName: conflictData.existingProjectName,
+          existingOrgSlug: conflictData.existingOrgSlug,
+          existingOrgName: conflictData.existingOrgName,
+          newProjectId: projectId,
+        });
+        return c.redirect(`/slack-conflict?${params.toString()}`);
       }
       throw error;
     }
@@ -435,10 +459,21 @@ slackApp.post("/webhook", async (c) => {
           }
         }
 
-        // Find connection
+        // Single optimized query: get connection + target machine (or fallback to first started machine)
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
-          with: { webhookTargetMachine: true },
+          with: {
+            webhookTargetMachine: true,
+            project: {
+              with: {
+                machines: {
+                  where: (m, { eq }) => eq(m.state, "started"),
+                  orderBy: (m, { asc }) => asc(m.createdAt),
+                  limit: 1,
+                },
+              },
+            },
+          },
         });
         const projectId = connection?.projectId;
         if (!projectId) {
@@ -446,9 +481,15 @@ slackApp.post("/webhook", async (c) => {
           return;
         }
 
-        // Forward to machine if configured
-        if (connection.webhookTargetMachine?.state === "started") {
-          await forwardSlackWebhookToMachine(connection.webhookTargetMachine, payload);
+        // Use explicit webhook target, or fall back to first started machine in project
+        const targetMachine =
+          connection.webhookTargetMachine?.state === "started"
+            ? connection.webhookTargetMachine
+            : (connection.project?.machines[0] ?? null);
+
+        // Forward to machine if available
+        if (targetMachine) {
+          await forwardSlackWebhookToMachine(targetMachine, payload);
         }
 
         // Save event with type slack:webhook-received, detailed info in payload

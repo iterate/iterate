@@ -8,6 +8,7 @@ import { env, type CloudflareEnv } from "../../../env.ts";
 import { decrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
+import { logger } from "../../tag-logger.ts";
 
 // Generate a machine API key that includes the machine ID
 // Format: mak_<machineId>_<randomHex>
@@ -231,6 +232,9 @@ export const machineRouter = router({
       if (!envVars["OPENAI_API_KEY"]) {
         envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
       }
+      if (!envVars["ANTHROPIC_API_KEY"]) {
+        envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
+      }
 
       // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
       // This allows the daemon to receive fresh GitHub tokens when it reports ready
@@ -390,6 +394,24 @@ export const machineRouter = router({
         input.machineId,
         ctx.env,
       );
+
+      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
+      const updatedMetadata = {
+        ...((machine.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "restarting",
+        daemonReadyAt: null,
+      };
+
+      await ctx.db
+        .update(schema.machine)
+        .set({ metadata: updatedMetadata })
+        .where(eq(schema.machine.id, input.machineId));
+
+      // Broadcast invalidation immediately so UI updates to show "Restarting..."
+      const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
+      await broadcastInvalidation(ctx.env).catch((err) => {
+        logger.error("Failed to broadcast invalidation", err);
+      });
 
       await provider.restart(machine.externalId).catch((err) => {
         throw new TRPCError({

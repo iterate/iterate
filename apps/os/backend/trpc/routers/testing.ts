@@ -14,9 +14,21 @@ import {
   project,
   organizationUserMembership,
   projectConnection,
+  event,
 } from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
+
+/** Generate a DiceBear avatar URL using a hash of the email as seed */
+function generateDefaultAvatar(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash << 5) - hash + normalized.charCodeAt(i);
+    hash |= 0;
+  }
+  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
+}
 
 /**
  * Testing router - provides helpers for test setup
@@ -62,6 +74,7 @@ export const testingRouter = router({
           name: input.name,
           role: input.role,
           emailVerified: true,
+          image: generateDefaultAvatar(input.email),
         })
         .onConflictDoUpdate({
           target: user.email,
@@ -209,5 +222,33 @@ export const testingRouter = router({
       }
 
       return { success: true };
+    }),
+
+  // Insert a test event
+  insertEvent: projectProtectedProcedure
+    .input(
+      z.object({
+        type: z.string().min(1),
+        payload: z.record(z.string(), z.unknown()).default({}),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const [newEvent] = await ctx.db
+        .insert(event)
+        .values({
+          type: input.type,
+          payload: input.payload,
+          projectId: ctx.project.id,
+        })
+        .returning();
+
+      return newEvent;
     }),
 });

@@ -10,6 +10,10 @@ interface InputOTPProps {
   autoFocus?: boolean;
 }
 
+/**
+ * OTP input using a single hidden input for reliable automation/autofill support.
+ * Visual boxes are purely presentational - all typing goes to the hidden input.
+ */
 export function InputOTP({
   length = 6,
   value,
@@ -18,58 +22,63 @@ export function InputOTP({
   className,
   autoFocus,
 }: InputOTPProps) {
-  const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const [focused, setFocused] = React.useState(false);
 
-  const handleChange = (index: number, char: string) => {
-    if (!/^\d*$/.test(char)) return;
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, "").slice(0, length);
+    onChange(digits);
+  };
 
-    const newValue = value.split("");
-    newValue[index] = char;
-    const result = newValue.join("").slice(0, length);
-    onChange(result);
-
-    if (char && index < length - 1) {
-      inputRefs.current[index + 1]?.focus();
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && value.length > 0) {
+      e.preventDefault();
+      onChange(value.slice(0, -1));
     }
   };
 
-  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace" && !value[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
+  const focusInput = () => {
+    inputRef.current?.focus();
   };
 
-  const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, length);
-    onChange(pastedData);
-    const nextIndex = Math.min(pastedData.length, length - 1);
-    inputRefs.current[nextIndex]?.focus();
-  };
+  const activeIndex = Math.min(value.length, length - 1);
 
   return (
-    <div className={cn("flex gap-2 justify-center", className)}>
+    <div
+      className={cn("relative flex gap-2 justify-center", className)}
+      onClick={focusInput}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        value={value}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        disabled={disabled}
+        autoFocus={autoFocus}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        aria-label={`Enter ${length}-digit code`}
+        data-testid="otp-input"
+      />
+
       {Array.from({ length }).map((_, index) => (
-        <input
+        <div
           key={index}
-          ref={(el) => {
-            inputRefs.current[index] = el;
-          }}
-          type="text"
-          inputMode="numeric"
-          maxLength={1}
-          value={value[index] || ""}
-          onChange={(e) => handleChange(index, e.target.value)}
-          onKeyDown={(e) => handleKeyDown(index, e)}
-          onPaste={handlePaste}
-          disabled={disabled}
-          autoFocus={autoFocus && index === 0}
           className={cn(
-            "h-12 w-10 rounded-md border border-input bg-transparent text-center text-lg font-semibold shadow-sm transition-colors",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            "disabled:cursor-not-allowed disabled:opacity-50",
+            "h-12 w-10 rounded-md border bg-transparent text-center text-lg font-semibold shadow-sm transition-colors flex items-center justify-center",
+            focused && index === activeIndex
+              ? "ring-2 ring-ring border-transparent"
+              : "border-input",
+            disabled && "cursor-not-allowed opacity-50",
           )}
-        />
+          aria-hidden="true"
+        >
+          {value[index] || ""}
+        </div>
       ))}
     </div>
   );

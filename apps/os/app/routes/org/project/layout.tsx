@@ -9,6 +9,7 @@ import {
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
+  Activity,
   Bot,
   GitBranch,
   Home,
@@ -155,6 +156,11 @@ function ProjectLayout() {
       to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
       label: "Machines",
       icon: Server,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/events" as const,
+      label: "Events",
+      icon: Activity,
     },
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/repo" as const,

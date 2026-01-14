@@ -82,7 +82,8 @@ const setupIterateRepo = () => {
 
   // Use mounted local repo if available (local-docker dev mode)
   // Otherwise clone/pull from GitHub (Daytona mode)
-  if (existsSync(LOCAL_REPO_MOUNT)) {
+  const isLocalDocker = existsSync(LOCAL_REPO_MOUNT);
+  if (isLocalDocker) {
     copyFromLocalMount();
   } else {
     cloneOrPullFromGit();
@@ -90,7 +91,11 @@ const setupIterateRepo = () => {
 
   console.log("");
   console.log("Running pnpm install...");
-  execSync("pnpm install", {
+
+  // In local-docker mode, allow lockfile updates (dependencies may have changed)
+  // In Daytona/CI mode, use frozen lockfile to ensure reproducibility
+  const pnpmCmd = isLocalDocker ? "pnpm install --no-frozen-lockfile" : "pnpm install";
+  execSync(pnpmCmd, {
     cwd: ITERATE_REPO,
     stdio: "inherit",
     env: { ...process.env, CI: "true" },

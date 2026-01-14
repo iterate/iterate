@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import * as arctic from "arctic";
 import {
   router,
+  protectedProcedure,
   orgProtectedProcedure,
   projectProtectedProcedure,
   orgAdminMutation,
@@ -20,6 +21,32 @@ import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/sla
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
+  // Get minimal project info by ID (for conflict resolution, no org access required)
+  // Returns just enough info to display the project/org names and slugs
+  getProjectInfoById: protectedProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const proj = await ctx.db.query.project.findFirst({
+        where: eq(project.id, input.projectId),
+        with: { organization: true },
+      });
+
+      if (!proj) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+
+      return {
+        id: proj.id,
+        name: proj.name,
+        slug: proj.slug,
+        organizationName: proj.organization.name,
+        organizationSlug: proj.organization.slug,
+      };
+    }),
+
   // List projects in organization
   list: orgProtectedProcedure.query(async ({ ctx }) => {
     const projects = await ctx.db.query.project.findMany({
@@ -418,5 +445,60 @@ export const projectRouter = router({
         .where(eq(projectConnection.id, connection.id));
 
       return { success: true };
+    }),
+
+  // Transfer Slack connection from one project to another
+  // Used when a Slack workspace is already connected elsewhere and user wants to switch
+  transferSlackConnection: projectProtectedMutation
+    .input(
+      z.object({
+        slackTeamId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Find existing connection by Slack team ID
+      const existingConnection = await ctx.db.query.projectConnection.findFirst({
+        where: and(
+          eq(projectConnection.provider, "slack"),
+          eq(projectConnection.externalId, input.slackTeamId),
+        ),
+        with: { project: { with: { organization: true } } },
+      });
+
+      if (!existingConnection) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Slack workspace connection not found",
+        });
+      }
+
+      // TODO: In the future, we may want to verify user has access to both projects.
+      // For now, if the user has a valid Slack authorization (they authorized the bot
+      // for this workspace), we trust that's sufficient permission to move the connection.
+
+      // Check if target project already has a Slack connection
+      const targetProjectConnection = ctx.project.connections.find((c) => c.provider === "slack");
+      if (targetProjectConnection) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Target project already has a Slack connection. Disconnect it first.",
+        });
+      }
+
+      // Transfer the connection to the new project
+      // Clear webhookTargetMachineId since it was for the old project
+      await ctx.db
+        .update(projectConnection)
+        .set({
+          projectId: ctx.project.id,
+          webhookTargetMachineId: null,
+        })
+        .where(eq(projectConnection.id, existingConnection.id));
+
+      return {
+        success: true,
+        previousProjectSlug: existingConnection.project?.slug,
+        previousOrgSlug: existingConnection.project?.organization?.slug,
+      };
     }),
 });
