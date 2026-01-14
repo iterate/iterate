@@ -4,8 +4,19 @@ import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
-import { cloudflareTunnel } from "@iterate-com/shared/cloudflare-tunnel";
+import { forceVitePublicUrl } from "@iterate-com/shared/force-public-url-vite-plugin";
 import viteTsConfigPaths from "vite-tsconfig-paths";
+
+// Allow tunnel hostname if VITE_PUBLIC_URL is set (e.g., from DEV_TUNNEL)
+function getAllowedHosts(): string[] {
+  const publicUrl = process.env.VITE_PUBLIC_URL;
+  if (!publicUrl) return [];
+  try {
+    return [new URL(publicUrl).hostname];
+  } catch {
+    return [];
+  }
+}
 
 export default defineConfig({
   resolve: {
@@ -21,9 +32,10 @@ export default defineConfig({
   server: {
     cors: false,
     strictPort: false,
+    allowedHosts: getAllowedHosts(),
   },
   plugins: [
-    cloudflareTunnel(import.meta.dirname),
+    forceVitePublicUrl(),
     devtools({
       eventBusConfig: {
         // Port 0 enables auto-assigned port (default behavior)
