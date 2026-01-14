@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { injectWebSocket } from "./server/utils/hono.ts";
 import app from "./server/app.ts";
+import { createWorkerClient } from "./server/orpc/client.ts";
 
 app.use("/*", serveStatic({ root: "./dist" }));
 app.get("*", serveStatic({ root: "./dist", path: "index.html" }));
@@ -33,7 +34,9 @@ async function reportStatusToPlatform() {
     return;
   }
 
-  console.log(`[bootstrap] Reporting status to ${baseUrl}/api/machines/status`);
+  console.log(`[bootstrap] Reporting status to ${baseUrl}/api/orpc`);
+
+  const client = createWorkerClient(baseUrl, apiKey);
 
   // Retry with exponential backoff
   const maxRetries = 5;
@@ -41,30 +44,19 @@ async function reportStatusToPlatform() {
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch(`${baseUrl}/api/machines/status`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status: "ready" }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log("[bootstrap] Successfully reported status to platform", result);
-        return;
-      }
-
-      const errorText = await response.text();
-      console.error(`[bootstrap] Failed to report status (${response.status}):`, errorText);
-
-      // Don't retry on 401 (invalid key format) but do retry 403 (key might be stale/updating)
-      if (response.status === 401) {
-        console.error("[bootstrap] Authentication failed (401), not retrying");
-        return;
-      }
+      const result = await client.machines.reportStatus({ status: "ready" });
+      console.log("[bootstrap] Successfully reported status to platform", result);
+      return;
     } catch (err) {
+      const isUnauthorized =
+        err instanceof Error &&
+        (err.message.includes("UNAUTHORIZED") || err.message.includes("401"));
+
+      if (isUnauthorized) {
+        console.error("[bootstrap] Authentication failed, not retrying:", err);
+        return;
+      }
+
       console.error(
         `[bootstrap] Error reporting status (attempt ${attempt + 1}/${maxRetries}):`,
         err,
