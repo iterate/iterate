@@ -31,12 +31,8 @@ export default defineConfig(({ command }) => {
       },
     },
     server: {
-      allowedHosts: [".dev.iterate.com"],
       cors: false,
       strictPort: false,
-    },
-    preview: {
-      port: 5174,
     },
     plugins: [
       cloudflareTunnel({

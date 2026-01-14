@@ -46,7 +46,6 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 3000,
-    allowedHosts: [".dev.iterate.com"],
     proxy: {
       "/api": {
         target: `http://localhost:3001`,
