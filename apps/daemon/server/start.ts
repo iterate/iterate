@@ -21,6 +21,8 @@ export const startServer = async (params: { port: number; hostname: string }) =>
  * This triggers the bootstrap flow where the platform sends back env vars and repos.
  */
 async function reportStatusToPlatform() {
+  if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) return;
+
   const client = createWorkerClient();
 
   const result = await client.machines.reportStatus({ status: "ready" });
