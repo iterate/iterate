@@ -7,8 +7,39 @@ import * as schema from "../../db/schema.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
 import { decrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
-import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
+
+// Generate a machine API key that includes the machine ID
+// Format: mak_<machineId>_<randomHex>
+function generateMachineApiKey(machineId: string): string {
+  const array = new Uint8Array(24);
+  crypto.getRandomValues(array);
+  const randomHex = Array.from(array)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `mak_${machineId}_${randomHex}`;
+}
+
+// Hash a machine API key using SHA-256
+async function hashMachineApiKey(apiKey: string): Promise<string> {
+  const encoded = new TextEncoder().encode(apiKey);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Parse machine ID from API key
+export function parseMachineIdFromApiKey(apiKey: string): string | null {
+  const match = apiKey.match(/^mak_(mach_[a-z0-9]+)_[a-f0-9]+$/);
+  return match ? match[1] : null;
+}
+
+// Verify a machine API key against its hash
+export async function verifyMachineApiKey(apiKey: string, hash: string): Promise<boolean> {
+  const computedHash = await hashMachineApiKey(apiKey);
+  return computedHash === hash;
+}
 
 interface DockerContainer {
   Ports?: Array<{ PublicPort?: number }>;
@@ -118,6 +149,10 @@ export const machineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const machineId = typeid("mach").toString();
 
+      // Generate API key for machine authentication
+      const machineApiKey = generateMachineApiKey(machineId);
+      const apiKeyHash = await hashMachineApiKey(machineApiKey);
+
       // Create provider for the specified type
       const provider = await createMachineProvider(input.type, ctx.env, {
         findAvailablePort,
@@ -144,15 +179,19 @@ export const machineRouter = router({
         envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
       }
 
-      const githubEnvVars = await getGitHubEnvVars(ctx.db, ctx.project.id, ctx.env);
-
+      // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
+      // This allows the daemon to receive fresh GitHub tokens when it reports ready
       const result = await provider
         .create({
           machineId,
           name: input.name,
           envVars: {
             ...envVars,
-            ...githubEnvVars,
+            // Platform bootstrap env vars - we use the tunnel host if it is set to handle remote sandbox and local control plane use cases
+            ITERATE_OS_BASE_URL: ctx.env.CLOUDFLARE_TUNNEL_HOST
+              ? `https://${ctx.env.CLOUDFLARE_TUNNEL_HOST}`
+              : ctx.env.VITE_PUBLIC_URL,
+            ITERATE_OS_API_KEY: machineApiKey,
             // In dev, use the current git branch for Daytona sandboxes
             ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
               ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
@@ -178,6 +217,7 @@ export const machineRouter = router({
               state: "started",
               metadata: { ...(input.metadata ?? {}), ...(result.metadata ?? {}) },
               externalId: result.externalId,
+              apiKeyHash,
             })
             .returning();
 
@@ -385,7 +425,7 @@ export const machineRouter = router({
         }
         // why aren't we using the provider.getPreviewUrl() here?
         if (machineRecord.type === "local-vanilla") {
-          return `http://localhost:${3000}`;
+          return `http://localhost:3000`;
         }
         return null;
       };
@@ -404,72 +444,5 @@ export const machineRouter = router({
     }),
 });
 
-async function getGitHubEnvVars(
-  db: DB,
-  projectId: string,
-  cloudflareEnv: CloudflareEnv,
-): Promise<Record<string, string>> {
-  const githubConnection = await db.query.projectConnection.findFirst({
-    where: and(
-      eq(schema.projectConnection.projectId, projectId),
-      eq(schema.projectConnection.provider, "github-app"),
-    ),
-  });
-
-  if (!githubConnection) {
-    return {};
-  }
-
-  const providerData = githubConnection.providerData as {
-    installationId?: number;
-  };
-
-  if (!providerData.installationId) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "GitHub connection exists but has no installation ID",
-    });
-  }
-
-  const projectRepos = await db.query.projectRepo.findMany({
-    where: eq(schema.projectRepo.projectId, projectId),
-  });
-
-  if (projectRepos.length === 0) {
-    return {};
-  }
-
-  const installationToken = await getGitHubInstallationToken(
-    cloudflareEnv,
-    providerData.installationId,
-  );
-
-  if (!installationToken) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to get GitHub installation token",
-    });
-  }
-
-  const repos = await Promise.all(
-    projectRepos.map(async (repo) => {
-      const repoInfo = await getRepositoryById(installationToken, repo.externalId);
-      if (!repoInfo) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to fetch repository ${repo.owner}/${repo.name} from GitHub - it may have been deleted`,
-        });
-      }
-      return {
-        owner: repoInfo.owner,
-        name: repoInfo.name,
-        defaultBranch: repoInfo.defaultBranch,
-      };
-    }),
-  );
-
-  return {
-    GITHUB_ACCESS_TOKEN: installationToken,
-    GITHUB_REPOS: JSON.stringify(repos),
-  };
-}
+// Note: GitHub env vars (GITHUB_ACCESS_TOKEN, GITHUB_REPOS) are now injected
+// via the bootstrap flow in machine-status.ts when the daemon reports ready.

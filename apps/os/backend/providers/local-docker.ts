@@ -38,7 +38,8 @@ export async function dockerApi<T>(
 
 export interface LocalDockerConfig {
   imageName: string;
-  findAvailablePort: () => Promise<number>;
+  /** Only required when calling create() */
+  findAvailablePort?: () => Promise<number>;
 }
 
 export function createLocalVanillaProvider(): MachineProvider {
@@ -67,7 +68,7 @@ export function createLocalVanillaProvider(): MachineProvider {
       _metadata?: Record<string, unknown>,
       _port?: number,
     ): string {
-      return `http://localhost:${3000}`;
+      return "http://localhost:3000";
     },
   };
 }
@@ -79,11 +80,23 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     type: "local-docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      if (!findAvailablePort) {
+        throw new Error("findAvailablePort required for create()");
+      }
       const port = await findAvailablePort();
+
+      // For local-docker, rewrite localhost URLs to host.docker.internal
+      // so the container can reach services on the host machine
+      const rewrittenEnvVars = Object.fromEntries(
+        Object.entries(machineConfig.envVars).map(([key, value]) => [
+          key,
+          value.replace(/localhost/g, "host.docker.internal"),
+        ]),
+      );
 
       // Add ITERATE_DEV=true for local-docker so entry.ts uses the right code path
       const envVarsWithDev = {
-        ...machineConfig.envVars,
+        ...rewrittenEnvVars,
         ITERATE_DEV: "true",
       };
 
@@ -155,8 +168,11 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     },
 
     getPreviewUrl(_externalId: string, metadata?: Record<string, unknown>, port?: number): string {
-      const basePort = (metadata as { port?: number })?.port ?? 3000;
-      return `http://localhost:${port ?? basePort}`;
+      const baseHostPort = (metadata as { port?: number })?.port ?? 3000;
+      // Map internal container port to host port
+      // Internal 3000 → metadata.port, internal 22222 → metadata.port + 1
+      const hostPort = port === 22222 ? baseHostPort + 1 : baseHostPort;
+      return `http://localhost:${hostPort}`;
     },
   };
 }

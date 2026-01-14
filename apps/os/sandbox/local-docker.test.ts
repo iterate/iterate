@@ -24,7 +24,14 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, DOCKER_API_URL } from "../backend/providers/local-docker.ts";
+import {
+  dockerApi,
+  execInContainer,
+  getContainerLogs,
+  getServiceFileLogs,
+  waitForLogPattern,
+  waitForFileLogPattern,
+} from "./test-helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
@@ -47,93 +54,6 @@ function createDaemonTrpcClient(port: number) {
       }),
     ],
   });
-}
-
-async function getContainerLogs(containerId: string): Promise<string> {
-  const response = await fetch(
-    `${DOCKER_API_URL}/containers/${containerId}/logs?stdout=true&stderr=true&timestamps=true`,
-  );
-  if (!response.ok) throw new Error("Failed to get logs");
-  const buffer = await response.arrayBuffer();
-  return decodeDockerLogs(new Uint8Array(buffer));
-}
-
-function decodeDockerLogs(buffer: Uint8Array): string {
-  const lines: string[] = [];
-  let offset = 0;
-
-  while (offset < buffer.length) {
-    if (offset + 8 > buffer.length) break;
-
-    const size =
-      (buffer[offset + 4]! << 24) |
-      (buffer[offset + 5]! << 16) |
-      (buffer[offset + 6]! << 8) |
-      buffer[offset + 7]!;
-
-    offset += 8;
-    if (offset + size > buffer.length) break;
-
-    const line = new TextDecoder().decode(buffer.slice(offset, offset + size));
-    lines.push(line);
-    offset += size;
-  }
-
-  return lines.join("");
-}
-
-async function waitForLogPattern(
-  containerId: string,
-  pattern: RegExp,
-  timeoutMs = 60000,
-): Promise<string> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const logs = await getContainerLogs(containerId);
-    if (pattern.test(logs)) return logs;
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  throw new Error(`Timeout waiting for log pattern: ${pattern}`);
-}
-
-async function getServiceFileLogs(containerId: string, logPath: string): Promise<string> {
-  return execInContainer(containerId, ["cat", logPath]);
-}
-
-async function waitForFileLogPattern(
-  containerId: string,
-  logPath: string,
-  pattern: RegExp,
-  timeoutMs = 60000,
-): Promise<string> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const logs = await getServiceFileLogs(containerId, logPath);
-      if (pattern.test(logs)) return logs;
-    } catch {
-      // File might not exist yet
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  throw new Error(`Timeout waiting for file log pattern in ${logPath}: ${pattern}`);
-}
-
-async function execInContainer(containerId: string, cmd: string[]): Promise<string> {
-  const execCreate = await dockerApi<{ Id: string }>("POST", `/containers/${containerId}/exec`, {
-    AttachStdout: true,
-    AttachStderr: true,
-    Cmd: cmd,
-  });
-
-  const response = await fetch(`${DOCKER_API_URL}/exec/${execCreate.Id}/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ Detach: false, Tty: false }),
-  });
-
-  const buffer = await response.arrayBuffer();
-  return decodeDockerLogs(new Uint8Array(buffer));
 }
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {

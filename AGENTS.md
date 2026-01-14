@@ -93,4 +93,5 @@ Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 - Backend: `apps/os/backend/AGENTS.md`
 - E2E: `spec/AGENTS.md`
 - Vitest patterns: `docs/vitest-patterns.md`
+- Architecture: `docs/architecture.md`
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`

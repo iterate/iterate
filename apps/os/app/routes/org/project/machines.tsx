@@ -43,19 +43,13 @@ function ProjectMachinesPage() {
   const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
   const [newMachineName, setNewMachineName] = useState(`${newMachineType}-${Date.now()}`);
 
-  const machineListQueryKey = trpc.machine.list.queryKey({
+  const machineListQueryOptions = trpc.machine.list.queryOptions({
     organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
     includeArchived: false,
   });
 
-  const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
-    }),
-  );
+  const { data: machines } = useSuspenseQuery(machineListQueryOptions);
 
   const createMachine = useMutation({
     mutationFn: async ({ name, type }: { name: string; type: MachineType }) => {
@@ -71,7 +65,7 @@ function ProjectMachinesPage() {
       setNewMachineType("daytona");
       setNewMachineName(`daytona-${Date.now()}`);
       toast.success("Machine created!");
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to create machine: " + error.message);
@@ -88,7 +82,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine archived!");
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to archive machine: " + error.message);
@@ -105,7 +99,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine restored!");
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to restore machine: " + error.message);
@@ -122,7 +116,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine deleted!");
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
+      queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
     onError: (error) => {
       toast.error("Failed to delete machine: " + error.message);

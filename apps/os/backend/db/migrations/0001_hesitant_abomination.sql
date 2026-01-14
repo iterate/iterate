@@ -1,0 +1,1 @@
+ALTER TABLE "machine" ADD COLUMN "api_key_hash" text;

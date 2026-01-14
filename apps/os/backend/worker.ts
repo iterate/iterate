@@ -16,6 +16,7 @@ import { githubApp } from "./integrations/github/github.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./routes/posthog-proxy.ts";
+import { machineStatusApp } from "./routes/machine-status.ts";
 import { logger } from "./tag-logger.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 
@@ -87,6 +88,9 @@ app.all("/api/trpc/*", (c) => {
 app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
+
+// Machine status endpoint (called by daemon to report ready)
+app.route("/api/machines", machineStatusApp);
 
 // WebSocket endpoint for realtime push (query invalidation)
 app.get("/api/ws/realtime", (c) => {
