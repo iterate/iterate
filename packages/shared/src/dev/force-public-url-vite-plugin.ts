@@ -1,12 +1,24 @@
 import type { Plugin } from "vite";
 
 /**
- * Vite plugin that redirects requests to VITE_PUBLIC_URL when the request host doesn't match.
- * Useful when running behind a tunnel/proxy and you want to ensure users access via the public URL.
+ * Vite plugin for VITE_PUBLIC_URL support:
+ * 1. Adds the public URL hostname to allowedHosts
+ * 2. Redirects requests to VITE_PUBLIC_URL when the request host doesn't match
+ * Useful when running behind a tunnel/proxy.
  */
-export function forceVitePublicUrl(): Plugin {
+export function vitePublicUrl(): Plugin {
   return {
-    name: "force-vite-public-url",
+    name: "vite-public-url",
+    config() {
+      const publicURL = process.env.VITE_PUBLIC_URL;
+      if (!publicURL) return;
+      try {
+        const hostname = new URL(publicURL).hostname;
+        return { server: { allowedHosts: [hostname] } };
+      } catch {
+        return;
+      }
+    },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const publicURL = process.env.VITE_PUBLIC_URL;
@@ -26,3 +38,6 @@ export function forceVitePublicUrl(): Plugin {
     },
   };
 }
+
+/** @deprecated Use vitePublicUrl instead */
+export const forceVitePublicUrl = vitePublicUrl;
