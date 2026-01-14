@@ -9,7 +9,8 @@ import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
 import { SidebarInset, SidebarProvider } from "../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../components/app-header.tsx";
-import { HeaderActionsProvider, useHeaderActions } from "../../components/header-actions.tsx";
+import { HeaderActionsProvider } from "../../components/header-actions.tsx";
+import { useHeaderActions } from "../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {

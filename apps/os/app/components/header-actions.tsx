@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useLayoutEffect, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, type ReactNode } from "react";
 
 type SetActions = (actions: ReactNode) => void;
 const HeaderActionsContext = createContext<SetActions | null>(null);
@@ -28,9 +28,4 @@ export function HeaderActions({ children }: { children: ReactNode }) {
   }, [children, setActions]);
 
   return null;
-}
-
-/** Hook for layouts to manage header actions state */
-export function useHeaderActions() {
-  return useState<ReactNode>(null);
 }

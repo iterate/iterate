@@ -36,7 +36,8 @@ import {
   SidebarProvider,
 } from "../../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../../components/app-header.tsx";
-import { HeaderActionsProvider, useHeaderActions } from "../../../components/header-actions.tsx";
+import { HeaderActionsProvider } from "../../../components/header-actions.tsx";
+import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
   beforeLoad: async ({ context, params }) => {
