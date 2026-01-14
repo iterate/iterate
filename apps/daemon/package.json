@@ -31,6 +31,7 @@
     "@hono/node-server": "^1.13.0",
     "@hono/node-ws": "^1.1.1",
     "@hono/zod-validator": "^0.7.5",
+    "@iterate-com/shared": "workspace:*",
     "@lydell/node-pty": "^1.0.1",
     "@mariozechner/pi-ai": "^0.42.0",
     "@mariozechner/pi-coding-agent": "^0.42.0",

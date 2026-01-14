@@ -30,10 +30,10 @@ pnpm format       # Format code
 
 ## Cloudflare Tunnels
 
-To expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
+Expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
 
 ```bash
-DEV_TUNNEL=1 pnpm dev
+DEV_TUNNEL=1 pnpm dev        # → dev-{ITERATE_USER}-{app}.dev.iterate.com
+DEV_TUNNEL=bob pnpm dev      # → bob.dev.iterate.com (custom, no stage/app suffix)
+DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 ```
-
-URLs: `https://dev-{ITERATE_USER}-{app}.dev.iterate.com` (e.g. `dev-jonas-os.dev.iterate.com`)

@@ -6,12 +6,12 @@ import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 import cloudflareTunnel from "vite-plugin-cloudflare-tunnel";
+import { getTunnelConfig } from "@iterate-com/shared/dev-utils";
 
 const appName = path.basename(process.cwd());
 const stage =
   process.env.STAGE ?? (process.env.ITERATE_USER ? `dev-${process.env.ITERATE_USER}` : undefined);
-const cloudflareTunnelHostname =
-  process.env.DEV_TUNNEL && stage ? `${stage}-${appName}.dev.iterate.com` : null;
+const tunnelConfig = getTunnelConfig(appName, stage);
 
 export default defineConfig({
   // Use relative paths for assets so they work when proxied at any base path
@@ -19,9 +19,9 @@ export default defineConfig({
   base: "./",
   plugins: [
     cloudflareTunnel({
-      enabled: !!cloudflareTunnelHostname,
-      hostname: cloudflareTunnelHostname ?? "",
-      tunnelName: `${stage}-${appName}`,
+      enabled: !!tunnelConfig,
+      hostname: tunnelConfig?.hostname ?? "",
+      tunnelName: tunnelConfig?.tunnelName ?? "",
       apiToken: process.env.CLOUDFLARE_API_TOKEN,
       accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
       ssl: "*.dev.iterate.com",

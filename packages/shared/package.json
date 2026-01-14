@@ -1,0 +1,9 @@
+{
+  "name": "@iterate-com/shared",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./dev-utils": "./src/dev-utils.ts"
+  }
+}
