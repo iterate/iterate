@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
+import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
@@ -122,18 +123,15 @@ app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 
 // oRPC handler for machine status (called by daemon to report ready)
-const orpcHandler = new RPCHandler(workerRouter);
+const orpcHandler = new RPCHandler(workerRouter, {
+  plugins: [new RequestHeadersPlugin()],
+});
 app.all("/api/orpc/*", async (c) => {
-  // Extract API key from Authorization header
-  const authHeader = c.req.header("Authorization");
-  const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
-
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
     prefix: "/api/orpc",
     context: {
       db: c.var.db,
       env: c.env,
-      apiKey,
       executionCtx: c.executionCtx as ExecutionContext,
     } satisfies ORPCContext,
   });

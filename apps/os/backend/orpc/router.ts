@@ -1,4 +1,5 @@
-import { implement } from "@orpc/server";
+import { implement, ORPCError } from "@orpc/server";
+import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
@@ -13,10 +14,10 @@ import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
-export type ORPCContext = {
+/** Initial context provided by the handler */
+export type ORPCContext = RequestHeadersPluginContext & {
   db: DB;
   env: CloudflareEnv;
-  apiKey: string;
   executionCtx: ExecutionContext;
 };
 
@@ -32,78 +33,87 @@ function createDaemonTrpcClient(baseUrl: string) {
 
 const os = implement(workerContract).$context<ORPCContext>();
 
-export const reportStatus = os.machines.reportStatus.handler(async ({ input, context }) => {
-  const { db, env, apiKey, executionCtx } = context;
-
-  const machineId = parseMachineIdFromApiKey(apiKey);
-  if (!machineId) {
-    logger.warn("Invalid machine API key format", { apiKey: apiKey.slice(0, 20) + "..." });
-    throw new Error("Invalid API key format");
+/** Middleware that extracts and validates API key from Authorization header */
+const withApiKey = os.middleware(async ({ context, next }) => {
+  const authHeader = context.reqHeaders?.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new ORPCError("UNAUTHORIZED", { message: "Missing or invalid Authorization header" });
   }
 
-  // Look up machine and verify API key
-  const machine = await db.query.machine.findFirst({
-    where: eq(schema.machine.id, machineId),
-    with: {
-      project: {
-        with: {
-          organization: true,
-        },
-      },
-    },
-  });
+  const apiKey = authHeader.slice(7); // Remove "Bearer " prefix
+  return next({ context: { apiKey } });
+});
 
-  if (!machine) {
-    logger.warn("Machine not found for status report", { machineId });
-    throw new Error("Machine not found");
-  }
+export const reportStatus = os.machines.reportStatus
+  .use(withApiKey)
+  .handler(async ({ input, context }) => {
+    const { db, env, apiKey, executionCtx } = context;
 
-  if (!machine.apiKeyHash) {
-    logger.error("Machine has no API key hash", { machineId });
-    throw new Error("Machine not configured for authentication");
-  }
+    const machineId = parseMachineIdFromApiKey(apiKey);
+    if (!machineId) {
+      logger.warn("Invalid machine API key format", { apiKey: apiKey.slice(0, 20) + "..." });
+      throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key format" });
+    }
 
-  const isValid = await verifyMachineApiKey(apiKey, machine.apiKeyHash);
-  if (!isValid) {
-    logger.warn("Invalid API key for machine", { machineId });
-    throw new Error("Invalid API key");
-  }
+    // Look up machine and verify API key
+    const machine = await db.query.machine.findFirst({
+      where: eq(schema.machine.id, machineId),
+      with: { project: { with: { organization: true } } },
+    });
 
-  const { status, message } = input;
+    if (!machine) {
+      logger.warn("Machine not found for status report", { machineId });
+      throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
+    }
 
-  // Update machine metadata to mark daemon as ready
-  const updatedMetadata = {
-    ...((machine.metadata as Record<string, unknown>) ?? {}),
-    daemonStatus: status,
-    daemonStatusMessage: message,
-    daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
-  };
+    if (!machine.apiKeyHash) {
+      logger.error("Machine has no API key hash", { machineId });
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: "Machine not configured for authentication",
+      });
+    }
 
-  await db
-    .update(schema.machine)
-    .set({ metadata: updatedMetadata })
-    .where(eq(schema.machine.id, machineId));
+    const isValid = await verifyMachineApiKey(apiKey, machine.apiKeyHash);
+    if (!isValid) {
+      logger.warn("Invalid API key for machine", { machineId });
+      throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
+    }
 
-  logger.info("Machine daemon status updated", { machineId, status });
+    const { status, message } = input;
 
-  // Broadcast invalidation to update UI in real-time
-  executionCtx.waitUntil(
-    broadcastInvalidation(env).catch((err) => {
-      logger.error("Failed to broadcast invalidation", err);
-    }),
-  );
+    // Update machine metadata to mark daemon as ready
+    const updatedMetadata = {
+      ...((machine.metadata as Record<string, unknown>) ?? {}),
+      daemonStatus: status,
+      daemonStatusMessage: message,
+      daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
+    };
 
-  // If daemon is ready, trigger bootstrap callbacks
-  if (status === "ready") {
+    await db
+      .update(schema.machine)
+      .set({ metadata: updatedMetadata })
+      .where(eq(schema.machine.id, machineId));
+
+    logger.info("Machine daemon status updated", { machineId, status });
+
+    // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(
-      triggerBootstrapCallbacks(env, db, machine).catch((err) => {
-        logger.error("Failed to trigger bootstrap callbacks", err);
+      broadcastInvalidation(env).catch((err) => {
+        logger.error("Failed to broadcast invalidation", err);
       }),
     );
-  }
 
-  return { success: true };
-});
+    // If daemon is ready, trigger bootstrap callbacks
+    if (status === "ready") {
+      executionCtx.waitUntil(
+        triggerBootstrapCallbacks(env, db, machine).catch((err) => {
+          logger.error("Failed to trigger bootstrap callbacks", err);
+        }),
+      );
+    }
+
+    return { success: true };
+  });
 
 export const workerRouter = os.router({
   machines: {
