@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @iterate-com/daemon --reporter-hide-prefix --color --parallel /dev:/",
-    "dev:client": "doppler run -- vite",
-    "dev:server": "doppler run -- drizzle-kit migrate && doppler run -- tsx watch --clear-screen=false ./server.ts",
+    "dev:client": "vite",
+    "dev:server": "drizzle-kit migrate && tsx watch --clear-screen=false ./server.ts",
     "build": "pnpm /build:/",
     "build:client": "doppler run -- vite build",
     "start": "tsx ./server.ts",
