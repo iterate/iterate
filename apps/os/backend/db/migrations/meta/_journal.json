@@ -5,57 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1767770481966,
-      "tag": "0000_lovely_bedlam",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1767887145939,
-      "tag": "0001_rare_omega_sentinel",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1767971589234,
-      "tag": "0002_wooden_arachne",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1768171714621,
-      "tag": "0003_loving_hardball",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1768227197562,
-      "tag": "0004_far_ultimo",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1736700000000,
-      "tag": "0005_billing_account",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1768273834757,
-      "tag": "0006_polite_morlun",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1768400000000,
-      "tag": "0007_project_name_unique",
+      "when": 1768385224963,
+      "tag": "0000_lumpy_omega_flight",
       "breakpoints": true
     }
   ]
