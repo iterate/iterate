@@ -1,1 +1,0 @@
-ALTER TABLE "project_repo" ADD COLUMN "external_id" text NOT NULL;
