@@ -15,19 +15,22 @@ export const stripeWebhookApp = new Hono<{ Bindings: CloudflareEnv }>();
  * Track a billing event in PostHog for an organization.
  * Uses org:{organizationId} as distinctId since billing events are org-level,
  * not user-level, and shouldn't be attributed to any specific user.
+ * Fire-and-forget: errors are logged but don't fail the webhook.
  */
-async function trackBillingEvent(
+function trackBillingEvent(
   env: CloudflareEnv,
   organizationId: string,
   event: string,
   properties: Record<string, unknown>,
-): Promise<void> {
-  await captureServerEvent(env, {
+): void {
+  captureServerEvent(env, {
     // Use org prefix for org-level events to avoid attributing to a specific user
     distinctId: `org:${organizationId}`,
     event,
     properties,
     groups: { organization: organizationId },
+  }).catch((error) => {
+    logger.error("Failed to track billing event in PostHog", { error, event, organizationId });
   });
 }
 
@@ -137,7 +140,7 @@ async function handleSubscriptionCreated(
   });
 
   if (billingAccount) {
-    await trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
+    trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
       subscription_id: subscription.id,
       status: subscription.status,
       customer_id: customerId,
@@ -226,7 +229,7 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
   });
 
   if (billingAccount) {
-    await trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
+    trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
       invoice_id: invoice.id,
       amount: invoice.amount_paid,
       currency: invoice.currency,
@@ -260,7 +263,7 @@ async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice):
   });
 
   if (billingAccount) {
-    await trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
+    trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
       invoice_id: invoice.id,
       amount: invoice.amount_due,
       currency: invoice.currency,
