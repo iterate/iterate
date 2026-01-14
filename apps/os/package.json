@@ -30,6 +30,7 @@
     "@hono/vite-dev-server": "^0.24.0",
     "@hono/zod-validator": "^0.7.5",
     "@hookform/resolvers": "^5.2.2",
+    "@iterate-com/shared": "workspace:*",
     "@mariozechner/pi-ai": "^0.42.0",
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@neondatabase/serverless": "^1.0.2",

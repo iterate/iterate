@@ -188,6 +188,9 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.7.5
         version: 0.7.5(hono@4.11.3)(zod@4.1.13)
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@lydell/node-pty':
         specifier: ^1.0.1
         version: 1.1.0
@@ -447,6 +450,9 @@ importers:
       vite:
         specifier: ^7.3.1
         version: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+      vite-plugin-cloudflare-tunnel:
+        specifier: ^1.0.12
+        version: 1.0.12(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
       vitest:
         specifier: ^3.0.5
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
@@ -601,6 +607,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.67.0(react@19.2.3))
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@mariozechner/pi-ai':
         specifier: ^0.42.0
         version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
@@ -863,6 +872,12 @@ importers:
       ws:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+  packages/shared:
+    dependencies:
+      vite-plugin-cloudflare-tunnel:
+        specifier: ^1.0.12
+        version: 1.0.12(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
 
 packages:
 
@@ -21344,6 +21359,13 @@ snapshots:
       cloudflared: 0.7.1
       dotenv: 16.6.1
       vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+      zod: 4.1.13
+
+  vite-plugin-cloudflare-tunnel@1.0.12(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)):
+    dependencies:
+      cloudflared: 0.7.1
+      dotenv: 16.6.1
+      vite: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
       zod: 4.1.13
 
   vite-tsconfig-paths@6.0.3(typescript@5.9.3)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)):
