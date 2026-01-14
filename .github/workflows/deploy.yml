@@ -42,29 +42,3 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run deploy
         working-directory: apps/iterate-com
-  deploy-mcp-mock-server:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
-      - name: Setup Doppler
-        run: doppler setup --config ${{ inputs.stage }} --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy Mock MCP Server
-        working-directory: apps/mcp-mock-server
-        run: pnpm run deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          STAGE: ${{ inputs.stage }}
