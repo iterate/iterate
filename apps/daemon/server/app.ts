@@ -3,6 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { trpcRouter } from "./trpc/router.ts";
 import { baseApp as app } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
@@ -47,5 +48,8 @@ app.all("/api/trpc/*", (c) => {
 });
 
 app.route("/api/pty", ptyRouter);
+
+app.use("/*", serveStatic({ root: "./dist" }));
+app.get("*", serveStatic({ root: "./dist", path: "index.html" }));
 
 export default app;
