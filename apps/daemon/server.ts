@@ -13,8 +13,7 @@ const port = parseInt(process.env.PORT || "3001", 10);
 const server = serve({ fetch: app.fetch, port, hostname }, () => {
   console.log(`Server running at http://${hostname}:${port}`);
 
-  // Report status to OS platform if configured
-  reportStatusToPlatform();
+  reportStatusToPlatform().catch(console.error);
 });
 
 injectWebSocket(server);

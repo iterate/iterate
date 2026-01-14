@@ -13,7 +13,11 @@ export function createWorkerClient(): ContractRouterClient<WorkerContract> {
     headers: {
       Authorization: `Bearer ${process.env.ITERATE_OS_API_KEY}`,
     },
-    plugins: [new ClientRetryPlugin()],
+    plugins: [
+      new ClientRetryPlugin({
+        default: { onRetry: (error) => console.warn(`Retrying after error`, error) },
+      }),
+    ],
   });
 
   return createORPCClient(link);
