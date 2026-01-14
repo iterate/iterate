@@ -10,6 +10,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { getTunnelHostname } from "@iterate-com/shared/cloudflare-tunnel";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -25,6 +26,12 @@ const app = await alchemy("os", {
 
 // Export STAGE so child processes (Vite) can use it for Cloudflare Tunnel config
 process.env.STAGE = app.stage;
+
+// Set VITE_PUBLIC_URL to tunnel hostname if DEV_TUNNEL is enabled
+const tunnelHostname = getTunnelHostname(__dirname);
+if (tunnelHostname) {
+  process.env.VITE_PUBLIC_URL = `https://${tunnelHostname}`;
+}
 
 if (!/^[\w-]+$/.test(app.stage)) {
   throw new Error(`Invalid stage: ${app.stage}`);
