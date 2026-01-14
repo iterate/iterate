@@ -5,7 +5,7 @@ import { getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { SubscriptionStatus } from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import type { CloudflareEnv } from "../../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../../env.ts";
 import { captureServerEvent } from "../../lib/posthog.ts";
 import { getStripe } from "./stripe.ts";
 
@@ -15,7 +15,7 @@ export const stripeWebhookApp = new Hono<{ Bindings: CloudflareEnv }>();
  * Track a billing event in PostHog for an organization.
  * Uses org:{organizationId} as distinctId since billing events are org-level,
  * not user-level, and shouldn't be attributed to any specific user.
- * Fire-and-forget: errors are logged but don't fail the webhook.
+ * Uses waitUntil to ensure delivery without blocking the webhook response.
  */
 function trackBillingEvent(
   env: CloudflareEnv,
@@ -23,15 +23,17 @@ function trackBillingEvent(
   event: string,
   properties: Record<string, unknown>,
 ): void {
-  captureServerEvent(env, {
-    // Use org prefix for org-level events to avoid attributing to a specific user
-    distinctId: `org:${organizationId}`,
-    event,
-    properties,
-    groups: { organization: organizationId },
-  }).catch((error) => {
-    logger.error("Failed to track billing event in PostHog", { error, event, organizationId });
-  });
+  waitUntil(
+    captureServerEvent(env, {
+      // Use org prefix for org-level events to avoid attributing to a specific user
+      distinctId: `org:${organizationId}`,
+      event,
+      properties,
+      groups: { organization: organizationId },
+    }).catch((error) => {
+      logger.error("Failed to track billing event in PostHog", { error, event, organizationId });
+    }),
+  );
 }
 
 stripeWebhookApp.post("/", async (c) => {
