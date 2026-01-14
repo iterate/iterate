@@ -23,6 +23,9 @@ const app = await alchemy("os", {
   destroyOrphans: false,
 });
 
+// Export STAGE so child processes (Vite) can use it for Cloudflare Tunnel config
+process.env.STAGE = app.stage;
+
 if (!/^[\w-]+$/.test(app.stage)) {
   throw new Error(`Invalid stage: ${app.stage}`);
 }

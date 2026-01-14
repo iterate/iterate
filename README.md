@@ -27,3 +27,13 @@ pnpm typecheck    # Type check all packages
 pnpm lint         # Lint and fix
 pnpm format       # Format code
 ```
+
+## Cloudflare Tunnels
+
+To expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
+
+```bash
+DEV_TUNNEL=1 pnpm dev
+```
+
+URLs: `https://dev-{ITERATE_USER}-{app}.dev.iterate.com` (e.g. `dev-jonas-os.dev.iterate.com`)
