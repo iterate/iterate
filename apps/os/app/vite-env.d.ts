@@ -4,12 +4,14 @@ interface ViteTypeOptions {
   strictImportMetaEnv: true;
 }
 
-type FullEnv = (typeof import("../alchemy.run").worker)["Env"];
-type ViteEnv = {
-  [K in keyof FullEnv as Extract<K, `VITE_${string}`>]: FullEnv[K];
-};
-
-interface ImportMetaEnv extends ViteEnv {}
+// Explicit VITE_* env vars - alchemy type inference loses these through the spread
+interface ImportMetaEnv {
+  readonly VITE_PUBLIC_URL: string;
+  readonly VITE_APP_STAGE: string;
+  readonly VITE_POSTHOG_PUBLIC_KEY?: string;
+  readonly VITE_POSTHOG_PROXY_URI?: string;
+  readonly VITE_ENABLE_EMAIL_OTP_SIGNIN?: "true" | "false";
+}
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
