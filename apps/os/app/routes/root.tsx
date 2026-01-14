@@ -27,6 +27,7 @@ import { AppErrorFallback } from "../components/app-error-fallback.tsx";
 import { useRealtimePusher } from "../hooks/use-realtime-pusher.ts";
 import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx";
 import type { TanstackRouterContext } from "../router.tsx";
+import { getEnvLogo } from "../lib/env-logo.ts";
 
 // Check if PostHog should be enabled (only in production with key)
 const shouldEnablePostHog = () => {
@@ -158,7 +159,7 @@ export const Route = createRootRouteWithContext<TanstackRouterContext>()({
       { title: "𝑖" },
     ],
     links: [
-      { rel: "icon", href: "/favicon.ico" },
+      { rel: "icon", type: "image/svg+xml", href: getEnvLogo() },
       { rel: "stylesheet", href: appCss },
     ],
   }),
