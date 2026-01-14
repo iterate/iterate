@@ -12,7 +12,7 @@ new_names as (
     WHERE name IN (SELECT name FROM duplicated_names)
 )
 update project
-set name = name || '-' || row_number
+set name = project.name || '-' || new_names.row_number
 from new_names
 where project.name = new_names.name
 and project.organization_id = new_names.organization_id;
