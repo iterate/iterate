@@ -83,7 +83,7 @@ export function AppSidebar({ agents }: { agents: Agent[] }) {
             </SidebarGroupAction>
             <SidebarMenu>
               {visibleAgents.map((agent) => (
-                <SidebarMenuItem key={agent.id}>
+                <SidebarMenuItem key={agent.slug}>
                   <SidebarMenuButton asChild isActive={selectedSlug === agent.slug}>
                     <Link to="/agents/$slug" params={{ slug: agent.slug }}>
                       <AgentTypeIcon type={agent.harnessType} className="size-4 shrink-0" />
