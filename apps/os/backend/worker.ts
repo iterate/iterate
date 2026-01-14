@@ -5,6 +5,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { RPCHandler } from "@orpc/server/fetch";
+import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
@@ -16,7 +18,7 @@ import { githubApp } from "./integrations/github/github.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./routes/posthog-proxy.ts";
-import { machineStatusApp } from "./routes/machine-status.ts";
+import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
@@ -120,8 +122,26 @@ app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 
-// Machine status endpoint (called by daemon to report ready)
-app.route("/api/machines", machineStatusApp);
+// oRPC handler for machine status (called by daemon to report ready)
+const orpcHandler = new RPCHandler(workerRouter, {
+  plugins: [new RequestHeadersPlugin()],
+});
+app.all("/api/orpc/*", async (c) => {
+  const { matched, response } = await orpcHandler.handle(c.req.raw, {
+    prefix: "/api/orpc",
+    context: {
+      db: c.var.db,
+      env: c.env,
+      executionCtx: c.executionCtx as ExecutionContext,
+    } satisfies ORPCContext,
+  });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  return c.json({ error: "Not found" }, 404);
+});
 
 // WebSocket endpoint for realtime push (query invalidation)
 app.get("/api/ws/realtime", (c) => {

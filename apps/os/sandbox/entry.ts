@@ -27,7 +27,7 @@ const copyFromLocalMount = () => {
   // Use rsync to copy, excluding common gitignored patterns
   // The mounted repo is read-only, so we copy to the target location
   execSync(
-    `rsync -av --delete \
+    `rsync -a --delete \
       --exclude='node_modules' \
       --exclude='.git' \
       --exclude='dist' \
