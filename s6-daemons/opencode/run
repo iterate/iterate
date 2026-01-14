@@ -1,0 +1,22 @@
+#!/bin/sh
+exec 2>&1
+
+# Set up FIFO for health check notification
+NOTIFY_FIFO="/tmp/s6-notify-opencode-$$"
+mkfifo "$NOTIFY_FIFO"
+
+# Health checker polls endpoint, writes to FIFO when ready
+"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:4096/session "$NOTIFY_FIFO" &
+
+# Duplicate fd 3 to fd 4 so background job can use it
+exec 4>&3
+
+# Waiter: reads FIFO, then notifies s6 via fd 4
+{
+  if read -r _ < "$NOTIFY_FIFO" 2>/dev/null; then
+    printf '\n' >&4 2>/dev/null && echo "s6 notified via fd 4 (dup of 3)"
+  fi
+  rm -f "$NOTIFY_FIFO"
+} &
+
+exec opencode serve --port 4096

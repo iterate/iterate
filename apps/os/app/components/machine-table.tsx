@@ -236,6 +236,28 @@ export function MachineTable({
     }
   };
 
+  const copyOpencodeLogsCommand = (machine: Machine) => {
+    const command = "tail -f /var/log/opencode/current";
+    if (machine.type === "local-docker") {
+      const containerId = machine.metadata.containerId;
+      if (!containerId) {
+        toast.error("Container ID not found");
+        return;
+      }
+      copyToClipboard(
+        `docker exec ${containerId} ${command}`,
+        "Copied OpenCode logs command:",
+        "Run in your local terminal. Won't work until entry.ts starts daemons.",
+      );
+    } else {
+      copyToClipboard(
+        command,
+        "Copied OpenCode logs command:",
+        "Paste this in the sandbox terminal",
+      );
+    }
+  };
+
   const copyEntryLogsCommand = (machine: Machine) => {
     if (machine.type === "local-docker") {
       const containerId = machine.metadata.containerId;
@@ -332,6 +354,10 @@ export function MachineTable({
       <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
         <ScrollText className="h-4 w-4 mr-2" />
         Copy daemon logs command
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => copyOpencodeLogsCommand(machine)}>
+        <ScrollText className="h-4 w-4 mr-2" />
+        Copy OpenCode logs command
       </DropdownMenuItem>
       {machine.type === "local-docker" && (
         <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>

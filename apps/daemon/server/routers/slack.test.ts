@@ -2,25 +2,25 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Agent } from "../db/schema.ts";
 
 vi.mock("../services/agent-manager.ts", () => ({
-  ensureAgentRunning: vi.fn(),
-  sendMessageToAgent: vi.fn(),
+  getOrCreateAgent: vi.fn(),
+  appendToAgent: vi.fn(),
 }));
 
 const { slackRouter } = await import("./slack.ts");
-const { ensureAgentRunning, sendMessageToAgent } = await import("../services/agent-manager.ts");
+const { getOrCreateAgent, appendToAgent } = await import("../services/agent-manager.ts");
 
-const mockedEnsureAgentRunning = vi.mocked(ensureAgentRunning);
-const mockedSendMessageToAgent = vi.mocked(sendMessageToAgent);
+const mockedGetOrCreateAgent = vi.mocked(getOrCreateAgent);
+const mockedAppendToAgent = vi.mocked(appendToAgent);
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   const now = new Date();
   return {
     id: "agent-1",
     slug: "slack-123",
-    harnessType: "pi",
-    harnessSessionId: null,
+    harnessType: "opencode",
+    harnessSessionId: "opencode-session-123",
     tmuxSession: "tmux-1",
-    workingDirectory: "/tmp",
+    workingDirectory: "/root/src/github.com/iterate/iterate",
     status: "running",
     initialPrompt: null,
     createdAt: now,
@@ -32,8 +32,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 
 describe("slack router", () => {
   beforeEach(() => {
-    mockedEnsureAgentRunning.mockReset();
-    mockedSendMessageToAgent.mockReset();
+    mockedGetOrCreateAgent.mockReset();
+    mockedAppendToAgent.mockReset();
   });
 
   it("returns 400 when no thread id can be extracted", async () => {
@@ -52,10 +52,10 @@ describe("slack router", () => {
 
   it("creates agent and returns slug for new thread", async () => {
     const threadTs = "1234567890.123456";
-    mockedEnsureAgentRunning.mockResolvedValue({
-      agent: makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` }),
+    const agent = makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` });
+    mockedGetOrCreateAgent.mockResolvedValue({
+      agent,
       wasCreated: true,
-      tmuxSession: "tmux-1",
     });
 
     const payload = {
@@ -78,15 +78,16 @@ describe("slack router", () => {
     expect(body.success).toBe(true);
     expect(body.agentSlug).toBe(`slack-${threadTs.replace(".", "-")}`);
     expect(body.created).toBe(true);
-    expect(mockedSendMessageToAgent).not.toHaveBeenCalled();
+    // Message is always sent via appendToAgent
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("hello"));
   });
 
   it("sends message to existing agent when thread already exists", async () => {
     const ts = "9999999999.999999";
-    mockedEnsureAgentRunning.mockResolvedValue({
-      agent: makeAgent({ slug: `slack-${ts.replace(".", "-")}` }),
+    const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
+    mockedGetOrCreateAgent.mockResolvedValue({
+      agent,
       wasCreated: false,
-      tmuxSession: "tmux-1",
     });
 
     const payload = {
@@ -109,10 +110,9 @@ describe("slack router", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.created).toBe(false);
-    expect(mockedSendMessageToAgent).toHaveBeenCalledWith(
-      "tmux-1",
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(
+      agent,
       "New Slack message from <@U_TEST> in C_TEST: hello world",
-      "pi",
     );
   });
 });

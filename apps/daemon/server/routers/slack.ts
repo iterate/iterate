@@ -3,9 +3,10 @@
  *
  * Handles incoming Slack webhooks forwarded from the OS backend.
  * Creates/reuses agents per Slack thread and sends formatted messages.
+ * Uses the harness system for SDK-based session management.
  */
 import { Hono } from "hono";
-import { ensureAgentRunning, sendMessageToAgent } from "../services/agent-manager.ts";
+import { getOrCreateAgent, appendToAgent } from "../services/agent-manager.ts";
 
 // Simple structured logger for daemon
 const logger = {
@@ -14,6 +15,9 @@ const logger = {
   error: (msg: string, data?: Record<string, unknown>) =>
     console.error(JSON.stringify({ level: "error", msg, ...data })),
 };
+
+// Working directory for agents - root of iterate repo
+const ITERATE_REPO = "/root/src/github.com/iterate/iterate";
 
 export const slackRouter = new Hono();
 
@@ -30,17 +34,15 @@ slackRouter.post("/webhook", async (c) => {
   const formattedMessage = formatSlackMessage(payload);
 
   try {
-    const result = await ensureAgentRunning({
+    // Get or create agent using harness system
+    const result = await getOrCreateAgent({
       slug: agentSlug,
-      harnessType: "claude-code",
-      workingDirectory: process.cwd(),
-      initialPrompt: formattedMessage,
+      harnessType: "opencode",
+      workingDirectory: ITERATE_REPO,
     });
 
-    // If agent already existed, send message to existing session
-    if (!result.wasCreated) {
-      await sendMessageToAgent(result.tmuxSession, formattedMessage, "pi");
-    }
+    // Send message via SDK (for both new and existing agents)
+    await appendToAgent(result.agent, formattedMessage);
 
     return c.json({
       success: true,

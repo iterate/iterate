@@ -200,6 +200,9 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: ^0.42.0
         version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@opencode-ai/sdk':
+        specifier: 1.1.18
+        version: 1.1.18
       '@orpc/client':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)
@@ -3386,6 +3389,9 @@ packages:
   '@oozcitak/util@10.0.0':
     resolution: {integrity: sha512-hAX0pT/73190NLqBPPWSdBVGtbY6VOhWYK3qqHqtXQ1gK7kS2yz4+ivsN07hpJ6I3aeMtKP6J6npsEKOAzuTLA==}
     engines: {node: '>=20.0'}
+
+  '@opencode-ai/sdk@1.1.18':
+    resolution: {integrity: sha512-2HN9q1sacXXOVZxD+Afn9BasNOHltwI7DxF8I+rvnGVCtlUC6z/RpwqGOJey7mzkOZ60ERWOI6s+08oTMbytrA==}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -13626,6 +13632,8 @@ snapshots:
       '@oozcitak/util': 10.0.0
 
   '@oozcitak/util@10.0.0': {}
+
+  '@opencode-ai/sdk@1.1.18': {}
 
   '@opentelemetry/api@1.9.0': {}
 

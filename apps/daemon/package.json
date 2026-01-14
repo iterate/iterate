@@ -34,6 +34,7 @@
     "@iterate-com/shared": "workspace:*",
     "@lydell/node-pty": "^1.0.1",
     "@mariozechner/pi-ai": "^0.42.0",
+    "@opencode-ai/sdk": "1.1.18",
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@orpc/client": "^1.13.4",
     "@orpc/contract": "^1.13.4",
