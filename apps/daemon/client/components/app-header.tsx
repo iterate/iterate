@@ -75,7 +75,7 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
     mutationFn: () => trpcClient.stopSession.mutate({ slug: agent!.slug }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: trpc.listSessions.queryKey() });
-      queryClient.removeQueries({ queryKey: ["ensureAgentStarted", agent!.slug] });
+      queryClient.removeQueries({ queryKey: ["ensureSessionStarted", agent!.slug] });
       toast.success("Agent stopped");
     },
     onError: () => {
