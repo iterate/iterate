@@ -10,6 +10,7 @@
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
+    "cli": "cd apps/cli && pnpm tsx main.ts",
     "spec": "playwright test",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",

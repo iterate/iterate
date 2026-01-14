@@ -2,12 +2,6 @@
 /**
  * Iterate CLI Entry Point
  */
-import { NodeRuntime } from "@effect/platform-node";
-import { Effect } from "effect";
-import { cli, cliLayer } from "./cli.ts";
+import { cli } from "./cli.ts";
 
-const program = Effect.suspend(() => cli(process.argv.slice(2)));
-
-const runnable = program.pipe(Effect.provide(cliLayer));
-
-NodeRuntime.runMain(runnable);
+cli.run();
