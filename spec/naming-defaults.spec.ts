@@ -73,7 +73,7 @@ test.describe("naming defaults", () => {
     await createProject(page);
     await sidebarButton(page, "Machines").click();
 
-    await page.getByRole("button", { name: "Create Machine" }).click();
+    await page.getByRole("link", { name: "Create Machine" }).click();
 
     await page
       .locator("input[placeholder='Machine name']")
