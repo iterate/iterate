@@ -30,7 +30,7 @@ function getTunnelConfig(appName: string, stage: string | undefined) {
  * Cloudflare tunnel plugin with automatic config from env vars.
  * Pass import.meta.dirname to correctly resolve the app name.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export function cloudflareTunnel(dirname: string): any {
   const appName = path.basename(dirname);
   const stage =
