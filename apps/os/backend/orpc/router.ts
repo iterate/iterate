@@ -155,6 +155,9 @@ async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: Ma
   } else if (machine.type === "local-vanilla") {
     // local-vanilla machines run the daemon directly on localhost:3000
     daemonBaseUrl = "http://localhost:3000";
+  } else if (machine.type === "local") {
+    // local machines also run daemon on localhost:3000
+    daemonBaseUrl = "http://localhost:3000";
   } else {
     // Exhaustive check - if we get here, a new machine type was added without updating this function
     const _exhaustiveCheck: never = machine.type;

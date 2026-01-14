@@ -33,6 +33,7 @@ export async function createMachineProvider(
     }
 
     case "local":
+    case "local-vanilla":
       // Local machines point to already-running services (e.g., local daemon)
       // They don't need a provider for creation/destruction
       throw new Error(
