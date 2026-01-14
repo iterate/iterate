@@ -2,7 +2,7 @@ import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-route
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, ActivityIcon } from "lucide-react";
 
-import type { Agent } from "@server/db/schema.ts";
+import type { SerializedAgent } from "@server/trpc/router.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
 import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 
@@ -23,7 +23,7 @@ import { AgentTypeIcon } from "@/components/agent-type-icons.tsx";
 
 const MAX_SIDEBAR_AGENTS = 10;
 
-export function AppSidebar({ agents }: { agents: Agent[] }) {
+export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
   const params = useParams({ strict: false });
   const navigate = useNavigate();
   const location = useLocation();

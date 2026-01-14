@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../worker.ts";
 import * as schema from "../db/schema.ts";
@@ -11,6 +13,16 @@ import { getGitHubInstallationToken, getRepositoryById } from "../integrations/g
 import { createDaytonaProvider } from "../providers/daytona.ts";
 import { createLocalDockerProvider } from "../providers/local-docker.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+
+function createDaemonTrpcClient(baseUrl: string) {
+  return createTRPCClient<TRPCRouter>({
+    links: [
+      httpBatchLink({
+        url: `${baseUrl}/api/trpc`,
+      }),
+    ],
+  });
+}
 
 export const machineStatusApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -185,28 +197,17 @@ async function triggerBootstrapCallbacks(
   // envVarsToInject["HTTPS_PROXY"] = `${env.VITE_PUBLIC_URL}/proxy/...`;
 
   // 2. Call daemon to inject env vars
+  const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
+
   if (Object.keys(envVarsToInject).length > 0) {
     try {
-      const envResponse = await fetch(`${daemonBaseUrl}/platform/env-vars`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vars: envVarsToInject }),
+      await daemonClient.platform.setEnvVars.mutate({ vars: envVarsToInject });
+      logger.info("Injected env vars to daemon", {
+        machineId: machine.id,
+        varCount: Object.keys(envVarsToInject).length,
       });
-
-      if (!envResponse.ok) {
-        logger.error("Failed to inject env vars to daemon", {
-          machineId: machine.id,
-          status: envResponse.status,
-          body: await envResponse.text(),
-        });
-      } else {
-        logger.info("Injected env vars to daemon", {
-          machineId: machine.id,
-          varCount: Object.keys(envVarsToInject).length,
-        });
-      }
     } catch (err) {
-      logger.error("Error calling daemon env-vars endpoint", err);
+      logger.error("Error calling daemon setEnvVars", err);
     }
   }
 
@@ -242,26 +243,13 @@ async function triggerBootstrapCallbacks(
 
         if (validRepos.length > 0) {
           try {
-            const repoResponse = await fetch(`${daemonBaseUrl}/platform/cloned-repos`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ repos: validRepos }),
+            await daemonClient.platform.cloneRepos.mutate({ repos: validRepos });
+            logger.info("Triggered repo cloning on daemon", {
+              machineId: machine.id,
+              repoCount: validRepos.length,
             });
-
-            if (!repoResponse.ok) {
-              logger.error("Failed to trigger repo cloning on daemon", {
-                machineId: machine.id,
-                status: repoResponse.status,
-                body: await repoResponse.text(),
-              });
-            } else {
-              logger.info("Triggered repo cloning on daemon", {
-                machineId: machine.id,
-                repoCount: validRepos.length,
-              });
-            }
           } catch (err) {
-            logger.error("Error calling daemon cloned-repos endpoint", err);
+            logger.error("Error calling daemon cloneRepos", err);
           }
         }
       }

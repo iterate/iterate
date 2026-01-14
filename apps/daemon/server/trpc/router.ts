@@ -18,10 +18,40 @@ import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
+import { platformRouter } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
 
+/** Serialized agent with ISO date strings instead of Date objects */
+type SerializedAgent = Omit<Agent, "createdAt" | "updatedAt" | "archivedAt"> & {
+  createdAt: string | null;
+  updatedAt: string | null;
+  archivedAt: string | null;
+};
+
+function serializeAgent(agent: Agent): SerializedAgent {
+  return {
+    ...agent,
+    createdAt: agent.createdAt?.toISOString() ?? null,
+    updatedAt: agent.updatedAt?.toISOString() ?? null,
+    archivedAt: agent.archivedAt?.toISOString() ?? null,
+  };
+}
+
+/** Serialized tmux session with ISO date string */
+type SerializedTmuxSession = Omit<TmuxSession, "created"> & {
+  created: string;
+};
+
+function serializeTmuxSession(session: TmuxSession): SerializedTmuxSession {
+  return {
+    ...session,
+    created: session.created.toISOString(),
+  };
+}
+
 export const trpcRouter = createTRPCRouter({
+  platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
   getServerCwd: publicProcedure.query(() => {
@@ -29,8 +59,8 @@ export const trpcRouter = createTRPCRouter({
   }),
 
   // Legacy tmux session procedures (for backwards compatibility)
-  listTmuxSessions: publicProcedure.query((): TmuxSession[] => {
-    return listTmuxSessions();
+  listTmuxSessions: publicProcedure.query((): SerializedTmuxSession[] => {
+    return listTmuxSessions().map(serializeTmuxSession);
   }),
 
   ensureTmuxSession: publicProcedure
@@ -50,17 +80,18 @@ export const trpcRouter = createTRPCRouter({
 
   // ============ Agent CRUD ============
 
-  listAgents: publicProcedure.query(async (): Promise<Agent[]> => {
-    return db
+  listAgents: publicProcedure.query(async (): Promise<SerializedAgent[]> => {
+    const agents = await db
       .select()
       .from(schema.agents)
       .where(isNull(schema.agents.archivedAt))
       .orderBy(schema.agents.createdAt);
+    return agents.map(serializeAgent);
   }),
 
   getAgent: publicProcedure
     .input(z.object({ slug: z.string() }))
-    .query(async ({ input }): Promise<Agent | null> => {
+    .query(async ({ input }): Promise<SerializedAgent | null> => {
       const result = await db
         .select()
         .from(schema.agents)
@@ -70,7 +101,7 @@ export const trpcRouter = createTRPCRouter({
       if (!agent || agent.archivedAt !== null) {
         return null;
       }
-      return agent;
+      return serializeAgent(agent);
     }),
 
   createAgent: publicProcedure
@@ -85,7 +116,7 @@ export const trpcRouter = createTRPCRouter({
         initialPrompt: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }): Promise<Agent> => {
+    .mutation(async ({ input }): Promise<SerializedAgent> => {
       const id = randomUUID();
       const tmuxSession = `agent-${id.slice(0, 8)}`;
 
@@ -102,7 +133,7 @@ export const trpcRouter = createTRPCRouter({
         })
         .returning();
 
-      return agent;
+      return serializeAgent(agent);
     }),
 
   deleteAgent: publicProcedure
@@ -299,3 +330,5 @@ function buildTmuxCommand(agentCommand: string[], workingDirectory: string): str
 }
 
 export type TRPCRouter = typeof trpcRouter;
+
+export type { SerializedAgent, SerializedTmuxSession };

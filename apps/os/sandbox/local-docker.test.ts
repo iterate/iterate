@@ -20,8 +20,7 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import superjson from "superjson";
+import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
 import {
@@ -48,9 +47,8 @@ const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 function createDaemonTrpcClient(port: number) {
   return createTRPCClient<TRPCRouter>({
     links: [
-      httpBatchLink({
+      httpLink({
         url: `http://localhost:${port}/api/trpc`,
-        transformer: superjson,
       }),
     ],
   });
