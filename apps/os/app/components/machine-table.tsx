@@ -13,6 +13,8 @@ import {
   RefreshCw,
   Activity,
   Circle,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
@@ -33,10 +35,14 @@ interface Machine {
   type: string;
   state: "started" | "archived";
   createdAt: Date;
-  metadata: { snapshotName?: string; containerId?: string; port?: number } & Record<
-    string,
-    unknown
-  >;
+  metadata: {
+    snapshotName?: string;
+    containerId?: string;
+    port?: number;
+    daemonStatus?: "ready" | "error";
+    daemonReadyAt?: string;
+    daemonStatusMessage?: string;
+  } & Record<string, unknown>;
 }
 
 interface MachineTableProps {
@@ -47,6 +53,45 @@ interface MachineTableProps {
   onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
   isLoading?: boolean;
+}
+
+function DaemonStatus({ machine }: { machine: Machine }) {
+  const { daemonStatus, daemonReadyAt, daemonStatusMessage } = machine.metadata;
+
+  if (machine.state === "archived") {
+    return <span className="text-muted-foreground text-sm">-</span>;
+  }
+
+  if (!daemonStatus) {
+    return (
+      <span className="flex items-center gap-1.5 text-muted-foreground text-sm">
+        <Circle className="h-3 w-3 animate-pulse" />
+        Starting...
+      </span>
+    );
+  }
+
+  if (daemonStatus === "error") {
+    return (
+      <span
+        className="flex items-center gap-1.5 text-destructive text-sm"
+        title={daemonStatusMessage}
+      >
+        <XCircle className="h-3 w-3" />
+        Error
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1.5 text-green-600 text-sm"
+      title={daemonReadyAt ? `Ready since ${new Date(daemonReadyAt).toLocaleString()}` : undefined}
+    >
+      <CheckCircle2 className="h-3 w-3" />
+      Ready
+    </span>
+  );
 }
 
 export function MachineTable({
@@ -75,46 +120,62 @@ export function MachineTable({
   // === Open URL helpers ===
 
   const openDaemonProxy = async (machineId: string) => {
-    const result = await trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-    window.open(result.daemonUrl, "_blank");
+    try {
+      const result = await trpcClient.machine.getPreviewInfo.query({
+        organizationSlug,
+        projectSlug,
+        machineId,
+      });
+      window.open(result.daemonUrl, "_blank");
+    } catch (err) {
+      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   const openTerminalProxy = async (machineId: string) => {
-    const result = await trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-    window.open(result.terminalUrl, "_blank");
+    try {
+      const result = await trpcClient.machine.getPreviewInfo.query({
+        organizationSlug,
+        projectSlug,
+        machineId,
+      });
+      window.open(result.terminalUrl, "_blank");
+    } catch (err) {
+      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   const openDaemonNative = async (machineId: string) => {
-    const result = await trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-    if (result.nativeDaemonUrl) {
-      window.open(result.nativeDaemonUrl, "_blank");
-    } else {
-      toast.error("Native URL not available");
+    try {
+      const result = await trpcClient.machine.getPreviewInfo.query({
+        organizationSlug,
+        projectSlug,
+        machineId,
+      });
+      if (result.nativeDaemonUrl) {
+        window.open(result.nativeDaemonUrl, "_blank");
+      } else {
+        toast.error("Native URL not available");
+      }
+    } catch (err) {
+      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
   const openTerminalNative = async (machineId: string) => {
-    const result = await trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-    if (result.nativeTerminalUrl) {
-      window.open(result.nativeTerminalUrl, "_blank");
-    } else {
-      toast.error("Native terminal URL not available");
+    try {
+      const result = await trpcClient.machine.getPreviewInfo.query({
+        organizationSlug,
+        projectSlug,
+        machineId,
+      });
+      if (result.nativeTerminalUrl) {
+        window.open(result.nativeTerminalUrl, "_blank");
+      } else {
+        toast.error("Native terminal URL not available");
+      }
+    } catch (err) {
+      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -356,6 +417,8 @@ export function MachineTable({
                 <span className={machine.type === "local-docker" ? "text-orange-600" : ""}>
                   {getTypeLabel(machine)}
                 </span>
+                <span>·</span>
+                <DaemonStatus machine={machine} />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
                 {machine.metadata?.snapshotName && (

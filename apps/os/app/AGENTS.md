@@ -4,13 +4,12 @@ This folder contains the React frontend application.
 
 ## Dev Server
 
-`pnpm dev` runs vite via Cloudflare tunnel. Key Doppler env vars:
+`pnpm dev` runs vite. Use `DEV_TUNNEL=1` for Cloudflare tunnel (→ `os-dev-{ITERATE_USER}.dev.iterate.com`).
 
-- `CLOUDFLARE_TUNNEL_HOST` — tunnel hostname (e.g., `jonas.dev2.iterate.com`)
-- `VITE_PUBLIC_URL` — must match tunnel URL for auth/callbacks to work
+Key Doppler env vars:
+
 - `ITERATE_USER` — used in alchemy stage (`dev-$ITERATE_USER`) → determines `DAYTONA_SNAPSHOT_PREFIX`
-
-Scripts use `sh -c` to expand `$ITERATE_USER` inside doppler context. Override with `STAGE=dev-foo pnpm dev`.
+- `VITE_PUBLIC_URL` — auto-set to tunnel URL when `DEV_TUNNEL=1`
 
 ## Browser Testing
 

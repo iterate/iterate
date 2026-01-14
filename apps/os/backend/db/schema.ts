@@ -293,6 +293,7 @@ export const machine = pgTable(
       .notNull()
       .default("started"),
     externalId: t.text().notNull(),
+    apiKeyHash: t.text(), // SHA-256 hash of machine API key for authentication
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),

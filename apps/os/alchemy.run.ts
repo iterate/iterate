@@ -10,6 +10,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { getTunnelHostname } from "@iterate-com/shared/cloudflare-tunnel";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -22,6 +23,15 @@ const app = await alchemy("os", {
   stateStore,
   destroyOrphans: false,
 });
+
+// Export STAGE so child processes (Vite) can use it for Cloudflare Tunnel config
+process.env.STAGE = app.stage;
+
+// Set VITE_PUBLIC_URL to tunnel hostname if DEV_TUNNEL is enabled
+const tunnelHostname = getTunnelHostname(__dirname);
+if (tunnelHostname) {
+  process.env.VITE_PUBLIC_URL = `https://${tunnelHostname}`;
+}
 
 if (!/^[\w-]+$/.test(app.stage)) {
   throw new Error(`Invalid stage: ${app.stage}`);
@@ -113,13 +123,19 @@ async function verifyDopplerEnvironment() {
 
 const NonEmpty = z.string().nonempty();
 const Required = NonEmpty;
-const Optional = NonEmpty.optional();
+// Treat empty strings as undefined for optional fields
+const Optional = z
+  .string()
+  .optional()
+  .transform((v) => (v === "" ? undefined : v))
+  .pipe(NonEmpty.optional());
 const BoolyString = z.enum(["true", "false"]).optional();
 /** needed by the deploy script, but not at runtime */
 const Env = z.object({
   // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
 
   BETTER_AUTH_SECRET: Required,
+  CLOUDFLARE_TUNNEL_HOST: Optional,
   DAYTONA_API_KEY: Required,
   DAYTONA_SNAPSHOT_PREFIX: Required,
   GOOGLE_CLIENT_ID: Required,
@@ -148,12 +164,21 @@ const Env = z.object({
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>>);
 
-async function setupEnvironmentVariables() {
+// Type for env vars wrapped as alchemy secrets
+type EnvSecrets = {
+  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string
+    ? ReturnType<typeof alchemy.secret<string>>
+    : never;
+};
+
+async function setupEnvironmentVariables(): Promise<EnvSecrets> {
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
   if (!parsed.success) {
     throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);
   }
-  return R.mapValues(parsed.data, alchemy.secret);
+  // Filter out undefined values before wrapping in alchemy.secret
+  const defined = R.pickBy(parsed.data, (v) => v !== undefined) as Record<string, string>;
+  return R.mapValues(defined, alchemy.secret) as unknown as EnvSecrets;
 }
 
 async function setupDatabase() {
@@ -274,6 +299,7 @@ async function deployWorker() {
   );
 
   const devGitRef = getCurrentGitRef();
+  console.log(`Current git branch: ${devGitRef}`);
 
   const worker = await TanStackStart("os", {
     bindings: {

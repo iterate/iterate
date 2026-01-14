@@ -51,9 +51,11 @@ export const billingRouter = router({
         if (!existing.stripeCustomerId) {
           const customer = await stripe.customers.create({
             name: ctx.organization.name,
+            email: ctx.user.email ?? undefined, // For Stripe→PostHog data warehouse linking
             metadata: {
               organizationId: ctx.organization.id,
               organizationSlug: ctx.organization.slug,
+              createdByUserId: ctx.user.id, // For PostHog tracking in webhooks
             },
           });
 

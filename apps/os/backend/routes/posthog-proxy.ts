@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { CloudflareEnv } from "../../env.ts";
-import { logger } from "../tag-logger.ts";
+import { logger as _logger } from "../tag-logger.ts";
 
 const POSTHOG_HOST = "eu.i.posthog.com";
 
@@ -13,7 +13,7 @@ const POSTHOG_HOST = "eu.i.posthog.com";
 // - /flags: Autocapture, session recording, feature flags
 // - /s: Session recordings
 // - /static: Static assets (array.js, etc.)
-const ALLOWED_PATH_PREFIXES = [
+const _ALLOWED_PATH_PREFIXES = [
   "/batch",
   "/e",
   "/i/",
@@ -36,16 +36,17 @@ posthogProxyApp.all("/ingest/*", async (c) => {
   // Remove /ingest prefix and forward to PostHog
   const posthogPath = url.pathname.replace(/^\/ingest/, "");
 
+  // TODO: Re-enable allowlist once we've confirmed all required PostHog paths
   // Validate path against allowlist
   // Only allow exact match or match with trailing slash (e.g., "/e" or "/e/something")
-  const isAllowed = ALLOWED_PATH_PREFIXES.some(
-    (prefix) => posthogPath === prefix || posthogPath.startsWith(prefix + "/"),
-  );
+  // const isAllowed = ALLOWED_PATH_PREFIXES.some(
+  //   (prefix) => posthogPath === prefix || posthogPath.startsWith(prefix + "/"),
+  // );
 
-  if (!isAllowed) {
-    logger.warn("PostHog proxy: blocked unallowed path", { path: posthogPath });
-    return c.text("Not found", 404);
-  }
+  // if (!isAllowed) {
+  //   logger.warn("PostHog proxy: blocked unallowed path", { path: posthogPath });
+  //   return c.text("Not found", 404);
+  // }
 
   const posthogUrl = new URL(`https://${POSTHOG_HOST}${posthogPath}${url.search}`);
 
