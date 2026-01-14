@@ -9,9 +9,6 @@ export default {
     deployments: "write",
   },
   on: {
-    push: {
-      branches: ["main", "mmkal/25/10/29/slackclientinworkflows"],
-    },
     workflow_dispatch: {
       inputs: {
         stage: {
