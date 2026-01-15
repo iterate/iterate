@@ -9,12 +9,15 @@ export default {
     deployments: "write",
   },
   on: {
+    push: {
+      branches: ["main"],
+    },
     workflow_dispatch: {
       inputs: {
         stage: {
           description:
             "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
-          required: true,
+          required: false,
           type: "string",
         },
       },
@@ -43,7 +46,7 @@ export default {
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
 
           run: dedent`
-            echo stage=\${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+            echo stage=\${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
             echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
           `,
         },
