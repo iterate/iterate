@@ -87,7 +87,6 @@ const setupIterateRepo = () => {
     cloneOrPullFromGit();
   }
 
-  console.log(`Deleting ${LOCAL_REPO_MOUNT} to avoid confusion with ${ITERATE_REPO}`);
   rmSync(LOCAL_REPO_MOUNT, { recursive: true, force: true });
 
   console.log("");
@@ -137,7 +136,7 @@ const buildDaemon = () => {
   console.log("========================================");
   console.log("");
 
-  execSync("pnpm build", { cwd: DAEMON_PATH, stdio: "inherit" });
+  execSync("npx vite build", { cwd: DAEMON_PATH, stdio: "inherit" });
 
   console.log("");
 };
