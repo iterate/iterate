@@ -25,7 +25,7 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm spec --repeat-each=10 --reporter=json > spec-results.json 2>&1 || true",
+          run: "PLAYWRIGHT_JSON_OUTPUT_FILE=spec-results.json pnpm spec --repeat-each=10 --reporter=json || true",
         },
         {
           name: "Generate Flaky Test Report",

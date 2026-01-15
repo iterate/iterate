@@ -5,10 +5,26 @@ const outputFile = process.argv[3] || "flaky-report.md";
 
 let results;
 try {
-  const jsonContent = fs.readFileSync(resultsFile, "utf8");
-  const lines = jsonContent.split("\n");
-  const jsonLine = lines.find((l) => l.startsWith("{"));
-  results = jsonLine ? JSON.parse(jsonLine) : null;
+  const content = fs.readFileSync(resultsFile, "utf8");
+  // Try parsing as clean JSON first (when using PLAYWRIGHT_JSON_OUTPUT_FILE)
+  // Fall back to extracting JSON from mixed stdout/stderr output
+  try {
+    results = JSON.parse(content);
+  } catch {
+    // Find JSON start - look for '{\n  "' pattern (Playwright JSON reporter format)
+    const jsonStartMatch = content.match(/\{[\r\n]+\s*"/);
+    if (!jsonStartMatch) {
+      throw new Error("No JSON object found in file");
+    }
+    const jsonStart = jsonStartMatch.index;
+    // Find last '}' followed by non-JSON content (pnpm error message) or EOF
+    const lastBraceMatch = content.match(/\}[\r\n]+\s*(?:ELIFECYCLE|$)/);
+    const jsonEnd = lastBraceMatch ? lastBraceMatch.index : content.lastIndexOf("}");
+    if (jsonEnd === -1 || jsonEnd < jsonStart) {
+      throw new Error("Could not find JSON end");
+    }
+    results = JSON.parse(content.slice(jsonStart, jsonEnd + 1));
+  }
 } catch (err) {
   console.log("Failed to parse results:", err.message);
   fs.writeFileSync(
