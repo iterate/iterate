@@ -68,7 +68,7 @@ function OrgSettingsForm({ organization, isSaving, onSubmit }: OrgSettingsFormPr
   };
 
   return (
-    <div className="p-4 md:p-8 space-y-6">
+    <div className="p-4 space-y-6">
       <form onSubmit={handleSubmit}>
         <FieldGroup>
           <FieldSet>

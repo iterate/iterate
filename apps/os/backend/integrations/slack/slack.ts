@@ -4,11 +4,138 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
+import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
+import { verifySlackSignature } from "./slack-utils.ts";
+
+const DAEMON_PORT = 3001;
+
+/**
+ * Check if a host is an internal/blocked address (SSRF protection).
+ * Blocks: localhost, private IPs (10.x, 172.16-31.x, 192.168.x), link-local, cloud metadata.
+ */
+function isBlockedHost(host: string): boolean {
+  const h = host.toLowerCase().trim();
+
+  // Block localhost
+  if (h === "localhost" || h.startsWith("127.")) return true;
+
+  // Block cloud metadata endpoints
+  if (h === "169.254.169.254" || h === "metadata.google.internal") return true;
+
+  // Block private IPs
+  const ip = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ip) {
+    const [, a, b] = ip.map(Number);
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local)
+  }
+
+  return false;
+}
+
+/**
+ * Build URL to forward webhooks to a machine's daemon.
+ * Supports all machine types: daytona, local-docker, local.
+ */
+function buildMachineForwardUrl(
+  machine: typeof schema.machine.$inferSelect,
+  path: string,
+): string | null {
+  const metadata = machine.metadata as Record<string, unknown> | null;
+
+  switch (machine.type) {
+    case "local": {
+      // Local machine: forward to configured host:port
+      const host = metadata?.host as string | undefined;
+      // Support both new format (ports map) and legacy (single port)
+      const ports = metadata?.ports as Record<string, number> | undefined;
+      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
+      if (!host || !port) {
+        logger.warn("[Slack Webhook] Local machine missing host/port config", {
+          machineId: machine.id,
+        });
+        return null;
+      }
+      // SSRF protection: block internal IPs
+      if (isBlockedHost(host)) {
+        logger.warn("[Slack Webhook] Blocked internal IP", {
+          host,
+          machineId: machine.id,
+        });
+        return null;
+      }
+      return `http://${host}:${port}${path}`;
+    }
+
+    case "local-docker": {
+      // Local docker: forward to localhost with mapped port
+      // Support both new format (ports map) and legacy (single port)
+      const ports = metadata?.ports as Record<string, number> | undefined;
+      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
+      if (!port) {
+        logger.warn("[Slack Webhook] Local docker machine missing port", {
+          machineId: machine.id,
+        });
+        return null;
+      }
+      return `http://localhost:${port}${path}`;
+    }
+
+    case "daytona":
+      // Daytona: use external proxy URL
+      if (!machine.externalId) {
+        logger.warn("[Slack Webhook] Daytona machine missing externalId", {
+          machineId: machine.id,
+        });
+        return null;
+      }
+      return `https://${DAEMON_PORT}-${machine.externalId}.proxy.daytona.works${path}`;
+
+    default:
+      logger.warn("[Slack Webhook] Unknown machine type for forwarding", {
+        machineId: machine.id,
+        type: machine.type,
+      });
+      return null;
+  }
+}
+
+/**
+ * Forward a Slack webhook payload to a machine's daemon.
+ * Extracted for testability and clarity.
+ */
+export async function forwardSlackWebhookToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  payload: Record<string, unknown>,
+): Promise<{ success: boolean; error?: string }> {
+  const targetUrl = buildMachineForwardUrl(machine, "/api/integrations/slack/webhook");
+  if (!targetUrl) {
+    return { success: false, error: "Could not build forward URL" };
+  }
+
+  try {
+    const resp = await fetch(targetUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) {
+      logger.error("[Slack Webhook] Forward failed", { status: resp.status });
+      return { success: false, error: `HTTP ${resp.status}` };
+    }
+    return { success: true };
+  } catch (err) {
+    logger.error("[Slack Webhook] Forward error", err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -181,12 +308,21 @@ slackApp.get(
         // Check if this Slack workspace is already connected to another project
         const existingWorkspaceConnection = await tx.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamData.id)),
-          with: { project: true },
+          with: { project: { with: { organization: true } } },
         });
 
         if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
+          const existingProject = existingWorkspaceConnection.project;
+          const existingOrg = existingProject?.organization;
           throw new Error(
-            `workspace_already_connected:${existingWorkspaceConnection.project?.name || "another project"}`,
+            `workspace_already_connected:${JSON.stringify({
+              teamId: teamData.id,
+              teamName: teamData.name,
+              existingProjectSlug: existingProject?.slug ?? "",
+              existingProjectName: existingProject?.name ?? "",
+              existingOrgSlug: existingOrg?.slug ?? "",
+              existingOrgName: existingOrg?.name ?? "",
+            })}`,
           );
         }
 
@@ -228,11 +364,26 @@ slackApp.get(
       });
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
-        const projectName = error.message.split(":")[1];
-        const redirectPath = callbackURL || "/";
-        return c.redirect(
-          `${redirectPath}?error=slack_workspace_already_connected&project=${encodeURIComponent(projectName)}`,
-        );
+        const conflictData = JSON.parse(
+          error.message.replace("workspace_already_connected:", ""),
+        ) as {
+          teamId: string;
+          teamName: string;
+          existingProjectSlug: string;
+          existingProjectName: string;
+          existingOrgSlug: string;
+          existingOrgName: string;
+        };
+        const params = new URLSearchParams({
+          teamId: conflictData.teamId,
+          teamName: conflictData.teamName,
+          existingProjectSlug: conflictData.existingProjectSlug,
+          existingProjectName: conflictData.existingProjectName,
+          existingOrgSlug: conflictData.existingOrgSlug,
+          existingOrgName: conflictData.existingOrgName,
+          newProjectId: projectId,
+        });
+        return c.redirect(`/slack-conflict?${params.toString()}`);
       }
       throw error;
     }
@@ -246,16 +397,14 @@ slackApp.get(
 
 /**
  * Slack webhook handler
- * - Verifies Slack signature
- * - Handles url_verification challenge
- * - Saves events to the events table
+ * - Verifies Slack signature synchronously
+ * - Handles url_verification challenge synchronously
+ * - Processes events in background via waitUntil for Slack compliance
+ * - Deduplicates events via slack_event_id
  */
 slackApp.post("/webhook", async (c) => {
+  // Signature verification - KEEP SYNCHRONOUS
   const body = await c.req.text();
-
-  logger.info("[Slack Webhook] Received webhook request");
-
-  // Verify Slack signature
   const isValid = await verifySlackSignature(
     c.env.SLACK_SIGNING_SECRET,
     c.req.header("x-slack-signature") ?? null,
@@ -265,77 +414,105 @@ slackApp.post("/webhook", async (c) => {
 
   if (!isValid) {
     logger.warn("[Slack Webhook] Invalid signature");
-    return c.json({ error: "Invalid signature" }, 401);
+    return c.text("Invalid signature", 401);
   }
 
-  let payload: unknown;
+  // Parse - KEEP SYNCHRONOUS
+  let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(body);
   } catch {
-    logger.warn("[Slack Webhook] Invalid JSON body");
-    return c.json({ error: "Invalid JSON" }, 400);
+    return c.text("Invalid JSON", 400);
   }
 
-  if (typeof payload !== "object" || payload === null) {
-    logger.warn("[Slack Webhook] Invalid payload structure");
-    return c.json({ error: "Invalid payload" }, 400);
+  // URL verification - return immediately
+  if (payload.type === "url_verification") {
+    return c.json({ challenge: payload.challenge });
   }
 
-  const p = payload as Record<string, unknown>;
+  // Extract event_id for dedup
+  const slackEventId = payload.event_id as string | undefined;
+  const teamId =
+    (payload.team_id as string) ||
+    ((payload.team as Record<string, unknown>)?.id as string) ||
+    ((payload.event as Record<string, unknown>)?.team as string);
 
-  // Log the full payload for debugging
-  logger.info("[Slack Webhook] Payload received", {
-    type: p.type,
-    event_type: (p.event as Record<string, unknown>)?.type,
-    team_id: p.team_id,
+  // Log receipt
+  logger.info("[Slack Webhook] Received", {
+    type: (payload.event as Record<string, unknown>)?.type,
+    teamId,
+    slackEventId,
+    retryNum: c.req.header("x-slack-retry-num"),
   });
 
-  // Handle URL verification challenge
-  if (p.type === "url_verification") {
-    logger.info("[Slack Webhook] URL verification challenge received");
-    return c.json({ challenge: p.challenge });
-  }
-
-  // Get team ID from payload
-  const teamId =
-    (p.team_id as string) ||
-    ((p.team as Record<string, unknown>)?.id as string) ||
-    ((p.event as Record<string, unknown>)?.team as string);
-
-  if (!teamId) {
-    logger.warn("[Slack Webhook] No team_id in payload");
-    return c.text("ok");
-  }
-
-  // Find the project associated with this Slack team
+  // Get db reference before returning (needed in background)
   const db = c.var.db;
 
-  // Try to find a project linked to this Slack team
-  const connection = await db.query.projectConnection.findFirst({
-    where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
-  });
+  // RETURN IMMEDIATELY - process in background for Slack compliance
+  waitUntil(
+    (async () => {
+      try {
+        if (!teamId) {
+          logger.warn("[Slack Webhook] No team_id in payload");
+          return;
+        }
 
-  const projectId = connection?.projectId;
+        // Dedup check using external_id (Slack's event_id)
+        if (slackEventId) {
+          const existing = await db.query.event.findFirst({
+            where: (e, { eq }) => eq(e.externalId, slackEventId),
+          });
+          if (existing) {
+            logger.info("[Slack Webhook] Duplicate, skipping", { slackEventId });
+            return;
+          }
+        }
 
-  if (!projectId) {
-    logger.warn("[Slack Webhook] No project found for team", { teamId });
-    return c.text("ok");
-  }
+        // Single optimized query: get connection + target machine (or fallback to first started machine)
+        const connection = await db.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
+          with: {
+            webhookTargetMachine: true,
+            project: {
+              with: {
+                machines: {
+                  where: (m, { eq }) => eq(m.state, "started"),
+                  orderBy: (m, { asc }) => asc(m.createdAt),
+                  limit: 1,
+                },
+              },
+            },
+          },
+        });
+        const projectId = connection?.projectId;
+        if (!projectId) {
+          logger.warn("[Slack Webhook] No project for team", { teamId });
+          return;
+        }
 
-  // Save event to database
-  const eventType = getSlackEventType(payload);
-  logger.info("[Slack Webhook] Saving event", { eventType, projectId, teamId });
+        // Use explicit webhook target, or fall back to first started machine in project
+        const targetMachine =
+          connection.webhookTargetMachine?.state === "started"
+            ? connection.webhookTargetMachine
+            : (connection.project?.machines[0] ?? null);
 
-  try {
-    await db.insert(schema.event).values({
-      type: eventType,
-      payload: payload as Record<string, unknown>,
-      projectId,
-    });
-    logger.info("[Slack Webhook] Event saved successfully");
-  } catch (error) {
-    logger.error("[Slack Webhook] Failed to save event", error);
-  }
+        // Forward to machine if available
+        if (targetMachine) {
+          await forwardSlackWebhookToMachine(targetMachine, payload);
+        }
+
+        // Save event with type slack:webhook-received, detailed info in payload
+        await db.insert(schema.event).values({
+          type: "slack:webhook-received",
+          payload: payload,
+          projectId,
+          externalId: slackEventId,
+        });
+      } catch (err) {
+        logger.error("[Slack Webhook] Background error", err);
+      }
+    })(),
+  );
 
   return c.text("ok");
 });

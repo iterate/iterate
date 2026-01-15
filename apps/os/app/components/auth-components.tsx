@@ -168,7 +168,12 @@ function EmailOtpSignIn() {
         <form onSubmit={handleOTPSubmit} className="space-y-4">
           <InputOTP value={otp} onChange={handleOtpChange} disabled={isDisabled} autoFocus />
           {error && <p className="text-sm text-destructive text-center">{error}</p>}
-          <Button type="submit" className="w-full" disabled={isDisabled || otp.length !== 6}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={isDisabled || otp.length !== 6}
+            aria-label={isLoading ? "Loading" : undefined}
+          >
             {isLoading ? "Verifying..." : "Verify"}
           </Button>
           <div className="flex items-center justify-between text-sm">
@@ -202,7 +207,6 @@ function EmailOtpSignIn() {
         placeholder="you@example.com"
         defaultValue={email}
         disabled={isDisabled}
-        aria-label={isDisabled ? "Loading" : undefined}
         required
         autoFocus
         data-testid="email-input"
@@ -212,6 +216,7 @@ function EmailOtpSignIn() {
         type="submit"
         className="w-full"
         disabled={isDisabled}
+        aria-label={isLoading ? "Loading" : undefined}
         data-testid="email-submit-button"
       >
         {isLoading ? "Sending code..." : "Continue with Email"}

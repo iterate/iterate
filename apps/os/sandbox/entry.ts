@@ -82,7 +82,8 @@ const setupIterateRepo = () => {
 
   // Use mounted local repo if available (local-docker dev mode)
   // Otherwise clone/pull from GitHub (Daytona mode)
-  if (existsSync(LOCAL_REPO_MOUNT)) {
+  const isLocalDocker = existsSync(LOCAL_REPO_MOUNT);
+  if (isLocalDocker) {
     copyFromLocalMount();
   } else {
     cloneOrPullFromGit();
@@ -90,12 +91,43 @@ const setupIterateRepo = () => {
 
   console.log("");
   console.log("Running pnpm install...");
-  execSync("pnpm install", {
+
+  // In local-docker mode, allow lockfile updates (dependencies may have changed)
+  // In Daytona/CI mode, use frozen lockfile to ensure reproducibility
+  const pnpmCmd = isLocalDocker ? "pnpm install --no-frozen-lockfile" : "pnpm install";
+  execSync(pnpmCmd, {
     cwd: ITERATE_REPO,
     stdio: "inherit",
     env: { ...process.env, CI: "true" },
   });
 
+  console.log("");
+};
+
+// ============================================
+// Agent configuration setup
+// ============================================
+
+/**
+ * Copies default agent configs (Claude Code, OpenCode, Pi) to $HOME.
+ * Done at runtime so config changes take effect on machine restart without rebuilding the image.
+ */
+const setupAgentConfigs = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up agent configurations");
+  console.log("========================================");
+  console.log("");
+
+  const homeSkeletonPath = join(ITERATE_REPO, "apps", "os", "sandbox", "home-skeleton");
+  const home = homedir();
+
+  if (!existsSync(homeSkeletonPath)) {
+    console.log("Warning: home-skeleton not found, skipping agent config setup");
+    return;
+  }
+
+  execSync(`rsync -av ${homeSkeletonPath}/ ${home}/`, { stdio: "inherit" });
   console.log("");
 };
 
@@ -173,6 +205,7 @@ const main = () => {
   console.log("########################################");
 
   setupIterateRepo();
+  setupAgentConfigs();
   buildDaemon();
   cleanupS6RuntimeState();
 

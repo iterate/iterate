@@ -1,0 +1,7 @@
+{
+  "displayName": "OpenCode",
+  "description": "AI coding assistant server",
+  "port": 4096,
+  "healthEndpoint": "/session",
+  "hasWebUI": true
+}
