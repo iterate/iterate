@@ -34,6 +34,7 @@
     "@iterate-com/shared": "workspace:*",
     "@lydell/node-pty": "^1.0.1",
     "@mariozechner/pi-ai": "^0.42.0",
+    "@opencode-ai/sdk": "1.1.18",
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@orpc/client": "^1.13.4",
     "@orpc/contract": "^1.13.4",
@@ -122,7 +123,6 @@
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
-    "vite-plugin-cloudflare-tunnel": "^1.0.12",
     "vitest": "^3.0.5"
   }
 }

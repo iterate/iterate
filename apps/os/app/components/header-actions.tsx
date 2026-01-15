@@ -1,31 +1,31 @@
-import { useLayoutEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { HEADER_ACTIONS_ID } from "./header-actions-constants.ts";
+import { createContext, useContext, useLayoutEffect, type ReactNode } from "react";
 
-interface HeaderActionsProps {
+type SetActions = (actions: ReactNode) => void;
+const HeaderActionsContext = createContext<SetActions | null>(null);
+
+/** Provider for header actions slot - wrap around layout content */
+export function HeaderActionsProvider({
+  children,
+  onActionsChange,
+}: {
   children: ReactNode;
+  onActionsChange: SetActions;
+}) {
+  return (
+    <HeaderActionsContext.Provider value={onActionsChange}>
+      {children}
+    </HeaderActionsContext.Provider>
+  );
 }
 
-/**
- * Portal component to render action buttons in the header's right side.
- * Use this on mobile to place page actions in the header instead of the content area.
- *
- * @example
- * <HeaderActions>
- *   <Button className="md:hidden" size="sm">
- *     <Plus className="h-4 w-4" />
- *   </Button>
- * </HeaderActions>
- */
-export function HeaderActions({ children }: HeaderActionsProps) {
-  const [container, setContainer] = useState<HTMLElement | null>(null);
+/** Render children in the header actions slot */
+export function HeaderActions({ children }: { children: ReactNode }) {
+  const setActions = useContext(HeaderActionsContext);
 
   useLayoutEffect(() => {
-    const element = document.getElementById(HEADER_ACTIONS_ID);
-    setContainer(element);
-  }, []);
+    setActions?.(children);
+    return () => setActions?.(null);
+  }, [children, setActions]);
 
-  if (!container) return null;
-
-  return createPortal(children, container);
+  return null;
 }

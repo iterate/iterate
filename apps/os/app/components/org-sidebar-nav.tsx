@@ -1,4 +1,4 @@
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useMatchRoute } from "@tanstack/react-router";
 import { Box, CreditCard, FolderOpen, Plus, Settings, Users } from "lucide-react";
 import {
   SidebarGroup,
@@ -22,12 +22,27 @@ interface OrgSidebarNavProps {
 }
 
 export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
-  const location = useLocation();
+  const matchRoute = useMatchRoute();
   const { isMobile } = useSidebar();
 
-  const isOrgSettingsActive = location.pathname === `/orgs/${orgSlug}/settings`;
-  const isTeamActive = location.pathname === `/orgs/${orgSlug}/team`;
-  const isBillingActive = location.pathname === `/orgs/${orgSlug}/billing`;
+  const isOrgSettingsActive = Boolean(
+    matchRoute({
+      to: "/orgs/$organizationSlug/settings",
+      params: { organizationSlug: orgSlug },
+    }),
+  );
+  const isTeamActive = Boolean(
+    matchRoute({
+      to: "/orgs/$organizationSlug/team",
+      params: { organizationSlug: orgSlug },
+    }),
+  );
+  const isBillingActive = Boolean(
+    matchRoute({
+      to: "/orgs/$organizationSlug/billing",
+      params: { organizationSlug: orgSlug },
+    }),
+  );
 
   return (
     <>
@@ -81,8 +96,12 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
           <SidebarGroupContent>
             <SidebarMenu>
               {projects.map((project) => {
-                const isActive = location.pathname.startsWith(
-                  `/orgs/${orgSlug}/projects/${project.slug}`,
+                const isActive = Boolean(
+                  matchRoute({
+                    to: "/orgs/$organizationSlug/projects/$projectSlug",
+                    params: { organizationSlug: orgSlug, projectSlug: project.slug },
+                    fuzzy: true,
+                  }),
                 );
                 return (
                   <SidebarMenuItem key={project.id}>

@@ -7,6 +7,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { trpcRouter } from "./trpc/router.ts";
 import { baseApp as app } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
+import { slackRouter } from "./routers/slack.ts";
 
 app.use("*", logger());
 app.use(
@@ -48,6 +49,7 @@ app.all("/api/trpc/*", (c) => {
 });
 
 app.route("/api/pty", ptyRouter);
+app.route("/api/integrations/slack", slackRouter);
 
 app.use("/*", serveStatic({ root: "./dist" }));
 app.get("*", serveStatic({ root: "./dist", path: "index.html" }));

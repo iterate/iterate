@@ -1,16 +1,15 @@
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
+import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
-import { getTunnelHostname } from "@iterate-com/shared/cloudflare-tunnel";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -24,14 +23,8 @@ const app = await alchemy("os", {
   destroyOrphans: false,
 });
 
-// Export STAGE so child processes (Vite) can use it for Cloudflare Tunnel config
+// Export STAGE so child processes (Vite) can use it
 process.env.STAGE = app.stage;
-
-// Set VITE_PUBLIC_URL to tunnel hostname if DEV_TUNNEL is enabled
-const tunnelHostname = getTunnelHostname(__dirname);
-if (tunnelHostname) {
-  process.env.VITE_PUBLIC_URL = `https://${tunnelHostname}`;
-}
 
 if (!/^[\w-]+$/.test(app.stage)) {
   throw new Error(`Invalid stage: ${app.stage}`);
@@ -96,6 +89,117 @@ function ensureLocalDockerImage() {
   }
 }
 
+/**
+ * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
+ * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
+ */
+function getDevTunnelConfig() {
+  const devTunnel = process.env.DEV_TUNNEL;
+  if (!devTunnel || devTunnel === "0" || devTunnel === "false") return null;
+
+  const subdomain = devTunnel === "1" || devTunnel === "true" ? `${app.stage}-os` : devTunnel;
+
+  return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
+}
+
+/**
+ * Wait for vite dev server to be ready by polling localhost
+ */
+async function waitForVite(port: number, maxWaitMs = 60_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await fetch(`http://localhost:${port}`, { method: "HEAD", redirect: "manual" });
+      // Accept any response - vite is responding (including 302 redirects from force-public-url plugin)
+      if (res.ok || res.status === 302 || res.status === 404) return;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`Vite did not start on port ${port} within ${maxWaitMs}ms`);
+}
+
+/**
+ * Create a Cloudflare Tunnel resource for dev mode.
+ * MUST be called before app.finalize() so the resource is tracked.
+ */
+async function createDevTunnel(vitePort: number) {
+  const config = getDevTunnelConfig();
+  if (!config) return null;
+
+  console.log(`Creating dev tunnel: ${config.hostname} -> localhost:${vitePort}`);
+
+  const tunnel = await Tunnel(`dev-tunnel-${config.subdomain}`, {
+    name: config.subdomain,
+    adopt: true, // Don't fail if tunnel already exists from previous session
+    ingress: [
+      { hostname: config.hostname, service: `http://localhost:${vitePort}` },
+      { service: "http_status:404" },
+    ],
+  });
+
+  return { tunnel, config, vitePort };
+}
+
+/**
+ * Start cloudflared after vite is ready. Called AFTER app.finalize().
+ */
+function startCloudflared(tunnel: Awaited<ReturnType<typeof createDevTunnel>>) {
+  if (!tunnel) return;
+
+  const { tunnel: tunnelResource, config } = tunnel;
+
+  console.log(`Starting cloudflared tunnel: https://${config.hostname}`);
+
+  const cloudflared = spawn(
+    "cloudflared",
+    [
+      "tunnel",
+      "--loglevel",
+      "warn",
+      "--no-autoupdate",
+      "run",
+      "--token",
+      tunnelResource.token.unencrypted,
+    ],
+    { stdio: ["ignore", "inherit", "inherit"] },
+  );
+
+  cloudflared.on("error", (err) => {
+    console.error("Failed to start cloudflared:", err.message);
+    console.error("Make sure cloudflared is installed: brew install cloudflared");
+  });
+
+  cloudflared.on("spawn", () => {
+    console.log(`Cloudflared started (pid ${cloudflared.pid})`);
+  });
+
+  cloudflared.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null) {
+      console.error(`Cloudflared exited with code ${code}`);
+    } else if (signal) {
+      console.log(`Cloudflared killed by signal ${signal}`);
+    }
+  });
+
+  // Clean up cloudflared when the process exits
+  process.on("exit", () => cloudflared.kill());
+  process.on("SIGINT", () => {
+    cloudflared.kill();
+    process.exit(0);
+  });
+}
+
+/**
+ * Set VITE_PUBLIC_URL before vite starts (if tunnel enabled)
+ */
+function setupDevTunnelEnv() {
+  const config = getDevTunnelConfig();
+  if (!config) return;
+  process.env.VITE_PUBLIC_URL = `https://${config.hostname}`;
+}
+
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
   const dopplerConfig = z
@@ -141,6 +245,7 @@ const Env = z.object({
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
+  ANTHROPIC_API_KEY: Required,
   SLACK_CLIENT_ID: Required,
   SLACK_CLIENT_SECRET: Required,
   SLACK_SIGNING_SECRET: Required,
@@ -345,10 +450,29 @@ await verifyDopplerEnvironment();
 
 if (isDevelopment) {
   ensureLocalDockerImage();
+  // Set VITE_PUBLIC_URL before vite starts
+  setupDevTunnelEnv();
 }
 
+// Deploy worker (starts vite in dev mode)
 export const worker = await deployWorker();
 
+// Create tunnel resource BEFORE finalize so it's properly tracked
+// (fixes bug where tunnel was created after finalize, causing orphan deletion)
+let devTunnel: Awaited<ReturnType<typeof createDevTunnel>> = null;
+if (isDevelopment && getDevTunnelConfig() && worker.url) {
+  const vitePort = Number(new URL(worker.url).port || "5173");
+  devTunnel = await createDevTunnel(vitePort);
+}
+
 await app.finalize();
+
+// Start cloudflared AFTER finalize (long-running process)
+if (devTunnel && worker.url) {
+  const vitePort = Number(new URL(worker.url).port || "5173");
+  console.log(`Vite running at ${worker.url}`);
+  await waitForVite(vitePort);
+  startCloudflared(devTunnel);
+}
 
 if (!app.local) process.exit(0);

@@ -9,6 +9,7 @@ import {
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
+  Activity,
   Bot,
   GitBranch,
   Home,
@@ -35,6 +36,8 @@ import {
   SidebarProvider,
 } from "../../../components/ui/sidebar.tsx";
 import { AppHeader } from "../../../components/app-header.tsx";
+import { HeaderActionsProvider } from "../../../components/header-actions.tsx";
+import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
   beforeLoad: async ({ context, params }) => {
@@ -67,6 +70,7 @@ function ProjectLayout() {
   });
   const matchRoute = useMatchRoute();
   const { user } = useSessionUser();
+  const [headerActions, setHeaderActions] = useHeaderActions();
 
   if (!user) {
     throw new Error("User not found - should not happen in auth-required layout");
@@ -86,6 +90,27 @@ function ProjectLayout() {
       projectSlug: params.projectSlug,
     }),
   );
+
+  // Fetch machines list for breadcrumb dropdown
+  const { data: machinesList } = useSuspenseQuery(
+    trpc.machine.list.queryOptions({
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    }),
+  );
+
+  // Detect if we're on a machine detail page and extract machine ID
+  const machineMatch = matchRoute({
+    to: "/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
+    params,
+  });
+  const currentMachineId = machineMatch
+    ? (machineMatch as { machineId: string }).machineId
+    : undefined;
+  const currentMachine = currentMachineId
+    ? machinesList.find((m) => m.id === currentMachineId)
+    : undefined;
 
   // Memoize user props to avoid creating new objects on each render
   const userProps = useMemo(
@@ -139,6 +164,13 @@ function ProjectLayout() {
     slug: p.slug,
   }));
 
+  // Transform machines for breadcrumb dropdown (using id as slug for machines)
+  const machines = machinesList.map((m) => ({
+    id: m.id,
+    name: m.name,
+    slug: m.id, // machines use id for routing
+  }));
+
   // Type-safe navigation items
   const navItems = [
     {
@@ -155,6 +187,11 @@ function ProjectLayout() {
       to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
       label: "Machines",
       icon: Server,
+    },
+    {
+      to: "/orgs/$organizationSlug/projects/$projectSlug/events" as const,
+      label: "Events",
+      icon: Activity,
     },
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/repo" as const,
@@ -188,60 +225,63 @@ function ProjectLayout() {
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <div className="flex min-h-screen w-full">
-        <SidebarShell
-          header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
-          user={userProps}
-        >
-          <SidebarGroup>
-            <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
-              <span>Project:</span>
-              <span>{currentProject?.name}</span>
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isHomeActive}>
-                    <Link to="/orgs/$organizationSlug/projects/$projectSlug" params={params}>
-                      <Home className="h-4 w-4" />
-                      <span>Home</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {navItems.map((item) => {
-                  const isActive = Boolean(matchRoute({ to: item.to, params, fuzzy: true }));
-                  return (
-                    <SidebarMenuItem key={item.to}>
-                      <SidebarMenuButton asChild isActive={isActive}>
-                        <Link to={item.to} params={params}>
-                          <item.icon className="h-4 w-4" />
-                          <span>{item.label}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+      <SidebarShell
+        header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
+        user={userProps}
+      >
+        <SidebarGroup>
+          <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
+            <span>Project:</span>
+            <span>{currentProject?.name}</span>
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={isHomeActive}>
+                  <Link to="/orgs/$organizationSlug/projects/$projectSlug" params={params}>
+                    <Home className="h-4 w-4" />
+                    <span>Home</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              {navItems.map((item) => {
+                const isActive = Boolean(matchRoute({ to: item.to, params, fuzzy: true }));
+                return (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton asChild isActive={isActive}>
+                      <Link to={item.to} params={params}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-          <OrgSidebarNav orgSlug={currentOrg.slug} />
-        </SidebarShell>
-        <SidebarInset>
-          <AppHeader
-            orgName={currentOrg.name}
-            projectName={currentProject?.name}
-            organizationSlug={params.organizationSlug}
-            projectSlug={params.projectSlug}
-            projects={projects}
-          />
-          <main className="flex-1 overflow-auto">
-            <div className="max-w-md">
-              <Outlet />
-            </div>
-          </main>
-        </SidebarInset>
-      </div>
+        <OrgSidebarNav orgSlug={currentOrg.slug} />
+      </SidebarShell>
+      <SidebarInset>
+        <AppHeader
+          orgName={currentOrg.name}
+          projectName={currentProject?.name}
+          organizationSlug={params.organizationSlug}
+          projectSlug={params.projectSlug}
+          organizations={orgsList}
+          projects={projects}
+          machines={machines}
+          currentMachineId={currentMachineId}
+          currentMachineName={currentMachine?.name}
+          actions={headerActions}
+        />
+        <main className="w-full max-w-3xl flex-1 overflow-auto">
+          <HeaderActionsProvider onActionsChange={setHeaderActions}>
+            <Outlet />
+          </HeaderActionsProvider>
+        </main>
+      </SidebarInset>
     </SidebarProvider>
   );
 }

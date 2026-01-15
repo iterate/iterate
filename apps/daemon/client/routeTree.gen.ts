@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
+import { Route as AppOpencodeLogsRouteImport } from './routes/_app/opencode-logs'
+import { Route as AppDaemonLogsRouteImport } from './routes/_app/daemon-logs'
 import { Route as AppBtopRouteImport } from './routes/_app/btop'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
 import { Route as AppTmuxSessionsTmuxSessionNameRouteImport } from './routes/_app/tmux-sessions/$tmuxSessionName'
@@ -32,6 +34,16 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const AppTerminalRoute = AppTerminalRouteImport.update({
   id: '/terminal',
   path: '/terminal',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOpencodeLogsRoute = AppOpencodeLogsRouteImport.update({
+  id: '/opencode-logs',
+  path: '/opencode-logs',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDaemonLogsRoute = AppDaemonLogsRouteImport.update({
+  id: '/daemon-logs',
+  path: '/daemon-logs',
   getParentRoute: () => AppRoute,
 } as any)
 const AppBtopRoute = AppBtopRouteImport.update({
@@ -74,6 +86,8 @@ const AppTmuxSessionsTmuxSessionNamePtyRoute =
 
 export interface FileRoutesByFullPath {
   '/btop': typeof AppBtopRoute
+  '/daemon-logs': typeof AppDaemonLogsRoute
+  '/opencode-logs': typeof AppOpencodeLogsRoute
   '/terminal': typeof AppTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
@@ -85,6 +99,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/btop': typeof AppBtopRoute
+  '/daemon-logs': typeof AppDaemonLogsRoute
+  '/opencode-logs': typeof AppOpencodeLogsRoute
   '/terminal': typeof AppTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
@@ -98,6 +114,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_app/btop': typeof AppBtopRoute
+  '/_app/daemon-logs': typeof AppDaemonLogsRoute
+  '/_app/opencode-logs': typeof AppOpencodeLogsRoute
   '/_app/terminal': typeof AppTerminalRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agent/new': typeof AppAgentNewRoute
@@ -111,6 +129,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/btop'
+    | '/daemon-logs'
+    | '/opencode-logs'
     | '/terminal'
     | '/'
     | '/agent/new'
@@ -122,6 +142,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/btop'
+    | '/daemon-logs'
+    | '/opencode-logs'
     | '/terminal'
     | '/'
     | '/agent/new'
@@ -134,6 +156,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_app/btop'
+    | '/_app/daemon-logs'
+    | '/_app/opencode-logs'
     | '/_app/terminal'
     | '/_app/'
     | '/_app/agent/new'
@@ -169,6 +193,20 @@ declare module '@tanstack/react-router' {
       path: '/terminal'
       fullPath: '/terminal'
       preLoaderRoute: typeof AppTerminalRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/opencode-logs': {
+      id: '/_app/opencode-logs'
+      path: '/opencode-logs'
+      fullPath: '/opencode-logs'
+      preLoaderRoute: typeof AppOpencodeLogsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/daemon-logs': {
+      id: '/_app/daemon-logs'
+      path: '/daemon-logs'
+      fullPath: '/daemon-logs'
+      preLoaderRoute: typeof AppDaemonLogsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/btop': {
@@ -240,6 +278,8 @@ const AppTmuxSessionsTmuxSessionNameRouteWithChildren =
 
 interface AppRouteChildren {
   AppBtopRoute: typeof AppBtopRoute
+  AppDaemonLogsRoute: typeof AppDaemonLogsRoute
+  AppOpencodeLogsRoute: typeof AppOpencodeLogsRoute
   AppTerminalRoute: typeof AppTerminalRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAgentNewRoute: typeof AppAgentNewRoute
@@ -251,6 +291,8 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppBtopRoute: AppBtopRoute,
+  AppDaemonLogsRoute: AppDaemonLogsRoute,
+  AppOpencodeLogsRoute: AppOpencodeLogsRoute,
   AppTerminalRoute: AppTerminalRoute,
   AppIndexRoute: AppIndexRoute,
   AppAgentNewRoute: AppAgentNewRoute,

@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
 
 function ProjectAgentsPage() {
   return (
-    <div className="p-4 md:p-8">
+    <div className="p-4">
       <EmptyState
         icon={<Bot className="h-12 w-12" />}
         title="No agents yet"

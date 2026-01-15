@@ -18,6 +18,5 @@ RUN npm install -g pnpm@10.24.0 tsx@4.20.6 opencode-ai@1.1.17 @anthropic-ai/clau
 # Cache bust arg - pass hash of entry.ts to invalidate when file changes
 ARG ENTRY_TS_HASH=default
 COPY apps/os/sandbox/entry.ts /app/entry.ts
-RUN ls
 
 ENTRYPOINT [ "tsx", "entry.ts" ]
