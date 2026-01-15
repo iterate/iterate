@@ -260,7 +260,7 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required.default(`${app.stage}--`),
+  DAYTONA_SNAPSHOT_PREFIX: Optional,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -276,17 +276,26 @@ const Env = z.object({
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
-  POSTHOG_KEY: Required,
+  POSTHOG_PUBLIC_KEY: Optional,
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
   // ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
-  VITE_POSTHOG_PROXY_URI: Optional,
-  SIGNUP_ALLOWLIST: Required.default("*@nustom.com"),
+  VITE_POSTHOG_PROXY_URL: Optional,
+  SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
-} satisfies Record<string, z.ZodType<unknown, string | undefined>>);
+} satisfies Record<string, z.ZodType<unknown, string | undefined>>)
+  .transform((env) => {
+    if (env.DAYTONA_SNAPSHOT_PREFIX) {
+      return env;
+    }
+    return {
+      ...env,
+      DAYTONA_SNAPSHOT_PREFIX: `${app.stage}--`,
+    };
+  });
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {

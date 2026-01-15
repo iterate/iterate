@@ -5,8 +5,8 @@ import { useLocation, useSearchParams } from "react-router";
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    posthog.init(import.meta.env.POSTHOG_PUBLIC_KEY, {
-      api_host: "/ingest",
+    posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY, {
+      api_host: import.meta.env.VITE_POSTHOG_PROXY_URL || "/api/integrations/posthog/proxy",
       ui_host: "https://eu.posthog.com",
       capture_pageview: false, // We capture pageviews manually
       capture_pageleave: true, // Enable pageleave capture

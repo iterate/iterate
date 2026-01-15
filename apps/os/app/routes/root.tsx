@@ -54,7 +54,7 @@ const getBootstrapConfig = () => {
 // Initialize PostHog client-side with enhanced configuration
 if (shouldEnablePostHog()) {
   posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY!, {
-    api_host: import.meta.env.VITE_POSTHOG_PROXY_URI || "/ingest",
+    api_host: import.meta.env.VITE_POSTHOG_PROXY_URL || "/api/integrations/posthog/proxy",
     ui_host: "https://eu.posthog.com",
     // Bootstrap with cross-domain IDs if present (from iterate.com)
     bootstrap: getBootstrapConfig(),

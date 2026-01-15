@@ -17,22 +17,24 @@ app.get("*", async (c, next) => {
 });
 
 // PostHog proxy routes (order matters - most specific first)
-app.all("/ingest/decide", async (c) => {
+const POSTHOG_PROXY_PREFIX = "/api/integrations/posthog/proxy";
+
+app.all(`${POSTHOG_PROXY_PREFIX}/decide`, async (c) => {
   const url = new URL(c.req.url);
   const targetUrl = `https://eu.i.posthog.com/decide${url.search}`;
   return proxy(targetUrl, { ...c.req });
 });
 
-app.all("/ingest/static/*", async (c) => {
+app.all(`${POSTHOG_PROXY_PREFIX}/static/*`, async (c) => {
   const url = new URL(c.req.url);
-  const path = url.pathname.replace("/ingest/static", "");
+  const path = url.pathname.replace(`${POSTHOG_PROXY_PREFIX}/static`, "");
   const targetUrl = `https://eu-assets.i.posthog.com/static${path}${url.search}`;
   return proxy(targetUrl, { ...c.req });
 });
 
-app.all("/ingest/*", async (c) => {
+app.all(`${POSTHOG_PROXY_PREFIX}/*`, async (c) => {
   const url = new URL(c.req.url);
-  const path = url.pathname.replace("/ingest", "");
+  const path = url.pathname.replace(POSTHOG_PROXY_PREFIX, "");
   const targetUrl = `https://eu.i.posthog.com${path}${url.search}`;
   return proxy(targetUrl, { ...c.req });
 });

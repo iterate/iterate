@@ -17,11 +17,13 @@ export async function captureServerEvent(
     groups?: Record<string, string>;
   },
 ): Promise<void> {
-  const apiKey = env.POSTHOG_KEY;
+  const apiKey = env.POSTHOG_PUBLIC_KEY;
 
   if (!apiKey) {
     if (env.VITE_APP_STAGE !== "prd") {
-      logger.warn("POSTHOG_KEY not configured, skipping event capture", { event: params.event });
+      logger.warn("POSTHOG_PUBLIC_KEY not configured, skipping event capture", {
+        event: params.event,
+      });
     }
     return;
   }
@@ -65,11 +67,11 @@ export async function captureServerException(
     properties?: Record<string, unknown>;
   },
 ): Promise<void> {
-  const apiKey = env.POSTHOG_KEY;
+  const apiKey = env.POSTHOG_PUBLIC_KEY;
 
   if (!apiKey) {
     if (env.VITE_APP_STAGE !== "prd") {
-      logger.warn("POSTHOG_KEY not configured, skipping exception capture");
+      logger.warn("POSTHOG_PUBLIC_KEY not configured, skipping exception capture");
     }
     return;
   }
