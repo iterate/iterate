@@ -117,7 +117,6 @@ export async function forwardSlackWebhookToMachine(
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
-  logger.info("targetUrl", targetUrl);
   try {
     const resp = await fetch(targetUrl, {
       method: "POST",
@@ -435,13 +434,8 @@ slackApp.post("/webhook", async (c) => {
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
 
-  // Log receipt
-  logger.info("[Slack Webhook] Received", {
-    type: (payload.event as Record<string, unknown>)?.type,
-    teamId,
-    slackEventId,
-    retryNum: c.req.header("x-slack-retry-num"),
-  });
+  // Log full payload for debugging
+  logger.debug("[Slack Webhook] Received", { payload });
 
   // Get db reference before returning (needed in background)
   const db = c.var.db;
@@ -461,11 +455,12 @@ slackApp.post("/webhook", async (c) => {
             where: (e, { eq }) => eq(e.externalId, slackEventId),
           });
           if (existing) {
-            logger.info("[Slack Webhook] Duplicate, skipping", { slackEventId });
+            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
             return;
           }
         }
-        logger.info("[Slack Webhook] Finding connection", { teamId, payload });
+
+        logger.debug("[Slack Webhook] Looking up connection", { teamId });
         // Single optimized query: get connection + target machine (or fallback to first started machine)
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
@@ -482,7 +477,7 @@ slackApp.post("/webhook", async (c) => {
             },
           },
         });
-        logger.info("[Slack Webhook] Connection found", { connection });
+
         const projectId = connection?.projectId;
         if (!projectId) {
           logger.warn("[Slack Webhook] No project for team", { teamId });
@@ -497,7 +492,7 @@ slackApp.post("/webhook", async (c) => {
 
         // Forward to machine if available
         if (targetMachine) {
-          logger.info("[Slack Webhook] Forwarding to machine", { targetMachine });
+          logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
           await forwardSlackWebhookToMachine(targetMachine, payload);
         }
 
