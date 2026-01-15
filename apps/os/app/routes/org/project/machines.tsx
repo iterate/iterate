@@ -65,8 +65,21 @@ const Search = z.object({
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
-  component: ProjectMachinesPage,
   validateSearch: Search,
+  component: ProjectMachinesPage,
+  beforeLoad: async ({ context, params }) => {
+    // Preload data to avoid suspense - machine.list is already in parent layout
+    await Promise.all([
+      context.queryClient.ensureQueryData(trpc.machine.getDaemonDefinitions.queryOptions()),
+      context.queryClient.ensureQueryData(
+        trpc.machine.list.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+          includeArchived: false,
+        }),
+      ),
+    ]);
+  },
 });
 
 function ProjectMachinesPage() {

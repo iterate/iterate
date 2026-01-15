@@ -3,6 +3,9 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 
 export const Route = createFileRoute("/_auth/admin/session-info")({
+  beforeLoad: async ({ context }) => {
+    await context.queryClient.ensureQueryData(trpc.admin.sessionInfo.queryOptions());
+  },
   component: SessionInfoPage,
 });
 

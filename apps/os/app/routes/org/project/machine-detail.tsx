@@ -25,6 +25,16 @@ import { TypeId } from "../../../components/type-id.tsx";
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
 )({
+  beforeLoad: async ({ context, params }) => {
+    // Preload machine data to avoid suspense
+    await context.queryClient.ensureQueryData(
+      trpc.machine.byId.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      }),
+    );
+  },
   component: MachineDetailPage,
 });
 

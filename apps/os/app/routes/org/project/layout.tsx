@@ -31,12 +31,28 @@ import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
   beforeLoad: async ({ context, params }) => {
-    // Ensure org exists
-    const currentOrg = await context.queryClient.ensureQueryData(
-      trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
-      }),
-    );
+    // Preload ALL queries the component uses to avoid suspense
+    const [currentOrg] = await Promise.all([
+      context.queryClient.ensureQueryData(
+        trpc.organization.withProjects.queryOptions({
+          organizationSlug: params.organizationSlug,
+        }),
+      ),
+      context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions()),
+      context.queryClient.ensureQueryData(
+        trpc.project.bySlug.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      ),
+      context.queryClient.ensureQueryData(
+        trpc.machine.list.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+          includeArchived: false,
+        }),
+      ),
+    ]);
 
     if (!currentOrg) {
       throw redirect({ to: "/" });

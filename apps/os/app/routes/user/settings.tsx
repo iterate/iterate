@@ -1,4 +1,4 @@
-import { useState, type FormEvent, Suspense } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -23,18 +23,11 @@ import {
 } from "../../components/ui/select.tsx";
 
 export const Route = createFileRoute("/_auth/user/settings")({
-  component: UserSettingsRoute,
+  beforeLoad: async ({ context }) => {
+    await context.queryClient.ensureQueryData(trpc.user.me.queryOptions());
+  },
+  component: UserSettingsPage,
 });
-
-function UserSettingsRoute() {
-  return (
-    <CenteredLayout>
-      <Suspense fallback={<div className="text-muted-foreground">Loading...</div>}>
-        <UserSettingsPage />
-      </Suspense>
-    </CenteredLayout>
-  );
-}
 
 function UserSettingsPage() {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
@@ -52,16 +45,22 @@ function UserSettingsPage() {
   });
 
   if (!user) {
-    return <div className="text-muted-foreground">User not found</div>;
+    return (
+      <CenteredLayout>
+        <div className="text-muted-foreground">User not found</div>
+      </CenteredLayout>
+    );
   }
 
   return (
-    <UserSettingsForm
-      key={user.id}
-      user={{ id: user.id, name: user.name, email: user.email }}
-      isSaving={updateUser.isPending}
-      onSubmit={(name) => updateUser.mutate(name)}
-    />
+    <CenteredLayout>
+      <UserSettingsForm
+        key={user.id}
+        user={{ id: user.id, name: user.name, email: user.email }}
+        isSaving={updateUser.isPending}
+        onSubmit={(name) => updateUser.mutate(name)}
+      />
+    </CenteredLayout>
   );
 }
 

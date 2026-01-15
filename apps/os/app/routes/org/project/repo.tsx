@@ -1,4 +1,5 @@
 import { Suspense, useState } from "react";
+// Note: outer Suspense import kept for RepoPicker component which loads on-demand
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GitBranch, Github, ChevronDown, Check, ExternalLink, Plus, Trash2 } from "lucide-react";
@@ -83,22 +84,25 @@ function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }
 }
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug/repo")({
-  component: ProjectRepoRoute,
+  beforeLoad: async ({ context, params }) => {
+    // Preload repo data to avoid suspense - project.bySlug is already in parent layout
+    await Promise.all([
+      context.queryClient.ensureQueryData(
+        trpc.project.bySlug.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      ),
+      context.queryClient.ensureQueryData(
+        trpc.project.getGithubConnection.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      ),
+    ]);
+  },
+  component: ProjectRepoPage,
 });
-
-function ProjectRepoRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
-      <ProjectRepoPage />
-    </Suspense>
-  );
-}
 
 function ProjectRepoPage() {
   const params = useParams({

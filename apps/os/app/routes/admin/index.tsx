@@ -4,6 +4,12 @@ import { Users, Building2 } from "lucide-react";
 import { trpc } from "../../lib/trpc.tsx";
 
 export const Route = createFileRoute("/_auth/admin/")({
+  beforeLoad: async ({ context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(trpc.admin.listUsers.queryOptions({ limit: 10 })),
+      context.queryClient.ensureQueryData(trpc.admin.listOrganizations.queryOptions({ limit: 10 })),
+    ]);
+  },
   component: AdminDashboardPage,
 });
 
