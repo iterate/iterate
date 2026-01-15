@@ -87,6 +87,48 @@ dev-* / pr-* stages → requires dev doppler config
 
 Bypass with `SKIP_DOPPLER_CHECK=true` if you know what you're doing.
 
+## Database
+
+Database connection is an input, not derived from stage:
+
+```bash
+DATABASE_URL=postgres://...   # connection string
+DATABASE_BRANCH=pr-1234       # optional, for planetscale branching
+```
+
+### Safety checks
+
+Like doppler, we validate DB config to prevent accidents:
+
+| Stage           | Allowed DB         | Branch allowed? |
+| --------------- | ------------------ | --------------- |
+| `prd`           | production DB only | No              |
+| `stg`           | staging DB only    | No              |
+| `dev-*`, `pr-*` | dev DB only        | Yes             |
+
+Non-prd stages **fail** if `DATABASE_URL` points to production. Bypass with `SKIP_DB_SAFETY_CHECK=true`.
+
+### PR previews
+
+CI sets up isolated branches automatically:
+
+```bash
+DATABASE_URL=<dev-db-connection>
+DATABASE_BRANCH=pr-1234  # created on PR open, deleted on PR close
+```
+
+Each PR gets its own branch of the dev database—isolated from other PRs but sharing the dev DB infrastructure.
+
+### Debugging with different DBs
+
+To point local dev at staging DB (e.g., to debug an issue):
+
+```bash
+SKIP_DB_SAFETY_CHECK=true DATABASE_URL=<staging-url> pnpm dev
+```
+
+Explicit override required—you can't do this accidentally.
+
 ## Why this model?
 
 This is [12-factor](https://12factor.net/config) thinking:
