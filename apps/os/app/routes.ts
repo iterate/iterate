@@ -41,8 +41,6 @@ export const routes = rootRoute("root.tsx", [
         route("/connectors", "org/project/connectors.tsx"),
         route("/env-vars", "org/project/env-vars.tsx"),
         route("/settings", "org/project/settings.tsx"),
-        route("/agents", "org/project/agents.tsx"),
-        route("/events", "org/project/events.tsx"),
       ]),
     ]),
 
