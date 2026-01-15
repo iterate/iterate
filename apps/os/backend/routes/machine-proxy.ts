@@ -16,9 +16,43 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { DAEMON_DEFINITIONS } from "../daemons.ts";
+import { DAEMON_DEFINITIONS, getDaemonByPort } from "../daemons.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+
+/**
+ * Resolve machine without checking membership (for unauthenticated daemon access).
+ * Returns machine data if found, null otherwise.
+ */
+async function resolveMachineOnly(
+  db: DB,
+  orgSlug: string,
+  projectSlug: string,
+  machineId: string,
+): Promise<{
+  machine: typeof schema.machine.$inferSelect;
+} | null> {
+  const result = await db
+    .select({
+      machine: schema.machine,
+    })
+    .from(schema.machine)
+    .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
+    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
+    .where(
+      and(
+        eq(schema.organization.slug, orgSlug),
+        eq(schema.project.slug, projectSlug),
+        eq(schema.machine.id, machineId),
+      ),
+    )
+    .limit(1);
+
+  const row = result[0];
+  if (!row) return null;
+
+  return { machine: row.machine };
+}
 
 /**
  * Single query to resolve org -> project -> machine and check membership.
@@ -71,36 +105,52 @@ async function resolveProxyAccess(
  * Proxy route: /org/:org/proj/:project/:machine/proxy/:port/*
  */
 machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) => {
-  // 1. Require authentication
-  if (!c.var.session) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-
   const { org, project, machine, port } = c.req.param();
   const db = c.var.db;
   const proxyBasePath = `/org/${org}/proj/${project}/${machine}/proxy/${port}`;
 
-  // 2. Validate port (must be valid TCP port number)
+  // 1. Validate port (must be valid TCP port number)
   const portNum = parseInt(port, 10);
   if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
     return c.json({ error: "Invalid port" }, 400);
   }
 
-  // 3. Single query to resolve machine + check access
-  const access = await resolveProxyAccess(
-    db,
-    org,
-    project,
-    machine,
-    c.var.session.user.id,
-    c.var.session.user.role === "admin",
-  );
+  // 2. Check if daemon requires authentication (default: true)
+  const daemon = getDaemonByPort(portNum);
+  const requireAuth = daemon?.requireAuth !== false;
 
-  if (!access) {
-    return c.json({ error: "Not found or forbidden" }, 404);
+  let machineRecord: typeof schema.machine.$inferSelect;
+
+  if (requireAuth) {
+    // 3a. Require authentication for this daemon
+    if (!c.var.session) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const access = await resolveProxyAccess(
+      db,
+      org,
+      project,
+      machine,
+      c.var.session.user.id,
+      c.var.session.user.role === "admin",
+    );
+
+    if (!access) {
+      return c.json({ error: "Not found or forbidden" }, 404);
+    }
+
+    machineRecord = access.machine;
+  } else {
+    // 3b. No authentication required - just resolve the machine
+    const resolved = await resolveMachineOnly(db, org, project, machine);
+
+    if (!resolved) {
+      return c.json({ error: "Not found" }, 404);
+    }
+
+    machineRecord = resolved.machine;
   }
-
-  const machineRecord = access.machine;
   const externalId = machineRecord.externalId;
 
   // 4. Build target URL based on machine type

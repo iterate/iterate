@@ -16,16 +16,23 @@ export interface DaemonDefinition {
   internalPort: number;
   /** Whether this daemon has a web UI */
   hasWebUI: boolean;
+  /** Whether requests to this daemon require authentication (default: true) */
+  requireAuth?: boolean;
 }
 
 export const DAEMON_DEFINITIONS: readonly DaemonDefinition[] = [
   { id: "iterate-daemon", name: "Iterate", internalPort: 3000, hasWebUI: true },
-  { id: "opencode", name: "OpenCode", internalPort: 4096, hasWebUI: true },
+  { id: "opencode", name: "OpenCode", internalPort: 4096, hasWebUI: true, requireAuth: false },
 ] as const;
 
 /** Get a daemon definition by ID */
 export function getDaemonById(id: string): DaemonDefinition | undefined {
   return DAEMON_DEFINITIONS.find((d) => d.id === id);
+}
+
+/** Get a daemon definition by internal port */
+export function getDaemonByPort(port: number): DaemonDefinition | undefined {
+  return DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
 }
 
 /** Get all daemons that have a web UI */
