@@ -163,7 +163,8 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       });
 
       // Mount local repo for development (allows code changes without rebuilding image)
-      const binds = [`${REPO_ROOT}:/local-iterate-repo:ro`];
+      // Read-write so entry.ts can delete it after copying to avoid confusion
+      const binds = [`${REPO_ROOT}:/local-iterate-repo`];
 
       const hostConfig: Record<string, unknown> = {
         PortBindings: portBindings,
