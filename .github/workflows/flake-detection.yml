@@ -11,6 +11,7 @@ env:
   DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 jobs:
   flake-detection:
+    timeout-minutes: 60
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout code
@@ -34,8 +35,12 @@ jobs:
       - name: Install Playwright Browsers
         run: pnpm exec playwright install chromium --with-deps
       - name: Run Tests with Repeats
-        run: mkdir -p test-results && PLAYWRIGHT_JSON_OUTPUT_FILE=test-results/spec-results.json pnpm spec --repeat-each=10 --reporter=json
         continue-on-error: true
+        run: |-
+          mkdir -p test-results
+          pnpm spec --repeat-each=10 --reporter=json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/spec-results.json
       - name: Generate Flaky Test Report
         if: always()
         run: node spec/analyze-flaky-tests.cjs test-results/spec-results.json test-results/flaky-report.md

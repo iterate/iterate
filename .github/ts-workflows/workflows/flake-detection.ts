@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
@@ -15,6 +16,7 @@ export default workflow({
   },
   jobs: {
     "flake-detection": {
+      "timeout-minutes": 60,
       ...utils.runsOn,
       steps: [
         ...utils.setupRepo,
@@ -26,8 +28,14 @@ export default workflow({
         },
         {
           name: "Run Tests with Repeats",
-          run: "mkdir -p test-results && PLAYWRIGHT_JSON_OUTPUT_FILE=test-results/spec-results.json pnpm spec --repeat-each=10 --reporter=json",
           "continue-on-error": true,
+          run: dedent`
+            mkdir -p test-results
+            pnpm spec --repeat-each=10 --reporter=json
+          `,
+          env: {
+            PLAYWRIGHT_JSON_OUTPUT_FILE: "test-results/spec-results.json",
+          },
         },
         {
           name: "Generate Flaky Test Report",
