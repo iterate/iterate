@@ -16,15 +16,21 @@ export const startServer = async (params: { port: number; hostname: string }) =>
   });
 };
 
+type ReportStatusInput = Parameters<
+  ReturnType<typeof createWorkerClient>["machines"]["reportStatus"]
+>[0];
+
 /**
  * Report daemon status to the OS platform.
- * This triggers the bootstrap flow where the platform sends back env vars and repos.
+ * Sending "ready" should trigger the bootstrap flow where the platform sends back env vars and repos.
+ * Sending anything else should update the UI so the user knows what's going on.
  */
-async function reportStatusToPlatform() {
+export async function reportStatusToPlatform({
+  status = "ready",
+}: Partial<ReportStatusInput> = {}) {
   if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) return;
-
   const client = createWorkerClient();
 
-  const result = await client.machines.reportStatus({ status: "ready" });
-  console.log("[bootstrap] Successfully reported status to platform", result);
+  const result = await client.machines.reportStatus({ status });
+  console.log(`[bootstrap] Successfully reported status ${status} to platform`, result);
 }
