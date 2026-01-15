@@ -5,11 +5,14 @@ permissions:
   contents: read
   deployments: write
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       stage:
         description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
-        required: true
+        required: false
         type: string
 jobs:
   variables:
@@ -18,7 +21,7 @@ jobs:
       - id: get_env
         name: Get environment variables
         run: |-
-          echo stage=${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+          echo stage=${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
           echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}

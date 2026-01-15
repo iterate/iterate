@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
@@ -9,9 +9,11 @@ import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { getDaemonById } from "../../daemons.ts";
+import type { DB } from "../../db/client.ts";
+import { createDaemonTrpcClient } from "../../orpc/router.ts";
+import { createDaytonaProvider } from "../../providers/daytona.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
-
-const DAEMON_PORT = 3001;
 
 /**
  * Check if a host is an internal/blocked address (SSRF protection).
@@ -95,7 +97,7 @@ function buildMachineForwardUrl(
         });
         return null;
       }
-      return `https://${DAEMON_PORT}-${machine.externalId}.proxy.daytona.works${path}`;
+      return `https://${getDaemonById("iterate-daemon")?.internalPort}-${machine.externalId}.proxy.daytona.works${path}`;
 
     default:
       logger.warn("[Slack Webhook] Unknown machine type for forwarding", {
@@ -118,7 +120,6 @@ export async function forwardSlackWebhookToMachine(
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
-
   try {
     const resp = await fetch(targetUrl, {
       method: "POST",
@@ -135,6 +136,101 @@ export async function forwardSlackWebhookToMachine(
     logger.error("[Slack Webhook] Forward error", err);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Build the daemon tRPC base URL for a machine.
+ * Uses port 3000 which is where the daemon's tRPC server runs.
+ */
+async function buildDaemonBaseUrl(
+  machine: typeof schema.machine.$inferSelect,
+  env: CloudflareEnv,
+): Promise<string | null> {
+  const metadata = machine.metadata as Record<string, unknown>;
+
+  switch (machine.type) {
+    case "daytona": {
+      const provider = createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
+      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
+    }
+    case "local-docker": {
+      if (!import.meta.env.DEV) {
+        logger.warn("[Slack] local-docker provider only available in development", {
+          machineId: machine.id,
+        });
+        return null;
+      }
+      const { createLocalDockerProvider } = await import("../../providers/local-docker.ts");
+      const provider = createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
+      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
+    }
+    case "local-vanilla":
+    case "local":
+      return "http://localhost:3000";
+    default:
+      logger.warn("[Slack] Unknown machine type for daemon URL", {
+        machineId: machine.id,
+        type: machine.type,
+      });
+      return null;
+  }
+}
+
+/**
+ * Push environment variables to a machine's daemon via tRPC.
+ */
+async function pushEnvVarsToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  vars: Record<string, string>,
+  env: CloudflareEnv,
+): Promise<void> {
+  const daemonBaseUrl = await buildDaemonBaseUrl(machine, env);
+  if (!daemonBaseUrl) {
+    logger.warn("[Slack] Could not build daemon URL for machine", { machineId: machine.id });
+    return;
+  }
+
+  const client = createDaemonTrpcClient(daemonBaseUrl);
+
+  try {
+    await client.platform.setEnvVars.mutate({ vars });
+    logger.info("[Slack] Pushed env vars to machine", {
+      machineId: machine.id,
+      varCount: Object.keys(vars).length,
+    });
+  } catch (err) {
+    logger.error("[Slack] Failed to push env vars to machine", err);
+  }
+}
+
+/**
+ * Push Slack access token to all running machines for a project.
+ */
+async function pushSlackTokenToRunningMachines(
+  db: DB,
+  projectId: string,
+  accessToken: string,
+  env: CloudflareEnv,
+): Promise<void> {
+  const runningMachines = await db.query.machine.findMany({
+    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "started")),
+  });
+
+  if (runningMachines.length === 0) {
+    logger.info("[Slack] No running machines to push token to", { projectId });
+    return;
+  }
+
+  logger.info("[Slack] Pushing token to running machines", {
+    projectId,
+    machineCount: runningMachines.length,
+  });
+
+  await Promise.all(
+    runningMachines.map((machine) =>
+      pushEnvVarsToMachine(machine, { SLACK_ACCESS_TOKEN: accessToken }, env),
+    ),
+  );
 }
 
 export const SLACK_BOT_SCOPES = [
@@ -388,6 +484,13 @@ slackApp.get(
       throw error;
     }
 
+    // Push Slack token to any running machines in the background
+    waitUntil(
+      pushSlackTokenToRunningMachines(c.var.db, projectId, accessToken, c.env).catch((err) => {
+        logger.error("[Slack OAuth] Failed to push token to machines", err);
+      }),
+    );
+
     const redirectPath =
       callbackURL ||
       (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
@@ -411,10 +514,9 @@ slackApp.post("/webhook", async (c) => {
     c.req.header("x-slack-request-timestamp") ?? null,
     body,
   );
-
   if (!isValid) {
-    logger.warn("[Slack Webhook] Invalid signature");
-    return c.text("Invalid signature", 401);
+    logger.debug("[Slack Webhook] Invalid signature");
+    return c.text("Invalid signature", 200);
   }
 
   // Parse - KEEP SYNCHRONOUS
@@ -437,13 +539,8 @@ slackApp.post("/webhook", async (c) => {
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
 
-  // Log receipt
-  logger.info("[Slack Webhook] Received", {
-    type: (payload.event as Record<string, unknown>)?.type,
-    teamId,
-    slackEventId,
-    retryNum: c.req.header("x-slack-retry-num"),
-  });
+  // Log full payload for debugging
+  logger.debug("[Slack Webhook] Received", { payload });
 
   // Get db reference before returning (needed in background)
   const db = c.var.db;
@@ -463,11 +560,12 @@ slackApp.post("/webhook", async (c) => {
             where: (e, { eq }) => eq(e.externalId, slackEventId),
           });
           if (existing) {
-            logger.info("[Slack Webhook] Duplicate, skipping", { slackEventId });
+            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
             return;
           }
         }
 
+        logger.debug("[Slack Webhook] Looking up connection", { teamId });
         // Single optimized query: get connection + target machine (or fallback to first started machine)
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
@@ -484,6 +582,7 @@ slackApp.post("/webhook", async (c) => {
             },
           },
         });
+
         const projectId = connection?.projectId;
         if (!projectId) {
           logger.warn("[Slack Webhook] No project for team", { teamId });
@@ -498,6 +597,7 @@ slackApp.post("/webhook", async (c) => {
 
         // Forward to machine if available
         if (targetMachine) {
+          logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
           await forwardSlackWebhookToMachine(targetMachine, payload);
         }
 

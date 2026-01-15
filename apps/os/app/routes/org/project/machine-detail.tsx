@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ExternalLink,
@@ -12,6 +12,7 @@ import {
   Copy,
   FileText,
   ScrollText,
+  Bot,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -209,6 +210,49 @@ function MachineDetailPage() {
   // Check if machine supports dual access (proxy + direct)
   const hasDualAccess = isDaytona || isLocalDocker;
 
+  // Query agents from the daemon
+  const { data: agentsData } = useQuery(
+    trpc.machine.listAgents.queryOptions(
+      {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
+      {
+        enabled: machine.state === "started" && metadata.daemonStatus === "ready",
+        refetchInterval: 10000, // Poll every 10s
+      },
+    ),
+  );
+
+  const agents = agentsData?.agents ?? [];
+
+  // URL helpers for agents - opens terminal with prefilled command
+  const openAgentTerminal = async (agentSlug: string, useNative: boolean) => {
+    try {
+      const result = await trpcClient.machine.getPreviewInfo.query({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+      const daemon = result.daemons.find((d: { id: string }) => d.id === "iterate-daemon");
+      if (!daemon) {
+        toast.error("Daemon URL not found");
+        return;
+      }
+      const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
+      if (baseUrl) {
+        const command = `echo ${agentSlug}`;
+        const url = `${baseUrl}terminal?command=${encodeURIComponent(command)}`;
+        window.open(url, "_blank");
+      } else {
+        toast.error("URL not available");
+      }
+    } catch (err) {
+      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   return (
     <div className="p-4 space-y-6">
       {/* Header Actions */}
@@ -390,6 +434,62 @@ function MachineDetailPage() {
                 </Button>
               </div>
             </div>
+          )}
+
+          {/* Agents */}
+          {agents.length > 0 && (
+            <>
+              <div className="pt-4 border-t">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Agents</h3>
+              </div>
+              {agents.map((agent) => (
+                <div
+                  key={agent.id}
+                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{agent.slug}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {agent.harnessType} · {agent.status}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {hasDualAccess ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openAgentTerminal(agent.slug, true)}
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Direct
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openAgentTerminal(agent.slug, false)}
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Proxy
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openAgentTerminal(agent.slug, true)}
+                      >
+                        <ExternalLink className="h-4 w-4 mr-1" />
+                        Open
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
           )}
         </div>
       )}

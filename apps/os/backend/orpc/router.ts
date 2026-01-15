@@ -9,8 +9,8 @@ import { logger } from "../tag-logger.ts";
 import { parseMachineIdFromApiKey, verifyMachineApiKey } from "../trpc/routers/machine.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { createDaytonaProvider } from "../providers/daytona.ts";
-import { createLocalDockerProvider } from "../providers/local-docker.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+import { decrypt } from "../utils/encryption.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
@@ -21,7 +21,7 @@ export type ORPCContext = RequestHeadersPluginContext & {
   executionCtx: ExecutionContext;
 };
 
-function createDaemonTrpcClient(baseUrl: string) {
+export function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<TRPCRouter>({
     links: [
       httpBatchLink({
@@ -150,6 +150,10 @@ async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: Ma
     const provider = createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
     daemonBaseUrl = provider.getPreviewUrl(machine.externalId, metadata, 3000);
   } else if (machine.type === "local-docker") {
+    if (!import.meta.env.DEV) {
+      throw new Error("local-docker provider only available in development");
+    }
+    const { createLocalDockerProvider } = await import("../providers/local-docker.ts");
     const provider = createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
     daemonBaseUrl = provider.getPreviewUrl(machine.externalId, metadata, 3000);
   } else if (machine.type === "local-vanilla") {
@@ -182,6 +186,24 @@ async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: Ma
       const installationToken = await getGitHubInstallationToken(env, providerData.installationId);
       if (installationToken) {
         envVarsToInject["GITHUB_ACCESS_TOKEN"] = installationToken;
+      }
+    }
+  }
+
+  // Get Slack connection and token
+  const slackConnection = await db.query.projectConnection.findFirst({
+    where: (conn, { and, eq: whereEq }) =>
+      and(whereEq(conn.projectId, project.id), whereEq(conn.provider, "slack")),
+  });
+
+  if (slackConnection) {
+    const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const slackToken = await decrypt(providerData.encryptedAccessToken);
+        envVarsToInject["SLACK_ACCESS_TOKEN"] = slackToken;
+      } catch (err) {
+        logger.error("Failed to decrypt Slack token", err);
       }
     }
   }

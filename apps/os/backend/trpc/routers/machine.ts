@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { eq, and, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import {
   router,
   projectProtectedProcedure,
@@ -15,6 +16,40 @@ import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
+import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+
+function createDaemonTrpcClient(baseUrl: string) {
+  return createTRPCClient<DaemonTRPCRouter>({
+    links: [
+      httpBatchLink({
+        url: `${baseUrl}/api/trpc`,
+      }),
+    ],
+  });
+}
+
+/** Get daemon base URL for a machine */
+function getDaemonBaseUrl(
+  machineType: schema.MachineType,
+  externalId: string,
+  metadata: Record<string, unknown>,
+): string {
+  if (machineType === "daytona") {
+    return `https://3000-${externalId}.proxy.daytona.works`;
+  }
+  if (machineType === "local-docker") {
+    const ports = metadata.ports as Record<string, number> | undefined;
+    const port = ports?.["iterate-daemon"] ?? (metadata.port as number | undefined) ?? 3000;
+    return `http://localhost:${port}`;
+  }
+  if (machineType === "local" || machineType === "local-vanilla") {
+    const host = (metadata.host as string) ?? "localhost";
+    const ports = metadata.ports as Record<string, number> | undefined;
+    const port = ports?.["iterate-daemon"] ?? (metadata.port as number | undefined) ?? 3000;
+    return `http://${host}:${port}`;
+  }
+  throw new Error(`Unknown machine type: ${machineType}`);
+}
 
 // Generate a machine API key that includes the machine ID
 // Format: mak_<machineId>_<randomHex>
@@ -225,9 +260,7 @@ export const machineRouter = router({
           envVars: {
             ...envVars,
             // Platform bootstrap env vars - we use the tunnel host if it is set to handle remote sandbox and local control plane use cases
-            ITERATE_OS_BASE_URL: ctx.env.CLOUDFLARE_TUNNEL_HOST
-              ? `https://${ctx.env.CLOUDFLARE_TUNNEL_HOST}`
-              : ctx.env.VITE_PUBLIC_URL,
+            ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
             ITERATE_OS_API_KEY: machineApiKey,
             // In dev, use the current git branch for Daytona sandboxes
             ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
@@ -555,6 +588,43 @@ export const machineRouter = router({
         containerId: metadata.containerId,
         hostPort: metadata.ports?.["iterate-daemon"] ?? metadata.port,
       };
+    }),
+
+  // List agents running on a machine (proxies to daemon)
+  listAgents: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const machineRecord = await ctx.db.query.machine.findFirst({
+        where: and(
+          eq(schema.machine.id, input.machineId),
+          eq(schema.machine.projectId, ctx.project.id),
+        ),
+      });
+      if (!machineRecord) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Machine not found",
+        });
+      }
+
+      try {
+        const daemonBaseUrl = getDaemonBaseUrl(
+          machineRecord.type,
+          machineRecord.externalId,
+          (machineRecord.metadata as Record<string, unknown>) ?? {},
+        );
+        const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
+        const agents = await daemonClient.listAgents.query();
+        return { agents };
+      } catch (err) {
+        logger.error("Failed to fetch agents from daemon", err);
+        // Return empty list on error (daemon might not be ready)
+        return { agents: [] };
+      }
     }),
 });
 

@@ -38,4 +38,4 @@ jobs:
       - name: Build and push Daytona snapshot
         env:
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
-        run: pnpm tsx apps/os/sandbox/snapshot.ts
+        run: pnpm os snapshot:daytona:prd

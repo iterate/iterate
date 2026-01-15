@@ -8,13 +8,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@iterate-com/daemon": "workspace:*",
+    "@slack/web-api": "^7.13.0",
+    "@trpc/server": "^11.4.3",
+    "trpc-cli": "^0.12.2",
+    "zod": "^4.1.11"
+  },
   "devDependencies": {
-    "@effect/cli": "^0.60.0",
-    "@effect/experimental": "^0.44.21",
-    "@effect/platform": "^0.82.0",
-    "@effect/platform-node": "^0.78.0",
     "@types/node": "^24.10.1",
-    "effect": "^3.19.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }
 }
