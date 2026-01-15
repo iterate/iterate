@@ -23,6 +23,16 @@ export default defineConfig({
     strictPort: false,
   },
   plugins: [
+    {
+      name: "iterate-os-banner",
+      configureServer(server) {
+        const _printUrls = server.printUrls;
+        server.printUrls = () => {
+          server.config.logger.info("\n  iterate os server ready\n");
+          _printUrls();
+        };
+      },
+    },
     vitePublicUrl(),
     devtools({
       eventBusConfig: {
