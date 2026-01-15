@@ -6,49 +6,5 @@
   "hasIdeOnboardingBeenShown": true,
   "hasShownOpus45Notice": true,
   "hasShownS1MWelcomeV2": true,
-  "mcpServers": {},
-  "projects": {
-    "/": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    },
-    "/app": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    },
-    "/root": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    },
-    "/root/src/github.com/iterate/iterate": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    },
-    "/home": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    },
-    "/workspace": {
-      "allowedTools": [],
-      "hasTrustDialogAccepted": true,
-      "hasTrustDialogHooksAccepted": true,
-      "projectOnboardingSeenCount": 10,
-      "hasClaudeMdExternalIncludesApproved": true
-    }
-  }
+  "mcpServers": {}
 }
