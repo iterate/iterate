@@ -9,9 +9,11 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/root.tsx'
+import { Route as logoutRouteImport } from './routes/logout.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as devRouteImport } from './routes/dev.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
+import { Route as slackConflictRouteImport } from './routes/slack-conflict.tsx'
 import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
 import { Route as indexRouteImport } from './routes/index.tsx'
@@ -32,10 +34,14 @@ import { Route as orgProjectRepoRouteImport } from './routes/org/project/repo.ts
 import { Route as orgProjectMachinesRouteImport } from './routes/org/project/machines.tsx'
 import { Route as orgProjectEnvVarsRouteImport } from './routes/org/project/env-vars.tsx'
 import { Route as orgProjectConnectorsRouteImport } from './routes/org/project/connectors.tsx'
-import { Route as orgProjectAgentsRouteImport } from './routes/org/project/agents.tsx'
 import { Route as orgProjectAccessTokensRouteImport } from './routes/org/project/access-tokens.tsx'
 import { Route as orgProjectMachineDetailRouteImport } from './routes/org/project/machine-detail.tsx'
 
+const logoutRoute = logoutRouteImport.update({
+  id: '/logout',
+  path: '/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -49,6 +55,11 @@ const devRoute = devRouteImport.update({
 const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
+} as any)
+const slackConflictRoute = slackConflictRouteImport.update({
+  id: '/slack-conflict',
+  path: '/slack-conflict',
+  getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
 const newOrganizationRoute = newOrganizationRouteImport.update({
   id: '/new-organization',
@@ -150,28 +161,25 @@ const orgProjectConnectorsRoute = orgProjectConnectorsRouteImport.update({
   path: '/connectors',
   getParentRoute: () => orgProjectLayoutRoute,
 } as any)
-const orgProjectAgentsRoute = orgProjectAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
-  getParentRoute: () => orgProjectLayoutRoute,
-} as any)
 const orgProjectAccessTokensRoute = orgProjectAccessTokensRouteImport.update({
   id: '/access-tokens',
   path: '/access-tokens',
   getParentRoute: () => orgProjectLayoutRoute,
 } as any)
 const orgProjectMachineDetailRoute = orgProjectMachineDetailRouteImport.update({
-  id: '/machine/$machineId',
-  path: '/machine/$machineId',
-  getParentRoute: () => orgProjectLayoutRoute,
+  id: '/$machineId',
+  path: '/$machineId',
+  getParentRoute: () => orgProjectMachinesRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
   '/new-organization': typeof newOrganizationRoute
+  '/slack-conflict': typeof slackConflictRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -184,20 +192,21 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/': typeof orgIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof orgProjectIndexRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId': typeof orgProjectMachineDetailRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachineDetailRoute
 }
 export interface FileRoutesByTo {
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
+  '/slack-conflict': typeof slackConflictRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/user/settings': typeof userSettingsRoute
@@ -208,23 +217,24 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/orgs/$organizationSlug': typeof orgIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectIndexRoute
-  '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId': typeof orgProjectMachineDetailRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachineDetailRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_auth': typeof authRequiredDotlayoutRouteWithChildren
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
   '/_auth/new-organization': typeof newOrganizationRoute
+  '/_auth/slack-conflict': typeof slackConflictRoute
   '/_auth/admin/session-info': typeof adminSessionInfoRoute
   '/_auth/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/_auth/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -237,23 +247,24 @@ export interface FileRoutesById {
   '/_auth/orgs/$organizationSlug/': typeof orgIndexRoute
   '/_auth/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
-  '/_auth/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
-  '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRoute
+  '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines': typeof orgProjectMachinesRouteWithChildren
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/repo': typeof orgProjectRepoRoute
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/settings': typeof orgProjectSettingsRoute
   '/_auth/orgs/$organizationSlug/projects/$projectSlug/': typeof orgProjectIndexRoute
-  '/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId': typeof orgProjectMachineDetailRoute
+  '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': typeof orgProjectMachineDetailRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/dev'
     | '/login'
+    | '/logout'
     | '/'
     | '/admin'
     | '/new-organization'
+    | '/slack-conflict'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/orgs/$organizationSlug'
@@ -266,20 +277,21 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug'
     | '/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
-    | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
     | '/orgs/$organizationSlug/projects/$projectSlug/machines'
     | '/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug/'
-    | '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
+    | '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/dev'
     | '/login'
+    | '/logout'
     | '/'
     | '/new-organization'
+    | '/slack-conflict'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/user/settings'
@@ -290,22 +302,23 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/team'
     | '/orgs/$organizationSlug'
     | '/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
-    | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
     | '/orgs/$organizationSlug/projects/$projectSlug/machines'
     | '/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug'
-    | '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
+    | '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   id:
     | '__root__'
     | '/_auth'
     | '/dev'
     | '/login'
+    | '/logout'
     | '/_auth/'
     | '/_auth/admin'
     | '/_auth/new-organization'
+    | '/_auth/slack-conflict'
     | '/_auth/admin/session-info'
     | '/_auth/admin/trpc-tools'
     | '/_auth/orgs/$organizationSlug'
@@ -318,24 +331,31 @@ export interface FileRouteTypes {
     | '/_auth/orgs/$organizationSlug/'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
-    | '/_auth/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/repo'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/_auth/orgs/$organizationSlug/projects/$projectSlug/'
-    | '/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
+    | '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
   devRoute: typeof devRoute
   loginRoute: typeof loginRoute
+  logoutRoute: typeof logoutRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/logout': {
+      id: '/logout'
+      path: '/logout'
+      fullPath: '/logout'
+      preLoaderRoute: typeof logoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -356,6 +376,13 @@ declare module '@tanstack/react-router' {
       fullPath: ''
       preLoaderRoute: typeof authRequiredDotlayoutRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_auth/slack-conflict': {
+      id: '/_auth/slack-conflict'
+      path: '/slack-conflict'
+      fullPath: '/slack-conflict'
+      preLoaderRoute: typeof slackConflictRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/new-organization': {
       id: '/_auth/new-organization'
@@ -497,13 +524,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgProjectConnectorsRouteImport
       parentRoute: typeof orgProjectLayoutRoute
     }
-    '/_auth/orgs/$organizationSlug/projects/$projectSlug/agents': {
-      id: '/_auth/orgs/$organizationSlug/projects/$projectSlug/agents'
-      path: '/agents'
-      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/agents'
-      preLoaderRoute: typeof orgProjectAgentsRouteImport
-      parentRoute: typeof orgProjectLayoutRoute
-    }
     '/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens': {
       id: '/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
       path: '/access-tokens'
@@ -511,12 +531,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgProjectAccessTokensRouteImport
       parentRoute: typeof orgProjectLayoutRoute
     }
-    '/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId': {
-      id: '/_auth/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
-      path: '/machine/$machineId'
-      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId'
+    '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId': {
+      id: '/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
+      path: '/$machineId'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId'
       preLoaderRoute: typeof orgProjectMachineDetailRouteImport
-      parentRoute: typeof orgProjectLayoutRoute
+      parentRoute: typeof orgProjectMachinesRoute
     }
   }
 }
@@ -537,28 +557,35 @@ const adminLayoutRouteWithChildren = adminLayoutRoute._addFileChildren(
   adminLayoutRouteChildren,
 )
 
+interface orgProjectMachinesRouteChildren {
+  orgProjectMachineDetailRoute: typeof orgProjectMachineDetailRoute
+}
+
+const orgProjectMachinesRouteChildren: orgProjectMachinesRouteChildren = {
+  orgProjectMachineDetailRoute: orgProjectMachineDetailRoute,
+}
+
+const orgProjectMachinesRouteWithChildren =
+  orgProjectMachinesRoute._addFileChildren(orgProjectMachinesRouteChildren)
+
 interface orgProjectLayoutRouteChildren {
   orgProjectAccessTokensRoute: typeof orgProjectAccessTokensRoute
-  orgProjectAgentsRoute: typeof orgProjectAgentsRoute
   orgProjectConnectorsRoute: typeof orgProjectConnectorsRoute
   orgProjectEnvVarsRoute: typeof orgProjectEnvVarsRoute
-  orgProjectMachinesRoute: typeof orgProjectMachinesRoute
+  orgProjectMachinesRoute: typeof orgProjectMachinesRouteWithChildren
   orgProjectRepoRoute: typeof orgProjectRepoRoute
   orgProjectSettingsRoute: typeof orgProjectSettingsRoute
   orgProjectIndexRoute: typeof orgProjectIndexRoute
-  orgProjectMachineDetailRoute: typeof orgProjectMachineDetailRoute
 }
 
 const orgProjectLayoutRouteChildren: orgProjectLayoutRouteChildren = {
   orgProjectAccessTokensRoute: orgProjectAccessTokensRoute,
-  orgProjectAgentsRoute: orgProjectAgentsRoute,
   orgProjectConnectorsRoute: orgProjectConnectorsRoute,
   orgProjectEnvVarsRoute: orgProjectEnvVarsRoute,
-  orgProjectMachinesRoute: orgProjectMachinesRoute,
+  orgProjectMachinesRoute: orgProjectMachinesRouteWithChildren,
   orgProjectRepoRoute: orgProjectRepoRoute,
   orgProjectSettingsRoute: orgProjectSettingsRoute,
   orgProjectIndexRoute: orgProjectIndexRoute,
-  orgProjectMachineDetailRoute: orgProjectMachineDetailRoute,
 }
 
 const orgProjectLayoutRouteWithChildren =
@@ -590,6 +617,7 @@ interface authRequiredDotlayoutRouteChildren {
   indexRoute: typeof indexRoute
   adminLayoutRoute: typeof adminLayoutRouteWithChildren
   newOrganizationRoute: typeof newOrganizationRoute
+  slackConflictRoute: typeof slackConflictRoute
   orgLayoutRoute: typeof orgLayoutRouteWithChildren
   userSettingsRoute: typeof userSettingsRoute
 }
@@ -598,6 +626,7 @@ const authRequiredDotlayoutRouteChildren: authRequiredDotlayoutRouteChildren = {
   indexRoute: indexRoute,
   adminLayoutRoute: adminLayoutRouteWithChildren,
   newOrganizationRoute: newOrganizationRoute,
+  slackConflictRoute: slackConflictRoute,
   orgLayoutRoute: orgLayoutRouteWithChildren,
   userSettingsRoute: userSettingsRoute,
 }
@@ -611,6 +640,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
   devRoute: devRoute,
   loginRoute: loginRoute,
+  logoutRoute: logoutRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

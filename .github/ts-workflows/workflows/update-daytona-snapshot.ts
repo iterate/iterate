@@ -26,7 +26,7 @@ export default {
           env: {
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
           },
-          run: "pnpm tsx apps/os/sandbox/snapshot.ts",
+          run: "pnpm os snapshot:daytona:prd",
         },
       ],
     },

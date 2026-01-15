@@ -146,7 +146,7 @@ function ProjectRepoPage() {
 
   if (!githubConnection.connected) {
     return (
-      <div className="p-4 md:p-8">
+      <div className="p-4">
         <EmptyState
           icon={<GitBranch className="h-12 w-12" />}
           title="No GitHub connected"
@@ -171,7 +171,7 @@ function ProjectRepoPage() {
 
   if (isAddingRepo) {
     return (
-      <div className="p-4 md:p-8">
+      <div className="p-4">
         <Suspense fallback={<RepoPickerSkeleton />}>
           <RepoPicker
             params={params}
@@ -184,7 +184,7 @@ function ProjectRepoPage() {
   }
 
   return (
-    <div className="p-4 md:p-8">
+    <div className="p-4">
       <HeaderActions>
         <Button variant="outline" size="sm" onClick={() => setIsAddingRepo(true)}>
           <Plus className="h-4 w-4" />

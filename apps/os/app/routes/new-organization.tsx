@@ -26,7 +26,7 @@ type Organization = {
 };
 
 function NewOrganizationPage() {
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const { defaultName } = Route.useLoaderData();
   const [name, setName] = useState(defaultName);

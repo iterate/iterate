@@ -17,7 +17,7 @@ function ProjectSettingsPage() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/settings",
   });
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
 
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
@@ -81,7 +81,7 @@ function ProjectSettingsPage() {
   };
 
   return (
-    <div className="p-4 md:p-8 space-y-8">
+    <div className="p-4 space-y-8">
       <form onSubmit={handleSubmit}>
         <FieldGroup>
           <FieldSet>

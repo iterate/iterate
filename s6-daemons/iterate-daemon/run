@@ -1,13 +1,20 @@
 #!/bin/sh
 exec 2>&1
+
+# Get daemon config from metadata.json (must be before cd)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+METADATA="$SCRIPT_DIR/metadata.json"
+
 cd "$ITERATE_REPO/apps/daemon"
+PORT=$(node -p "require('$METADATA').port")
+HEALTH_ENDPOINT=$(node -p "require('$METADATA').healthEndpoint")
 
 # Set up FIFO for health check notification
 NOTIFY_FIFO="/tmp/s6-notify-iterate-daemon-$$"
 mkfifo "$NOTIFY_FIFO"
 
 # Health checker polls endpoint, writes to FIFO when ready
-"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3000/api/health "$NOTIFY_FIFO" &
+"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" "http://localhost:$PORT$HEALTH_ENDPOINT" "$NOTIFY_FIFO" &
 
 # Duplicate fd 3 to fd 4 so background job can use it
 exec 4>&3
@@ -21,4 +28,4 @@ exec 4>&3
 } &
 
 pnpm db:migrate
-exec env HOSTNAME=0.0.0.0 PORT=3000 tsx server.ts
+exec env HOSTNAME=0.0.0.0 PORT="$PORT" tsx server.ts

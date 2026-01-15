@@ -27,7 +27,7 @@ export default {
     deployments: "write",
   },
   jobs: {
-    "deploy-website": {
+    "deploy-os": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       if: "inputs.stage == 'prd'",
@@ -35,29 +35,29 @@ export default {
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
-          name: "Deploy Website",
+          name: "Deploy apps/os",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm run deploy:prd",
+          "working-directory": "apps/os",
+        },
+      ],
+    },
+    "deploy-iterate-com": {
+      "runs-on":
+        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      if: "inputs.stage == 'prd'",
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        {
+          name: "Deploy apps/iterate-com",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: "pnpm run deploy",
           "working-directory": "apps/iterate-com",
-        },
-      ],
-    },
-    "deploy-mcp-mock-server": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
-        {
-          name: "Deploy Mock MCP Server",
-          "working-directory": "apps/mcp-mock-server",
-          run: "pnpm run deploy",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            STAGE: "${{ inputs.stage }}",
-          },
         },
       ],
     },

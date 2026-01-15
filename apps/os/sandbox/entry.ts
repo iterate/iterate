@@ -1,11 +1,11 @@
 import { spawn, execSync, type ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, rmSync, globSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import * as path from "node:path";
 
-const ITERATE_REPO = join(homedir(), "src", "github.com", "iterate", "iterate");
-const S6_DAEMONS_PATH = join(ITERATE_REPO, "s6-daemons");
-const DAEMON_PATH = join(ITERATE_REPO, "apps", "daemon");
+const ITERATE_REPO = path.join(homedir(), "src/github.com/iterate/iterate");
+const S6_DAEMONS_PATH = path.join(ITERATE_REPO, "s6-daemons");
+const DAEMON_PATH = path.join(ITERATE_REPO, "apps/daemon");
 
 // Path where local repo is mounted in local-docker mode
 const LOCAL_REPO_MOUNT = "/local-iterate-repo";
@@ -27,7 +27,7 @@ const copyFromLocalMount = () => {
   // Use rsync to copy, excluding common gitignored patterns
   // The mounted repo is read-only, so we copy to the target location
   execSync(
-    `rsync -av --delete \
+    `rsync -a --delete \
       --exclude='node_modules' \
       --exclude='.git' \
       --exclude='dist' \
@@ -55,9 +55,7 @@ const cloneOrPullFromGit = () => {
   if (!existsSync(ITERATE_REPO)) {
     console.log("");
     console.log(`Cloning iterate repo (ref: ${gitRef})...`);
-    execSync(`mkdir -p ${join(homedir(), "src", "github.com", "iterate")}`, {
-      stdio: "inherit",
-    });
+    execSync(`mkdir -p ${path.dirname(ITERATE_REPO)}`, { stdio: "inherit" });
     execSync(
       `git clone --branch ${gitRef} https://github.com/iterate/iterate.git ${ITERATE_REPO}`,
       {
@@ -82,20 +80,48 @@ const setupIterateRepo = () => {
 
   // Use mounted local repo if available (local-docker dev mode)
   // Otherwise clone/pull from GitHub (Daytona mode)
-  if (existsSync(LOCAL_REPO_MOUNT)) {
+  const isLocalDocker = existsSync(LOCAL_REPO_MOUNT);
+  if (isLocalDocker) {
     copyFromLocalMount();
   } else {
     cloneOrPullFromGit();
   }
 
+  rmSync(LOCAL_REPO_MOUNT, { recursive: true, force: true });
+
   console.log("");
   console.log("Running pnpm install...");
-  execSync("pnpm install", {
+
+  // In local-docker mode, allow lockfile updates (dependencies may have changed)
+  // In Daytona/CI mode, use frozen lockfile to ensure reproducibility
+  const pnpmCmd = isLocalDocker ? "pnpm install --no-frozen-lockfile" : "pnpm install";
+  execSync(pnpmCmd, {
     cwd: ITERATE_REPO,
     stdio: "inherit",
     env: { ...process.env, CI: "true" },
   });
 
+  console.log("");
+};
+
+// ============================================
+// Agent configuration setup
+// ============================================
+
+/**
+ * Copies default agent configs (Claude Code, OpenCode, Pi) to $HOME.
+ * Done at runtime so config changes take effect on machine restart without rebuilding the image.
+ */
+const setupHomeSkeleton = () => {
+  console.log("");
+  console.log("========================================");
+  console.log("Setting up agent configurations");
+  console.log("========================================");
+  console.log("");
+
+  const homeSkeletonPath = path.join(ITERATE_REPO, "apps/os/sandbox/home-skeleton");
+
+  execSync(`rsync -a ${homeSkeletonPath}/ ${homedir()}/`, { stdio: "inherit" });
   console.log("");
 };
 
@@ -106,7 +132,7 @@ const setupIterateRepo = () => {
 const buildDaemon = () => {
   console.log("");
   console.log("========================================");
-  console.log("Building daemon frontend");
+  console.log("Building daemon");
   console.log("========================================");
   console.log("");
 
@@ -120,17 +146,10 @@ const buildDaemon = () => {
 // ============================================
 
 const cleanupS6RuntimeState = () => {
-  if (!existsSync(S6_DAEMONS_PATH)) {
-    return;
-  }
+  rmSync(path.join(S6_DAEMONS_PATH, ".s6-svscan"), { recursive: true, force: true });
 
-  rmSync(join(S6_DAEMONS_PATH, ".s6-svscan"), { recursive: true, force: true });
-
-  for (const entry of readdirSync(S6_DAEMONS_PATH, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    rmSync(join(S6_DAEMONS_PATH, entry.name, "supervise"), { recursive: true, force: true });
-    rmSync(join(S6_DAEMONS_PATH, entry.name, "log", "supervise"), { recursive: true, force: true });
-  }
+  const paths = globSync("{*/supervise,*/log/supervise}", { cwd: S6_DAEMONS_PATH });
+  paths.forEach((p) => rmSync(path.join(S6_DAEMONS_PATH, p), { recursive: true, force: true }));
 };
 
 const startS6Svscan = (): ChildProcess => {
@@ -173,6 +192,7 @@ const main = () => {
   console.log("########################################");
 
   setupIterateRepo();
+  setupHomeSkeleton();
   buildDaemon();
   cleanupS6RuntimeState();
 
@@ -180,7 +200,7 @@ const main = () => {
 
   // Forward signals for clean shutdown
   const shutdown = (signal: string) => {
-    console.log(`Received ${signal}, shutting down...`);
+    console.log(`Received ${signal}, forwarding to s6-svscan...`);
     svscan.kill("SIGTERM");
   };
 

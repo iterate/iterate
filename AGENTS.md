@@ -41,7 +41,7 @@ Mobile-first is mandatory. Design for 375px, expand to desktop.
 **Layout:**
 
 - No page titles (h1) — breadcrumbs provide context
-- Page containers: `p-4 md:p-8`
+- Page containers: `p-4`
 - Main content max-width: `max-w-md` (phone-width, set in layouts)
 - Use `HeaderActions` for action buttons in header
 - Use `CenteredLayout` for standalone pages (login, settings)

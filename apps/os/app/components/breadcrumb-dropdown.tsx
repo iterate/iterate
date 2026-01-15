@@ -1,6 +1,5 @@
 import { Link, type LinkProps } from "@tanstack/react-router";
 import { ChevronDown, Plus } from "lucide-react";
-import { cn } from "../lib/cn.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { BreadcrumbItem, BreadcrumbLink, BreadcrumbPage } from "./ui/breadcrumb.tsx";
+import { cn } from "@/lib/utils.ts";
 
 // Shared button styling - extracted to eliminate duplication
 const DROPDOWN_TRIGGER_CLASSES =
@@ -34,10 +34,12 @@ interface BreadcrumbDropdownProps extends React.ComponentProps<"li"> {
   /** Configuration for the "add" action at the bottom of the dropdown */
   addAction: {
     label: string;
-    linkProps: Pick<LinkProps, "to" | "params">;
+    linkProps: Pick<LinkProps, "to" | "params" | "search">;
   };
   /** Accessible label for the dropdown trigger (e.g., "Switch organization") */
   ariaLabel: string;
+  /** Optional prefix to show before the name (e.g., "Project:") */
+  prefix?: string;
 }
 
 export function BreadcrumbDropdown({
@@ -48,8 +50,11 @@ export function BreadcrumbDropdown({
   getItemLinkProps,
   addAction,
   ariaLabel,
+  prefix,
   ...liProps
 }: BreadcrumbDropdownProps) {
+  const displayName = prefix ? `${prefix} ${currentName}` : currentName;
+
   return (
     <BreadcrumbItem {...liProps}>
       <DropdownMenu>
@@ -64,10 +69,10 @@ export function BreadcrumbDropdown({
             )}
           >
             {isCurrentPage ? (
-              <BreadcrumbPage className="pointer-events-none">{currentName}</BreadcrumbPage>
+              <BreadcrumbPage className="pointer-events-none">{displayName}</BreadcrumbPage>
             ) : (
               <BreadcrumbLink asChild className="pointer-events-none">
-                <span>{currentName}</span>
+                <span>{displayName}</span>
               </BreadcrumbLink>
             )}
             <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
@@ -120,6 +125,7 @@ export function BreadcrumbDropdown({
 interface OrgBreadcrumbDropdownProps {
   currentName: string;
   currentId: string;
+  currentSlug: string;
   items: DropdownItem[];
   isCurrentPage?: boolean;
 }
@@ -127,11 +133,13 @@ interface OrgBreadcrumbDropdownProps {
 export function OrgBreadcrumbDropdown({
   currentName,
   currentId,
+  currentSlug,
   items,
   isCurrentPage = false,
 }: OrgBreadcrumbDropdownProps) {
   return (
     <BreadcrumbDropdown
+      data-organization={currentSlug}
       currentName={currentName}
       currentId={currentId}
       items={items}
@@ -174,6 +182,7 @@ export function ProjectBreadcrumbDropdown({
       items={items}
       isCurrentPage={isCurrentPage}
       ariaLabel="switch project"
+      prefix="Project:"
       getItemLinkProps={(item) => ({
         to: "/orgs/$organizationSlug/projects/$projectSlug",
         params: { organizationSlug, projectSlug: item.slug },
@@ -183,6 +192,48 @@ export function ProjectBreadcrumbDropdown({
         linkProps: {
           to: "/orgs/$organizationSlug/new-project",
           params: { organizationSlug },
+        },
+      }}
+    />
+  );
+}
+
+interface MachineBreadcrumbDropdownProps {
+  currentName: string;
+  currentId: string;
+  organizationSlug: string;
+  projectSlug: string;
+  items: DropdownItem[];
+  isCurrentPage?: boolean;
+}
+
+export function MachineBreadcrumbDropdown({
+  currentName,
+  currentId,
+  organizationSlug,
+  projectSlug,
+  items,
+  isCurrentPage = false,
+}: MachineBreadcrumbDropdownProps) {
+  return (
+    <BreadcrumbDropdown
+      data-machine={currentId}
+      currentName={currentName}
+      currentId={currentId}
+      items={items}
+      isCurrentPage={isCurrentPage}
+      ariaLabel="switch machine"
+      prefix="Machine:"
+      getItemLinkProps={(item) => ({
+        to: "/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
+        params: { organizationSlug, projectSlug, machineId: item.id },
+      })}
+      addAction={{
+        label: "Add machine",
+        linkProps: {
+          to: "/orgs/$organizationSlug/projects/$projectSlug/machines",
+          params: { organizationSlug, projectSlug },
+          search: { create: true },
         },
       }}
     />

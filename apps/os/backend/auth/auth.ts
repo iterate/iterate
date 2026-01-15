@@ -12,6 +12,18 @@ import { captureServerEvent } from "../lib/posthog.ts";
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
+/** Generate a DiceBear avatar URL using a hash of the user's email as seed */
+function generateDefaultAvatar(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  // Simple hash to avoid exposing email in URL
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash << 5) - hash + normalized.charCodeAt(i);
+    hash |= 0;
+  }
+  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
+}
+
 function parseEmailPatterns(value: string) {
   return value
     .split(",")
@@ -50,7 +62,9 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 message: "Sign up is not available for this email address",
               });
             }
-            return { data: user };
+            // Set default DiceBear avatar if no image provided (e.g., email OTP signup)
+            const image = user.image || generateDefaultAvatar(email);
+            return { data: { ...user, image } };
           },
           after: async (user) => {
             logger.info("User signed up", { userId: user.id, email: user.email });

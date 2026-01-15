@@ -49,6 +49,7 @@ export default defineConfig([
     "**/build/",
     "pnpm-lock.yaml",
     "opensrc/**",
+    "test-results/**",
   ]),
   js.configs.recommended,
   // TypeScript/JavaScript files

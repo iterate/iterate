@@ -6,18 +6,16 @@ import {
   Archive,
   Trash2,
   RotateCcw,
-  Monitor,
   ScrollText,
   SquareTerminal,
   Terminal,
   RefreshCw,
   Activity,
   Circle,
-  CheckCircle2,
-  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
+import { DaemonStatus } from "./daemon-status.tsx";
 import { TypeId } from "./type-id.tsx";
 import { Button } from "./ui/button.tsx";
 import { ConfirmDialog } from "./ui/confirm-dialog.tsx";
@@ -39,7 +37,9 @@ interface Machine {
     snapshotName?: string;
     containerId?: string;
     port?: number;
-    daemonStatus?: "ready" | "error";
+    ports?: Record<string, number>;
+    host?: string;
+    daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
   } & Record<string, unknown>;
@@ -52,46 +52,8 @@ interface MachineTableProps {
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onRestart: (id: string) => void;
   isLoading?: boolean;
-}
-
-function DaemonStatus({ machine }: { machine: Machine }) {
-  const { daemonStatus, daemonReadyAt, daemonStatusMessage } = machine.metadata;
-
-  if (machine.state === "archived") {
-    return <span className="text-muted-foreground text-sm">-</span>;
-  }
-
-  if (!daemonStatus) {
-    return (
-      <span className="flex items-center gap-1.5 text-muted-foreground text-sm">
-        <Circle className="h-3 w-3 animate-pulse" />
-        Starting...
-      </span>
-    );
-  }
-
-  if (daemonStatus === "error") {
-    return (
-      <span
-        className="flex items-center gap-1.5 text-destructive text-sm"
-        title={daemonStatusMessage}
-      >
-        <XCircle className="h-3 w-3" />
-        Error
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="flex items-center gap-1.5 text-green-600 text-sm"
-      title={daemonReadyAt ? `Ready since ${new Date(daemonReadyAt).toLocaleString()}` : undefined}
-    >
-      <CheckCircle2 className="h-3 w-3" />
-      Ready
-    </span>
-  );
 }
 
 export function MachineTable({
@@ -101,6 +63,7 @@ export function MachineTable({
   onArchive,
   onUnarchive,
   onDelete,
+  onRestart,
   isLoading,
 }: MachineTableProps) {
   const [deleteConfirmMachine, setDeleteConfirmMachine] = useState<Machine | null>(null);
@@ -119,44 +82,18 @@ export function MachineTable({
 
   // === Open URL helpers ===
 
-  const openDaemonProxy = async (machineId: string) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
-      window.open(result.daemonUrl, "_blank");
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const getPreviewInfo = async (machineId: string) => {
+    return trpcClient.machine.getPreviewInfo.query({
+      organizationSlug,
+      projectSlug,
+      machineId,
+    });
   };
 
   const openTerminalProxy = async (machineId: string) => {
     try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
+      const result = await getPreviewInfo(machineId);
       window.open(result.terminalUrl, "_blank");
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const openDaemonNative = async (machineId: string) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
-      if (result.nativeDaemonUrl) {
-        window.open(result.nativeDaemonUrl, "_blank");
-      } else {
-        toast.error("Native URL not available");
-      }
     } catch (err) {
       toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -164,11 +101,7 @@ export function MachineTable({
 
   const openTerminalNative = async (machineId: string) => {
     try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
+      const result = await getPreviewInfo(machineId);
       if (result.nativeTerminalUrl) {
         window.open(result.nativeTerminalUrl, "_blank");
       } else {
@@ -225,6 +158,28 @@ export function MachineTable({
     }
   };
 
+  const copyOpencodeLogsCommand = (machine: Machine) => {
+    const command = "tail -f /var/log/opencode/current";
+    if (machine.type === "local-docker") {
+      const containerId = machine.metadata.containerId;
+      if (!containerId) {
+        toast.error("Container ID not found");
+        return;
+      }
+      copyToClipboard(
+        `docker exec ${containerId} ${command}`,
+        "Copied OpenCode logs command:",
+        "Run in your local terminal. Won't work until entry.ts starts daemons.",
+      );
+    } else {
+      copyToClipboard(
+        command,
+        "Copied OpenCode logs command:",
+        "Paste this in the sandbox terminal",
+      );
+    }
+  };
+
   const copyEntryLogsCommand = (machine: Machine) => {
     if (machine.type === "local-docker") {
       const containerId = machine.metadata.containerId;
@@ -265,33 +220,19 @@ export function MachineTable({
     }
   };
 
-  // === Actions ===
-
-  const restartMachine = async (machineId: string) => {
-    try {
-      await trpcClient.machine.restart.mutate({
-        organizationSlug,
-        projectSlug,
-        machineId,
-      });
-      toast.success("Machine restarting...");
-    } catch (err) {
-      toast.error(`Failed to restart: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  // === Dropdown menu (shared between layouts) ===
+  // === Dropdown menu (terminal, logs, machine actions) ===
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
+      {/* Terminal options */}
       {machine.type === "daytona" && (
         <>
           <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
             <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (Daytona native)
+            Terminal (direct)
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
             <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (Iterate proxy)
+            Terminal (proxy)
           </DropdownMenuItem>
         </>
       )}
@@ -302,40 +243,15 @@ export function MachineTable({
         </DropdownMenuItem>
       )}
       <DropdownMenuSeparator />
-      {machine.type === "daytona" && (
-        <>
-          <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
-            <Monitor className="h-4 w-4 mr-2" />
-            Daemon (Daytona native)
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
-            <Monitor className="h-4 w-4 mr-2" />
-            Daemon (Iterate proxy)
-          </DropdownMenuItem>
-        </>
-      )}
-      {machine.type === "local-docker" && (
-        <>
-          <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
-            <Monitor className="h-4 w-4 mr-2" />
-            Daemon (localhost)
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openDaemonProxy(machine.id)}>
-            <Monitor className="h-4 w-4 mr-2" />
-            Daemon (Iterate proxy)
-          </DropdownMenuItem>
-        </>
-      )}
-      {machine.type === "local-vanilla" && (
-        <DropdownMenuItem onClick={() => openDaemonNative(machine.id)}>
-          <Monitor className="h-4 w-4 mr-2" />
-          Daemon (localhost)
-        </DropdownMenuItem>
-      )}
-      <DropdownMenuSeparator />
+
+      {/* Log commands */}
       <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
         <ScrollText className="h-4 w-4 mr-2" />
         Copy daemon logs command
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => copyOpencodeLogsCommand(machine)}>
+        <ScrollText className="h-4 w-4 mr-2" />
+        Copy OpenCode logs command
       </DropdownMenuItem>
       {machine.type === "local-docker" && (
         <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
@@ -348,8 +264,10 @@ export function MachineTable({
         Copy s6 service status command
       </DropdownMenuItem>
       <DropdownMenuSeparator />
+
+      {/* Machine actions */}
       {machine.state === "started" && (
-        <DropdownMenuItem onClick={() => restartMachine(machine.id)}>
+        <DropdownMenuItem onClick={() => onRestart(machine.id)}>
           <RefreshCw className="h-4 w-4 mr-2" />
           Restart
         </DropdownMenuItem>
@@ -377,10 +295,17 @@ export function MachineTable({
 
   const getTypeLabel = (machine: Machine) => {
     if (machine.type === "local-docker") {
-      return `Local Docker :${machine.metadata?.port ?? "?"}`;
+      // Show first daemon port from ports map, or legacy port
+      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
+      return `Local Docker :${port ?? "?"}`;
     }
     if (machine.type === "local-vanilla") {
       return "Local Vanilla";
+    }
+    if (machine.type === "local") {
+      const host = machine.metadata?.host ?? "localhost";
+      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
+      return `Local ${host}:${port ?? "?"}`;
     }
     return "Daytona";
   };
@@ -389,9 +314,11 @@ export function MachineTable({
     <>
       <div className="space-y-3">
         {machines.map((machine) => (
-          <div
+          <Link
             key={machine.id}
-            className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card"
+            to="/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId"
+            params={{ organizationSlug, projectSlug, machineId: machine.id }}
+            className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card hover:bg-accent/50 transition-colors"
           >
             <div className="min-w-0 flex-1 space-y-1">
               {/* Name + State indicator */}
@@ -403,13 +330,7 @@ export function MachineTable({
                       : "fill-muted text-muted"
                   }`}
                 />
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/machine/$machineId"
-                  params={{ organizationSlug, projectSlug, machineId: machine.id }}
-                  className="font-medium hover:underline truncate"
-                >
-                  {machine.name}
-                </Link>
+                <span className="font-medium truncate">{machine.name}</span>
               </div>
 
               {/* Meta info */}
@@ -418,7 +339,12 @@ export function MachineTable({
                   {getTypeLabel(machine)}
                 </span>
                 <span>·</span>
-                <DaemonStatus machine={machine} />
+                <DaemonStatus
+                  state={machine.state}
+                  daemonStatus={machine.metadata.daemonStatus}
+                  daemonReadyAt={machine.metadata.daemonReadyAt}
+                  daemonStatusMessage={machine.metadata.daemonStatusMessage}
+                />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
                 {machine.metadata?.snapshotName && (
@@ -439,13 +365,21 @@ export function MachineTable({
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               {renderDropdownContent(machine)}
             </DropdownMenu>
-          </div>
+          </Link>
         ))}
       </div>
 

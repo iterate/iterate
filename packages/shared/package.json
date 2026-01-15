@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./cloudflare-tunnel": "./src/cloudflare-tunnel.ts"
+    "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts"
   },
-  "dependencies": {
-    "vite-plugin-cloudflare-tunnel": "^1.0.12"
+  "devDependencies": {
+    "vite": "7.2.4"
   }
 }

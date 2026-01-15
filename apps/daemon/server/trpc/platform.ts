@@ -28,36 +28,23 @@ export const platformRouter = createTRPCRouter({
   setEnvVars: publicProcedure
     .input(
       z.object({
-        vars: z.record(z.string(), z.string()),
+        vars: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),
       }),
     )
     .mutation(async ({ input }) => {
+      const envFilePath = join(homedir(), ".iterate/.env");
       const { vars } = input;
 
-      // Validate all keys BEFORE storing anything to prevent inconsistent state
-      for (const key of Object.keys(vars)) {
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-          throw new Error(`Invalid environment variable name: ${key}`);
-        }
-      }
+      Object.assign(platformEnvVars, vars);
+      Object.assign(process.env, vars);
 
-      // Store the env vars (keys are now validated)
-      for (const [key, value] of Object.entries(vars)) {
-        platformEnvVars[key] = value;
-        // Also set in process.env for this process
-        process.env[key] = value;
-      }
-
-      console.log(`[platform] Injected ${Object.keys(vars).length} env vars`);
+      console.log(`[platform] Injected ${Object.keys(vars).length} env vars to ${envFilePath}`);
 
       // Write env vars to a file that tmux sessions can source
-      const envFilePath = join(homedir(), ".iterate-platform-env");
       const envFileContent = Object.entries(platformEnvVars)
-        .map(([key, value]) => {
-          // Use shell-quote for proper escaping of all special characters
-          return `export ${key}=${quote([value])}`;
-        })
+        .map(([key, value]) => `export ${key}=${quote([value])}`)
         .join("\n");
+      mkdirSync(dirname(envFilePath), { recursive: true });
       writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
 
       // Refresh tmux sessions with new env vars
@@ -68,7 +55,7 @@ export const platformRouter = createTRPCRouter({
         // Send source command to each session in parallel
         await Promise.all(
           sessions.map((session) =>
-            x("tmux", ["send-keys", "-t", session, "source ~/.iterate-platform-env", "Enter"], {
+            x("tmux", ["send-keys", "-t", session, `source ${envFilePath}`, "Enter"], {
               throwOnError: true,
             }),
           ),

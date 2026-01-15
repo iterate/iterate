@@ -1,10 +1,34 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, publicMutation, protectedProcedure } from "../trpc.ts";
-import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
+import {
+  router,
+  publicProcedure,
+  publicMutation,
+  protectedProcedure,
+  projectProtectedProcedure,
+} from "../trpc.ts";
+import {
+  user,
+  organization,
+  project,
+  organizationUserMembership,
+  projectConnection,
+  event,
+} from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
+
+/** Generate a DiceBear avatar URL using a hash of the email as seed */
+function generateDefaultAvatar(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash << 5) - hash + normalized.charCodeAt(i);
+    hash |= 0;
+  }
+  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
+}
 
 /**
  * Testing router - provides helpers for test setup
@@ -50,6 +74,7 @@ export const testingRouter = router({
           name: input.name,
           role: input.role,
           emailVerified: true,
+          image: generateDefaultAvatar(input.email),
         })
         .onConflictDoUpdate({
           target: user.email,
@@ -145,5 +170,85 @@ export const testingRouter = router({
       }
 
       return { results };
+    }),
+
+  // Seed Slack project connection for tests
+  seedSlackConnection: projectProtectedProcedure
+    .input(
+      z.object({
+        teamId: z.string().min(1),
+        teamName: z.string().optional(),
+        teamDomain: z.string().optional(),
+        webhookTargetMachineId: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const existingConnection = await ctx.db.query.projectConnection.findFirst({
+        where: (pc, { eq, and }) => and(eq(pc.projectId, ctx.project.id), eq(pc.provider, "slack")),
+      });
+
+      const providerData = {
+        teamId: input.teamId,
+        teamName: input.teamName ?? input.teamId,
+        teamDomain: input.teamDomain ?? input.teamId,
+      };
+
+      if (existingConnection) {
+        await ctx.db
+          .update(projectConnection)
+          .set({
+            externalId: input.teamId,
+            providerData,
+            webhookTargetMachineId: input.webhookTargetMachineId ?? null,
+          })
+          .where(eq(projectConnection.id, existingConnection.id));
+      } else {
+        await ctx.db.insert(projectConnection).values({
+          projectId: ctx.project.id,
+          provider: "slack",
+          externalId: input.teamId,
+          scope: "project",
+          userId: ctx.user.id,
+          providerData,
+          webhookTargetMachineId: input.webhookTargetMachineId ?? null,
+        });
+      }
+
+      return { success: true };
+    }),
+
+  // Insert a test event
+  insertEvent: projectProtectedProcedure
+    .input(
+      z.object({
+        type: z.string().min(1),
+        payload: z.record(z.string(), z.unknown()).default({}),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
+
+      const [newEvent] = await ctx.db
+        .insert(event)
+        .values({
+          type: input.type,
+          payload: input.payload,
+          projectId: ctx.project.id,
+        })
+        .returning();
+
+      return newEvent;
     }),
 });

@@ -4,14 +4,14 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import { cloudflareTunnel } from "@iterate-com/shared/cloudflare-tunnel";
+import { vitePublicUrl } from "@iterate-com/shared/force-public-url-vite-plugin";
 
 export default defineConfig({
   // Use relative paths for assets so they work when proxied at any base path
   // The proxy injects <base href="..."> which makes relative URLs resolve correctly
   base: "./",
   plugins: [
-    cloudflareTunnel(import.meta.dirname),
+    vitePublicUrl(),
     devtools(),
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],
@@ -31,6 +31,7 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
+    open: false,
     port: 3000,
     proxy: {
       "/api": {

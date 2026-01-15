@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
 export const DOCKER_API_URL = "http://127.0.0.1:2375";
@@ -36,10 +37,39 @@ export async function dockerApi<T>(
   return text ? JSON.parse(text) : ({} as T);
 }
 
+interface DockerContainer {
+  Ports?: Array<{ PublicPort?: number }>;
+}
+
+/** Find a block of consecutive available host ports by querying Docker */
+async function findAvailablePortBlock(count: number): Promise<number> {
+  const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
+
+  const usedPorts = new Set<number>();
+  for (const container of containers) {
+    for (const port of container.Ports ?? []) {
+      if (port.PublicPort) {
+        usedPorts.add(port.PublicPort);
+      }
+    }
+  }
+
+  // Find a contiguous block of `count` available ports
+  for (let basePort = 10000; basePort <= 11000 - count; basePort++) {
+    let blockAvailable = true;
+    for (let i = 0; i < count; i++) {
+      if (usedPorts.has(basePort + i)) {
+        blockAvailable = false;
+        break;
+      }
+    }
+    if (blockAvailable) return basePort;
+  }
+  throw new Error(`No available port block of size ${count} in range 10000-11000`);
+}
+
 export interface LocalDockerConfig {
   imageName: string;
-  /** Only required when calling create() */
-  findAvailablePort?: () => Promise<number>;
 }
 
 export function createLocalVanillaProvider(): MachineProvider {
@@ -74,16 +104,36 @@ export function createLocalVanillaProvider(): MachineProvider {
 }
 
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
-  const { imageName, findAvailablePort } = config;
+  const { imageName } = config;
 
   return {
     type: "local-docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      if (!findAvailablePort) {
-        throw new Error("findAvailablePort required for create()");
-      }
-      const port = await findAvailablePort();
+      // Allocate a block of consecutive ports: one per daemon + one for terminal (22222)
+      const terminalInternalPort = 22222;
+      const numPorts = DAEMON_DEFINITIONS.length + 1; // +1 for terminal
+      const basePort = await findAvailablePortBlock(numPorts);
+
+      // Build port mappings: { daemonId: hostPort } for metadata
+      const ports: Record<string, number> = {};
+      const portBindings: Record<string, Array<{ HostPort: string }>> = {};
+      const exposedPorts: Record<string, object> = {};
+
+      // Map each daemon to a host port
+      DAEMON_DEFINITIONS.forEach((daemon, index) => {
+        const hostPort = basePort + index;
+        const internalPortKey = `${daemon.internalPort}/tcp`;
+        ports[daemon.id] = hostPort;
+        portBindings[internalPortKey] = [{ HostPort: String(hostPort) }];
+        exposedPorts[internalPortKey] = {};
+      });
+
+      // Map terminal to the last port in the block
+      const terminalHostPort = basePort + DAEMON_DEFINITIONS.length;
+      ports["terminal"] = terminalHostPort;
+      portBindings[`${terminalInternalPort}/tcp`] = [{ HostPort: String(terminalHostPort) }];
+      exposedPorts[`${terminalInternalPort}/tcp`] = {};
 
       // For local-docker, rewrite localhost URLs to host.docker.internal
       // so the container can reach services on the host machine
@@ -113,22 +163,29 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       });
 
       // Mount local repo for development (allows code changes without rebuilding image)
-      const binds = [`${REPO_ROOT}:/local-iterate-repo:ro`];
+      // Read-write so entry.ts can delete it after copying to avoid confusion
+      const binds = [`${REPO_ROOT}:/local-iterate-repo`];
 
       const hostConfig: Record<string, unknown> = {
-        PortBindings: {
-          "3000/tcp": [{ HostPort: String(port) }],
-        },
+        PortBindings: portBindings,
         Binds: binds,
       };
 
+      // Use machine name (slug) for container name for easier identification
+      // Docker container names: alphanumeric, underscore, hyphen, period (must start with alphanumeric)
+      const containerName = machineConfig.name
+        .toLowerCase()
+        .replace(/[^a-z0-9_.-]/g, "-")
+        .replace(/^[^a-z0-9]+/, "")
+        .slice(0, 63);
+
       const createResponse = await dockerApi<{ Id: string }>(
         "POST",
-        `/containers/create?name=${encodeURIComponent(machineConfig.machineId)}`,
+        `/containers/create?name=${encodeURIComponent(containerName || machineConfig.machineId)}`,
         {
           Image: imageName,
           Env: envArray,
-          ExposedPorts: { "3000/tcp": {} },
+          ExposedPorts: exposedPorts,
           HostConfig: hostConfig,
         },
       );
@@ -139,7 +196,7 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
 
       return {
         externalId: containerId,
-        metadata: { port, containerId },
+        metadata: { ports, containerId },
       };
     },
 
@@ -168,9 +225,27 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     },
 
     getPreviewUrl(_externalId: string, metadata?: Record<string, unknown>, port?: number): string {
-      const baseHostPort = (metadata as { port?: number })?.port ?? 3000;
-      // Map internal container port to host port
-      // Internal 3000 → metadata.port, internal 22222 → metadata.port + 1
+      const meta = metadata as { ports?: Record<string, number>; port?: number };
+
+      // New format: ports is a map of daemonId/terminal -> hostPort
+      if (meta?.ports) {
+        // Find which daemon this internal port corresponds to
+        const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
+        if (daemon && meta.ports[daemon.id]) {
+          return `http://localhost:${meta.ports[daemon.id]}`;
+        }
+        // Terminal port
+        if (port === 22222 && meta.ports["terminal"]) {
+          return `http://localhost:${meta.ports["terminal"]}`;
+        }
+        // Default to iterate-daemon
+        if (meta.ports["iterate-daemon"]) {
+          return `http://localhost:${meta.ports["iterate-daemon"]}`;
+        }
+      }
+
+      // Legacy fallback: single port field
+      const baseHostPort = meta?.port ?? 3000;
       const hostPort = port === 22222 ? baseHostPort + 1 : baseHostPort;
       return `http://localhost:${hostPort}`;
     },

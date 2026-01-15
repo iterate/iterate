@@ -30,7 +30,7 @@ function OrgHomePage() {
   const projects = org?.projects ?? [];
 
   return (
-    <div className="p-4 md:p-8 space-y-6">
+    <div className="p-4 space-y-6">
       <HeaderActions>
         <Button asChild size="sm">
           <Link
