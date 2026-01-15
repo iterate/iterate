@@ -15,6 +15,12 @@ posthogProxyApp.all("/api/integrations/posthog/proxy/*", async (c) => {
   headers.set("X-Forwarded-Host", url.hostname);
   headers.set("X-Forwarded-Proto", url.protocol.replace(":", ""));
 
+  // Forward client IP for geolocation - Cloudflare provides the real client IP
+  const clientIP = c.req.header("cf-connecting-ip");
+  if (clientIP) {
+    headers.set("X-Forwarded-For", clientIP);
+  }
+
   const response = await fetch(posthogUrl, {
     method: c.req.method,
     headers,
