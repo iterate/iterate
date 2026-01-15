@@ -6,13 +6,12 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { trpcRouter } from "./trpc/router.ts";
-import { baseApp as app } from "./utils/hono.ts";
+import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 
-app.use("*", logger());
-app.use(
-  "*",
+const app = baseApp.use(
+  logger(),
   cors({
     origin: (origin) => {
       if (process.env.NODE_ENV === "development") return origin;

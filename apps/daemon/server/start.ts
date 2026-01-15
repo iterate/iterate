@@ -6,7 +6,7 @@ import { createWorkerClient } from "./orpc/client.ts";
 export const startServer = async (params: { port: number; hostname: string }) => {
   return new Promise<ServerType>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, ...params }, () => {
-      console.log(`Server running at http://${params.hostname}:${params.port}`);
+      console.log(`\nServer running at http://${params.hostname}:${params.port}`);
 
       reportStatusToPlatform().catch(console.error);
       resolve(server);
