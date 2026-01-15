@@ -241,7 +241,6 @@ const Env = z
     // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
 
     BETTER_AUTH_SECRET: Required,
-    CLOUDFLARE_TUNNEL_HOST: Optional,
     DAYTONA_API_KEY: Required,
     DAYTONA_SNAPSHOT_PREFIX: Optional,
     GOOGLE_CLIENT_ID: Required,
