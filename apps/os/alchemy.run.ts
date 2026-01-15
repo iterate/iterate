@@ -238,7 +238,7 @@ const BoolyString = z.enum(["true", "false"]).optional();
 /** needed by the deploy script, but not at runtime */
 const Env = z
   .object({
-    // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
+    // you'll need CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and ALCHEMY_STATE_TOKEN for the deployment to work, but not at runtime
 
     BETTER_AUTH_SECRET: Required,
     DAYTONA_API_KEY: Required,
