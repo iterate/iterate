@@ -1,4 +1,4 @@
-import { serve, ServerType } from "@hono/node-server";
+import { serve, type ServerType } from "@hono/node-server";
 import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
