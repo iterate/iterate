@@ -21,9 +21,8 @@ COPY apps/os/sandbox/entry.ts /app/entry.ts
 
 RUN mkdir -p .iterate && \
   mkdir -p /usr/local/bin && \
-  echo '#!/bin/sh
-exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"
-' > /usr/local/bin/iterate && \
+  echo '#!/bin/sh' > /usr/local/bin/iterate && \
+  echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
   chmod +x /usr/local/bin/iterate
 
 ENTRYPOINT [ "tsx", "entry.ts" ]
