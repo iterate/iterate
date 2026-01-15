@@ -61,7 +61,7 @@ export function githubScript(
   const relativeSourceFilepath = path.relative(repoRoot, sourceFilepath);
 
   const importShims: Record<string, string> = {};
-  const importExpressionRegex = /await import\(\n?\s*['"]([^'"]+)['"],?\n?\s*\)/g;
+  const importExpressionRegex = /await import\(\n?\s*['"](.+)['"],?\n?\s*\)/g;
   const fnString = handler.toString().replace(importExpressionRegex, (_, filepath) => {
     const hash = crypto.createHash("md5").update(filepath).digest("hex");
     const slug = `${filepath.replaceAll(/\W/g, "")}-${hash}`;
