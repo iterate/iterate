@@ -9,6 +9,10 @@ export default workflow({
     },
     workflow_dispatch: {},
   },
+  env: {
+    SLACK_CLIENT_ID: "fake123",
+    DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+  },
   jobs: {
     "flake-detection": {
       ...utils.runsOn,
