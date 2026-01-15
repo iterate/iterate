@@ -73,11 +73,12 @@ test.describe("naming defaults", () => {
     await createProject(page);
     await sidebarButton(page, "Machines").click();
 
-    await page.getByRole("button", { name: "Create Machine" }).click();
+    await page.getByRole("link", { name: "Create Machine" }).click();
 
+    // Default machine type is "local-docker" in dev/test, "daytona" in production
     await page
       .locator("input[placeholder='Machine name']")
-      .and(page.locator("[value^='daytona-']"))
+      .and(page.locator("[value^='local-docker-'],[value^='daytona-']"))
       .waitFor();
   });
 });
