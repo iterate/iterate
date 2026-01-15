@@ -260,9 +260,7 @@ export const machineRouter = router({
           envVars: {
             ...envVars,
             // Platform bootstrap env vars - we use the tunnel host if it is set to handle remote sandbox and local control plane use cases
-            ITERATE_OS_BASE_URL: ctx.env.CLOUDFLARE_TUNNEL_HOST
-              ? `https://${ctx.env.CLOUDFLARE_TUNNEL_HOST}`
-              : ctx.env.VITE_PUBLIC_URL,
+            ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
             ITERATE_OS_API_KEY: machineApiKey,
             // In dev, use the current git branch for Daytona sandboxes
             ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF

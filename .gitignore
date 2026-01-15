@@ -48,3 +48,6 @@ session-ses*.md
 
 # local lint-staged config
 lint-staged.local.cjs
+
+playwriter-screenshot-*
+opencode.json

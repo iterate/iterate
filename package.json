@@ -10,6 +10,7 @@
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
+    "cli": "cd apps/cli && pnpm tsx main.ts",
     "spec": "playwright test",
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
@@ -34,7 +35,7 @@
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate"
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

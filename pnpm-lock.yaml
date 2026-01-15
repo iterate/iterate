@@ -133,25 +133,29 @@ importers:
         version: 4.1.13
 
   apps/cli:
+    dependencies:
+      '@iterate-com/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@slack/web-api':
+        specifier: ^7.13.0
+        version: 7.13.0
+      '@trpc/server':
+        specifier: ^11.4.3
+        version: 11.7.2(typescript@5.9.3)
+      trpc-cli:
+        specifier: ^0.12.2
+        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13)
+      zod:
+        specifier: ^4.1.11
+        version: 4.1.13
     devDependencies:
-      '@effect/cli':
-        specifier: ^0.60.0
-        version: 0.60.1(@effect/platform@0.82.8(effect@3.19.14))(@effect/printer-ansi@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(@effect/printer@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(effect@3.19.14)
-      '@effect/experimental':
-        specifier: ^0.44.21
-        version: 0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14)
-      '@effect/platform':
-        specifier: ^0.82.0
-        version: 0.82.8(effect@3.19.14)
-      '@effect/platform-node':
-        specifier: ^0.78.0
-        version: 0.78.1(@effect/cluster@0.31.1(@effect/platform@0.82.8(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(bufferutil@4.0.9)(effect@3.19.14)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.1
-      effect:
-        specifier: ^3.19.0
-        version: 3.19.14
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -180,7 +184,7 @@ importers:
         specifier: ^6.2.2
         version: 6.2.2(@codemirror/language@6.11.3)(@codemirror/state@6.5.2)(@codemirror/view@6.38.8)(@lezer/highlight@1.2.3)
       '@hono/node-server':
-        specifier: ^1.13.0
+        specifier: ^1.19.6
         version: 1.19.6(hono@4.11.3)
       '@hono/node-ws':
         specifier: ^1.1.1
@@ -290,6 +294,24 @@ importers:
       '@trpc/tanstack-react-query':
         specifier: ^11.4.3
         version: 11.7.2(@tanstack/react-query@5.90.16(react@19.2.3))(@trpc/client@11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.2(typescript@5.9.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+      '@xterm/addon-clipboard':
+        specifier: 0.3.0-beta.103
+        version: 0.3.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-fit':
+        specifier: 0.12.0-beta.103
+        version: 0.12.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-ligatures':
+        specifier: 0.11.0-beta.103
+        version: 0.11.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-unicode-graphemes':
+        specifier: 0.5.0-beta.103
+        version: 0.5.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-webgl':
+        specifier: 0.20.0-beta.102
+        version: 0.20.0-beta.102(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/xterm':
+        specifier: 6.1.0-beta.103
+        version: 6.1.0-beta.103
       '@xyflow/react':
         specifier: ^12.10.0
         version: 12.10.0(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -323,9 +345,6 @@ importers:
       embla-carousel-react:
         specifier: ^8.6.0
         version: 8.6.0(react@19.2.3)
-      ghostty-web:
-        specifier: ^0.4.0
-        version: 0.4.0
       hono:
         specifier: ^4.11.3
         version: 4.11.3
@@ -341,6 +360,9 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      partysocket:
+        specifier: ^1.1.6
+        version: 1.1.6
       react:
         specifier: ^19.2.3
         version: 19.2.3
@@ -5679,6 +5701,35 @@ packages:
   '@vitest/utils@4.0.16':
     resolution: {integrity: sha512-h8z9yYhV3e1LEfaQ3zdypIrnAg/9hguReGZoS7Gl0aBG5xgA410zBqECqmaF/+RkTggRsfnzc1XaAHA6bmUufA==}
 
+  '@xterm/addon-clipboard@0.3.0-beta.103':
+    resolution: {integrity: sha512-L3h9GEiNhopTF3TnacebbrtgrcObw1Of8NMJFx65OYtyIxW1JqTuFHcFayQg2gksdQnoUIpfqQiMauo16dp0Nw==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/addon-fit@0.12.0-beta.103':
+    resolution: {integrity: sha512-HrqwCB2IOakwU5E53P1fy4qmXkIPt4O4ygtOcFAe6New/Om0Dkne3czoSePOI5huUwSodOSmNl9BZDBCPIi4BQ==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/addon-ligatures@0.11.0-beta.103':
+    resolution: {integrity: sha512-+Nyq0CUJ6ZKj82D/6KGD3xnsgqEmnbaS3Jh/dFKBZxlICzGiJjQ8zlUCWabbdpgwQyCg4BHGuM+qC8P9FF9rsA==}
+    engines: {node: '>8.0.0'}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/addon-unicode-graphemes@0.5.0-beta.103':
+    resolution: {integrity: sha512-BR7BPdUd6EMsXbypdW1vOnax8BEtwL3Np7qBt9gpIK2o/+/ev1+YyfPYASCg14QovATLsO3w3ecgxYHQirXdgA==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/addon-webgl@0.20.0-beta.102':
+    resolution: {integrity: sha512-xorsFnfF6rpJUILiRVzknUVfi66f7hdUjtb4FtDF4msMOHLsIEFOzXTegD01PcnSGmUaHkfTldmOAV6oPMWX8w==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/xterm@6.1.0-beta.103':
+    resolution: {integrity: sha512-R2j1dmGkiyM1+YK2+PUSb1oDnLRUYwtNs+HzcKHGEDyuUOV8hyfnLMO+VLTsgdeCHBnKVgJVlpI0EkqNQmfYvw==}
+
   '@xyflow/react@12.10.0':
     resolution: {integrity: sha512-eOtz3whDMWrB4KWVatIBrKuxECHqip6PfA8fTpaS2RUGVpiEAe+nqDKsLqkViVWxDGreq0lWX71Xth/SPAzXiw==}
     peerDependencies:
@@ -7392,9 +7443,6 @@ packages:
   get-tsconfig@4.13.0:
     resolution: {integrity: sha512-1VKTZJCwBrvbd+Wn3AOgQP/2Av+TfTCOlE4AcRJE72W1ksZXbAx8PPBR9RzgTeSPzlPMHrbANMH3LbltH73wxQ==}
 
-  ghostty-web@0.4.0:
-    resolution: {integrity: sha512-0puDBik2qapbD/QQBW9o5ZHfXnZBqZWx/ctBiVtKZ6ZLds4NYb+wZuw1cRLXZk9zYovIQ908z3rvFhexAvc5Hg==}
-
   github-from-package@0.0.0:
     resolution: {integrity: sha512-SyHy3T1v2NUXn29OsWdxmK6RwHD+vkj3v8en8AOBZ1wBQ/hCAQ5bAQTD02kW4W9tUp/3Qh6J8r9EvntiyCmOOw==}
 
@@ -8196,6 +8244,10 @@ packages:
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
 
+  lru-cache@6.0.0:
+    resolution: {integrity: sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==}
+    engines: {node: '>=10'}
+
   lru-cache@7.18.3:
     resolution: {integrity: sha512-jumlc0BIUrS3qJGgIkWZsyfAM7NCWiBcCDhnd+3NNM5KbBmLTgHVfWBcg6W+rLUsIpzpERPsvwUP7CckAQSOoA==}
     engines: {node: '>=12'}
@@ -8726,6 +8778,10 @@ packages:
 
   openapi-types@12.1.3:
     resolution: {integrity: sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw==}
+
+  opentype.js@0.8.0:
+    resolution: {integrity: sha512-FQHR4oGP+a0m/f6yHoRpBOIbn/5ZWxKd4D/djHVJu8+KpBTYrJda0b7mLcgDEMWXE9xBCJm+qb0yv6FcvPjukg==}
+    hasBin: true
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -9758,6 +9814,9 @@ packages:
   thenify@3.3.1:
     resolution: {integrity: sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw==}
 
+  tiny-inflate@1.0.3:
+    resolution: {integrity: sha512-pkY1fj1cKHb2seWDy0B16HeWyczlJA9/WW3u3c4z/NiWDsO3DOU5D7nhTLE9CF0yXv/QZFY7sEJmj24dK+Rrqw==}
+
   tiny-invariant@1.3.3:
     resolution: {integrity: sha512-+FbBPE1o9QAYvviau/qC5SE3caw21q3xkvWKBtja5vgqOWIHHJ3ioaq1VPfn/Szqctz2bU/oYeKd9/z5BL+PVg==}
 
@@ -9835,6 +9894,31 @@ packages:
 
   trpc-cli@0.12.0:
     resolution: {integrity: sha512-MRzoqm2rPbUsSpVWiMdmHsXJJezAsq8kDJlO9d/uOX17tImxiBjA0aU52RthVHrftn++wFOE1uqBSCVs+88e6w==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@orpc/server': ^1.0.0
+      '@trpc/server': ^10.45.2 || ^11.0.1
+      '@valibot/to-json-schema': ^1.1.0
+      effect: ^3.14.2 || ^4.0.0
+      valibot: ^1.1.0
+      zod: ^3.24.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@orpc/server':
+        optional: true
+      '@trpc/server':
+        optional: true
+      '@valibot/to-json-schema':
+        optional: true
+      effect:
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  trpc-cli@0.12.2:
+    resolution: {integrity: sha512-kGNCiyOimGlfcZFImbWzFF2Nn3TMnenwUdyuckiN5SEaceJbIac7+Iau3WsVHjQpoNgugFruZMDOKf8GNQNtJw==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -11992,16 +12076,6 @@ snapshots:
   '@effect/cli@0.60.1(@effect/platform@0.81.1(effect@3.19.14))(@effect/printer-ansi@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(@effect/printer@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(effect@3.19.14)':
     dependencies:
       '@effect/platform': 0.81.1(effect@3.19.14)
-      '@effect/printer': 0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14)
-      '@effect/printer-ansi': 0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14)
-      effect: 3.19.14
-      ini: 4.1.3
-      toml: 3.0.0
-      yaml: 2.8.2
-
-  '@effect/cli@0.60.1(@effect/platform@0.82.8(effect@3.19.14))(@effect/printer-ansi@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(@effect/printer@0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14))(effect@3.19.14)':
-    dependencies:
-      '@effect/platform': 0.82.8(effect@3.19.14)
       '@effect/printer': 0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14)
       '@effect/printer-ansi': 0.42.22(@effect/typeclass@0.33.22(effect@3.19.14))(effect@3.19.14)
       effect: 3.19.14
@@ -16528,6 +16602,31 @@ snapshots:
       '@vitest/pretty-format': 4.0.16
       tinyrainbow: 3.0.3
 
+  '@xterm/addon-clipboard@0.3.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+      js-base64: 3.7.8
+
+  '@xterm/addon-fit@0.12.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+
+  '@xterm/addon-ligatures@0.11.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+      lru-cache: 6.0.0
+      opentype.js: 0.8.0
+
+  '@xterm/addon-unicode-graphemes@0.5.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+
+  '@xterm/addon-webgl@0.20.0-beta.102(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+
+  '@xterm/xterm@6.1.0-beta.103': {}
+
   '@xyflow/react@12.10.0(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
       '@xyflow/system': 0.0.74
@@ -18330,8 +18429,6 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  ghostty-web@0.4.0: {}
-
   github-from-package@0.0.0: {}
 
   glob-parent@5.1.2:
@@ -18915,8 +19012,7 @@ snapshots:
 
   jose@6.1.2: {}
 
-  js-base64@3.7.8:
-    optional: true
+  js-base64@3.7.8: {}
 
   js-tokens@4.0.0: {}
 
@@ -19200,6 +19296,10 @@ snapshots:
   lru-cache@5.1.1:
     dependencies:
       yallist: 3.1.1
+
+  lru-cache@6.0.0:
+    dependencies:
+      yallist: 4.0.0
 
   lru-cache@7.18.3: {}
 
@@ -19976,6 +20076,10 @@ snapshots:
       zod: 4.1.13
 
   openapi-types@12.1.3: {}
+
+  opentype.js@0.8.0:
+    dependencies:
+      tiny-inflate: 1.0.3
 
   optionator@0.9.4:
     dependencies:
@@ -21236,6 +21340,8 @@ snapshots:
     dependencies:
       any-promise: 1.3.0
 
+  tiny-inflate@1.0.3: {}
+
   tiny-invariant@1.3.3: {}
 
   tiny-warning@1.0.3: {}
@@ -21299,6 +21405,16 @@ snapshots:
   trough@2.2.0: {}
 
   trpc-cli@0.12.0(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13):
+    dependencies:
+      commander: 14.0.2
+    optionalDependencies:
+      '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@trpc/server': 11.7.2(typescript@5.9.3)
+      effect: 3.19.14
+      valibot: 1.1.0(typescript@5.9.3)
+      zod: 4.1.13
+
+  trpc-cli@0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(effect@3.19.14)(valibot@1.1.0(typescript@5.9.3))(zod@4.1.13):
     dependencies:
       commander: 14.0.2
     optionalDependencies:

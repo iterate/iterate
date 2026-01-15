@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon } from "lucide-react";
-import { GhosttyTerminal } from "@/components/ghostty-terminal.tsx";
+import { XtermTerminal } from "@/components/xterm-terminal.tsx";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
 
@@ -43,5 +43,5 @@ function AgentPage() {
     );
   }
 
-  return <GhosttyTerminal key={agent.tmuxSession} tmuxSessionName={agent.tmuxSession} />;
+  return <XtermTerminal key={agent.tmuxSession} tmuxSessionName={agent.tmuxSession} />;
 }
