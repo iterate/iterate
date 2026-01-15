@@ -17,19 +17,22 @@ test("slow button", async ({ page }) => {
 
 test("slow button fails without spinner waiter", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ disabled: true });
-  await expect(run(page)).rejects.toThrowError(/Timeout .* exceeded/);
+  const error = await run(page).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
 });
 
 test("slow button fails when spinner doesn't match selector", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ spinnerSelectors: [".myCustomSpinnerClass"] });
-  await expect(run(page)).rejects.toThrowError(/Timeout .* exceeded/);
+  const error = await run(page).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
+  expect(error.message).toMatch(/If this is a slow operation.../);
 });
 
 test("slow button when spinner times out", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ spinnerTimeout: 1001 });
   // make the slow button even slower, must take longer than 1s (initial timeout) +1s (minimum spinner timeout) + 1s (last chance) + any time for chugging along
   await page.goto(`/dev?slowMutationTimeout=6000`);
-  await expect(run(Object.assign(page, { goto: () => {} }))).rejects.toThrowError(
-    /Timeout .* exceeded/,
-  );
+  const error = await run(Object.assign(page, { goto: () => {} })).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
+  expect(error.message).toMatch(/spinner was still visible after .*/i);
 });
