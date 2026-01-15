@@ -1,4 +1,4 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
@@ -14,6 +14,7 @@ export default workflow({
       ...utils.runsOn,
       steps: [
         ...utils.setupRepo,
+        { run: "pnpm docker:up" },
         ...utils.setupDoppler({ config: "dev" }),
         {
           name: "Install Playwright Browsers",
@@ -21,26 +22,22 @@ export default workflow({
         },
         {
           name: "Run Tests with Repeats",
+          run: "mkdir -p test-results && PLAYWRIGHT_JSON_OUTPUT_FILE=test-results/spec-results.json pnpm spec --repeat-each=10 --reporter=json",
           "continue-on-error": true,
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          run: "PLAYWRIGHT_JSON_OUTPUT_FILE=spec-results.json pnpm spec --repeat-each=10 --reporter=json || true",
         },
         {
           name: "Generate Flaky Test Report",
-          id: "report",
-          run: "node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md",
+          if: "always()",
+          run: "node spec/analyze-flaky-tests.cjs test-results/spec-results.json test-results/flaky-report.md",
         },
         {
-          name: "Upload Flaky Test Report",
+          name: "Upload Test Results",
           if: "always()",
-          uses: "actions/upload-artifact@v4",
-          with: {
-            name: "flaky-test-report",
-            path: "spec/flaky-report.md",
+          ...uses("actions/upload-artifact@v4", {
+            name: "flaky-test-results",
+            path: "test-results",
             "retention-days": 30,
-          },
+          }),
         },
       ],
     },

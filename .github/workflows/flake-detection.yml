@@ -21,6 +21,7 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install
+      - run: pnpm docker:up
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
@@ -30,17 +31,15 @@ jobs:
       - name: Install Playwright Browsers
         run: pnpm exec playwright install chromium --with-deps
       - name: Run Tests with Repeats
+        run: mkdir -p test-results && PLAYWRIGHT_JSON_OUTPUT_FILE=test-results/spec-results.json pnpm spec --repeat-each=10 --reporter=json
         continue-on-error: true
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: PLAYWRIGHT_JSON_OUTPUT_FILE=spec-results.json pnpm spec --repeat-each=10 --reporter=json || true
       - name: Generate Flaky Test Report
-        id: report
-        run: node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md
-      - name: Upload Flaky Test Report
+        if: always()
+        run: node spec/analyze-flaky-tests.cjs test-results/spec-results.json test-results/flaky-report.md
+      - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flaky-test-report
-          path: spec/flaky-report.md
+          name: flaky-test-results
+          path: test-results
           retention-days: 30
