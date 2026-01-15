@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
 import { test } from "./test-helpers.ts";
 
@@ -12,19 +13,23 @@ test("slow button", async ({ page }) => {
   await run(page);
 });
 
-test.fail("slow button fails without spinner waiter", async ({ page }) => {
+/* eslint-disable no-restricted-syntax -- expect ok here */
+
+test("slow button fails without spinner waiter", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ disabled: true });
-  await run(page);
+  await expect(run(page)).rejects.toThrowError(/Timeout .* exceeded/);
 });
 
-test.fail("slow button fails when spinner doesn't match selector", async ({ page }) => {
-  spinnerWaiter.settings.enterWith({ spinnerSelector: ".myCustomSpinnerClass" });
-  await run(page);
+test("slow button fails when spinner doesn't match selector", async ({ page }) => {
+  spinnerWaiter.settings.enterWith({ spinnerSelectors: [".myCustomSpinnerClass"] });
+  await expect(run(page)).rejects.toThrowError(/Timeout .* exceeded/);
 });
 
-test.fail("slow button when spinner times out", async ({ page }) => {
+test("slow button when spinner times out", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ spinnerTimeout: 1001 });
   // make the slow button even slower, must take longer than 1s (initial timeout) +1s (minimum spinner timeout) + 1s (last chance) + any time for chugging along
   await page.goto(`/dev?slowMutationTimeout=6000`);
-  await run(Object.assign(page, { goto: () => {} }));
+  await expect(run(Object.assign(page, { goto: () => {} }))).rejects.toThrowError(
+    /Timeout .* exceeded/,
+  );
 });

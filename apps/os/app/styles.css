@@ -153,3 +153,9 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Hide interactive elements during hydration to prevent premature interactions.
+   visibility:hidden keeps layout stable while making elements non-actionable. */
+body[data-hydrated="false"] :is(input, button, textarea, select, a) {
+  visibility: hidden;
+}

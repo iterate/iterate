@@ -13,6 +13,7 @@ import {
   Scripts,
   useRouter,
   useRouterState,
+  useHydrated,
 } from "@tanstack/react-router";
 import {
   PostHogProvider as _PostHogProvider,
@@ -188,12 +189,14 @@ function RootComponent() {
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
+  const isHydrated = useHydrated();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
-      <body className="min-h-screen bg-background font-sans antialiased">
+      <body className="min-h-screen bg-background font-sans antialiased" data-hydrated={isHydrated}>
         <RouterProgress />
         <ThemeProvider
           attribute="class"
