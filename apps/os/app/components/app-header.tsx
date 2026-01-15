@@ -103,7 +103,7 @@ export function AppHeader({
     !isProjectHome && !isOrgHome && !isMachineDetailRoute ? (PAGE_NAMES[lastPart] ?? null) : null;
 
   // Find current IDs for aria-current
-  const currentOrgId = organizations.find((o) => o.slug === organizationSlug)?.id ?? "";
+  const _currentOrgId = organizations.find((o) => o.slug === organizationSlug)?.id ?? "";
   const currentProjectId = projects.find((p) => p.slug === projectSlug)?.id ?? "";
 
   // Determine display name for mobile

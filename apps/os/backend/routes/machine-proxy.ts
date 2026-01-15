@@ -14,7 +14,7 @@ import type { Variables } from "../worker.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
-import { rewriteHTMLUrls, rewriteCSSUrls } from "../utils/proxy-html-rewriter.ts";
+import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 

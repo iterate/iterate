@@ -158,7 +158,7 @@ export async function rewriteCSSUrls(response: Response, proxyBasePath: string):
   // Rewrite absolute URLs in url() references: url(/path) or url("/path") or url('/path')
   const rewrittenCSS = css.replace(
     /url\(\s*(["']?)\/(?!\/)(.*?)\1\s*\)/g,
-    (match, quote, path) => `url(${quote}${proxyBasePath}/${path}${quote})`,
+    (_match, quote, path) => `url(${quote}${proxyBasePath}/${path}${quote})`,
   );
 
   return new Response(rewrittenCSS, {
