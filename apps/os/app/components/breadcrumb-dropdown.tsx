@@ -125,6 +125,7 @@ export function BreadcrumbDropdown({
 interface OrgBreadcrumbDropdownProps {
   currentName: string;
   currentId: string;
+  currentSlug: string;
   items: DropdownItem[];
   isCurrentPage?: boolean;
 }
@@ -132,11 +133,13 @@ interface OrgBreadcrumbDropdownProps {
 export function OrgBreadcrumbDropdown({
   currentName,
   currentId,
+  currentSlug,
   items,
   isCurrentPage = false,
 }: OrgBreadcrumbDropdownProps) {
   return (
     <BreadcrumbDropdown
+      data-organization={currentSlug}
       currentName={currentName}
       currentId={currentId}
       items={items}

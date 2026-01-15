@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/root.tsx'
+import { Route as logoutRouteImport } from './routes/logout.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as devRouteImport } from './routes/dev.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
@@ -38,6 +39,11 @@ import { Route as orgProjectAgentsRouteImport } from './routes/org/project/agent
 import { Route as orgProjectAccessTokensRouteImport } from './routes/org/project/access-tokens.tsx'
 import { Route as orgProjectMachineDetailRouteImport } from './routes/org/project/machine-detail.tsx'
 
+const logoutRoute = logoutRouteImport.update({
+  id: '/logout',
+  path: '/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -181,6 +187,7 @@ const orgProjectMachineDetailRoute = orgProjectMachineDetailRouteImport.update({
 export interface FileRoutesByFullPath {
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
   '/new-organization': typeof newOrganizationRoute
@@ -210,6 +217,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
   '/slack-conflict': typeof slackConflictRoute
@@ -238,6 +246,7 @@ export interface FileRoutesById {
   '/_auth': typeof authRequiredDotlayoutRouteWithChildren
   '/dev': typeof devRoute
   '/login': typeof loginRoute
+  '/logout': typeof logoutRoute
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
   '/_auth/new-organization': typeof newOrganizationRoute
@@ -269,6 +278,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/dev'
     | '/login'
+    | '/logout'
     | '/'
     | '/admin'
     | '/new-organization'
@@ -298,6 +308,7 @@ export interface FileRouteTypes {
   to:
     | '/dev'
     | '/login'
+    | '/logout'
     | '/'
     | '/new-organization'
     | '/slack-conflict'
@@ -325,6 +336,7 @@ export interface FileRouteTypes {
     | '/_auth'
     | '/dev'
     | '/login'
+    | '/logout'
     | '/_auth/'
     | '/_auth/admin'
     | '/_auth/new-organization'
@@ -356,10 +368,18 @@ export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
   devRoute: typeof devRoute
   loginRoute: typeof loginRoute
+  logoutRoute: typeof logoutRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/logout': {
+      id: '/logout'
+      path: '/logout'
+      fullPath: '/logout'
+      preLoaderRoute: typeof logoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -662,6 +682,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
   devRoute: devRoute,
   loginRoute: loginRoute,
+  logoutRoute: logoutRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

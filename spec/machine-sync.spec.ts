@@ -9,7 +9,7 @@ test.describe("machine list sync", () => {
     await sidebarButton(page, "Machines").click();
 
     const machineName = `E2E Machine ${Date.now()}`;
-    await page.getByRole("link", { name: "Create Machine" }).click();
+    await page.getByRole("button", { name: "Create Machine" }).click();
     await page.getByPlaceholder("Machine name").fill(machineName);
     await page.getByRole("button", { name: "Create" }).click();
 

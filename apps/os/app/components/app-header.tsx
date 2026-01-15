@@ -12,11 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "./ui/breadcrumb.tsx";
-import {
-  OrgBreadcrumbDropdown,
-  ProjectBreadcrumbDropdown,
-  MachineBreadcrumbDropdown,
-} from "./breadcrumb-dropdown.tsx";
+import { ProjectBreadcrumbDropdown, MachineBreadcrumbDropdown } from "./breadcrumb-dropdown.tsx";
 
 interface Organization {
   id: string;
@@ -152,32 +148,25 @@ export function AppHeader({
           {/* Desktop breadcrumbs */}
           <Breadcrumb className="hidden md:flex">
             <BreadcrumbList>
-              {/* Organization level with dropdown */}
+              {/* Organization level */}
               {organizationSlug && (
-                <>
-                  {organizations.length > 0 ? (
-                    <OrgBreadcrumbDropdown
-                      currentName={orgName || organizationSlug}
-                      currentId={currentOrgId}
-                      items={organizations}
-                      isCurrentPage={isOrgHome && !currentPageName}
-                    />
+                <BreadcrumbItem>
+                  {isOrgHome && !currentPageName ? (
+                    <BreadcrumbPage data-organization={organizationSlug}>
+                      {orgName || organizationSlug}
+                    </BreadcrumbPage>
                   ) : (
-                    <BreadcrumbItem>
-                      {isOrgHome && !currentPageName ? (
-                        <BreadcrumbPage data-organization={organizationSlug}>
-                          {orgName || organizationSlug}
-                        </BreadcrumbPage>
-                      ) : (
-                        <BreadcrumbLink asChild>
-                          <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
-                            {orgName || organizationSlug}
-                          </Link>
-                        </BreadcrumbLink>
-                      )}
-                    </BreadcrumbItem>
+                    <BreadcrumbLink asChild>
+                      <Link
+                        to="/orgs/$organizationSlug"
+                        params={{ organizationSlug }}
+                        data-organization={organizationSlug}
+                      >
+                        {orgName || organizationSlug}
+                      </Link>
+                    </BreadcrumbLink>
                   )}
-                </>
+                </BreadcrumbItem>
               )}
 
               {/* Org-level page (settings, team, new-project) */}
