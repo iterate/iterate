@@ -122,15 +122,14 @@
   }
 }
 
-/* Hide the ghostty-web helper textarea cursor - it captures keyboard input but shouldn't be visible */
-[data-testid="terminal-container"] textarea {
-  caret-color: transparent !important;
-}
-
-/* Ensure ghostty terminal elements fill their container */
-[data-testid="terminal-container"] > div {
+/* Ensure xterm terminal elements fill their container */
+[data-testid="terminal-container"] .xterm {
   width: 100% !important;
   height: 100% !important;
+}
+
+[data-testid="terminal-container"] .xterm-viewport {
+  overflow-y: auto !important;
 }
 
 @layer base {

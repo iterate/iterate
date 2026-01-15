@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import * as pty from "@lydell/node-pty";
-import type { IPty } from "@lydell/node-pty";
 import type { WSContext } from "hono/ws";
 import type { WebSocket } from "ws";
 import { Hono } from "hono";
@@ -14,9 +13,10 @@ import * as schema from "../db/schema.ts";
 import { getHarness, getCommandString } from "../agent-harness.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
+const COMMAND_PREFIX = "\x00[command]\x00";
 
 interface PtyConnection {
-  ptyProcess: IPty;
+  ptyProcess: pty.IPty;
   tmuxSessionName: string | null;
 }
 
@@ -28,17 +28,15 @@ ptyRouter.get(
   "/ws",
   upgradeWebSocket((c) => {
     const url = new URL(c.req.url);
-    const cols = parseInt(url.searchParams.get("cols") || "80");
-    const rows = parseInt(url.searchParams.get("rows") || "24");
     const tmuxSessionName = url.searchParams.get("tmuxSession");
 
     return {
       async onOpen(_event, ws) {
         console.log(
-          `[PTY] New connection: ${cols}x${rows}${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}`,
+          `[PTY] New connection ${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}`,
         );
 
-        let ptyProcess: IPty;
+        let ptyProcess: pty.IPty;
         try {
           if (tmuxSessionName) {
             if (!hasTmuxSession(tmuxSessionName)) {
@@ -85,8 +83,6 @@ ptyRouter.get(
               ["-S", TMUX_SOCKET, "attach-session", "-t", tmuxSessionName],
               {
                 name: "xterm-256color",
-                cols,
-                rows,
                 cwd: homedir(),
                 env: {
                   ...process.env,
@@ -99,8 +95,6 @@ ptyRouter.get(
             const shell = process.env.SHELL || "/bin/bash";
             ptyProcess = pty.spawn(shell, [], {
               name: "xterm-256color",
-              cols,
-              rows,
               cwd: homedir(),
               env: {
                 ...process.env,
@@ -145,14 +139,18 @@ ptyRouter.get(
 
         const text = typeof event.data === "string" ? event.data : "";
 
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed.type === "resize") {
-            conn.ptyProcess.resize(parsed.cols, parsed.rows);
+        if (text.startsWith(COMMAND_PREFIX)) {
+          try {
+            const parsed = JSON.parse(text.slice(COMMAND_PREFIX.length));
+            if (parsed.type === "resize") {
+              conn.ptyProcess.resize(parsed.cols, parsed.rows);
+            }
+            return;
+          } catch (error) {
+            console.error(`[PTY] Failed to parse command: ${error}`);
+            ws.send(`\r\n\x1b[31mError: Failed to parse command: ${error}\x1b[0m\r\n`);
             return;
           }
-        } catch {
-          // Not JSON, treat as terminal input
         }
 
         conn.ptyProcess.write(text);

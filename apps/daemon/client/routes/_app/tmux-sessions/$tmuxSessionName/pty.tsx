@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { GhosttyTerminal } from "@/components/ghostty-terminal.tsx";
+import { XtermTerminal } from "@/components/xterm-terminal.tsx";
 
 export const Route = createFileRoute("/_app/tmux-sessions/$tmuxSessionName/pty")({
   component: TmuxSessionPtyPage,
@@ -9,5 +9,5 @@ export const Route = createFileRoute("/_app/tmux-sessions/$tmuxSessionName/pty")
 function TmuxSessionPtyPage() {
   const { tmuxSessionName } = Route.useParams();
 
-  return <GhosttyTerminal key={tmuxSessionName} tmuxSessionName={tmuxSessionName} />;
+  return <XtermTerminal key={tmuxSessionName} tmuxSessionName={tmuxSessionName} />;
 }
