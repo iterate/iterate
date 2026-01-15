@@ -180,7 +180,7 @@ importers:
         specifier: ^6.2.2
         version: 6.2.2(@codemirror/language@6.11.3)(@codemirror/state@6.5.2)(@codemirror/view@6.38.8)(@lezer/highlight@1.2.3)
       '@hono/node-server':
-        specifier: ^1.13.0
+        specifier: ^1.19.6
         version: 1.19.6(hono@4.11.3)
       '@hono/node-ws':
         specifier: ^1.1.1
