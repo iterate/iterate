@@ -68,7 +68,14 @@ jobs:
                 context: _context,
               },
             ) {
+              // todo: consider contributing a union like this to jlarky/gha-ts?
+
+
+
+
+
               const context = _context;
+
               console.log(`context`, JSON.stringify(context, null, 2));
               const isTest = context.eventName === "push" && context.actor === "mmkal";
 
@@ -76,10 +83,7 @@ jobs:
                 prState,
               } = await require(
                 ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs" /* <-- shimmed module of "../utils/github-script.ts" that actions/github-script can require */,
-              ).load().then((s) => {
-                const e = "default";
-                return s[e] && typeof s[e] == "object" && "__esModule" in s[e] ? s[e] : s;
-              });
+              ).load();
 
               if (context.eventName === "pull_request" && context.payload.action === "closed") {
                 const state = prState(context.payload.pull_request?.body || "", "nag_info");
@@ -91,10 +95,7 @@ jobs:
                     slackChannelIds,
                   } = await require(
                     ".github/ts-workflows/workflows/nag.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
-                  ).load().then((s) => {
-                    const e = "default";
-                    return s[e] && typeof s[e] == "object" && "__esModule" in s[e] ? s[e] : s;
-                  });
+                  ).load();
 
                   const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
                   const reaction = context.payload.pull_request?.merged ? "merged" : "x";
@@ -157,23 +158,23 @@ jobs:
                 const unresolvedComments = res.nodes?.filter((n) => !n?.isMinimized);
                 const lastActive = [comments.at(-1)?.created_at, reviews.at(-1)?.submitted_at].filter(Boolean).map((d) => new Date(d)).sort((a, b) => a.getTime() - b.getTime()).at(-1) || new Date(pr.created_at);
 
-                const timeAgo = __name((d) => {
+                const timeAgo = (d) => {
                   const ms = Date.now() - new Date(d).getTime();
 
                   const props = {
-                    ms,
-                    seconds: ms / 1e3,
-                    minutes: ms / (60 * 1e3),
-                    hours: ms / (60 * 60 * 1e3),
-                    days: ms / (24 * 60 * 60 * 1e3),
-                    weeks: ms / (7 * 24 * 60 * 60 * 1e3),
-                    years: ms / (365.25 * 24 * 60 * 60 * 1e3),
+                    ms: ms,
+                    seconds: ms / 1000,
+                    minutes: ms / (60 * 1000),
+                    hours: ms / (60 * 60 * 1000),
+                    days: ms / (24 * 60 * 60 * 1000),
+                    weeks: ms / (7 * 24 * 60 * 60 * 1000),
+                    years: ms / (365.25 * 24 * 60 * 60 * 1000),
                   };
 
-                  const format = __name((unit) => {
+                  const format = (unit) => {
                     const int = Math.floor(props[unit]);
                     return `${int} ${unit}${int === 1 ? "" : "s"} ago`;
-                  }, "format");
+                  };
 
                   const mostUseful = Object.entries(props).findLast(([_, value]) => value >= 1);
 
@@ -182,23 +183,23 @@ jobs:
                     format,
                     pretty: format(mostUseful?.[0]),
                   };
-                }, "timeAgo");
+                };
 
-                const when = __name((d) => {
+                const when = (d) => {
                   if (!d)
                     return "never";
 
                   return timeAgo(d).pretty;
-                }, "when");
+                };
 
-                const realWorkingHours = __name((now) => {
+                const realWorkingHours = (now) => {
                   const [hour, day] = [now.getHours(), now.getDay()];
                   return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
-                }, "realWorkingHours");
+                };
 
-                const testWorkingHours = __name(() => {
+                const testWorkingHours = () => {
                   return true;
-                }, "testWorkingHours");
+                };
 
                 const workingHours = isTest ? testWorkingHours : realWorkingHours;
                 const lastNagTime = state.read().nags?.at(-1)?.time;
@@ -213,7 +214,7 @@ jobs:
                 };
 
                 if (context.eventName === "pull_request" && context.payload.action === "auto_merge_enabled" && pr.number === context.payload.pull_request?.number) {
-                  delete reasonsToNag.noActivityForAWhile;
+                  delete reasonsToNag.noActivityForAWhile; // automerge was just enabled, let's assume the "recent activity" is the author enabling automerge
                 }
 
                 const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
@@ -229,16 +230,13 @@ jobs:
                   slackUsers,
                 } = await require(
                   ".github/ts-workflows/workflows/nag.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
-                ).load().then((s) => {
-                  const e = "default";
-                  return s[e] && typeof s[e] == "object" && "__esModule" in s[e] ? s[e] : s;
-                });
+                ).load();
 
                 const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
                 const slackUser = slackUsers.find((u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase());
                 const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
 
-                const nagOrGiveUp = __name(async () => {
+                const nagOrGiveUp = async () => {
                   const newNag = {
                     time: new Date().toISOString(),
                     channel: isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#building"],
@@ -251,7 +249,7 @@ jobs:
                     return;
                   }
 
-                  const postMessage = __name((params) => {
+                  const postMessage = (params) => {
                     return slack.chat.postMessage({
                       channel: newNag.channel,
                       ...params,
@@ -260,7 +258,7 @@ jobs:
                         text: params.text.replaceAll("<@U", "<...U"),
                       }),
                     });
-                  }, "postMessage");
+                  };
 
                   if (lastNag?.message_ts) {
                     const othersMentions = slackUsers.filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase()).filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now()).map((u) => `<@${u.id}>`).join(" ");
@@ -288,15 +286,17 @@ jobs:
                     pull_number: pr.number,
 
                     body: state.write({
-                      nags: [...(state.read().nags || []), newNag],
+                      nags: [// break
+                      ...(state.read().nags || []), newNag],
                     }),
                   });
-                }, "nagOrGiveUp");
+                };
 
                 if (shouldNag) {
                   await nagOrGiveUp();
                 }
 
+                // annoyingly "all comments must be resolved" in a ruleset doesn't let automerge happen for hidden comments, and cursor bugbot loves to hide comments
                 const incorrectlyMinimizedComments = comments.filter((c) => {
                   const node = res.nodes?.find(
                     (n) => n?.id === c.node_id && n?.minimizedReason?.toLowerCase() !== "resolved",
