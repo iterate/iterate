@@ -19,7 +19,7 @@ RUN npm install -g pnpm@10.24.0 tsx@4.20.6 opencode-ai@1.1.17 @anthropic-ai/clau
 ARG ENTRY_TS_HASH=default
 COPY apps/os/sandbox/entry.ts /app/entry.ts
 
-RUN mkdir -p .iterate && \
+RUN mkdir -p ~/.iterate && \
   mkdir -p /usr/local/bin && \
   echo '#!/bin/sh' > /usr/local/bin/iterate && \
   echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
