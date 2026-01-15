@@ -1,5 +1,5 @@
 import { spawn, execSync, type ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, rmSync, globSync } from "node:fs";
+import { existsSync, rmSync, globSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
