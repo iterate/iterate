@@ -112,13 +112,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
 
     expect(result.success).toBe(true);
     expect(result.injectedCount).toBe(2);
-    expect(result.envFilePath).toContain(".iterate-platform-env");
+    expect(result.envFilePath).toContain(".iterate/.env");
 
     // Verify the env file was written with correct content
-    const envFileContent = await execInContainer(containerId, [
-      "cat",
-      "/root/.iterate-platform-env",
-    ]);
+    const envFileContent = await execInContainer(containerId, ["cat", "/root/.iterate/.env"]);
     expect(envFileContent).toContain(`export TEST_VAR=${uniqueValue}`);
     expect(envFileContent).toContain("export ANOTHER_VAR=another_value");
   });
