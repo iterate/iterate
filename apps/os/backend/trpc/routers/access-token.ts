@@ -90,7 +90,7 @@ export const accessTokenRouter = router({
     }),
 });
 
-async function hashToken(token: string): Promise<string> {
+export async function hashToken(token: string): Promise<string> {
   const encoded = new TextEncoder().encode(token);
   const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
   return Array.from(new Uint8Array(hashBuffer))

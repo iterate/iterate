@@ -7,7 +7,7 @@
  * Route: /org/:org/proj/:project/:machine/proxy/:port/*
  */
 import { Hono } from "hono";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../worker.ts";
@@ -16,12 +16,13 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { DAEMON_DEFINITIONS, getDaemonByPort } from "../daemons.ts";
+import { DAEMON_DEFINITIONS } from "../daemons.ts";
+import { hashToken } from "../trpc/routers/access-token.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
 /**
- * Resolve machine without checking membership (for unauthenticated daemon access).
+ * Resolve machine without checking membership (for access token auth).
  * Returns machine data if found, null otherwise.
  */
 async function resolveMachineOnly(
@@ -102,6 +103,80 @@ async function resolveProxyAccess(
 }
 
 /**
+ * Validate HTTP Basic Auth with project access token.
+ * Returns machine record if valid token, null otherwise.
+ */
+async function validateAccessTokenAuth(
+  db: DB,
+  authHeader: string | undefined,
+  orgSlug: string,
+  projectSlug: string,
+  machineId: string,
+): Promise<{ machine: typeof schema.machine.$inferSelect } | null> {
+  if (!authHeader?.startsWith("Basic ")) {
+    return null;
+  }
+
+  // Decode base64 credentials (format: "username:password" where username is empty)
+  const base64Credentials = authHeader.slice(6);
+  let credentials: string;
+  try {
+    credentials = atob(base64Credentials);
+  } catch {
+    return null;
+  }
+
+  // Split on first colon only (password may contain colons)
+  const colonIndex = credentials.indexOf(":");
+  if (colonIndex === -1) {
+    return null;
+  }
+
+  const token = credentials.slice(colonIndex + 1);
+  if (!token?.startsWith("pat_")) {
+    return null;
+  }
+
+  // Hash the token and look it up
+  const tokenHash = await hashToken(token);
+
+  // Find token and verify it's valid and belongs to the right project
+  const tokenRecord = await db
+    .select({
+      token: schema.projectAccessToken,
+      project: schema.project,
+      organization: schema.organization,
+    })
+    .from(schema.projectAccessToken)
+    .innerJoin(schema.project, eq(schema.projectAccessToken.projectId, schema.project.id))
+    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
+    .where(
+      and(
+        eq(schema.projectAccessToken.tokenHash, tokenHash),
+        isNull(schema.projectAccessToken.revokedAt),
+        eq(schema.project.slug, projectSlug),
+        eq(schema.organization.slug, orgSlug),
+      ),
+    )
+    .limit(1)
+    .then((rows) => rows[0]);
+
+  if (!tokenRecord) {
+    return null;
+  }
+
+  // Update lastUsedAt (fire and forget)
+  db.update(schema.projectAccessToken)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(schema.projectAccessToken.id, tokenRecord.token.id))
+    .then(() => {})
+    .catch(() => {});
+
+  // Get machine record (no membership check needed for token auth)
+  return resolveMachineOnly(db, orgSlug, projectSlug, machineId);
+}
+
+/**
  * Proxy route: /org/:org/proj/:project/:machine/proxy/:port/*
  */
 machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) => {
@@ -115,14 +190,17 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return c.json({ error: "Invalid port" }, 400);
   }
 
-  // 2. Check if daemon requires authentication (default: true)
-  const daemon = getDaemonByPort(portNum);
-  const requireAuth = daemon?.requireAuth !== false;
-
   let machineRecord: typeof schema.machine.$inferSelect;
 
-  if (requireAuth) {
-    // 3a. Require authentication for this daemon
+  // 2. Try HTTP Basic Auth with project access token first
+  const authHeader = c.req.header("Authorization");
+  const tokenAuth = await validateAccessTokenAuth(db, authHeader, org, project, machine);
+
+  if (tokenAuth) {
+    // Valid access token - use machine from token auth
+    machineRecord = tokenAuth.machine;
+  } else {
+    // 3. Fall back to session-based authentication
     if (!c.var.session) {
       return c.json({ error: "Unauthorized" }, 401);
     }
@@ -141,16 +219,8 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     }
 
     machineRecord = access.machine;
-  } else {
-    // 3b. No authentication required - just resolve the machine
-    const resolved = await resolveMachineOnly(db, org, project, machine);
-
-    if (!resolved) {
-      return c.json({ error: "Not found" }, 404);
-    }
-
-    machineRecord = resolved.machine;
   }
+
   const externalId = machineRecord.externalId;
 
   // 4. Build target URL based on machine type
