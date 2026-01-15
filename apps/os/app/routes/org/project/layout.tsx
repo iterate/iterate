@@ -7,8 +7,9 @@ import {
   useParams,
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import { GitBranch, Home, Plug, Server, Settings, SlidersHorizontal } from "lucide-react";
+import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../../hooks/use-posthog-identity.tsx";
@@ -30,29 +31,13 @@ import { HeaderActionsProvider } from "../../../components/header-actions.tsx";
 import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
+  // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
-    // Preload ALL queries the component uses to avoid suspense
-    const [currentOrg] = await Promise.all([
-      context.queryClient.ensureQueryData(
-        trpc.organization.withProjects.queryOptions({
-          organizationSlug: params.organizationSlug,
-        }),
-      ),
-      context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions()),
-      context.queryClient.ensureQueryData(
-        trpc.project.bySlug.queryOptions({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      ),
-      context.queryClient.ensureQueryData(
-        trpc.machine.list.queryOptions({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-          includeArchived: false,
-        }),
-      ),
-    ]);
+    const currentOrg = await context.queryClient.ensureQueryData(
+      trpc.organization.withProjects.queryOptions({
+        organizationSlug: params.organizationSlug,
+      }),
+    );
 
     if (!currentOrg) {
       throw redirect({ to: "/" });
@@ -67,6 +52,31 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
       });
     }
   },
+
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, params }) => {
+    // Critical data - await (needed for initial render without layout shift)
+    await Promise.all([
+      context.queryClient.ensureQueryData(
+        trpc.project.bySlug.queryOptions({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      ),
+      context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions()),
+    ]);
+
+    // Deferred data - prefetch (can load after page shows)
+    // Machine list is only needed for breadcrumb dropdown interaction
+    context.queryClient.prefetchQuery(
+      trpc.machine.list.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      }),
+    );
+  },
+
   component: ProjectLayout,
 });
 
@@ -269,10 +279,21 @@ function ProjectLayout() {
         />
         <main className="w-full max-w-3xl flex-1 overflow-auto">
           <HeaderActionsProvider onActionsChange={setHeaderActions}>
-            <Outlet />
+            <Suspense fallback={<ContentSpinner />}>
+              <Outlet />
+            </Suspense>
           </HeaderActionsProvider>
         </main>
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+/** Content area loading spinner for child routes */
+function ContentSpinner() {
+  return (
+    <div className="flex h-full min-h-[200px] items-center justify-center p-4">
+      <Spinner className="size-6" />
+    </div>
   );
 }

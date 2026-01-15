@@ -25,7 +25,8 @@ import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/fie
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/team")({
-  beforeLoad: async ({ context, params }) => {
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, params }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(
         trpc.organization.members.queryOptions({

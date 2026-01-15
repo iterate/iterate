@@ -25,8 +25,8 @@ import { TypeId } from "../../../components/type-id.tsx";
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
 )({
-  beforeLoad: async ({ context, params }) => {
-    // Preload machine data to avoid suspense
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, params }) => {
     await context.queryClient.ensureQueryData(
       trpc.machine.byId.queryOptions({
         organizationSlug: params.organizationSlug,

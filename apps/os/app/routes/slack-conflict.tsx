@@ -21,10 +21,13 @@ const Search = z.object({
 export const Route = createFileRoute("/_auth/slack-conflict")({
   validateSearch: Search,
   component: SlackConflictPage,
-  beforeLoad: async ({ context, search }) => {
+  // loaderDeps: Declare search params needed by loader
+  loaderDeps: ({ search }) => ({ newProjectId: search.newProjectId }),
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, deps }) => {
     await context.queryClient.ensureQueryData(
       trpc.project.getProjectInfoById.queryOptions({
-        projectId: search.newProjectId,
+        projectId: deps.newProjectId,
       }),
     );
   },

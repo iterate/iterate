@@ -25,7 +25,9 @@ const Search = z.object({
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
   validateSearch: Search,
   component: BillingPage,
-  beforeLoad: async ({ context, params }) => {
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, params }) => {
+    // Critical data - await (entire page depends on billing status)
     await context.queryClient.ensureQueryData(
       trpc.billing.getBillingAccount.queryOptions({
         organizationSlug: params.organizationSlug,

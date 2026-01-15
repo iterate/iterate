@@ -23,7 +23,8 @@ import {
 } from "../../components/ui/select.tsx";
 
 export const Route = createFileRoute("/_auth/user/settings")({
-  beforeLoad: async ({ context }) => {
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context }) => {
     await context.queryClient.ensureQueryData(trpc.user.me.queryOptions());
   },
   component: UserSettingsPage,

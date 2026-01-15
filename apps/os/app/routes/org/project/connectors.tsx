@@ -27,8 +27,9 @@ export const Route = createFileRoute(
 )({
   validateSearch: Search,
   component: ProjectConnectorsPage,
-  beforeLoad: async ({ context, params }) => {
-    // Preload connector data to avoid suspense - machine.list is already in parent layout
+  // loader: For data fetching (runs in parallel after beforeLoad)
+  loader: async ({ context, params }) => {
+    // Critical data - await (determines page UI)
     await Promise.all([
       context.queryClient.ensureQueryData(
         trpc.project.getSlackConnection.queryOptions({
@@ -42,14 +43,16 @@ export const Route = createFileRoute(
           projectSlug: params.projectSlug,
         }),
       ),
-      context.queryClient.ensureQueryData(
-        trpc.machine.list.queryOptions({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-          includeArchived: false,
-        }),
-      ),
     ]);
+
+    // Deferred data - prefetch (machine list for dropdown, already in parent layout)
+    context.queryClient.prefetchQuery(
+      trpc.machine.list.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      }),
+    );
   },
 });
 
