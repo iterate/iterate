@@ -9,9 +9,8 @@ import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { getDaemonById } from "../../daemons.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
-
-const DAEMON_PORT = 3001;
 
 /**
  * Check if a host is an internal/blocked address (SSRF protection).
@@ -95,7 +94,7 @@ function buildMachineForwardUrl(
         });
         return null;
       }
-      return `https://${DAEMON_PORT}-${machine.externalId}.proxy.daytona.works${path}`;
+      return `https://${getDaemonById("iterate-daemon")?.internalPort}-${machine.externalId}.proxy.daytona.works${path}`;
 
     default:
       logger.warn("[Slack Webhook] Unknown machine type for forwarding", {
@@ -118,7 +117,7 @@ export async function forwardSlackWebhookToMachine(
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
-
+  logger.info("targetUrl", targetUrl);
   try {
     const resp = await fetch(targetUrl, {
       method: "POST",
@@ -411,10 +410,9 @@ slackApp.post("/webhook", async (c) => {
     c.req.header("x-slack-request-timestamp") ?? null,
     body,
   );
-
   if (!isValid) {
-    logger.warn("[Slack Webhook] Invalid signature");
-    return c.text("Invalid signature", 401);
+    logger.debug("[Slack Webhook] Invalid signature");
+    return c.text("Invalid signature", 200);
   }
 
   // Parse - KEEP SYNCHRONOUS
@@ -467,7 +465,7 @@ slackApp.post("/webhook", async (c) => {
             return;
           }
         }
-
+        logger.info("[Slack Webhook] Finding connection", { teamId, payload });
         // Single optimized query: get connection + target machine (or fallback to first started machine)
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
@@ -484,6 +482,7 @@ slackApp.post("/webhook", async (c) => {
             },
           },
         });
+        logger.info("[Slack Webhook] Connection found", { connection });
         const projectId = connection?.projectId;
         if (!projectId) {
           logger.warn("[Slack Webhook] No project for team", { teamId });
@@ -498,6 +497,7 @@ slackApp.post("/webhook", async (c) => {
 
         // Forward to machine if available
         if (targetMachine) {
+          logger.info("[Slack Webhook] Forwarding to machine", { targetMachine });
           await forwardSlackWebhookToMachine(targetMachine, payload);
         }
 
