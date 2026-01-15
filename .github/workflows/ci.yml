@@ -5,6 +5,9 @@ permissions:
   contents: read
   deployments: write
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       stage:
