@@ -150,7 +150,7 @@ const cleanupS6RuntimeState = () => {
   rmSync(path.join(S6_DAEMONS_PATH, ".s6-svscan"), { recursive: true, force: true });
 
   const paths = globSync("{*/supervise,*/log/supervise}", { cwd: S6_DAEMONS_PATH });
-  paths.forEach((path) => rmSync(path, { recursive: true, force: true }));
+  paths.forEach((p) => rmSync(path.join(S6_DAEMONS_PATH, p), { recursive: true, force: true }));
 };
 
 const startS6Svscan = (): ChildProcess => {
