@@ -1,4 +1,4 @@
-import { defineConfig, type PluginOption } from "vite";
+import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
