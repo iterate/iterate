@@ -3,6 +3,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 interface GhosttyTerminalProps {
   wsBase?: string;
   tmuxSessionName?: string;
+  /** Command to pre-fill in the terminal (user just needs to hit Enter) */
+  initialCommand?: string;
 }
 
 export interface GhosttyTerminalHandle {
@@ -25,7 +27,7 @@ interface FitAddonLike {
 }
 
 export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminalProps>(
-  function GhosttyTerminal({ wsBase, tmuxSessionName }, ref) {
+  function GhosttyTerminal({ wsBase, tmuxSessionName, initialCommand }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [connectionStatus, setConnectionStatus] = useState<
       "connecting" | "connected" | "disconnected"
@@ -47,6 +49,8 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
 
     useEffect(() => {
       if (!containerRef.current) return;
+
+      console.log("[Terminal] Mounting with initialCommand:", initialCommand);
 
       const container = containerRef.current;
       let cancelled = false;
@@ -135,6 +139,16 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
               fitAddon.fit();
             });
             terminal.focus();
+
+            // Pre-fill initial command if provided (user just needs to hit Enter)
+            if (initialCommand && ws) {
+              // Delay to let the shell prompt render first
+              setTimeout(() => {
+                if (cancelled || !ws || ws.readyState !== WebSocket.OPEN) return;
+                console.log("[Terminal] Sending initial command:", initialCommand);
+                ws.send(initialCommand);
+              }, 500);
+            }
           };
 
           ws.onmessage = (event) => {
@@ -201,7 +215,7 @@ export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminal
           container.innerHTML = "";
         }
       };
-    }, [wsBase, tmuxSessionName]);
+    }, [wsBase, tmuxSessionName, initialCommand]);
 
     useEffect(() => {
       const handleSendCommand = (event: CustomEvent<string>) => {
