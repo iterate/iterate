@@ -4,7 +4,7 @@ export const routes = rootRoute("root.tsx", [
   // Public routes
   route("/login", "login.tsx"),
   route("/logout", "logout.tsx"),
-  ...(process.env.NODE_ENV !== "production" ? [route("/dev", "dev.tsx")] : []),
+  route("/dev", "dev.tsx"),
 
   // Auth required layout (underscore prefix = pathless)
   layout("_auth", "auth-required.layout.tsx", [
@@ -41,8 +41,6 @@ export const routes = rootRoute("root.tsx", [
         route("/connectors", "org/project/connectors.tsx"),
         route("/env-vars", "org/project/env-vars.tsx"),
         route("/settings", "org/project/settings.tsx"),
-        route("/agents", "org/project/agents.tsx"),
-        route("/events", "org/project/events.tsx"),
       ]),
     ]),
 

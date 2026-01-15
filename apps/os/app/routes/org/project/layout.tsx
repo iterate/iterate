@@ -8,17 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import {
-  Activity,
-  Bot,
-  GitBranch,
-  Home,
-  KeyRound,
-  Plug,
-  Server,
-  Settings,
-  SlidersHorizontal,
-} from "lucide-react";
+import { GitBranch, Home, Plug, Server, Settings, SlidersHorizontal } from "lucide-react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../../hooks/use-posthog-identity.tsx";
@@ -179,29 +169,14 @@ function ProjectLayout() {
       icon: Plug,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/agents" as const,
-      label: "Agents",
-      icon: Bot,
-    },
-    {
       to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
       label: "Machines",
       icon: Server,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/events" as const,
-      label: "Events",
-      icon: Activity,
-    },
-    {
       to: "/orgs/$organizationSlug/projects/$projectSlug/repo" as const,
       label: "Repo",
       icon: GitBranch,
-    },
-    {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/access-tokens" as const,
-      label: "Access tokens",
-      icon: KeyRound,
     },
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/env-vars" as const,

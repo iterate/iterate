@@ -15,6 +15,11 @@ RUN git config --global user.name "iterate" && \
 
 RUN npm install -g pnpm@10.24.0 tsx@4.20.6 opencode-ai@1.1.17 @anthropic-ai/claude-code@2.1.6 @mariozechner/pi-coding-agent@0.44.0
 
+# Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
+RUN echo '#!/bin/sh' > /usr/local/bin/claude && \
+    echo 'exec /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js --dangerously-skip-permissions "$@"' >> /usr/local/bin/claude && \
+    chmod +x /usr/local/bin/claude
+
 # Cache bust arg - pass hash of entry.ts to invalidate when file changes
 ARG ENTRY_TS_HASH=default
 COPY apps/os/sandbox/entry.ts /app/entry.ts

@@ -1,5 +1,10 @@
 {
-  "numStartups": 1,
+  "numStartups": 100,
   "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.6",
+  "shiftEnterKeyBindingInstalled": true,
+  "hasIdeOnboardingBeenShown": true,
+  "hasShownOpus45Notice": true,
+  "hasShownS1MWelcomeV2": true,
   "mcpServers": {}
 }
