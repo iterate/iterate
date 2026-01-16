@@ -547,23 +547,19 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         // Always clean up resources
         console.log("[test] Cleaning up...");
 
-        // TEMPORARILY COMMENTED OUT - leave sandbox running for debugging
-        // if (sandbox) {
-        //   try {
-        //     console.log("[test] Stopping sandbox...");
-        //     await sandbox.stop(60);
-        //   } catch (e) {
-        //     console.error("[test] Error stopping sandbox:", e);
-        //   }
-        //   try {
-        //     console.log("[test] Deleting sandbox...");
-        //     await sandbox.delete();
-        //   } catch (e) {
-        //     console.error("[test] Error deleting sandbox:", e);
-        //   }
-        // }
         if (sandbox) {
-          console.log(`[test] Sandbox left running for debugging: ${sandbox.id}`);
+          try {
+            console.log("[test] Stopping sandbox...");
+            await sandbox.stop(60);
+          } catch (e) {
+            console.error("[test] Error stopping sandbox:", e);
+          }
+          try {
+            console.log("[test] Deleting sandbox...");
+            await sandbox.delete();
+          } catch (e) {
+            console.error("[test] Error deleting sandbox:", e);
+          }
         }
 
         if (cloudflared) {
