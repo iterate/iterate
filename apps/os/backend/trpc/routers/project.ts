@@ -379,74 +379,6 @@ export const projectRouter = router({
     return { success: true };
   }),
 
-  // Get webhook target machine for Slack webhooks
-  // Returns full machine record to avoid needing refactoring if UI needs more fields
-  getSlackWebhookTargetMachine: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = await ctx.db.query.projectConnection.findFirst({
-      where: and(
-        eq(projectConnection.projectId, ctx.project.id),
-        eq(projectConnection.provider, "slack"),
-      ),
-      with: { webhookTargetMachine: true },
-    });
-
-    if (!connection) {
-      return { connected: false as const, webhookTargetMachine: null };
-    }
-
-    return {
-      connected: true as const,
-      webhookTargetMachine: connection.webhookTargetMachine ?? null,
-    };
-  }),
-
-  // Set webhook target machine for Slack webhooks
-  setSlackWebhookTargetMachine: projectProtectedMutation
-    .input(
-      z.object({
-        machineId: z.string().nullable(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const connection = await ctx.db.query.projectConnection.findFirst({
-        where: and(
-          eq(projectConnection.projectId, ctx.project.id),
-          eq(projectConnection.provider, "slack"),
-        ),
-      });
-
-      if (!connection) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No Slack connection found for this project",
-        });
-      }
-
-      // Validate machine exists and belongs to this project
-      if (input.machineId) {
-        const machine = await ctx.db.query.machine.findFirst({
-          where: and(
-            eq(schema.machine.id, input.machineId),
-            eq(schema.machine.projectId, ctx.project.id),
-          ),
-        });
-
-        if (!machine) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Machine not found in this project",
-          });
-        }
-      }
-
-      await ctx.db
-        .update(projectConnection)
-        .set({ webhookTargetMachineId: input.machineId })
-        .where(eq(projectConnection.id, connection.id));
-
-      return { success: true };
-    }),
-
   // Transfer Slack connection from one project to another
   // Used when a Slack workspace is already connected elsewhere and user wants to switch
   transferSlackConnection: projectProtectedMutation
@@ -486,12 +418,10 @@ export const projectRouter = router({
       }
 
       // Transfer the connection to the new project
-      // Clear webhookTargetMachineId since it was for the old project
       await ctx.db
         .update(projectConnection)
         .set({
           projectId: ctx.project.id,
-          webhookTargetMachineId: null,
         })
         .where(eq(projectConnection.id, existingConnection.id));
 

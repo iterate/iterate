@@ -303,12 +303,18 @@ importers:
       '@xterm/addon-ligatures':
         specifier: 0.11.0-beta.103
         version: 0.11.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-serialize':
+        specifier: 0.15.0-beta.103
+        version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
       '@xterm/addon-unicode-graphemes':
         specifier: 0.5.0-beta.103
         version: 0.5.0-beta.103(@xterm/xterm@6.1.0-beta.103)
       '@xterm/addon-webgl':
         specifier: 0.20.0-beta.102
         version: 0.20.0-beta.102(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/headless':
+        specifier: 6.1.0-beta.103
+        version: 6.1.0-beta.103
       '@xterm/xterm':
         specifier: 6.1.0-beta.103
         version: 6.1.0-beta.103
@@ -5717,6 +5723,11 @@ packages:
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.103
 
+  '@xterm/addon-serialize@0.15.0-beta.103':
+    resolution: {integrity: sha512-U8pa+okuIey9/lLFdgkbcKzqgPsG6saYE+TKpoX5povVMSEEZGu5fC/QZyWeNwaDzAgQK8gW6D5cGrxPUN9Vwg==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
   '@xterm/addon-unicode-graphemes@0.5.0-beta.103':
     resolution: {integrity: sha512-BR7BPdUd6EMsXbypdW1vOnax8BEtwL3Np7qBt9gpIK2o/+/ev1+YyfPYASCg14QovATLsO3w3ecgxYHQirXdgA==}
     peerDependencies:
@@ -5726,6 +5737,9 @@ packages:
     resolution: {integrity: sha512-xorsFnfF6rpJUILiRVzknUVfi66f7hdUjtb4FtDF4msMOHLsIEFOzXTegD01PcnSGmUaHkfTldmOAV6oPMWX8w==}
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/headless@6.1.0-beta.103':
+    resolution: {integrity: sha512-TVgSN71pDZatpEoxiP8Otqnqoz+9ERNm6MJYc58n0FsuSK2lJ1+UMENPq7Wk+wHrhjWtacJMIJMystPtrTdVhw==}
 
   '@xterm/xterm@6.1.0-beta.103':
     resolution: {integrity: sha512-R2j1dmGkiyM1+YK2+PUSb1oDnLRUYwtNs+HzcKHGEDyuUOV8hyfnLMO+VLTsgdeCHBnKVgJVlpI0EkqNQmfYvw==}
@@ -16617,6 +16631,10 @@ snapshots:
       lru-cache: 6.0.0
       opentype.js: 0.8.0
 
+  '@xterm/addon-serialize@0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
+
   '@xterm/addon-unicode-graphemes@0.5.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
     dependencies:
       '@xterm/xterm': 6.1.0-beta.103
@@ -16624,6 +16642,8 @@ snapshots:
   '@xterm/addon-webgl@0.20.0-beta.102(@xterm/xterm@6.1.0-beta.103)':
     dependencies:
       '@xterm/xterm': 6.1.0-beta.103
+
+  '@xterm/headless@6.1.0-beta.103': {}
 
   '@xterm/xterm@6.1.0-beta.103': {}
 

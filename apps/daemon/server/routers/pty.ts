@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -6,171 +7,239 @@ import type { WSContext } from "hono/ws";
 import type { WebSocket } from "ws";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
+import XTermHeadless from "@xterm/headless";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { upgradeWebSocket } from "../utils/hono.ts";
-import { hasTmuxSession } from "../tmux-control.ts";
+import { hasTmuxSession, sendKeys } from "../tmux-control.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import type { Agent, AgentType } from "../db/schema.ts";
+import { getHarness, getCommandString } from "../agent-harness.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 const COMMAND_PREFIX = "\x00[command]\x00";
+const PTY_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-// OpenCode server URL
-const OPENCODE_BASE_URL = "http://localhost:4096";
-
-interface PtyConnection {
+interface PtySession {
+  id: string;
   ptyProcess: pty.IPty;
-  connectionType: "tmux" | "agent" | "shell";
-  identifier: string | null;
+  tmuxSessionName: string | null;
+  ws: WSContext<WebSocket> | null;
+  cleanupTimer: ReturnType<typeof setTimeout> | null;
+  headlessTerminal: XTermHeadless.Terminal;
+  serializeAddon: SerializeAddon;
+  pendingCommand: { command: string; autorun: boolean } | null;
+  shellReady: boolean;
 }
 
-const ptyConnections = new Map<WSContext<WebSocket>, PtyConnection>();
+const ptySessions = new Map<string, PtySession>();
+const wsToSessionId = new Map<WSContext<WebSocket>, string>();
 
-/**
- * Get the CLI command and args for spawning an agent
- */
-function getAgentCommand(agent: Agent): { command: string; args: string[] } {
-  switch (agent.harnessType as AgentType) {
-    case "claude-code":
-      return { command: "claude", args: [] };
+function sendCommand(ws: WSContext<WebSocket>, command: object) {
+  ws.send(COMMAND_PREFIX + JSON.stringify(command));
+}
 
-    case "opencode":
-      // OpenCode uses attach command to connect to existing session
-      if (!agent.harnessSessionId) {
-        throw new Error("OpenCode agent has no session ID");
-      }
-      return {
-        command: "opencode",
-        args: ["attach", OPENCODE_BASE_URL, "--session", agent.harnessSessionId],
-      };
+function scheduleCleanup(session: PtySession) {
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+  }
+  session.cleanupTimer = setTimeout(() => {
+    console.log(`[PTY] Session ${session.id} expired after ${PTY_TTL_MS / 1000}s of inactivity`);
+    // Delete from map first so onExit handler knows cleanup was already done
+    ptySessions.delete(session.id);
+    session.headlessTerminal.dispose();
+    session.ptyProcess.kill();
+  }, PTY_TTL_MS);
+}
 
-    case "pi":
-      return { command: "pi", args: [] };
-
-    default:
-      throw new Error(`Unknown agent type: ${agent.harnessType}`);
+function cancelCleanup(session: PtySession) {
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = null;
   }
 }
 
 export const ptyRouter = new Hono();
+
+async function spawnPtyProcess(
+  tmuxSessionName: string | null,
+  ws: WSContext<WebSocket>,
+): Promise<pty.IPty | null> {
+  if (tmuxSessionName) {
+    if (!hasTmuxSession(tmuxSessionName)) {
+      let commandInfo = "";
+      const [agent] = await db
+        .select()
+        .from(schema.agents)
+        .where(eq(schema.agents.tmuxSession, tmuxSessionName))
+        .limit(1);
+      if (agent) {
+        const harness = getHarness(agent.harnessType);
+        const cmd = harness.getStartCommand(agent.workingDirectory, {
+          prompt: agent.initialPrompt ?? undefined,
+        });
+        commandInfo = `\r\n\r\nCommand: cd "${agent.workingDirectory}" && ${getCommandString(cmd)}`;
+      }
+      const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.${commandInfo}\r\n\r\nThe session may have exited or was never created.\r\nTry restarting the agent or check if the command failed to start.`;
+      ws.send(`\x1b[31m${errorMsg}\x1b[0m\r\n`);
+      ws.close(4000, "Session does not exist");
+      return null;
+    }
+
+    spawnSync("tmux", ["-S", TMUX_SOCKET, "set-option", "-t", tmuxSessionName, "status", "off"]);
+    spawnSync("tmux", ["-S", TMUX_SOCKET, "set-option", "-t", tmuxSessionName, "mouse", "on"]);
+
+    return pty.spawn("tmux", ["-S", TMUX_SOCKET, "attach-session", "-t", tmuxSessionName], {
+      name: "xterm-256color",
+      cwd: homedir(),
+      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<
+        string,
+        string
+      >,
+    });
+  }
+
+  const shell = process.env.SHELL || "/bin/bash";
+  return pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cwd: homedir(),
+    env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<
+      string,
+      string
+    >,
+  });
+}
+
+function createSession(
+  ptyProcess: pty.IPty,
+  tmuxSessionName: string | null,
+  ws: WSContext<WebSocket>,
+): PtySession {
+  const headlessTerminal = new XTermHeadless.Terminal({ scrollback: 10000, cols: 80, rows: 24 });
+  const serializeAddon = new SerializeAddon();
+  headlessTerminal.loadAddon(serializeAddon);
+
+  const session: PtySession = {
+    id: randomUUID(),
+    ptyProcess,
+    tmuxSessionName,
+    ws,
+    cleanupTimer: null,
+    headlessTerminal,
+    serializeAddon,
+    pendingCommand: null,
+    shellReady: false,
+  };
+
+  ptySessions.set(session.id, session);
+  wsToSessionId.set(ws, session.id);
+
+  ptyProcess.onData((data) => {
+    session.headlessTerminal.write(data);
+    if (session.ws) {
+      session.ws.send(data);
+    }
+
+    // Execute pending command once shell is ready (first data received)
+    if (!session.shellReady) {
+      session.shellReady = true;
+      if (session.pendingCommand) {
+        const { command, autorun } = session.pendingCommand;
+        session.pendingCommand = null;
+        if (session.tmuxSessionName) {
+          sendKeys(session.tmuxSessionName, command, autorun, true);
+        } else {
+          session.ptyProcess.write(command);
+          if (autorun) session.ptyProcess.write("\r\n");
+        }
+        if (session.ws) {
+          sendCommand(session.ws, { type: "commandExecuted" });
+        }
+      }
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    console.log(`[PTY] Process exited: code=${exitCode}, session=${session.id}`);
+
+    // If session is no longer in the map, cleanup was already handled by scheduleCleanup
+    if (!ptySessions.has(session.id)) {
+      return;
+    }
+
+    cancelCleanup(session);
+    session.headlessTerminal.dispose();
+    ptySessions.delete(session.id);
+
+    if (session.ws) {
+      wsToSessionId.delete(session.ws);
+      const msg =
+        exitCode === 0
+          ? `\r\n\x1b[33m${tmuxSessionName ? "Tmux session detached" : "Shell exited"}\x1b[0m\r\n`
+          : `\r\n\x1b[31m${tmuxSessionName ? `Tmux session exited (code: ${exitCode})` : `Shell exited (code: ${exitCode})`}\x1b[0m\r\n`;
+      session.ws.send(msg);
+      session.ws.close(exitCode === 0 ? 1000 : 4000, "Process exited");
+    }
+  });
+
+  return session;
+}
+
+function attachToSession(session: PtySession, ws: WSContext<WebSocket>) {
+  cancelCleanup(session);
+  // Remove old ws from mapping before overwriting to prevent stale onClose handlers
+  // from corrupting the new connection's state
+  if (session.ws) {
+    wsToSessionId.delete(session.ws);
+  }
+  session.ws = ws;
+  wsToSessionId.set(ws, session.id);
+
+  const serializedBuffer = session.serializeAddon.serialize();
+  if (serializedBuffer) {
+    sendCommand(ws, { type: "buffer", data: serializedBuffer });
+  }
+}
+
+function detachFromSession(session: PtySession) {
+  if (session.ws) {
+    wsToSessionId.delete(session.ws);
+    session.ws = null;
+  }
+  scheduleCleanup(session);
+}
 
 ptyRouter.get(
   "/ws",
   upgradeWebSocket((c) => {
     const url = new URL(c.req.url);
     const tmuxSessionName = url.searchParams.get("tmuxSession");
-    const agentSlug = url.searchParams.get("agentSlug");
+    const requestedPtyId = url.searchParams.get("ptyId");
+    const initialCommand = url.searchParams.get("command");
+    const initialAutorun = url.searchParams.get("autorun") === "true";
 
     return {
       async onOpen(_event, ws) {
         console.log(
-          `[PTY] New connection${tmuxSessionName ? ` (tmux: ${tmuxSessionName})` : ""}${agentSlug ? ` (agent: ${agentSlug})` : ""}`,
+          `[PTY] New connection${tmuxSessionName ? ` (tmux: ${tmuxSessionName})` : ""}${requestedPtyId ? ` (ptyId: ${requestedPtyId})` : ""}${initialCommand ? ` (command: ${initialCommand.slice(0, 50)}...)` : ""}`,
         );
 
-        let ptyProcess: pty.IPty;
-        let connectionType: "tmux" | "agent" | "shell" = "shell";
-        let identifier: string | null = null;
+        let session: PtySession | undefined;
 
-        try {
-          if (agentSlug) {
-            // ========== AGENT CONNECTION ==========
-            // Spawn the agent CLI directly (no tmux)
-            const [agent] = await db
-              .select()
-              .from(schema.agents)
-              .where(eq(schema.agents.slug, agentSlug))
-              .limit(1);
-
-            if (!agent) {
-              ws.send(`\x1b[31mAgent "${agentSlug}" not found.\x1b[0m\r\n`);
-              ws.close(4000, "Agent not found");
-              return;
-            }
-
-            const { command, args } = getAgentCommand(agent);
-
-            console.log(
-              `[PTY] Spawning agent CLI: ${command} ${args.join(" ")} in ${agent.workingDirectory}`,
-            );
-
-            ptyProcess = pty.spawn(command, args, {
-              name: "xterm-256color",
-              cwd: agent.workingDirectory,
-              env: {
-                ...process.env,
-                TERM: "xterm-256color",
-                COLORTERM: "truecolor",
-              } as Record<string, string>,
-            });
-
-            connectionType = "agent";
-            identifier = agentSlug;
-
-            // Update agent status to running
-            await db
-              .update(schema.agents)
-              .set({ status: "running" })
-              .where(eq(schema.agents.slug, agentSlug));
-          } else if (tmuxSessionName) {
-            // ========== TMUX CONNECTION (for utility tools like btop, logs) ==========
-            if (!hasTmuxSession(tmuxSessionName)) {
-              const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.\r\n\r\nThe session may have exited or was never created.`;
-              ws.send(`\x1b[31m${errorMsg}\x1b[0m\r\n`);
-              ws.close(4000, "Session does not exist");
-              return;
-            }
-
-            // Configure tmux session
-            spawnSync("tmux", [
-              "-S",
-              TMUX_SOCKET,
-              "set-option",
-              "-t",
-              tmuxSessionName,
-              "status",
-              "off",
-            ]);
-            spawnSync("tmux", [
-              "-S",
-              TMUX_SOCKET,
-              "set-option",
-              "-t",
-              tmuxSessionName,
-              "mouse",
-              "on",
-            ]);
-
-            ptyProcess = pty.spawn(
-              "tmux",
-              ["-S", TMUX_SOCKET, "attach-session", "-t", tmuxSessionName],
-              {
-                name: "xterm-256color",
-                cwd: homedir(),
-                env: {
-                  ...process.env,
-                  TERM: "xterm-256color",
-                  COLORTERM: "truecolor",
-                } as Record<string, string>,
-              },
-            );
-
-            connectionType = "tmux";
-            identifier = tmuxSessionName;
-          } else {
-            // ========== SHELL CONNECTION ==========
-            const shell = process.env.SHELL || "/bin/bash";
-            ptyProcess = pty.spawn(shell, [], {
-              name: "xterm-256color",
-              cwd: homedir(),
-              env: {
-                ...process.env,
-                TERM: "xterm-256color",
-                COLORTERM: "truecolor",
-              } as Record<string, string>,
-            });
-
-            connectionType = "shell";
+        if (requestedPtyId) {
+          session = ptySessions.get(requestedPtyId);
+          if (session) {
+            console.log(`[PTY] Reconnecting to existing session ${requestedPtyId}`);
+            attachToSession(session, ws);
+            sendCommand(ws, { type: "ptyId", ptyId: session.id });
+            return;
           }
+          console.log(`[PTY] Session ${requestedPtyId} not found, creating new`);
+        }
+
+        let ptyProcess: pty.IPty | null;
+        try {
+          ptyProcess = await spawnPtyProcess(tmuxSessionName, ws);
+          if (!ptyProcess) return;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[PTY] Failed to spawn process: ${message}`);
@@ -179,48 +248,19 @@ ptyRouter.get(
           return;
         }
 
-        ptyConnections.set(ws, { ptyProcess, connectionType, identifier });
-
-        ptyProcess.onData((data) => {
-          ws.send(data);
-        });
-
-        ptyProcess.onExit(async ({ exitCode }) => {
-          console.log(`[PTY] Process exited: code=${exitCode}, type=${connectionType}`);
-
-          // Update agent status when process exits
-          if (connectionType === "agent" && identifier) {
-            await db
-              .update(schema.agents)
-              .set({ status: "stopped" })
-              .where(eq(schema.agents.slug, identifier));
-          }
-
-          if (exitCode === 0) {
-            const exitMessage =
-              connectionType === "tmux"
-                ? "Tmux session detached"
-                : connectionType === "agent"
-                  ? "Agent exited"
-                  : "Shell exited";
-            ws.send(`\r\n\x1b[33m${exitMessage}\x1b[0m\r\n`);
-            ws.close(1000, "Process exited normally");
-          } else {
-            const exitMessage =
-              connectionType === "tmux"
-                ? `Tmux session exited (code: ${exitCode})`
-                : connectionType === "agent"
-                  ? `Agent exited (code: ${exitCode})`
-                  : `Shell exited (code: ${exitCode})`;
-            ws.send(`\r\n\x1b[31m${exitMessage}\x1b[0m\r\n`);
-            ws.close(4000, `Process exited with code ${exitCode}`);
-          }
-        });
+        session = createSession(ptyProcess, tmuxSessionName, ws);
+        if (initialCommand) {
+          session.pendingCommand = { command: initialCommand, autorun: initialAutorun };
+        }
+        console.log(`[PTY] Created new session ${session.id}`);
+        sendCommand(ws, { type: "ptyId", ptyId: session.id });
       },
 
       onMessage(event, ws) {
-        const conn = ptyConnections.get(ws);
-        if (!conn) return;
+        const sessionId = wsToSessionId.get(ws);
+        if (!sessionId) return;
+        const session = ptySessions.get(sessionId);
+        if (!session) return;
 
         const text = typeof event.data === "string" ? event.data : "";
 
@@ -228,7 +268,20 @@ ptyRouter.get(
           try {
             const parsed = JSON.parse(text.slice(COMMAND_PREFIX.length));
             if (parsed.type === "resize") {
-              conn.ptyProcess.resize(parsed.cols, parsed.rows);
+              session.ptyProcess.resize(parsed.cols, parsed.rows);
+              session.headlessTerminal.resize(parsed.cols, parsed.rows);
+            } else if (parsed.type === "exec") {
+              const { command, autorun } = parsed as { command?: string; autorun?: boolean };
+              if (!command) {
+                ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
+                return;
+              }
+              if (session.tmuxSessionName) {
+                sendKeys(session.tmuxSessionName, command, autorun === true, true);
+              } else {
+                session.ptyProcess.write(command);
+                if (autorun) session.ptyProcess.write("\r\n");
+              }
             }
             return;
           } catch (error) {
@@ -238,27 +291,29 @@ ptyRouter.get(
           }
         }
 
-        conn.ptyProcess.write(text);
+        session.ptyProcess.write(text);
       },
 
       onClose(_event, ws) {
-        const conn = ptyConnections.get(ws);
-        if (conn) {
-          console.log(
-            `[PTY] Connection closed (${conn.connectionType}: ${conn.identifier || "none"})`,
-          );
-          conn.ptyProcess.kill();
-          ptyConnections.delete(ws);
-        }
+        const sessionId = wsToSessionId.get(ws);
+        if (!sessionId) return;
+        const session = ptySessions.get(sessionId);
+        if (!session) return;
+
+        console.log(
+          `[PTY] Connection closed, session ${session.id} will expire in ${PTY_TTL_MS / 1000}s`,
+        );
+        detachFromSession(session);
       },
 
       onError(event, ws) {
         console.error(`[PTY] WebSocket error:`, event);
-        const conn = ptyConnections.get(ws);
-        if (conn) {
-          conn.ptyProcess.kill();
-          ptyConnections.delete(ws);
-        }
+        const sessionId = wsToSessionId.get(ws);
+        if (!sessionId) return;
+        const session = ptySessions.get(sessionId);
+        if (!session) return;
+
+        detachFromSession(session);
       },
     };
   }),

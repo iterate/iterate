@@ -156,23 +156,6 @@ function ProjectMachinesPage() {
     },
   });
 
-  const unarchiveMachine = useMutation({
-    mutationFn: async (machineId: string) => {
-      return trpcClient.machine.unarchive.mutate({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId,
-      });
-    },
-    onSuccess: () => {
-      toast.success("Machine restored!");
-      queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
-    },
-    onError: (error) => {
-      toast.error("Failed to restore machine: " + error.message);
-    },
-  });
-
   const deleteMachine = useMutation({
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.delete.mutate({
@@ -385,7 +368,6 @@ function ProjectMachinesPage() {
         organizationSlug={params.organizationSlug}
         projectSlug={params.projectSlug}
         onArchive={(id) => archiveMachine.mutate(id)}
-        onUnarchive={(id) => unarchiveMachine.mutate(id)}
         onDelete={(id) => deleteMachine.mutate(id)}
         onRestart={(id) => restartMachine.mutate(id)}
       />

@@ -1,9 +1,9 @@
 /**
- * Daemon Platform Endpoint Tests
+ * Daemon Platform Function Tests
  *
- * These tests verify the platform tRPC endpoints used for machine bootstrap:
- * - platform.setEnvVars - inject environment variables
- * - platform.cloneRepos - trigger repo cloning
+ * These tests verify the daemon's integration with the control plane:
+ * - Fetching env vars from getEnv endpoint
+ * - Applying env vars to tmux sessions
  *
  * REQUIREMENTS:
  * - Docker with TCP API enabled on port 2375 (OrbStack has this by default)
@@ -14,6 +14,7 @@
  */
 
 import { execSync } from "node:child_process";
+import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
@@ -37,13 +38,88 @@ const REPO_ROOT = join(__dirname, "../../..");
 const IMAGE_NAME = "iterate-sandbox-test";
 const CONTAINER_NAME = `platform-test-${Date.now()}`;
 const DAEMON_PORT = 14000 + Math.floor(Math.random() * 1000);
+const MOCK_CONTROL_PLANE_PORT = 15000 + Math.floor(Math.random() * 1000);
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
+/**
+ * Create a mock control plane server that implements the oRPC getEnv endpoint.
+ * Returns configurable env vars and repos.
+ *
+ * oRPC wire format:
+ * - Each procedure is at its own URL path: /api/orpc/machines/getEnv
+ * - Response format: { json: <output>, meta: [] }
+ */
+function createMockControlPlane(envVars: Record<string, string>) {
+  const server = createServer((req, res) => {
+    // oRPC sends POST requests to /api/orpc/<path>
+    if (req.method === "POST" && req.url?.startsWith("/api/orpc")) {
+      const path = req.url.replace("/api/orpc/", "").replace(/\?.*$/, "");
+
+      // Handle machines/getEnv
+      if (path === "machines/getEnv") {
+        const response = {
+          json: {
+            envVars,
+            repos: [],
+          },
+          meta: [],
+        };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(response));
+        return;
+      }
+
+      // Handle machines/reportStatus
+      if (path === "machines/reportStatus") {
+        const response = {
+          json: { success: true },
+          meta: [],
+        };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(response));
+        return;
+      }
+
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          json: {
+            defined: false,
+            code: "NOT_FOUND",
+            status: 404,
+            message: `Unknown procedure: ${path}`,
+          },
+          meta: [],
+        }),
+      );
+    } else {
+      res.writeHead(404);
+      res.end("Not found");
+    }
+  });
+
+  return server;
+}
+
+describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
   let containerId: string;
+  let mockServer: Server;
+  const testEnvVars = {
+    TEST_API_KEY: `test-key-${Date.now()}`,
+    CUSTOM_VAR: "custom-value-123",
+  };
 
   beforeAll(async () => {
+    // Start mock control plane server
+    mockServer = createMockControlPlane(testEnvVars);
+    await new Promise<void>((resolve) => {
+      mockServer.listen(MOCK_CONTROL_PLANE_PORT, () => {
+        console.log(`Mock control plane listening on port ${MOCK_CONTROL_PLANE_PORT}`);
+        resolve();
+      });
+    });
+
     console.log("Building sandbox image...");
     execSync(`docker build -t ${IMAGE_NAME} -f apps/os/sandbox/Dockerfile .`, {
       cwd: REPO_ROOT,
@@ -51,11 +127,17 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
     });
 
     // Mount local repo at /local-iterate-repo - entry.sh will detect and copy from there
-    console.log("Creating container with local repo mounted...");
+    // Pass control plane URL pointing to host machine
+    console.log("Creating container with local repo mounted and mock control plane...");
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
       Image: IMAGE_NAME,
       name: CONTAINER_NAME,
       ExposedPorts: { "3000/tcp": {} },
+      Env: [
+        // host.docker.internal resolves to the host machine from inside Docker
+        `ITERATE_OS_BASE_URL=http://host.docker.internal:${MOCK_CONTROL_PLANE_PORT}`,
+        `ITERATE_OS_API_KEY=test-api-key`,
+      ],
       HostConfig: {
         PortBindings: {
           "3000/tcp": [{ HostPort: String(DAEMON_PORT) }],
@@ -88,101 +170,89 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Endpoints", () => {
       }
       await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
     }
+
+    if (mockServer) {
+      await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+    }
   });
 
-  test("platform.setEnvVars injects environment variables", async () => {
+  test("refreshEnv fetches env vars from control plane and applies them", async () => {
     const client = createDaemonTrpcClient(DAEMON_PORT);
-    const uniqueValue = `test_value_${Date.now()}`;
 
-    const result = await client.platform.setEnvVars.mutate({
-      vars: { TEST_VAR: uniqueValue, ANOTHER_VAR: "another_value" },
-    });
+    // Call refreshEnv - this should fetch from our mock control plane
+    const result = await client.platform.refreshEnv.mutate();
+    expect(result).toEqual({ success: true });
 
-    expect(result.success).toBe(true);
-    expect(result.injectedCount).toBe(2);
-    expect(result.envFilePath).toContain(".iterate/.env");
+    // Verify the env file was written with our test vars
+    // Format is: export VAR=value (shell-quote escapes values as needed)
+    const envFileContent = await execInContainer(containerId, ["cat", "/root/.iterate/.env"]);
+    expect(envFileContent).toContain(`export TEST_API_KEY=${testEnvVars.TEST_API_KEY}`);
+    expect(envFileContent).toContain(`export CUSTOM_VAR=${testEnvVars.CUSTOM_VAR}`);
+  });
 
-    // Verify the env file was written with correct content
-    const envFileContent = await execInContainer(containerId, [
-      "cat",
-      "/home/iterate/.iterate/.env",
+  test("env vars are available in new shell sessions", async () => {
+    // First ensure env vars are loaded
+    const client = createDaemonTrpcClient(DAEMON_PORT);
+    await client.platform.refreshEnv.mutate();
+
+    // Source the env file and check the var (simulates what a new shell would do)
+    // Use bash since sh doesn't have `source`, or use `. ` syntax
+    const output = await execInContainer(containerId, [
+      "bash",
+      "-c",
+      `source /root/.iterate/.env && echo $TEST_API_KEY`,
     ]);
-    expect(envFileContent).toContain(`export TEST_VAR=${uniqueValue}`);
-    expect(envFileContent).toContain("export ANOTHER_VAR=another_value");
+    expect(output.trim()).toBe(testEnvVars.TEST_API_KEY);
   });
 
-  test("platform.setEnvVars makes vars available in tmux sessions", async () => {
+  test("env vars update when refreshEnv is called again", async () => {
     const client = createDaemonTrpcClient(DAEMON_PORT);
-    const uniqueValue = `tmux_test_${Date.now()}`;
 
-    // First create a tmux session
-    const sessionName = `env-test-${Date.now()}`;
-    await execInContainer(containerId, ["tmux", "new-session", "-d", "-s", sessionName]);
+    // First refresh
+    await client.platform.refreshEnv.mutate();
 
-    // Inject env var (this should send source command to tmux)
-    const result = await client.platform.setEnvVars.mutate({
-      vars: { TMUX_TEST_VAR: uniqueValue },
-    });
-    expect(result.success).toBe(true);
+    // Verify initial value
+    const envFileContent = await execInContainer(containerId, ["cat", "/root/.iterate/.env"]);
+    expect(envFileContent).toContain(testEnvVars.TEST_API_KEY);
 
-    // Give tmux a moment to source the file
-    await new Promise((r) => setTimeout(r, 500));
+    // Update the mock server's env vars (we'll just verify the file timestamp changes)
+    const beforeMtime = await execInContainer(containerId, [
+      "stat",
+      "-c",
+      "%Y",
+      "/root/.iterate/.env",
+    ]);
 
-    // Send echo command to tmux and capture output
+    // Wait a second so mtime changes
+    await new Promise((r) => setTimeout(r, 1100));
+
+    // Refresh again
+    await client.platform.refreshEnv.mutate();
+
+    const afterMtime = await execInContainer(containerId, [
+      "stat",
+      "-c",
+      "%Y",
+      "/root/.iterate/.env",
+    ]);
+
+    // File should have been rewritten
+    expect(Number(afterMtime)).toBeGreaterThan(Number(beforeMtime));
+  });
+
+  test("git clone works for public repositories", async () => {
+    const repoPath = "/root/src/github.com/octocat/Hello-World";
+
+    // Clone a real public repo directly using git
     await execInContainer(containerId, [
-      "tmux",
-      "send-keys",
-      "-t",
-      sessionName,
-      "echo $TMUX_TEST_VAR",
-      "Enter",
+      "git",
+      "clone",
+      "--branch",
+      "master",
+      "--single-branch",
+      "https://github.com/octocat/Hello-World.git",
+      repoPath,
     ]);
-
-    // Give command time to execute
-    await new Promise((r) => setTimeout(r, 200));
-
-    // Capture tmux pane content
-    const paneContent = await execInContainer(containerId, [
-      "tmux",
-      "capture-pane",
-      "-t",
-      sessionName,
-      "-p",
-    ]);
-
-    expect(paneContent).toContain(uniqueValue);
-
-    // Cleanup
-    await execInContainer(containerId, ["tmux", "kill-session", "-t", sessionName]);
-  }, 30000);
-
-  test("platform.setEnvVars rejects invalid input", async () => {
-    const client = createDaemonTrpcClient(DAEMON_PORT);
-
-    // @ts-expect-error - intentionally passing invalid input
-    await expect(client.platform.setEnvVars.mutate({})).rejects.toThrow();
-  });
-
-  test("platform.cloneRepos clones a real repository", async () => {
-    const client = createDaemonTrpcClient(DAEMON_PORT);
-    const repoPath = "/home/iterate/src/github.com/octocat/Hello-World";
-
-    // Request clone of a real public repo
-    const result = await client.platform.cloneRepos.mutate({
-      repos: [
-        {
-          url: "https://github.com/octocat/Hello-World.git",
-          branch: "master",
-          path: repoPath,
-          owner: "octocat",
-          name: "Hello-World",
-        },
-      ],
-    });
-
-    expect(result.success).toBe(true);
-    expect(result.repos).toHaveLength(1);
-    expect(result.repos[0]).toMatchObject({ owner: "octocat", name: "Hello-World" });
 
     // Poll filesystem until clone completes (wait for README to appear)
     await vi.waitFor(async () => {

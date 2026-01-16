@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
@@ -10,9 +10,7 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { getDaemonById } from "../../daemons.ts";
-import type { DB } from "../../db/client.ts";
-import { createDaemonTrpcClient } from "../../orpc/router.ts";
-import { createDaytonaProvider } from "../../providers/daytona.ts";
+import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 /**
@@ -128,7 +126,12 @@ export async function forwardSlackWebhookToMachine(
       signal: AbortSignal.timeout(10000),
     });
     if (!resp.ok) {
-      logger.error("[Slack Webhook] Forward failed", { status: resp.status });
+      logger.error("[Slack Webhook] Forward failed", {
+        machine,
+        targetUrl,
+        status: resp.status,
+        text: await resp.text(),
+      });
       return { success: false, error: `HTTP ${resp.status}` };
     }
     return { success: true };
@@ -136,101 +139,6 @@ export async function forwardSlackWebhookToMachine(
     logger.error("[Slack Webhook] Forward error", err);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * Build the daemon tRPC base URL for a machine.
- * Uses port 3000 which is where the daemon's tRPC server runs.
- */
-async function buildDaemonBaseUrl(
-  machine: typeof schema.machine.$inferSelect,
-  env: CloudflareEnv,
-): Promise<string | null> {
-  const metadata = machine.metadata as Record<string, unknown>;
-
-  switch (machine.type) {
-    case "daytona": {
-      const provider = createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
-      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
-    }
-    case "local-docker": {
-      if (!import.meta.env.DEV) {
-        logger.warn("[Slack] local-docker provider only available in development", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      const { createLocalDockerProvider } = await import("../../providers/local-docker.ts");
-      const provider = createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
-      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
-    }
-    case "local-vanilla":
-    case "local":
-      return "http://localhost:3000";
-    default:
-      logger.warn("[Slack] Unknown machine type for daemon URL", {
-        machineId: machine.id,
-        type: machine.type,
-      });
-      return null;
-  }
-}
-
-/**
- * Push environment variables to a machine's daemon via tRPC.
- */
-async function pushEnvVarsToMachine(
-  machine: typeof schema.machine.$inferSelect,
-  vars: Record<string, string>,
-  env: CloudflareEnv,
-): Promise<void> {
-  const daemonBaseUrl = await buildDaemonBaseUrl(machine, env);
-  if (!daemonBaseUrl) {
-    logger.warn("[Slack] Could not build daemon URL for machine", { machineId: machine.id });
-    return;
-  }
-
-  const client = createDaemonTrpcClient(daemonBaseUrl);
-
-  try {
-    await client.platform.setEnvVars.mutate({ vars });
-    logger.info("[Slack] Pushed env vars to machine", {
-      machineId: machine.id,
-      varCount: Object.keys(vars).length,
-    });
-  } catch (err) {
-    logger.error("[Slack] Failed to push env vars to machine", err);
-  }
-}
-
-/**
- * Push Slack access token to all running machines for a project.
- */
-async function pushSlackTokenToRunningMachines(
-  db: DB,
-  projectId: string,
-  accessToken: string,
-  env: CloudflareEnv,
-): Promise<void> {
-  const runningMachines = await db.query.machine.findMany({
-    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "started")),
-  });
-
-  if (runningMachines.length === 0) {
-    logger.info("[Slack] No running machines to push token to", { projectId });
-    return;
-  }
-
-  logger.info("[Slack] Pushing token to running machines", {
-    projectId,
-    machineCount: runningMachines.length,
-  });
-
-  await Promise.all(
-    runningMachines.map((machine) =>
-      pushEnvVarsToMachine(machine, { SLACK_ACCESS_TOKEN: accessToken }, env),
-    ),
-  );
 }
 
 export const SLACK_BOT_SCOPES = [
@@ -484,10 +392,10 @@ slackApp.get(
       throw error;
     }
 
-    // Push Slack token to any running machines in the background
+    // Poke running machines to refresh their bootstrap data (they'll pull the new Slack token)
     waitUntil(
-      pushSlackTokenToRunningMachines(c.var.db, projectId, accessToken, c.env).catch((err) => {
-        logger.error("[Slack OAuth] Failed to push token to machines", err);
+      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
+        logger.error("[Slack OAuth] Failed to poke machines for refresh", err);
       }),
     );
 
@@ -566,16 +474,14 @@ slackApp.post("/webhook", async (c) => {
         }
 
         logger.debug("[Slack Webhook] Looking up connection", { teamId });
-        // Single optimized query: get connection + target machine (or fallback to first started machine)
+        // Find connection and the single active machine for its project
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
           with: {
-            webhookTargetMachine: true,
             project: {
               with: {
                 machines: {
                   where: (m, { eq }) => eq(m.state, "started"),
-                  orderBy: (m, { asc }) => asc(m.createdAt),
                   limit: 1,
                 },
               },
@@ -589,11 +495,8 @@ slackApp.post("/webhook", async (c) => {
           return;
         }
 
-        // Use explicit webhook target, or fall back to first started machine in project
-        const targetMachine =
-          connection.webhookTargetMachine?.state === "started"
-            ? connection.webhookTargetMachine
-            : (connection.project?.machines[0] ?? null);
+        // Get the single active machine for this project
+        const targetMachine = connection.project?.machines[0] ?? null;
 
         // Forward to machine if available
         if (targetMachine) {

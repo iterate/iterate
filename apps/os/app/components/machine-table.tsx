@@ -5,7 +5,6 @@ import {
   MoreHorizontal,
   Archive,
   Trash2,
-  RotateCcw,
   ScrollText,
   SquareTerminal,
   Terminal,
@@ -50,7 +49,6 @@ interface MachineTableProps {
   organizationSlug: string;
   projectSlug: string;
   onArchive: (id: string) => void;
-  onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
   onRestart: (id: string) => void;
   isLoading?: boolean;
@@ -61,7 +59,6 @@ export function MachineTable({
   organizationSlug,
   projectSlug,
   onArchive,
-  onUnarchive,
   onDelete,
   onRestart,
   isLoading,
@@ -272,15 +269,10 @@ export function MachineTable({
           Restart
         </DropdownMenuItem>
       )}
-      {machine.state === "started" ? (
+      {machine.state === "started" && (
         <DropdownMenuItem onClick={() => onArchive(machine.id)}>
           <Archive className="h-4 w-4 mr-2" />
           Archive
-        </DropdownMenuItem>
-      ) : (
-        <DropdownMenuItem onClick={() => onUnarchive(machine.id)}>
-          <RotateCcw className="h-4 w-4 mr-2" />
-          Restore
         </DropdownMenuItem>
       )}
       <DropdownMenuItem
