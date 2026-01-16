@@ -1,8 +1,11 @@
 import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { typeid } from "typeid-js";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectAccessToken } from "../../db/schema.ts";
+import { encrypt } from "../../utils/encryption.ts";
+import { generateProjectAccessKey } from "./machine.ts";
 
 export const accessTokenRouter = router({
   list: projectProtectedProcedure.query(async ({ ctx }) => {
@@ -27,15 +30,17 @@ export const accessTokenRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const rawToken = generateToken();
-      const tokenHash = await hashToken(rawToken);
+      const tokenId = typeid("pat").toString();
+      const rawToken = generateProjectAccessKey(tokenId);
+      const encryptedToken = await encrypt(rawToken);
 
       const [created] = await ctx.db
         .insert(projectAccessToken)
         .values({
+          id: tokenId,
           projectId: ctx.project.id,
           name: input.name,
-          tokenHash,
+          encryptedToken,
         })
         .returning();
 
@@ -89,19 +94,3 @@ export const accessTokenRouter = router({
       };
     }),
 });
-
-async function hashToken(token: string): Promise<string> {
-  const encoded = new TextEncoder().encode(token);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-export function generateToken(): string {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return `pat_${Array.from(array)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")}`;
-}

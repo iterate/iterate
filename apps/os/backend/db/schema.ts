@@ -217,7 +217,7 @@ export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   }),
 }));
 
-// API access tokens for a project
+// API access tokens for a project (also used by machines for control plane auth)
 export const projectAccessToken = pgTable(
   "project_access_token",
   (t) => ({
@@ -227,9 +227,9 @@ export const projectAccessToken = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     name: t.text().notNull(),
-    tokenHash: t.text().notNull(),
-    lastUsedAt: t.timestamp(),
-    revokedAt: t.timestamp(),
+    encryptedToken: t.text().notNull(), // Encrypted API token (can be decrypted to send to machines)
+    lastUsedAt: t.timestamp({ withTimezone: true }),
+    revokedAt: t.timestamp({ withTimezone: true }),
     ...withTimestamps,
   }),
   (t) => [index().on(t.projectId)],
@@ -293,7 +293,6 @@ export const machine = pgTable(
       .notNull()
       .default("started"),
     externalId: t.text().notNull(),
-    apiKeyHash: t.text(), // SHA-256 hash of machine API key for authentication
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),

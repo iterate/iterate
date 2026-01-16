@@ -26,8 +26,15 @@
     {
       "idx": 3,
       "version": "7",
-      "when": 1768564260956,
-      "tag": "0003_solid_victor_mancha",
+      "when": 1768560595038,
+      "tag": "0003_brave_molecule_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1768569185228,
+      "tag": "0004_majestic_daredevil",
       "breakpoints": true
     }
   ]

@@ -1,6 +1,6 @@
 {
-  "id": "30ee26b2-85fd-47b7-afc0-f67e56e1ece1",
-  "prevId": "f71fbf16-edab-44a8-ba94-23baf0b34b52",
+  "id": "89541310-2e2f-4d4a-aaa6-320af879ba66",
+  "prevId": "30ee26b2-85fd-47b7-afc0-f67e56e1ece1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -558,6 +558,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "machine_project_one_active": {
+          "name": "machine_project_one_active",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "state != 'archived'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -989,12 +1005,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "webhook_target_machine_id": {
-          "name": "webhook_target_machine_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1046,21 +1056,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "idx_project_connection_webhook_target_machine": {
-          "name": "idx_project_connection_webhook_target_machine",
-          "columns": [
-            {
-              "expression": "webhook_target_machine_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1088,19 +1083,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "project_connection_webhook_target_machine_id_machine_id_fk": {
-          "name": "project_connection_webhook_target_machine_id_machine_id_fk",
-          "tableFrom": "project_connection",
-          "tableTo": "machine",
-          "columnsFrom": [
-            "webhook_target_machine_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

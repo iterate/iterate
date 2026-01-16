@@ -1,14 +1,13 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq } from "drizzle-orm";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { parseMachineIdFromApiKey, verifyMachineApiKey } from "../trpc/routers/machine.ts";
+import { parseTokenIdFromApiKey } from "../trpc/routers/machine.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
-import { createDaytonaProvider } from "../providers/daytona.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
@@ -44,46 +43,102 @@ const withApiKey = os.middleware(async ({ context, next }) => {
   return next({ context: { apiKey } });
 });
 
+/**
+ * Authenticate an API key and return the associated machine.
+ * API key format: pak_<tokenId>_<randomHex>
+ *
+ * The token is project-scoped (shared by all machines in the project).
+ * Machine ID is provided separately to identify which machine is calling.
+ */
+async function authenticateApiKey(
+  db: DB,
+  apiKey: string,
+  machineId: string,
+): Promise<{
+  machine: typeof schema.machine.$inferSelect & {
+    project: typeof schema.project.$inferSelect;
+  };
+  tokenId: string;
+}> {
+  const tokenId = parseTokenIdFromApiKey(apiKey);
+  if (!tokenId) {
+    logger.warn("Invalid API key format", { apiKey: apiKey.slice(0, 20) + "..." });
+    throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key format" });
+  }
+
+  const accessToken = await db.query.projectAccessToken.findFirst({
+    where: eq(schema.projectAccessToken.id, tokenId),
+  });
+
+  if (!accessToken) {
+    logger.warn("Access token not found", { tokenId });
+    throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
+  }
+
+  if (accessToken.revokedAt) {
+    logger.warn("Access token revoked", { tokenId });
+    throw new ORPCError("UNAUTHORIZED", { message: "Token has been revoked" });
+  }
+
+  // Decrypt the stored token and compare with the provided API key
+  const storedToken = await decrypt(accessToken.encryptedToken);
+  if (apiKey !== storedToken) {
+    logger.warn("Invalid API key for token", { tokenId });
+    throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
+  }
+
+  // Find the machine by ID and verify it belongs to the same project as the token
+  const machine = await db.query.machine.findFirst({
+    where: eq(schema.machine.id, machineId),
+    with: { project: true },
+  });
+
+  if (!machine) {
+    logger.warn("Machine not found", { machineId });
+    throw new ORPCError("UNAUTHORIZED", { message: "Machine not found" });
+  }
+
+  if (machine.projectId !== accessToken.projectId) {
+    logger.warn("Machine does not belong to token's project", {
+      machineId,
+      machineProjectId: machine.projectId,
+      tokenProjectId: accessToken.projectId,
+    });
+    throw new ORPCError("UNAUTHORIZED", { message: "Token not valid for this machine" });
+  }
+
+  // Update last used timestamp in background
+  db.update(schema.projectAccessToken)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(schema.projectAccessToken.id, tokenId))
+    .catch(() => {});
+
+  return { machine, tokenId };
+}
+
 export const reportStatus = os.machines.reportStatus
   .use(withApiKey)
   .handler(async ({ input, context }) => {
     const { db, env, apiKey, executionCtx } = context;
 
-    const machineId = parseMachineIdFromApiKey(apiKey);
-    if (!machineId) {
-      logger.warn("Invalid machine API key format", { apiKey: apiKey.slice(0, 20) + "..." });
-      throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key format" });
-    }
+    // Authenticate and get machine
+    const { machine } = await authenticateApiKey(db, apiKey, input.machineId);
 
-    // Look up machine and verify API key
-    const machine = await db.query.machine.findFirst({
-      where: eq(schema.machine.id, machineId),
+    // Re-fetch with organization for invalidation
+    const machineWithOrg = await db.query.machine.findFirst({
+      where: eq(schema.machine.id, machine.id),
       with: { project: { with: { organization: true } } },
     });
 
-    if (!machine) {
-      logger.warn("Machine not found for status report", { machineId });
+    if (!machineWithOrg) {
       throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
-    }
-
-    if (!machine.apiKeyHash) {
-      logger.error("Machine has no API key hash", { machineId });
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "Machine not configured for authentication",
-      });
-    }
-
-    const isValid = await verifyMachineApiKey(apiKey, machine.apiKeyHash);
-    if (!isValid) {
-      logger.warn("Invalid API key for machine", { machineId });
-      throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
     }
 
     const { status, message } = input;
 
     // Update machine metadata to mark daemon as ready
     const updatedMetadata = {
-      ...((machine.metadata as Record<string, unknown>) ?? {}),
+      ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
       daemonStatus: status,
       daemonStatusMessage: message,
       daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
@@ -92,9 +147,9 @@ export const reportStatus = os.machines.reportStatus
     await db
       .update(schema.machine)
       .set({ metadata: updatedMetadata })
-      .where(eq(schema.machine.id, machineId));
+      .where(eq(schema.machine.id, machine.id));
 
-    logger.info("Machine daemon status updated", { machineId, status });
+    logger.info("Machine daemon status updated", { machineId: machine.id, status });
 
     // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(
@@ -103,141 +158,91 @@ export const reportStatus = os.machines.reportStatus
       }),
     );
 
-    // If daemon is ready, trigger bootstrap callbacks
-    if (status === "ready") {
-      executionCtx.waitUntil(
-        triggerBootstrapCallbacks(env, db, machine).catch((err) => {
-          logger.error("Failed to trigger bootstrap callbacks", err);
-        }),
-      );
-    }
+    // Note: Bootstrap data is now pulled by the daemon via getBootstrapData endpoint
+    // after it reports ready. No push-based callback needed.
 
     return { success: true };
   });
 
-export const workerRouter = os.router({
-  machines: {
-    reportStatus,
-  },
-});
+export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input, context }) => {
+  const { db, env, apiKey } = context;
 
-type MachineWithProject = typeof schema.machine.$inferSelect & {
-  project: typeof schema.project.$inferSelect & {
-    organization: typeof schema.organization.$inferSelect;
-  };
-};
-
-type RepoInfo = {
-  url: string;
-  branch: string;
-  path: string;
-  owner: string;
-  name: string;
-};
-
-/**
- * Trigger callbacks to the daemon to inject env vars and clone repos.
- * This runs in the background via waitUntil.
- */
-async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: MachineWithProject) {
+  // Authenticate and get machine
+  const { machine } = await authenticateApiKey(db, apiKey, input.machineId);
   const { project } = machine;
+  const machineId = machine.id;
 
-  // Get the daemon URL using the appropriate provider
-  let daemonBaseUrl: string;
-  const metadata = machine.metadata as Record<string, unknown>;
+  // Run all DB queries in parallel
+  const [projectEnvVars, githubConnection, slackConnection, projectRepos] = await Promise.all([
+    db.query.projectEnvVar.findMany({
+      where: and(
+        eq(schema.projectEnvVar.projectId, project.id),
+        // Include project-level vars (machineId is null) and machine-specific vars
+        or(isNull(schema.projectEnvVar.machineId), eq(schema.projectEnvVar.machineId, machineId)),
+      ),
+    }),
+    db.query.projectConnection.findFirst({
+      where: (conn, { and: whereAnd, eq: whereEq }) =>
+        whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
+    }),
+    db.query.projectConnection.findFirst({
+      where: (conn, { and: whereAnd, eq: whereEq }) =>
+        whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "slack")),
+    }),
+    db.query.projectRepo.findMany({
+      where: eq(schema.projectRepo.projectId, project.id),
+    }),
+  ]);
 
-  if (machine.type === "daytona") {
-    const provider = createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
-    daemonBaseUrl = provider.getPreviewUrl(machine.externalId, metadata, 3000);
-  } else if (machine.type === "local-docker") {
-    if (!import.meta.env.DEV) {
-      throw new Error("local-docker provider only available in development");
-    }
-    const { createLocalDockerProvider } = await import("../providers/local-docker.ts");
-    const provider = createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
-    daemonBaseUrl = provider.getPreviewUrl(machine.externalId, metadata, 3000);
-  } else if (machine.type === "local-vanilla") {
-    // local-vanilla machines run the daemon directly on localhost:3000
-    daemonBaseUrl = "http://localhost:3000";
-  } else if (machine.type === "local") {
-    // local machines also run daemon on localhost:3000
-    daemonBaseUrl = "http://localhost:3000";
-  } else {
-    // Exhaustive check - if we get here, a new machine type was added without updating this function
-    const _exhaustiveCheck: never = machine.type;
-    logger.error("Unknown machine type", { machineId: machine.id, type: _exhaustiveCheck });
-    return;
-  }
-
-  logger.info("Triggering bootstrap callbacks", { machineId: machine.id, daemonBaseUrl });
-
-  // 1. Gather env vars to inject (GitHub token, etc.)
-  const envVarsToInject: Record<string, string> = {};
-
-  // Get GitHub connection and token (filter by provider to avoid returning non-GitHub connections)
-  const githubConnection = await db.query.projectConnection.findFirst({
-    where: (conn, { and, eq: whereEq }) =>
-      and(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
-  });
-
+  // Get GitHub installation token (needed for repos)
+  let installationToken: string | null = null;
   if (githubConnection) {
     const providerData = githubConnection.providerData as { installationId?: number };
     if (providerData.installationId) {
-      const installationToken = await getGitHubInstallationToken(env, providerData.installationId);
-      if (installationToken) {
-        envVarsToInject["GITHUB_ACCESS_TOKEN"] = installationToken;
-      }
+      installationToken = await getGitHubInstallationToken(env, providerData.installationId);
     }
   }
 
-  // Get Slack connection and token
-  const slackConnection = await db.query.projectConnection.findFirst({
-    where: (conn, { and, eq: whereEq }) =>
-      and(whereEq(conn.projectId, project.id), whereEq(conn.provider, "slack")),
-  });
+  // Decrypt env vars, Slack token, and fetch repo info in parallel
+  type RepoInfo = {
+    url: string;
+    branch: string;
+    path: string;
+    owner: string;
+    name: string;
+  };
 
-  if (slackConnection) {
-    const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
-    if (providerData.encryptedAccessToken) {
+  const [decryptedEnvVars, slackToken, repoResults] = await Promise.all([
+    // Decrypt all env vars (project-level and machine-specific)
+    Promise.all(
+      projectEnvVars.map(async (envVar) => {
+        try {
+          return {
+            key: envVar.key,
+            value: await decrypt(envVar.encryptedValue),
+            machineId: envVar.machineId,
+          };
+        } catch (err) {
+          logger.error("Failed to decrypt env var", { key: envVar.key, err });
+          return null;
+        }
+      }),
+    ),
+    // Decrypt Slack token if available
+    (async () => {
+      if (!slackConnection) return null;
+      const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
+      if (!providerData.encryptedAccessToken) return null;
       try {
-        const slackToken = await decrypt(providerData.encryptedAccessToken);
-        envVarsToInject["SLACK_ACCESS_TOKEN"] = slackToken;
+        return await decrypt(providerData.encryptedAccessToken);
       } catch (err) {
         logger.error("Failed to decrypt Slack token", err);
+        return null;
       }
-    }
-  }
-
-  // Add HTTPS_PROXY if configured (for future use)
-  // envVarsToInject["HTTPS_PROXY"] = `${env.VITE_PUBLIC_URL}/proxy/...`;
-
-  // 2. Call daemon to inject env vars
-  const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
-
-  if (Object.keys(envVarsToInject).length > 0) {
-    try {
-      await daemonClient.platform.setEnvVars.mutate({ vars: envVarsToInject });
-      logger.info("Injected env vars to daemon", {
-        machineId: machine.id,
-        varCount: Object.keys(envVarsToInject).length,
-      });
-    } catch (err) {
-      logger.error("Error calling daemon setEnvVars", err);
-    }
-  }
-
-  // 3. Get repos to clone
-  const projectRepos = await db.query.projectRepo.findMany({
-    where: eq(schema.projectRepo.projectId, project.id),
-  });
-
-  if (projectRepos.length > 0 && githubConnection) {
-    const providerData = githubConnection.providerData as { installationId?: number };
-    if (providerData.installationId) {
-      const installationToken = await getGitHubInstallationToken(env, providerData.installationId);
-      if (installationToken) {
-        // Build repos array with clone URLs
-        const repos: (RepoInfo | null)[] = await Promise.all(
+    })(),
+    // Fetch repo info for all repos
+    installationToken && projectRepos.length > 0
+      ? Promise.all(
           projectRepos.map(async (repo): Promise<RepoInfo | null> => {
             const repoInfo = await getRepositoryById(installationToken, repo.externalId);
             if (!repoInfo) {
@@ -252,22 +257,51 @@ async function triggerBootstrapCallbacks(env: CloudflareEnv, db: DB, machine: Ma
               name: repoInfo.name,
             };
           }),
-        );
+        )
+      : Promise.resolve([]),
+  ]);
 
-        const validRepos = repos.filter((r): r is RepoInfo => r !== null);
-
-        if (validRepos.length > 0) {
-          try {
-            await daemonClient.platform.cloneRepos.mutate({ repos: validRepos });
-            logger.info("Triggered repo cloning on daemon", {
-              machineId: machine.id,
-              repoCount: validRepos.length,
-            });
-          } catch (err) {
-            logger.error("Error calling daemon cloneRepos", err);
-          }
-        }
-      }
-    }
+  // Build envVars object - project-level first, then machine-specific (overrides)
+  const envVars: Record<string, string> = {};
+  // First, add project-level env vars (machineId is null)
+  for (const item of decryptedEnvVars) {
+    if (item && !item.machineId) envVars[item.key] = item.value;
   }
-}
+  // Then, add machine-specific env vars (overrides project-level)
+  for (const item of decryptedEnvVars) {
+    if (item && item.machineId) envVars[item.key] = item.value;
+  }
+
+  // Fallback API keys if not set by user (only if defined in env)
+  if (!envVars["OPENAI_API_KEY"] && env.OPENAI_API_KEY) {
+    envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
+  }
+  if (!envVars["ANTHROPIC_API_KEY"] && env.ANTHROPIC_API_KEY) {
+    envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
+  }
+
+  // Add tokens from connections
+  if (installationToken) {
+    envVars["GITHUB_ACCESS_TOKEN"] = installationToken;
+  }
+  if (slackToken) {
+    envVars["SLACK_ACCESS_TOKEN"] = slackToken;
+  }
+
+  const repos = repoResults.filter((r): r is RepoInfo => r !== null);
+
+  logger.info("Returning env data for machine", {
+    machineId,
+    envVarCount: Object.keys(envVars).length,
+    repoCount: repos.length,
+  });
+
+  return { envVars, repos };
+});
+
+export const workerRouter = os.router({
+  machines: {
+    reportStatus,
+    getEnv,
+  },
+});
