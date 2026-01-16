@@ -501,7 +501,8 @@ function MachineDetailPage() {
                             openAgentTerminal({
                               agentSlug: agent.slug,
                               useNative: true,
-                              command: `echo ${agent.slug}`,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
                             })
                           }
                         >
@@ -515,7 +516,8 @@ function MachineDetailPage() {
                             openAgentTerminal({
                               agentSlug: agent.slug,
                               useNative: false,
-                              command: `echo ${agent.slug}`,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
                             })
                           }
                         >
@@ -531,7 +533,8 @@ function MachineDetailPage() {
                           openAgentTerminal({
                             agentSlug: agent.slug,
                             useNative: true,
-                            command: `echo ${agent.slug}`,
+                            command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                            autorun: true,
                           })
                         }
                       >
