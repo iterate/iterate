@@ -5,7 +5,13 @@
  * Does not use tmux - node-pty spawns `pi` directly.
  */
 import { randomUUID } from "node:crypto";
-import type { AgentHarness, AgentEvent, CreateAgentParams, CreateAgentResult } from "./types.ts";
+import type {
+  AgentHarness,
+  AgentEvent,
+  CreateAgentParams,
+  CreateAgentResult,
+  StartCommandOptions,
+} from "./types.ts";
 
 export const piHarness: AgentHarness = {
   type: "pi",
@@ -26,5 +32,13 @@ export const piHarness: AgentHarness = {
     throw new Error(
       "Pi agents don't support programmatic messages. Use the terminal UI to interact.",
     );
+  },
+
+  getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {
+    const cmd = ["pi"];
+    if (options?.prompt) {
+      cmd.push("--prompt", options.prompt);
+    }
+    return cmd;
   },
 };

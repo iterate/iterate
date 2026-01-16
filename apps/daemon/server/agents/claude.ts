@@ -5,7 +5,13 @@
  * Does not use tmux - node-pty spawns `claude` directly.
  */
 import { randomUUID } from "node:crypto";
-import type { AgentHarness, AgentEvent, CreateAgentParams, CreateAgentResult } from "./types.ts";
+import type {
+  AgentHarness,
+  AgentEvent,
+  CreateAgentParams,
+  CreateAgentResult,
+  StartCommandOptions,
+} from "./types.ts";
 
 export const claudeHarness: AgentHarness = {
   type: "claude-code",
@@ -26,5 +32,13 @@ export const claudeHarness: AgentHarness = {
     throw new Error(
       "Claude Code agents don't support programmatic messages. Use the terminal UI to interact.",
     );
+  },
+
+  getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {
+    const cmd = ["claude"];
+    if (options?.prompt) {
+      cmd.push("--prompt", options.prompt);
+    }
+    return cmd;
   },
 };

@@ -15,8 +15,11 @@ import {
   sendKeys as defaultSendKeys,
   isSessionProcessRunning as defaultIsSessionProcessRunning,
 } from "../tmux-control.ts";
-import { getHarness as defaultGetHarness, getCommandString } from "../agent-harness.ts";
-import { getHarness as defaultGetNewHarness, type AgentHarness } from "../agents/index.ts";
+import {
+  getHarness as defaultGetHarness,
+  getCommandString,
+  type AgentHarness,
+} from "../agents/index.ts";
 
 // Per-harness wait times (in ms) for tmux session to be ready
 const HARNESS_READY_WAIT_MS: Record<AgentType, number> = {
@@ -191,7 +194,7 @@ export interface HarnessAgentManagerDeps {
 
 const defaultHarnessDeps: HarnessAgentManagerDeps = {
   db: defaultDb,
-  getHarness: defaultGetNewHarness,
+  getHarness: defaultGetHarness,
 };
 
 /**

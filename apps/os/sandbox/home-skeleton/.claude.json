@@ -1,5 +1,14 @@
 {
   "numStartups": 100,
+  "customApiKeyResponses": {
+    "approved": [],
+    "rejected": []
+  },
+  "tipsHistory": {
+    "plan-mode-for-complex-tasks": 100,
+    "git-worktrees": 100,
+    "shift-enter": 100
+  },
   "hasCompletedOnboarding": true,
   "lastOnboardingVersion": "2.1.6",
   "shiftEnterKeyBindingInstalled": true,
@@ -7,5 +16,9 @@
   "hasShownOpus45Notice": true,
   "hasShownS1MWelcomeV2": true,
   "mcpServers": {},
-  "bypassPermissionsModeAccepted": true
+  "bypassPermissionsModeAccepted": true,
+  "sonnet45MigrationComplete": true,
+  "opus45MigrationComplete": true,
+  "opusProMigrationComplete": true,
+  "thinkingMigrationComplete": true
 }

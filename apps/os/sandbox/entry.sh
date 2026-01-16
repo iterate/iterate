@@ -54,6 +54,15 @@ rm -rf "$S6_DAEMONS/.s6-svscan"
 find "$S6_DAEMONS" -type d -name supervise -exec rm -rf {} + 2>/dev/null || true
 
 echo "Starting s6-svscan..."
+echo ""
+echo "Reminder - logs will be here:"
+echo "  Daemon:   /var/log/iterate-daemon/"
+echo "  Opencode: /var/log/opencode/"
+echo ""
 export ITERATE_REPO
 export HOSTNAME="0.0.0.0"
+
+# Signal readiness via file (more reliable than stdout for docker log detection)
+touch /tmp/.iterate-sandbox-ready
+
 exec s6-svscan "$S6_DAEMONS"

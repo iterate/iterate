@@ -6,7 +6,13 @@
  */
 
 import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk";
-import type { AgentHarness, AgentEvent, CreateAgentParams, CreateAgentResult } from "./types.ts";
+import type {
+  AgentHarness,
+  AgentEvent,
+  CreateAgentParams,
+  CreateAgentResult,
+  StartCommandOptions,
+} from "./types.ts";
 
 // OpenCode server runs on port 4096 (started by s6)
 const OPENCODE_BASE_URL = "http://localhost:4096";
@@ -91,5 +97,13 @@ export const opencodeHarness: AgentHarness = {
         parts: [{ type: "text", text: event.content }],
       },
     });
+  },
+
+  getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {
+    const cmd = ["opencode"];
+    if (options?.prompt) {
+      cmd.push("--prompt", options.prompt);
+    }
+    return cmd;
   },
 };

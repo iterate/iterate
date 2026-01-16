@@ -27,6 +27,10 @@ export interface CreateAgentResult {
   tmuxSession?: string;
 }
 
+export interface StartCommandOptions {
+  prompt?: string;
+}
+
 export interface AgentHarness {
   type: AgentType;
 
@@ -40,4 +44,10 @@ export interface AgentHarness {
    * Send a message/event to an existing agent session.
    */
   append(harnessSessionId: string, event: AgentEvent): Promise<void>;
+
+  /**
+   * Get the command to start this agent in a terminal.
+   * Returns an array of command parts (command + args).
+   */
+  getStartCommand(workingDirectory: string, options?: StartCommandOptions): string[];
 }
