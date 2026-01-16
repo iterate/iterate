@@ -125,7 +125,7 @@ const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
     const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
     const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
     const settings = getSettings();
-    const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
+    const skipSpinnerCheck = settings.disabled || !!_options?.skipSpinnerCheck;
 
     settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
     let called = false;
