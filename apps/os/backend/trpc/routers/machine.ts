@@ -11,7 +11,7 @@ import {
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
-import { decrypt } from "../../utils/encryption.ts";
+import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 import { logger } from "../../tag-logger.ts";
@@ -51,19 +51,19 @@ function getDaemonBaseUrl(
   throw new Error(`Unknown machine type: ${machineType}`);
 }
 
-// Generate a machine API key that includes the machine ID
-// Format: mak_<machineId>_<randomHex>
-function generateMachineApiKey(machineId: string): string {
+// Generate a project access token API key
+// Format: pak_<tokenId>_<randomHex>
+export function generateProjectAccessKey(tokenId: string): string {
   const array = new Uint8Array(24);
   crypto.getRandomValues(array);
   const randomHex = Array.from(array)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return `mak_${machineId}_${randomHex}`;
+  return `pak_${tokenId}_${randomHex}`;
 }
 
-// Hash a machine API key using SHA-256
-async function hashMachineApiKey(apiKey: string): Promise<string> {
+// Hash an API key using SHA-256
+export async function hashApiKey(apiKey: string): Promise<string> {
   const encoded = new TextEncoder().encode(apiKey);
   const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
   return Array.from(new Uint8Array(hashBuffer))
@@ -71,16 +71,55 @@ async function hashMachineApiKey(apiKey: string): Promise<string> {
     .join("");
 }
 
-// Parse machine ID from API key
-export function parseMachineIdFromApiKey(apiKey: string): string | null {
-  const match = apiKey.match(/^mak_(mach_[a-z0-9]+)_[a-f0-9]+$/);
+// Parse token ID from API key
+export function parseTokenIdFromApiKey(apiKey: string): string | null {
+  const match = apiKey.match(/^pak_(pat_[a-z0-9]+)_[a-f0-9]+$/);
   return match ? match[1] : null;
 }
 
-// Verify a machine API key against its hash
-export async function verifyMachineApiKey(apiKey: string, hash: string): Promise<boolean> {
-  const computedHash = await hashMachineApiKey(apiKey);
+// Verify an API key against its hash (kept for backward compatibility during migration)
+export async function verifyApiKey(apiKey: string, hash: string): Promise<boolean> {
+  const computedHash = await hashApiKey(apiKey);
   return computedHash === hash;
+}
+
+/**
+ * Get or create the project-level access token for machines.
+ * Returns the token ID and decrypted API key.
+ * If a token doesn't exist, creates one.
+ */
+async function getOrCreateProjectMachineToken(
+  db: DB,
+  projectId: string,
+): Promise<{ tokenId: string; apiKey: string }> {
+  // Look for an existing non-revoked token for the project
+  const existingToken = await db.query.projectAccessToken.findFirst({
+    where: and(
+      eq(schema.projectAccessToken.projectId, projectId),
+      isNull(schema.projectAccessToken.revokedAt),
+    ),
+    orderBy: (token, { asc }) => [asc(token.createdAt)], // Get oldest (first created) token
+  });
+
+  if (existingToken) {
+    // Decrypt and return the existing token
+    const apiKey = await decrypt(existingToken.encryptedToken);
+    return { tokenId: existingToken.id, apiKey };
+  }
+
+  // No existing token - create a new one
+  const tokenId = typeid("pat").toString();
+  const apiKey = generateProjectAccessKey(tokenId);
+  const encryptedToken = await encrypt(apiKey);
+
+  await db.insert(schema.projectAccessToken).values({
+    id: tokenId,
+    projectId,
+    name: "Machine Access Token",
+    encryptedToken,
+  });
+
+  return { tokenId, apiKey };
 }
 
 // Schema for local machine metadata: host + per-daemon ports
@@ -93,39 +132,9 @@ const localMetadataSchema = z
   })
   .passthrough();
 
-/**
- * Create a local machine (DB-only, no provider).
- * Extracted for consistency with provider-based machine types.
- */
-async function createLocalMachine(
-  db: DB,
-  projectId: string,
-  machineId: string,
-  name: string,
-  metadata: Record<string, unknown>,
-): Promise<typeof schema.machine.$inferSelect> {
-  const localMetadata = localMetadataSchema.parse(metadata);
-  const [newMachine] = await db
-    .insert(schema.machine)
-    .values({
-      id: machineId,
-      name,
-      type: "local",
-      projectId,
-      state: "started",
-      metadata: localMetadata,
-      externalId: machineId,
-    })
-    .returning();
-
-  if (!newMachine) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to create machine",
-    });
-  }
-
-  return newMachine;
+/** Validates local machine metadata */
+function parseLocalMetadata(metadata: Record<string, unknown>) {
+  return localMetadataSchema.parse(metadata);
 }
 
 // Helper to get provider for a machine by looking up its type from the database
@@ -198,6 +207,7 @@ export const machineRouter = router({
     }),
 
   // Create a new machine
+  // Returns apiKey for local machines (user needs to configure daemon manually)
   create: projectProtectedMutation
     .input(
       z.object({
@@ -207,24 +217,42 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Validate metadata upfront for local machines
+      const localMetadata =
+        input.type === "local" ? parseLocalMetadata(input.metadata ?? {}) : null;
+
       const machineId = typeid("mach").toString();
 
-      // Local machines are DB-only (no provider)
+      // Get or create the project-level access token (shared by all machines)
+      const { apiKey } = await getOrCreateProjectMachineToken(ctx.db, ctx.project.id);
+
+      // Local machines are DB-only (no provider) - just create machine in DB
       if (input.type === "local") {
-        return createLocalMachine(
-          ctx.db,
-          ctx.project.id,
-          machineId,
-          input.name,
-          input.metadata ?? {},
-        );
+        const [newMachine] = await ctx.db
+          .insert(schema.machine)
+          .values({
+            id: machineId,
+            name: input.name,
+            type: "local",
+            projectId: ctx.project.id,
+            state: "started",
+            metadata: localMetadata!,
+            externalId: machineId,
+          })
+          .returning();
+
+        if (!newMachine) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to create machine",
+          });
+        }
+
+        // Return apiKey for local machines - user needs this to configure their daemon
+        return { ...newMachine, apiKey };
       }
 
-      // Generate API key for machine authentication
-      const machineApiKey = generateMachineApiKey(machineId);
-      const apiKeyHash = await hashMachineApiKey(machineApiKey);
-
-      // Create provider for the specified type
+      // For provider-based machines, create provider first
       const provider = await createMachineProvider(input.type, ctx.env);
 
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
@@ -242,18 +270,18 @@ export const machineRouter = router({
         ),
       );
 
-      // If there is no defined key, use the default one for now
+      // If there is no defined key, use the default one for now (only if defined)
       // TODO: very dangerous, remove this as soon as we have things setup
-      if (!envVars["OPENAI_API_KEY"]) {
+      if (!envVars["OPENAI_API_KEY"] && env.OPENAI_API_KEY) {
         envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
       }
-      if (!envVars["ANTHROPIC_API_KEY"]) {
+      if (!envVars["ANTHROPIC_API_KEY"] && env.ANTHROPIC_API_KEY) {
         envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
       }
 
       // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
       // This allows the daemon to receive fresh GitHub tokens when it reports ready
-      const result = await provider
+      const providerResult = await provider
         .create({
           machineId,
           name: input.name,
@@ -261,7 +289,8 @@ export const machineRouter = router({
             ...envVars,
             // Platform bootstrap env vars - we use the tunnel host if it is set to handle remote sandbox and local control plane use cases
             ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
-            ITERATE_OS_API_KEY: machineApiKey,
+            ITERATE_OS_API_KEY: apiKey,
+            ITERATE_MACHINE_ID: machineId,
             // In dev, use the current git branch for Daytona sandboxes
             ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
               ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
@@ -275,28 +304,23 @@ export const machineRouter = router({
           });
         });
 
-      const newMachine = await ctx.db
-        .transaction(async (tx) => {
-          const [newMachine] = await tx
-            .insert(schema.machine)
-            .values({
-              id: machineId,
-              name: input.name,
-              type: input.type,
-              projectId: ctx.project.id,
-              state: "started",
-              metadata: { ...(input.metadata ?? {}), ...(result.metadata ?? {}) },
-              externalId: result.externalId,
-              apiKeyHash,
-            })
-            .returning();
-
-          return newMachine;
+      // Create machine in DB
+      const [newMachine] = await ctx.db
+        .insert(schema.machine)
+        .values({
+          id: machineId,
+          name: input.name,
+          type: input.type,
+          projectId: ctx.project.id,
+          state: "started",
+          metadata: { ...(input.metadata ?? {}), ...(providerResult.metadata ?? {}) },
+          externalId: providerResult.externalId,
         })
+        .returning()
         .catch(async (err) => {
-          // Cleanup: delete the created machine if DB transaction fails
+          // Cleanup: delete the provider resource if DB insert fails
           try {
-            await provider.delete(result.externalId);
+            await provider.delete(providerResult.externalId);
           } catch {
             // Ignore cleanup errors
           }
@@ -451,14 +475,15 @@ export const machineRouter = router({
         ctx.env,
       );
 
-      const result = await ctx.db
+      // Delete machine from DB (token is shared across project, so we keep it)
+      const deleted = await ctx.db
         .delete(schema.machine)
         .where(
           and(eq(schema.machine.id, input.machineId), eq(schema.machine.projectId, ctx.project.id)),
         )
         .returning();
 
-      if (result.length === 0) {
+      if (deleted.length === 0) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Machine not found",
