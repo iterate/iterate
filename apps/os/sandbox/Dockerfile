@@ -1,5 +1,8 @@
 FROM node:24
 
+# Build cache buster: 2026-01-16T23:10
+# (change this comment to force Daytona to rebuild when cache is stale)
+
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container

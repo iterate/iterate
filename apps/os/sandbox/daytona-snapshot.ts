@@ -16,6 +16,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
+// Daytona snapshots MUST have a git ref - there's no local mount to sync from
+const repoRef = process.env.SANDBOX_ITERATE_REPO_REF;
+if (!repoRef) {
+  console.error("ERROR: SANDBOX_ITERATE_REPO_REF is required for Daytona snapshots.");
+  console.error("");
+  console.error("Daytona snapshots must include the iterate repo baked in.");
+  console.error("Set SANDBOX_ITERATE_REPO_REF to a branch name or commit SHA:");
+  console.error("");
+  console.error("  SANDBOX_ITERATE_REPO_REF=main pnpm snapshot:daytona:prd");
+  console.error("  SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona:prd");
+  console.error("");
+  process.exit(1);
+}
+
 const stage = getStage();
 // Generate snapshot name: <stage>--<timestamp>
 // e.g., "dev-jonas--20260111-193045", "stg--20260111-193045"
@@ -69,17 +83,16 @@ for (const relativePath of files) {
   chmodSync(targetPath, stats.mode & 0o777);
 }
 
-// Read Dockerfile and inject env var overrides for ARG defaults
-// Only SANDBOX_ITERATE_GIT_REF is an ARG - other versions are ENV vars edited directly in Dockerfile
+// Read Dockerfile and inject the git ref into ALL ARG declarations
+// Docker ARG values don't persist across USER switches, so both declarations need the value
 let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
 
-if (process.env.SANDBOX_ITERATE_REPO_REF) {
-  console.log(`Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
-  dockerfileContent = dockerfileContent.replace(
-    /^ARG SANDBOX_ITERATE_REPO_REF=.*$/m,
-    `ARG SANDBOX_ITERATE_REPO_REF="${process.env.SANDBOX_ITERATE_REPO_REF}"`,
-  );
-}
+console.log(`Using SANDBOX_ITERATE_REPO_REF=${repoRef}`);
+// Replace all ARG SANDBOX_ITERATE_REPO_REF declarations (with or without default value)
+dockerfileContent = dockerfileContent.replace(
+  /^ARG SANDBOX_ITERATE_REPO_REF(=.*)?$/gm,
+  `ARG SANDBOX_ITERATE_REPO_REF="${repoRef}"`,
+);
 
 writeFileSync(dockerfileTargetPath, dockerfileContent);
 

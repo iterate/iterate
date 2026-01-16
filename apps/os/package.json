@@ -24,8 +24,8 @@
     "snapshot:daytona:stg": "doppler run --preserve-env=SANDBOX_ITERATE_REPO_REF --config stg -- tsx sandbox/daytona-snapshot.ts",
     "snapshot:daytona:prd": "doppler run --preserve-env=SANDBOX_ITERATE_REPO_REF --config prd -- tsx sandbox/daytona-snapshot.ts",
     "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts",
-    "snapshot:local-docker:smoketest": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts'",
-    "sandbox:bootstrap-test": "doppler run -- sh -c 'RUN_DAYTONA_BOOTSTRAP_TESTS=true pnpm vitest run sandbox/daytona-bootstrap.test.ts'",
+    "snapshot:local-docker:test": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run --reporter=verbose sandbox/local-docker.test.ts'",
+    "snapshot:daytona:test": "doppler run --config prd -- sh -c 'RUN_DAYTONA_TESTS=true pnpm vitest run --reporter=verbose sandbox/daytona.test.ts'",
     "sandbox:shell": "doppler run --config dev -- ./sandbox/shell-with-entrypoint.sh",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },

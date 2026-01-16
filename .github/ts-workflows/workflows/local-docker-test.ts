@@ -25,7 +25,7 @@ export default workflow({
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm vitest run apps/os/sandbox/local-docker.test.ts",
+          run: "pnpm os snapshot:local-docker:test",
         },
         {
           name: "Upload test results",
