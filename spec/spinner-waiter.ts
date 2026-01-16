@@ -33,7 +33,6 @@ const getSettings = () => {
 };
 
 const oneArgMethods = ["fill", "type", "press"] as const;
-type OneArgMethod = (typeof oneArgMethods)[number];
 
 const overrideableMethods = [
   "click",
@@ -48,10 +47,6 @@ const overrideableMethods = [
 // Methods that require the element to be enabled (not disabled)
 const methodsRequiringEnabled = new Set(["click", "fill", "clear", "dblclick", "press", "type"]);
 type OverrideableMethod = (typeof overrideableMethods)[number];
-
-type Options<M extends OverrideableMethod> = (M extends OneArgMethod
-  ? Parameters<Locator[M]>[1]
-  : Parameters<Locator[M]>[0]) & { skipSpinnerCheck?: boolean };
 
 export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
