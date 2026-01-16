@@ -282,10 +282,10 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
 
   // Add tokens from connections
   if (installationToken) {
-    envVars["GITHUB_ACCESS_TOKEN"] = installationToken;
+    envVars["ITERATE_GITHUB_ACCESS_TOKEN"] = installationToken;
   }
   if (slackToken) {
-    envVars["SLACK_ACCESS_TOKEN"] = slackToken;
+    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = slackToken;
   }
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
