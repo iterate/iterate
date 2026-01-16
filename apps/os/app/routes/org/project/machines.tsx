@@ -67,20 +67,6 @@ export const Route = createFileRoute(
 )({
   validateSearch: Search,
   component: ProjectMachinesPage,
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context, params }) => {
-    // Critical data - await (needed for machine list view)
-    await context.queryClient.ensureQueryData(
-      trpc.machine.list.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        includeArchived: false,
-      }),
-    );
-
-    // Deferred data - prefetch (only needed when creating machine)
-    context.queryClient.prefetchQuery(trpc.machine.getDaemonDefinitions.queryOptions());
-  },
 });
 
 function ProjectMachinesPage() {

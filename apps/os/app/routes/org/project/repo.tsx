@@ -84,24 +84,6 @@ function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }
 }
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug/repo")({
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context, params }) => {
-    // Critical data - await (project.bySlug already in parent, but github connection needed)
-    await context.queryClient.ensureQueryData(
-      trpc.project.getGithubConnection.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-      }),
-    );
-
-    // project.bySlug is already loaded in parent layout, just prefetch to ensure
-    context.queryClient.prefetchQuery(
-      trpc.project.bySlug.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-      }),
-    );
-  },
   component: ProjectRepoPage,
 });
 

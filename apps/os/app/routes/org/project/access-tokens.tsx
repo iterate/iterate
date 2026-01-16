@@ -27,15 +27,6 @@ import {
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
 )({
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context, params }) => {
-    await context.queryClient.ensureQueryData(
-      trpc.accessToken.list.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-      }),
-    );
-  },
   component: ProjectAccessTokensPage,
 });
 

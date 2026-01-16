@@ -27,10 +27,9 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
     }
   },
 
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context }) => {
-    // Critical data - await (needed for initial render)
-    await context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions());
+  // loader: Prefetch data (non-blocking, shows spinner if not ready)
+  loader: ({ context }) => {
+    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
   },
 
   component: OrgLayout,

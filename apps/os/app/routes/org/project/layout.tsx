@@ -53,21 +53,15 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
     }
   },
 
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context, params }) => {
-    // Critical data - await (needed for initial render without layout shift)
-    await Promise.all([
-      context.queryClient.ensureQueryData(
-        trpc.project.bySlug.queryOptions({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      ),
-      context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions()),
-    ]);
-
-    // Deferred data - prefetch (can load after page shows)
-    // Machine list is only needed for breadcrumb dropdown interaction
+  // loader: Prefetch data (non-blocking, shows spinner if not ready)
+  loader: ({ context, params }) => {
+    context.queryClient.prefetchQuery(
+      trpc.project.bySlug.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      }),
+    );
+    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
     context.queryClient.prefetchQuery(
       trpc.machine.list.queryOptions({
         organizationSlug: params.organizationSlug,

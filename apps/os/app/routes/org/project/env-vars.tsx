@@ -35,25 +35,6 @@ import {
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
 )({
-  // loader: For data fetching (runs in parallel after beforeLoad)
-  loader: async ({ context, params }) => {
-    // Critical data - await (env var list is main content)
-    await context.queryClient.ensureQueryData(
-      trpc.envVar.list.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-      }),
-    );
-
-    // Deferred data - prefetch (machine list for dropdown, already in parent layout)
-    context.queryClient.prefetchQuery(
-      trpc.machine.list.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        includeArchived: false,
-      }),
-    );
-  },
   component: ProjectEnvVarsPage,
 });
 
