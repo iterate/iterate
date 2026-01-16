@@ -24,8 +24,8 @@ export const slackRouter = new Hono();
 slackRouter.post("/webhook", async (c) => {
   const payload = await c.req.json();
 
-  // Extract thread ID from payload
-  const threadId = extractThreadId(payload);
+  const threadTs = extractThreadTs(payload);
+  const threadId = threadTs && sanitizeThreadId(threadTs);
   if (!threadId) {
     return c.json({ error: "Could not extract thread_id from payload" }, 400);
   }
@@ -67,7 +67,7 @@ slackRouter.post("/webhook", async (c) => {
  * Thread IDs look like: "1234567890.123456"
  * We sanitize them to "1234567890-123456" for valid slug format.
  */
-function extractThreadId(payload: unknown): string | null {
+function extractThreadTs(payload: unknown): string | null {
   if (typeof payload !== "object" || payload === null) {
     return null;
   }
@@ -81,13 +81,13 @@ function extractThreadId(payload: unknown): string | null {
 
   // If it's a reply, use the thread_ts (parent message timestamp)
   if (event.thread_ts && typeof event.thread_ts === "string") {
-    return sanitizeThreadId(event.thread_ts);
+    return event.thread_ts;
   }
 
   // Otherwise use the message's own timestamp
   // This becomes the thread_ts for future replies
   if (event.ts && typeof event.ts === "string") {
-    return sanitizeThreadId(event.ts);
+    return event.ts;
   }
 
   return null;
@@ -102,6 +102,7 @@ function sanitizeThreadId(ts: string): string {
 }
 
 function formatSlackMessage(payload: unknown): string {
+  const threadTs = extractThreadTs(payload);
   const p = payload as Record<string, unknown>;
   const event = p.event as Record<string, unknown> | undefined;
 
@@ -116,22 +117,11 @@ function formatSlackMessage(payload: unknown): string {
   const userPart = user ? `<@${user}>` : "unknown";
   const channelPart = channel || "unknown channel";
   const textPart = text || "(no text)";
-  let ts = "";
-  let threadTs = "";
-  JSON.stringify(event, (key, value) => {
-    if (key === "ts") {
-      ts = value as string;
-    }
-    if (key === "thread_ts") {
-      threadTs = value as string;
-    }
-    return value;
-  });
 
   return [
     `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
     "",
     `Before responding, use the following CLI command to reply to the message:`,
-    `\`iterate tools send-slack-message --channel ${channelPart} --thread-ts ${threadTs || ts} --message "<your response here>"\` `,
+    `\`iterate tool send-slack-message --channel ${channelPart} --thread-ts ${threadTs} --message "<your response here>"\` `,
   ].join("\n");
 }
