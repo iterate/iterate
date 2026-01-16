@@ -216,7 +216,11 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
     const output = execSync(`pnpm snapshot:daytona`, {
       cwd: join(REPO_ROOT, "apps/os"),
       encoding: "utf-8",
-      env: { ...process.env, SANDBOX_ITERATE_REPO_REF: repoRef },
+      env: {
+        ...process.env,
+        SANDBOX_ITERATE_REPO_REF: repoRef,
+        APP_STAGE: process.env.APP_STAGE || "dev",
+      },
       stdio: ["inherit", "pipe", "inherit"],
     });
     console.log(output);
