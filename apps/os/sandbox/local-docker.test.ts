@@ -163,31 +163,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
-    test.runIf(process.env.OPENAI_API_KEY)(
-      "opencode answers math question",
-      async () => {
-        const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
-        expect(output).toContain("42");
-      },
-      10000,
-    );
+    test("opencode answers math question", async () => {
+      const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
+      expect(output).toContain("42");
+    }, 30000);
 
-    // Claude CLI refuses --dangerously-skip-permissions when running as root
-    // Skip this test since container runs as root
-    test.skip("claude answers math question", async () => {
+    test("claude answers math question", async () => {
       const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
       expect(output).toContain("42");
-    });
+    }, 30000);
 
-    // pi uses anthropic provider per home-skeleton/.pi/agent/settings.json
-    test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "pi answers math question",
-      async () => {
-        const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
-        expect(output).toContain("42");
-      },
-      10000,
-    );
+    test("pi answers math question", async () => {
+      const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
+      expect(output).toContain("42");
+    }, 30000);
 
     test("container setup correct", async () => {
       // tmux installed
@@ -234,6 +223,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         "test",
       ]);
       expect(commit).toContain("test");
+    });
+
+    test("git status works in iterate repo", async () => {
+      const status = await execInContainer(container.id, [
+        "git",
+        "-C",
+        CONTAINER_REPO_PATH,
+        "status",
+      ]);
+      expect(status).toContain("On branch");
     });
   });
 
