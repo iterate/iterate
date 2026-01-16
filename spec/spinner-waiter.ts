@@ -3,7 +3,7 @@ import { Locator, type Page } from "@playwright/test";
 
 export namespace spinnerWaiter {
   export type Settings = {
-    spinnerSelectors: string[];
+    spinnerSelector: string;
     spinnerTimeout: number;
     disabled: boolean;
     log: (message: string) => void;
@@ -13,12 +13,7 @@ export namespace spinnerWaiter {
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
 const defaults: spinnerWaiter.Settings = {
-  spinnerSelectors: [
-    `[aria-label="Loading"]`,
-    `[data-spinner='true']`,
-    `:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
-    `[data-hydrated='false']`, // app is not hydrated yet
-  ],
+  spinnerSelector: `[aria-label="Loading"],[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
   spinnerTimeout: 30_000,
   disabled: false,
   log: () => {},
@@ -32,18 +27,17 @@ const getSettings = () => {
   return result;
 };
 
-const oneArgMethods = ["fill", "type", "press"] as const;
-
 const overrideableMethods = [
   "click",
   "waitFor",
+  "fill",
   "clear",
   "dblclick",
+  "press",
   "blur",
   "focus",
-  ...oneArgMethods,
+  "type",
 ] satisfies (keyof Locator)[];
-
 type OverrideableMethod = (typeof overrideableMethods)[number];
 
 export type LocatorWithOriginal = Locator & {
@@ -60,9 +54,7 @@ function setup(page: Page) {
     locatorPrototype[`${method}_original`] = locatorPrototype[method];
     Object.defineProperty(locatorPrototype, method, {
       value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
-        const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
-        const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
-        const argsWithoutOptions = args.slice(0, optionIndex);
+        const _options = args.at(-1) as any;
         const settings = getSettings();
         const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
@@ -85,8 +77,7 @@ function setup(page: Page) {
           });
         }
 
-        const spinnerSelector = settings.spinnerSelectors.join(",");
-        const spinnerLocator = this.page().locator(spinnerSelector) as LocatorWithOriginal;
+        const spinnerLocator = this.page().locator(settings.spinnerSelector) as LocatorWithOriginal;
         const union = this.or(spinnerLocator).first() as LocatorWithOriginal;
 
         settings.log(`waiting for union ${union}`);
@@ -118,7 +109,7 @@ function setup(page: Page) {
 
         const race = await Promise.race([
           callOriginal([
-            ...argsWithoutOptions,
+            ...args.slice(0, -1),
             { ..._options, timeout: settings.spinnerTimeout - 1000, trial: true },
           ])
             .then((result) => ({ outcome: "success" as const, result }))
