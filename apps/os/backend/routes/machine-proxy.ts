@@ -103,16 +103,21 @@ async function resolveProxyAccess(
 }
 
 /**
- * Validate HTTP Basic Auth with project access token.
- * Returns machine record if valid token, null otherwise.
+ * Extract token from Authorization header (Basic auth) or query parameter.
+ * Returns the token string if found, null otherwise.
  */
-async function validateAccessTokenAuth(
-  db: DB,
+function extractToken(
   authHeader: string | undefined,
-  orgSlug: string,
-  projectSlug: string,
-  machineId: string,
-): Promise<{ machine: typeof schema.machine.$inferSelect } | null> {
+  queryToken: string | undefined,
+): string | null {
+  // Try query parameter first (for clients that don't support Basic auth)
+  if (queryToken?.startsWith("pat_")) {
+    // Strip any path segments that got appended (e.g. opencode appends /agent)
+    const cleanToken = queryToken.split("/")[0];
+    return cleanToken;
+  }
+
+  // Try Basic auth header
   if (!authHeader?.startsWith("Basic ")) {
     return null;
   }
@@ -134,6 +139,26 @@ async function validateAccessTokenAuth(
 
   const token = credentials.slice(colonIndex + 1);
   if (!token?.startsWith("pat_")) {
+    return null;
+  }
+
+  return token;
+}
+
+/**
+ * Validate project access token (from header or query param).
+ * Returns machine record if valid token, null otherwise.
+ */
+async function validateAccessTokenAuth(
+  db: DB,
+  authHeader: string | undefined,
+  queryToken: string | undefined,
+  orgSlug: string,
+  projectSlug: string,
+  machineId: string,
+): Promise<{ machine: typeof schema.machine.$inferSelect } | null> {
+  const token = extractToken(authHeader, queryToken);
+  if (!token) {
     return null;
   }
 
@@ -192,9 +217,17 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   let machineRecord: typeof schema.machine.$inferSelect;
 
-  // 2. Try HTTP Basic Auth with project access token first
+  // 2. Try access token auth (Basic auth header or query param)
   const authHeader = c.req.header("Authorization");
-  const tokenAuth = await validateAccessTokenAuth(db, authHeader, org, project, machine);
+  const queryToken = c.req.query("token");
+  const tokenAuth = await validateAccessTokenAuth(
+    db,
+    authHeader,
+    queryToken,
+    org,
+    project,
+    machine,
+  );
 
   if (tokenAuth) {
     // Valid access token - use machine from token auth
