@@ -56,38 +56,62 @@ function getCurrentGitRef(): string | undefined {
 }
 
 function ensureLocalDockerImage() {
-  const result = spawnSync("docker", ["images", "-q", LOCAL_DOCKER_IMAGE_NAME], {
-    encoding: "utf-8",
-  });
-
+  // Check if Docker is available
+  const result = spawnSync("docker", ["version"], { encoding: "utf-8" });
   if (result.status !== 0) {
     console.log("Docker not available, skipping local sandbox image build");
     return;
   }
 
-  const imageExists = result.stdout.trim().length > 0;
+  // Always run docker build in background - let Docker's cache decide if rebuild is needed
+  // This ensures we pick up Dockerfile changes without blocking dev server startup
+  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
 
-  if (!imageExists) {
-    console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME}...`);
-    const buildResult = spawnSync(
-      "docker",
-      ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os/sandbox/Dockerfile", "."],
-      {
-        cwd: repoRoot,
-        stdio: "inherit",
-      },
+  // Build args from env vars (only SANDBOX_ITERATE_REPO_REF is a build arg - other versions are ENV in Dockerfile)
+  const buildArgs: string[] = [];
+  if (process.env.SANDBOX_ITERATE_REPO_REF) {
+    buildArgs.push(
+      "--build-arg",
+      `SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`,
     );
-
-    if (buildResult.status !== 0) {
-      throw new Error(
-        `Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Check Docker is running and try again.`,
-      );
-    } else {
-      console.log(`Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
-    }
-  } else {
-    console.log(`Local Docker image ${LOCAL_DOCKER_IMAGE_NAME} already exists`);
+    console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
   }
+
+  const buildProcess = spawn(
+    "docker",
+    ["build", ...buildArgs, "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os/sandbox/Dockerfile", "."],
+    {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  // Stream output with prefix so it's clear what's happening
+  buildProcess.stdout?.on("data", (data: Buffer) => {
+    const lines = data.toString().trim().split("\n");
+    for (const line of lines) {
+      if (line) console.log(`[docker] ${line}`);
+    }
+  });
+
+  buildProcess.stderr?.on("data", (data: Buffer) => {
+    const lines = data.toString().trim().split("\n");
+    for (const line of lines) {
+      if (line) console.log(`[docker] ${line}`);
+    }
+  });
+
+  buildProcess.on("exit", (code) => {
+    if (code === 0) {
+      console.log(`[docker] Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
+    } else {
+      console.error(`[docker] Failed to build ${LOCAL_DOCKER_IMAGE_NAME} (exit code ${code})`);
+    }
+  });
+
+  buildProcess.on("error", (err) => {
+    console.error(`[docker] Build process error: ${err.message}`);
+  });
 }
 
 /**

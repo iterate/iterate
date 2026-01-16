@@ -13,7 +13,7 @@ import { upgradeWebSocket } from "../utils/hono.ts";
 import { hasTmuxSession, sendKeys } from "../tmux-control.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { getHarness, getCommandString } from "../agent-harness.ts";
+import { getHarness, getCommandString } from "../agents/index.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 const COMMAND_PREFIX = "\x00[command]\x00";

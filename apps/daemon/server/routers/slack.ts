@@ -17,7 +17,7 @@ const logger = {
 };
 
 // Working directory for agents - root of iterate repo
-const ITERATE_REPO = "/root/src/github.com/iterate/iterate";
+const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 
 export const slackRouter = new Hono();
 

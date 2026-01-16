@@ -148,7 +148,7 @@ export function MachineTable({
       copyToClipboard(
         `docker exec ${containerId} ${command}`,
         "Copied daemon logs command:",
-        "Run in your local terminal. Won't work until entry.ts starts daemons.",
+        "Run in your local terminal. Won't work until entry.sh starts daemons.",
       );
     } else {
       copyToClipboard(command, "Copied daemon logs command:", "Paste this in the sandbox terminal");
@@ -166,7 +166,7 @@ export function MachineTable({
       copyToClipboard(
         `docker exec ${containerId} ${command}`,
         "Copied OpenCode logs command:",
-        "Run in your local terminal. Won't work until entry.ts starts daemons.",
+        "Run in your local terminal. Won't work until entry.sh starts daemons.",
       );
     } else {
       copyToClipboard(
@@ -186,7 +186,7 @@ export function MachineTable({
       }
       copyToClipboard(
         `docker logs -f ${containerId}`,
-        "Copied entry.ts logs command:",
+        "Copied container logs command:",
         "Run in your local terminal",
       );
     } else {
@@ -196,7 +196,7 @@ export function MachineTable({
 
   const copyServiceStatusCommand = (machine: Machine) => {
     const command =
-      'export S6DIR=/root/src/github.com/iterate/iterate/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
+      'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
     if (machine.type === "local-docker") {
       const containerId = machine.metadata.containerId;
       if (!containerId) {

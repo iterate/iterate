@@ -7,7 +7,7 @@ export default {
     workflow_dispatch: {}, // Manual trigger
     push: {
       branches: ["main"],
-      paths: ["apps/os/sandbox/Dockerfile", "apps/os/sandbox/entry.ts", "pnpm-lock.yaml"],
+      paths: ["apps/os/sandbox/Dockerfile", "apps/os/sandbox/entry.sh", "pnpm-lock.yaml"],
     },
   },
   permissions: {

@@ -2,19 +2,24 @@
  * OpenCode Agent Harness
  *
  * Uses @opencode-ai/sdk to manage sessions and send messages.
- * Also creates a tmux session running `opencode attach` for terminal UI.
+ * No tmux sessions - uses SDK API directly for all operations.
  */
 
 import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk";
-import { createTmuxSession, hasTmuxSession } from "../tmux-control.ts";
-import type { AgentHarness, AgentEvent, CreateAgentParams, CreateAgentResult } from "./types.ts";
+import type {
+  AgentHarness,
+  AgentEvent,
+  CreateAgentParams,
+  CreateAgentResult,
+  StartCommandOptions,
+} from "./types.ts";
 
 // OpenCode server runs on port 4096 (started by s6)
 const OPENCODE_BASE_URL = "http://localhost:4096";
 
 // Root of the iterate repo - used as working directory for all agents
 // TODO: In future, use agent-specific working directories from params
-const ITERATE_REPO = "/root/src/github.com/iterate/iterate";
+const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 
 // Polling config for session readiness
 const READINESS_POLL_INTERVAL_MS = 200;
@@ -72,22 +77,9 @@ export const opencodeHarness: AgentHarness = {
     // Wait for session to be ready
     await waitForSessionReady(client, harnessSessionId);
 
-    // Generate tmux session name
-    const tmuxSession = params.sessionName || `agent-${params.slug}`;
-
-    // Create tmux session running opencode attach (for terminal UI)
-    // If session already exists, we'll reuse it
-    if (!hasTmuxSession(tmuxSession)) {
-      const attachCommand = `opencode attach ${OPENCODE_BASE_URL} --session ${harnessSessionId} --dir ${workingDirectory}`;
-      const success = createTmuxSession(tmuxSession, attachCommand);
-      if (!success) {
-        throw new Error(`Failed to create tmux session: ${tmuxSession}`);
-      }
-    }
-
+    // No tmux session - use opencode SDK streaming API for terminal UI
     return {
       harnessSessionId,
-      tmuxSession,
     };
   },
 
@@ -105,5 +97,13 @@ export const opencodeHarness: AgentHarness = {
         parts: [{ type: "text", text: event.content }],
       },
     });
+  },
+
+  getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {
+    const cmd = ["opencode"];
+    if (options?.prompt) {
+      cmd.push("--prompt", options.prompt);
+    }
+    return cmd;
   },
 };
