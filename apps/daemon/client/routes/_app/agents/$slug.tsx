@@ -40,7 +40,7 @@ function AgentPage() {
     );
   }
 
-  // Connect directly to agent CLI via PTY (no tmux)
+  // Connect to agent's tmux session
   return (
     <Suspense
       fallback={
@@ -49,7 +49,7 @@ function AgentPage() {
         </div>
       }
     >
-      <XtermTerminal key={agent.slug} agentSlug={agent.slug} />
+      <XtermTerminal key={agent.slug} tmuxSessionName={agent.tmuxSession ?? undefined} />
     </Suspense>
   );
 }
