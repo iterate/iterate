@@ -25,6 +25,7 @@
     "snapshot:daytona:prd": "doppler run --config prd -- tsx sandbox/daytona-snapshot.ts",
     "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts",
     "snapshot:local-docker:smoketest": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts'",
+    "sandbox:shell": "bash -c 'docker run --rm -it --env-file <(doppler secrets download --config dev --no-file --format=env) --entrypoint /bin/bash iterate-sandbox:local'",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {

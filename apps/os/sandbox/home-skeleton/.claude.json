@@ -6,5 +6,6 @@
   "hasIdeOnboardingBeenShown": true,
   "hasShownOpus45Notice": true,
   "hasShownS1MWelcomeV2": true,
-  "mcpServers": {}
+  "mcpServers": {},
+  "bypassPermissionsModeAccepted": true
 }

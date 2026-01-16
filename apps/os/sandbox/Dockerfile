@@ -8,9 +8,9 @@ ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.9
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.47.0
 ENV SANDBOX_BUN_VERSION=1.3.6
 
-# SANDBOX_ITERATE_GIT_REF is also a build ARG so CI can override: --build-arg SANDBOX_ITERATE_GIT_REF=feature-branch
-ARG SANDBOX_ITERATE_GIT_REF=main
-ENV SANDBOX_ITERATE_GIT_REF=${SANDBOX_ITERATE_GIT_REF}
+# === Build Args ===
+# SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
+ARG SANDBOX_ITERATE_REPO_REF=""
 
 # === System packages (as root) ===
 
@@ -29,17 +29,15 @@ RUN useradd -m -s /bin/bash iterate && \
     chmod 0440 /etc/sudoers.d/iterate
 
 # Create s6 log directories (owned by iterate user so services can write logs)
-RUN mkdir -p /var/log/iterate-daemon /var/log/opencode /var/log/example-service-b && \
-    chown -R iterate:iterate /var/log/iterate-daemon /var/log/opencode /var/log/example-service-b
+RUN mkdir -p /var/log/iterate-daemon /var/log/opencode && \
+    chown -R iterate:iterate /var/log/iterate-daemon /var/log/opencode
 
 # Global npm tools (as root for system-wide access)
 RUN npm install -g pnpm tsx
 
-# Copy entry script and s6 daemon definitions
+# Copy entry script (needs stable location for ENTRYPOINT)
 COPY apps/os/sandbox/entry.sh /app/entry.sh
 RUN chmod +x /app/entry.sh
-COPY --chown=iterate:iterate apps/os/sandbox/s6-daemons /app/s6-daemons
-RUN chmod +x /app/s6-daemons/*/run /app/s6-daemons/*/log/run 2>/dev/null || true
 
 # Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
 RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
@@ -80,22 +78,47 @@ RUN mkdir -p /home/iterate/.local/bin && \
     chmod +x /home/iterate/.local/bin/claude
 ENV PATH="/home/iterate/.local/bin:$PATH"
 
-# === Iterate (from source) ===
+# === Iterate repo ===
+# Two modes based on SANDBOX_ITERATE_REPO_REF:
+#   - Set: git clone the specified ref (CI/Daytona - fast cached builds)
+#   - Empty: create placeholder, entry.sh syncs from local mount at runtime
 
-RUN mkdir -p /home/iterate/src/github.com/iterate && \
-    git clone --branch ${SANDBOX_ITERATE_GIT_REF} https://github.com/iterate/iterate.git /home/iterate/src/github.com/iterate/iterate && \
-    cd /home/iterate/src/github.com/iterate/iterate && \
-    pnpm install && \
-    cd apps/daemon && npx vite build
+ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
+
+# Re-declare ARG after USER switch (ARGs don't persist across USER)
+ARG SANDBOX_ITERATE_REPO_REF
+
+# If ref provided, clone from git; otherwise create placeholder for local mount
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+      git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
+      cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
+    else \
+      mkdir -p $ITERATE_REPO/apps/os/sandbox; \
+    fi
+
+# Make scripts executable (only if repo was cloned)
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+      chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh && \
+      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/run 2>/dev/null || true && \
+      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/log/run 2>/dev/null || true; \
+    fi
+
+# Install deps and build daemon (only if repo was cloned)
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+      cd $ITERATE_REPO && pnpm install; \
+    fi
+
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+      cd $ITERATE_REPO/apps/daemon && npx vite build; \
+    fi
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
 RUN mkdir -p ~/.iterate && \
     echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
 
-# Copy agent configs (Claude Code, OpenCode, Pi) from repo to $HOME
-# This gives agents pre-configured settings (e.g. provider defaults)
-# Note: These are copies, not symlinks. In Daytona containers, to update configs
-# after image build, manually copy from ~/src/github.com/iterate/iterate/apps/os/sandbox/home-skeleton/
-RUN cp -r /home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/home-skeleton/. /home/iterate/
+# Setup home directory (only if repo was cloned; entry.sh handles local mode)
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+      $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
+    fi
 
 ENTRYPOINT [ "/app/entry.sh" ]

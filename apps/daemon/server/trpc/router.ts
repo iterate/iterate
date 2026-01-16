@@ -4,8 +4,6 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
-import { createTRPCRouter, publicProcedure } from "./init.ts";
-import { platformRouter } from "./platform.ts";
 import { getOrCreateAgent } from "../services/agent-manager.ts";
 import {
   createTmuxSession,
@@ -13,6 +11,8 @@ import {
   listTmuxSessions,
   type TmuxSession,
 } from "../tmux-control.ts";
+import { createTRPCRouter, publicProcedure } from "./init.ts";
+import { platformRouter } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
 

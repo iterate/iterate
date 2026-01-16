@@ -44,7 +44,7 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
   const port = options?.exposePort ? getRandomPort() : undefined;
 
   const envVars = [
-    "PATH=/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   ];
 
   if (process.env.ANTHROPIC_API_KEY) {
@@ -59,7 +59,11 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
     name: containerName,
     Env: envVars,
     Tty: false,
-    HostConfig: { AutoRemove: false },
+    HostConfig: {
+      AutoRemove: false,
+      // Mount local repo so entry.sh can rsync it into the container
+      Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
+    },
   };
 
   if (port) {
@@ -102,7 +106,7 @@ async function waitForContainerReady(containerId: string, timeoutMs = 30000): Pr
   throw new Error("Timeout waiting for container to start");
 }
 
-async function waitForDaemonReady(port: number, timeoutMs = 60000): Promise<void> {
+async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -126,10 +130,12 @@ function createDaemonTrpcClient(port: number) {
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   beforeAll(async () => {
-    console.log("Building sandbox image...");
-    execSync(`docker build -t ${IMAGE_NAME} -f apps/os/sandbox/Dockerfile .`, {
-      cwd: REPO_ROOT,
+    console.log("Building sandbox image via pnpm snapshot:local-docker...");
+    // Use the existing script - builds without SANDBOX_ITERATE_REPO_REF (local dev mode)
+    execSync(`pnpm snapshot:local-docker`, {
+      cwd: join(REPO_ROOT, "apps/os"),
       stdio: "inherit",
+      env: { ...process.env, LOCAL_DOCKER_IMAGE_NAME: IMAGE_NAME },
     });
   }, 300000);
 
@@ -144,7 +150,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
-    });
+    }, 30000);
 
     test("agent CLIs installed", async () => {
       const opencode = await execInContainer(container.id, ["opencode", "--version"]);
@@ -194,12 +200,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(ls).toContain("apps");
       // s6-daemons moved into apps/os/sandbox/
 
-      // no bind mounts
+      // has bind mount for local repo (entry.sh syncs from this)
       const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
         "GET",
         `/containers/${container.id}/json`,
       );
-      expect(inspect.HostConfig?.Binds ?? []).toEqual([]);
+      expect(inspect.HostConfig?.Binds).toHaveLength(1);
+      expect(inspect.HostConfig?.Binds?.[0]).toContain("/local-iterate-repo");
     });
 
     test("git operations work", async () => {
@@ -241,40 +248,26 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
-    });
+    }, 30000);
 
     test("daemon accessible", async () => {
-      // from inside container
-      await expect
-        .poll(
-          async () => {
-            const r = await execInContainer(container.id, [
-              "curl",
-              "-s",
-              "http://localhost:3000/api/health",
-            ]);
-            return r.includes("ok") || r.includes("healthy");
-          },
-          { timeout: 30000, interval: 2000 },
-        )
-        .toBe(true);
+      // Wait for daemon to be ready (entry.sh does pnpm install + vite build)
+      await waitForDaemonReady(container.port!);
 
-      // from host via exposed port
-      await expect
-        .poll(
-          async () => {
-            try {
-              const r = await fetch(`http://localhost:${container.port}/api/health`);
-              const t = await r.text();
-              return r.ok && (t.includes("ok") || t.includes("healthy"));
-            } catch {
-              return false;
-            }
-          },
-          { timeout: 30000, interval: 2000 },
-        )
-        .toBe(true);
-    }, 70000);
+      // Verify health endpoint from host
+      const healthResponse = await fetch(`http://localhost:${container.port}/api/health`);
+      expect(healthResponse.ok).toBe(true);
+      const healthText = await healthResponse.text();
+      expect(healthText.includes("ok") || healthText.includes("healthy")).toBe(true);
+
+      // Verify health from inside container
+      const internalHealth = await execInContainer(container.id, [
+        "curl",
+        "-s",
+        "http://localhost:3000/api/health",
+      ]);
+      expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
+    }, 210000);
 
     test("tmux and PTY work", async () => {
       await waitForDaemonReady(container.port!);
@@ -296,7 +289,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
       const sessions = await trpc.listTmuxSessions.query();
       expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
-    }, 70000);
+    }, 210000);
 
     test("serves assets and routes correctly", async () => {
       await waitForDaemonReady(container.port!);
@@ -338,6 +331,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const spa = await fetch(`${baseUrl}/agents/some-agent-id`);
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
-    }, 30000);
+    }, 210000);
   });
 });
