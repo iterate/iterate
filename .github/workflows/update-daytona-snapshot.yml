@@ -8,7 +8,7 @@ on:
       - main
     paths:
       - apps/os/sandbox/Dockerfile
-      - apps/os/sandbox/entry.ts
+      - apps/os/sandbox/entry.sh
       - pnpm-lock.yaml
 permissions:
   contents: read

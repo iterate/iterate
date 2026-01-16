@@ -179,7 +179,6 @@ export const testingRouter = router({
         teamId: z.string().min(1),
         teamName: z.string().optional(),
         teamDomain: z.string().optional(),
-        webhookTargetMachineId: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -206,7 +205,6 @@ export const testingRouter = router({
           .set({
             externalId: input.teamId,
             providerData,
-            webhookTargetMachineId: input.webhookTargetMachineId ?? null,
           })
           .where(eq(projectConnection.id, existingConnection.id));
       } else {
@@ -217,7 +215,6 @@ export const testingRouter = router({
           scope: "project",
           userId: ctx.user.id,
           providerData,
-          webhookTargetMachineId: input.webhookTargetMachineId ?? null,
         });
       }
 

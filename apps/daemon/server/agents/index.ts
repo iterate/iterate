@@ -14,7 +14,30 @@ import { piHarness } from "./pi.ts";
 export { opencodeHarness } from "./opencode.ts";
 export { claudeHarness } from "./claude.ts";
 export { piHarness } from "./pi.ts";
-export type { AgentHarness, AgentEvent, CreateAgentParams, CreateAgentResult } from "./types.ts";
+export type {
+  AgentHarness,
+  AgentEvent,
+  CreateAgentParams,
+  CreateAgentResult,
+  StartCommandOptions,
+} from "./types.ts";
+
+/**
+ * Convert a command array to a shell command string.
+ * Properly escapes arguments that contain spaces or special characters.
+ */
+export function getCommandString(command: string[]): string {
+  return command
+    .map((arg) => {
+      // If arg contains spaces or shell special characters, wrap in single quotes
+      if (/[\s"'$`\\!*?[\]{}()<>|&;]/.test(arg)) {
+        // Escape single quotes within the arg
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      return arg;
+    })
+    .join(" ");
+}
 
 const harnesses: Record<AgentType, AgentHarness> = {
   opencode: opencodeHarness,

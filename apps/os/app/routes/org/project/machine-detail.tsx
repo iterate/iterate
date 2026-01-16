@@ -155,15 +155,28 @@ function MachineDetailPage() {
     }
   };
 
-  const openTerminal = async (useNative: boolean) => {
+  const openTerminal = async ({
+    useNative,
+    command,
+    autorun,
+  }: {
+    useNative: boolean;
+    command?: string;
+    autorun?: boolean;
+  }) => {
     try {
       const result = await trpcClient.machine.getPreviewInfo.query({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
-      const url = useNative ? result.nativeTerminalUrl : result.terminalUrl;
-      if (url) {
+      const urlBase = useNative ? result.nativeTerminalUrl : result.terminalUrl;
+      if (urlBase) {
+        const url = new URL(urlBase);
+        if (command) {
+          url.searchParams.set("command", command);
+          url.searchParams.set("autorun", autorun ? "true" : "false");
+        }
         window.open(url, "_blank");
       } else {
         toast.error("Terminal URL not available");
@@ -228,7 +241,17 @@ function MachineDetailPage() {
   const agents = agentsData?.agents ?? [];
 
   // URL helpers for agents - opens terminal with prefilled command
-  const openAgentTerminal = async (agentSlug: string, useNative: boolean) => {
+  const openAgentTerminal = async ({
+    agentSlug,
+    useNative,
+    command,
+    autorun,
+  }: {
+    agentSlug: string;
+    useNative: boolean;
+    command?: string;
+    autorun?: boolean;
+  }) => {
     try {
       const result = await trpcClient.machine.getPreviewInfo.query({
         organizationSlug: params.organizationSlug,
@@ -242,8 +265,12 @@ function MachineDetailPage() {
       }
       const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
       if (baseUrl) {
-        const command = `echo ${agentSlug}`;
-        const url = `${baseUrl}terminal?command=${encodeURIComponent(command)}`;
+        agentSlug; // fill in this and construct the command
+        const url = new URL(`${baseUrl}/terminal`);
+        if (command) {
+          url.searchParams.set("command", command);
+          url.searchParams.set("autorun", autorun ? "true" : "false");
+        }
         window.open(url, "_blank");
       } else {
         toast.error("URL not available");
@@ -397,11 +424,19 @@ function MachineDetailPage() {
             <div className="flex items-center gap-1">
               {isDaytona && (
                 <>
-                  <Button variant="ghost" size="sm" onClick={() => openTerminal(true)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openTerminal({ useNative: true })}
+                  >
                     <ExternalLink className="h-4 w-4 mr-1" />
                     Direct
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => openTerminal(false)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openTerminal({ useNative: false })}
+                  >
                     <ExternalLink className="h-4 w-4 mr-1" />
                     Proxy
                   </Button>
@@ -462,7 +497,13 @@ function MachineDetailPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => openAgentTerminal(agent.slug, true)}
+                          onClick={() =>
+                            openAgentTerminal({
+                              agentSlug: agent.slug,
+                              useNative: true,
+                              command: `echo ${agent.slug}`,
+                            })
+                          }
                         >
                           <ExternalLink className="h-4 w-4 mr-1" />
                           Direct
@@ -470,7 +511,13 @@ function MachineDetailPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => openAgentTerminal(agent.slug, false)}
+                          onClick={() =>
+                            openAgentTerminal({
+                              agentSlug: agent.slug,
+                              useNative: false,
+                              command: `echo ${agent.slug}`,
+                            })
+                          }
                         >
                           <ExternalLink className="h-4 w-4 mr-1" />
                           Proxy
@@ -480,7 +527,13 @@ function MachineDetailPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => openAgentTerminal(agent.slug, true)}
+                        onClick={() =>
+                          openAgentTerminal({
+                            agentSlug: agent.slug,
+                            useNative: true,
+                            command: `echo ${agent.slug}`,
+                          })
+                        }
                       >
                         <ExternalLink className="h-4 w-4 mr-1" />
                         Open

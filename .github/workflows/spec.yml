@@ -26,12 +26,11 @@ jobs:
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
         run: |-
-          set -o pipefail
           mkdir -p test-results
           # tee everything to a log file but filter out WebServer logs which are noisy
-          pnpm spec | tee test-results/spec.txt | awk '/iterate os server ready/ { r=1 }; !r || !/WebServer/ { print }'
-      - if: always()
-        name: upload logs
+          pnpm spec | tee test-results/spec.txt | grep -v WebServer
+      - name: upload logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spec-results

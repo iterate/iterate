@@ -10,6 +10,10 @@ export default defineConfig({
   // Use relative paths for assets so they work when proxied at any base path
   // The proxy injects <base href="..."> which makes relative URLs resolve correctly
   base: "./",
+  resolve: {
+    // Ensure partysocket/react uses the same React instance as the app
+    dedupe: ["react", "react-dom"],
+  },
   plugins: [
     vitePublicUrl(),
     devtools(),
