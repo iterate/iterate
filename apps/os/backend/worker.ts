@@ -17,7 +17,7 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
-import { posthogProxyApp } from "./routes/posthog-proxy.ts";
+import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
@@ -121,6 +121,7 @@ app.all("/api/trpc/*", (c) => {
 app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
+app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
 
 // oRPC handler for machine status (called by daemon to report ready)
 const orpcHandler = new RPCHandler(workerRouter, {
@@ -149,9 +150,6 @@ app.get("/api/ws/realtime", (c) => {
   const stub = c.env.REALTIME_PUSHER.get(id);
   return stub.fetch(c.req.raw);
 });
-
-// Mount PostHog reverse proxy (for ad-blocker bypass)
-app.route("", posthogProxyApp);
 
 // Mount machine proxy (Daytona, local-docker, etc.)
 app.route("", machineProxyApp);

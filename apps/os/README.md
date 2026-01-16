@@ -143,17 +143,17 @@ For detailed documentation on the s6 process supervision setup, see [`apps/os/sa
 
 ## Analytics (PostHog)
 
-OS uses PostHog for product analytics, session replay, and group analytics with EU data residency.
+OS uses PostHog for product analytics, session replay, and group analytics with EU data residency. **PostHog is optional** - if no key is configured, the app works normally without analytics.
 
 ### Configuration
 
-PostHog is configured via environment variables (managed by Doppler):
+PostHog is configured via environment variables (managed by Doppler). All are optional:
 
-| Variable                  | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `VITE_POSTHOG_PUBLIC_KEY` | PostHog project API key (client-side)           |
-| `VITE_POSTHOG_PROXY_URI`  | Proxy endpoint for PostHog (default: `/ingest`) |
-| `POSTHOG_KEY`             | PostHog API key for server-side tracking        |
+| Variable                  | Description                                                              |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `POSTHOG_PUBLIC_KEY`      | PostHog project API key (server-side, optional)                          |
+| `VITE_POSTHOG_PUBLIC_KEY` | PostHog project API key (client-side, reference to `POSTHOG_PUBLIC_KEY`) |
+| `VITE_POSTHOG_PROXY_URL`  | Proxy endpoint for PostHog (default: `/api/integrations/posthog/proxy`)  |
 
 ### Architecture
 
