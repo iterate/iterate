@@ -52,6 +52,7 @@ describe("slack router", () => {
 
   it("creates agent and returns slug for new thread", async () => {
     const threadTs = "1234567890.123456";
+    const botUserId = "U_BOT";
     const agent = makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` });
     mockedGetOrCreateAgent.mockResolvedValue({
       agent,
@@ -61,10 +62,13 @@ describe("slack router", () => {
     const payload = {
       type: "event_callback",
       event: {
-        type: "message",
+        type: "app_mention",
         thread_ts: threadTs,
-        text: "hello",
+        text: `<@${botUserId}> hello`,
+        user: "U_USER",
+        channel: "C_TEST",
       },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
     };
 
     const response = await slackRouter.request("/webhook", {
@@ -84,6 +88,7 @@ describe("slack router", () => {
 
   it("sends message to existing agent when thread already exists", async () => {
     const ts = "9999999999.999999";
+    const botUserId = "U_BOT";
     const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
     mockedGetOrCreateAgent.mockResolvedValue({
       agent,
@@ -93,12 +98,13 @@ describe("slack router", () => {
     const payload = {
       type: "event_callback",
       event: {
-        type: "message",
+        type: "app_mention",
         ts,
         channel: "C_TEST",
         user: "U_TEST",
-        text: "hello world",
+        text: `<@${botUserId}> hello world`,
       },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
     };
 
     const response = await slackRouter.request("/webhook", {
@@ -113,7 +119,7 @@ describe("slack router", () => {
     expect(mockedAppendToAgent).toHaveBeenCalledWith(
       agent,
       [
-        "New Slack message from <@U_TEST> in C_TEST: hello world",
+        `New Slack message from <@U_TEST> in C_TEST: <@${botUserId}> hello world`,
         "",
         "Before responding, use the following CLI command to reply to the message:",
         '`iterate tool send-slack-message --channel C_TEST --thread-ts 9999999999.999999 --message "<your response here>"` ',
