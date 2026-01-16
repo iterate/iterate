@@ -1,6 +1,13 @@
 import { expect } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
-import { test } from "./test-helpers.ts";
+import { baseTest as base } from "./test-helpers.ts";
+
+const test = base.extend({
+  page: async ({ page }, use) => {
+    spinnerWaiter.setup(page);
+    await use(page);
+  },
+});
 
 // normally I'd say just copy-paste the code, but it's v important that the actions are identical because test.fail is too "easy" to make pass succeed otherwise.
 async function run(page: import("@playwright/test").Page) {
