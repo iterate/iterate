@@ -48,7 +48,7 @@ export default workflow({
         },
         {
           name: "upload logs",
-          if: "failure()",
+          if: "always()",
           ...uses("actions/upload-artifact@v4", {
             name: "spec-results",
             path: "test-results",
