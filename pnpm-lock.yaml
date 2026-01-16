@@ -71,6 +71,9 @@ importers:
       playwright:
         specifier: ^1.57.0
         version: 1.57.0
+      playwright-core:
+        specifier: 1.57.0
+        version: 1.57.0
       prettier:
         specifier: ^3.7.3
         version: 3.7.3
