@@ -21,6 +21,7 @@ export default defineConfig({
   server: {
     cors: false,
     strictPort: false,
+    allowedHosts: ["host.docker.internal"],
   },
   plugins: [
     {
