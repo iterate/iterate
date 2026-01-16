@@ -18,15 +18,6 @@ jobs:
       matrix:
         shardIndex:
           - 1
-          - 2
-          - 3
-          - 4
-          - 5
-          - 6
-          - 7
-          - 8
-          - 9
-          - 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -52,7 +43,7 @@ jobs:
         continue-on-error: true
         run: |-
           mkdir -p test-results
-          pnpm spec --repeat-each=10 --reporter=json --shard=${{ matrix.shardIndex }}/10
+          pnpm spec --repeat-each=10 --reporter=json --shard=${{ matrix.shardIndex }}/1
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/spec-results.json
       - name: Generate Flaky Test Report

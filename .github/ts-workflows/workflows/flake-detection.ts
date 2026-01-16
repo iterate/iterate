@@ -2,7 +2,7 @@ import dedent from "dedent";
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
-const shardTotal = 10;
+const shardTotal = 1;
 
 export default workflow({
   name: "Flake Detection",
