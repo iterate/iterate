@@ -30,10 +30,9 @@ import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx"
 import type { TanstackRouterContext } from "../router.tsx";
 import { getEnvLogo } from "../lib/env-logo.ts";
 
-// Check if PostHog should be enabled (only in production with key)
+// Check if PostHog should be enabled (when key is configured)
 const shouldEnablePostHog = () => {
   if (typeof window === "undefined") return false;
-  if (!import.meta.env.PROD) return false;
   if (!import.meta.env.VITE_POSTHOG_PUBLIC_KEY) return false;
   return true;
 };

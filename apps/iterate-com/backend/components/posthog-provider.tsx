@@ -24,6 +24,12 @@ if (shouldEnablePostHog()) {
       maskInputOptions: { password: true },
       maskTextSelector: "",
     },
+    // Register environment as super property (included in all events)
+    loaded: (posthog) => {
+      posthog.register({
+        $environment: import.meta.env.VITE_APP_STAGE,
+      });
+    },
   });
 }
 
