@@ -65,75 +65,91 @@ function setup(page: Page) {
     Object.defineProperty(locatorPrototype, method, {
       value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
         const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
-        const options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
+        const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
+        const argsWithoutOptions = args.slice(0, optionIndex);
         const settings = getSettings();
-        const skipSpinnerCheck = settings.disabled || options?.skipSpinnerCheck;
+        const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
         settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
-
-        const [attempt1] = await Promise.allSettled([
-          (this[`${method}_original`] as Function)(...args),
-        ]);
-
-        if (attempt1.status === "fulfilled") {
-          return attempt1.value;
-        }
-
-        if (skipSpinnerCheck) {
-          // bad luck, attempt1 is all you get
-          adjustError(attempt1.reason as Error);
-          throw attempt1.reason;
-        }
-
         let called = false;
 
         const callOriginal = async (argsList: unknown[]) => {
           if (called) {
-            throw new Error("Original called more than once, this is a bug in spinner-waiter");
+            throw new Error("callOriginal called more than once, this is a bug in spinner-waiter");
           }
-
-          called = true;
+          const options = argsList.at(-1) as { trial?: boolean } | undefined;
+          called = !options?.trial;
           return (this[`${method}_original`] as Function)(...argsList);
         };
 
+        if (skipSpinnerCheck) {
+          return await callOriginal(args).catch((e) => {
+            adjustError(e);
+            throw e;
+          });
+        }
+
         const spinnerSelector = settings.spinnerSelectors.join(",");
         const spinnerLocator = this.page().locator(spinnerSelector) as LocatorWithOriginal;
+        const union = this.or(spinnerLocator).first() as LocatorWithOriginal;
 
-        const spinnerVisible = await spinnerLocator.isVisible();
+        settings.log(`waiting for union ${union}`);
 
-        if (!spinnerVisible) {
-          adjustError(attempt1.reason as Error, [
-            `If this is a slow operation, update the product code to add a spinner while it's running.`,
-            `This will improve the user experience and buy you more time for this assertion.`,
-            `To add a spinner, show any UI element matching this locator:`,
-            `  ${spinnerLocator}`,
-          ]);
-          throw attempt1.reason;
+        await union.waitFor_original().catch((e: Error) => {
+          const resolvedToTooMany = `${e}`.match(/resolved to \d+ elements/); // playwright throws when you match too many elements. this isn't spinner related.
+          if (!resolvedToTooMany)
+            adjustError(e, [
+              `If this is a slow operation, update the product code to add a spinner while it's running.`,
+              `This will improve the user experience and buy you more time for this assertion.`,
+              `To add a spinner, show any UI element matching this locator:`,
+              `  ${spinnerLocator}`,
+            ]);
+          throw e;
+        });
+
+        settings.log(`union gotten. ${this}.isVisible(): ${await this.isVisible()}`);
+
+        if (await this.isVisible()) {
+          return await callOriginal(args).catch((e) => {
+            adjustError(e as Error, []);
+            throw e;
+          });
         }
 
         settings.log(
           `${this} not visible, but the spinner is. racing between ${this}.${method}(...) and ${spinnerLocator} being hidden`,
         );
 
-        const targetVisibleOrSpinnerRemoval = this.or(
-          this.page().locator(`body:not(:has(${spinnerSelector}))`),
-        ).first() as LocatorWithOriginal;
-
-        const [attempt2] = await Promise.allSettled([
-          targetVisibleOrSpinnerRemoval.waitFor_original({ timeout: settings.spinnerTimeout }),
+        const race = await Promise.race([
+          callOriginal([
+            ...argsWithoutOptions,
+            { ..._options, timeout: settings.spinnerTimeout - 1000, trial: true },
+          ])
+            .then((result) => ({ outcome: "success" as const, result }))
+            .catch((e) => ({ outcome: "error" as const, error: e })),
+          spinnerLocator
+            .waitFor_original({ timeout: settings.spinnerTimeout, state: "hidden" })
+            .then((result: void) => ({ outcome: "spinner-hidden" as const, result }))
+            .catch((e: Error) => ({ outcome: "error" as const, error: e })),
         ]);
 
-        if (attempt2.status === "rejected") {
-          adjustError(attempt2.reason as Error, [
+        settings.log(`race result: ${JSON.stringify(race)}`);
+
+        if (race.outcome === "error") {
+          adjustError(race.error as Error, [
             `${this}.${method}(...) didn't succeed and spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`,
           ]);
-          throw attempt2.reason;
+          throw race.error;
         }
 
-        const targetVisible = await this.isVisible();
+        if (race.outcome === "success") {
+          return await callOriginal(args).catch((e) => {
+            adjustError(e as Error);
+            throw e;
+          });
+        }
 
-        if (!targetVisible) {
-          // last chance, we expect to fail at this point
+        if (race.outcome === "spinner-hidden") {
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, [
               `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
@@ -142,10 +158,7 @@ function setup(page: Page) {
           });
         }
 
-        return await callOriginal(args).catch((e) => {
-          adjustError(e as Error);
-          throw e;
-        });
+        throw new Error(`Unknown race outcome: ${JSON.stringify(race)}`);
       },
     });
   }
