@@ -14,7 +14,6 @@ import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as devRouteImport } from './routes/dev.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as slackConflictRouteImport } from './routes/slack-conflict.tsx'
-import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
 import { Route as indexRouteImport } from './routes/index.tsx'
 import { Route as adminIndexRouteImport } from './routes/admin/index.tsx'
@@ -59,11 +58,6 @@ const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
 const slackConflictRoute = slackConflictRouteImport.update({
   id: '/slack-conflict',
   path: '/slack-conflict',
-  getParentRoute: () => authRequiredDotlayoutRoute,
-} as any)
-const newOrganizationRoute = newOrganizationRouteImport.update({
-  id: '/new-organization',
-  path: '/new-organization',
   getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
 const adminLayoutRoute = adminLayoutRouteImport.update({
@@ -178,7 +172,6 @@ export interface FileRoutesByFullPath {
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
-  '/new-organization': typeof newOrganizationRoute
   '/slack-conflict': typeof slackConflictRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
@@ -205,7 +198,6 @@ export interface FileRoutesByTo {
   '/login': typeof loginRoute
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
-  '/new-organization': typeof newOrganizationRoute
   '/slack-conflict': typeof slackConflictRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
@@ -233,7 +225,6 @@ export interface FileRoutesById {
   '/logout': typeof logoutRoute
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
-  '/_auth/new-organization': typeof newOrganizationRoute
   '/_auth/slack-conflict': typeof slackConflictRoute
   '/_auth/admin/session-info': typeof adminSessionInfoRoute
   '/_auth/admin/trpc-tools': typeof adminTrpcToolsRoute
@@ -263,7 +254,6 @@ export interface FileRouteTypes {
     | '/logout'
     | '/'
     | '/admin'
-    | '/new-organization'
     | '/slack-conflict'
     | '/admin/session-info'
     | '/admin/trpc-tools'
@@ -290,7 +280,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/logout'
     | '/'
-    | '/new-organization'
     | '/slack-conflict'
     | '/admin/session-info'
     | '/admin/trpc-tools'
@@ -317,7 +306,6 @@ export interface FileRouteTypes {
     | '/logout'
     | '/_auth/'
     | '/_auth/admin'
-    | '/_auth/new-organization'
     | '/_auth/slack-conflict'
     | '/_auth/admin/session-info'
     | '/_auth/admin/trpc-tools'
@@ -382,13 +370,6 @@ declare module '@tanstack/react-router' {
       path: '/slack-conflict'
       fullPath: '/slack-conflict'
       preLoaderRoute: typeof slackConflictRouteImport
-      parentRoute: typeof authRequiredDotlayoutRoute
-    }
-    '/_auth/new-organization': {
-      id: '/_auth/new-organization'
-      path: '/new-organization'
-      fullPath: '/new-organization'
-      preLoaderRoute: typeof newOrganizationRouteImport
       parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth/admin': {
@@ -616,7 +597,6 @@ const orgLayoutRouteWithChildren = orgLayoutRoute._addFileChildren(
 interface authRequiredDotlayoutRouteChildren {
   indexRoute: typeof indexRoute
   adminLayoutRoute: typeof adminLayoutRouteWithChildren
-  newOrganizationRoute: typeof newOrganizationRoute
   slackConflictRoute: typeof slackConflictRoute
   orgLayoutRoute: typeof orgLayoutRouteWithChildren
   userSettingsRoute: typeof userSettingsRoute
@@ -625,7 +605,6 @@ interface authRequiredDotlayoutRouteChildren {
 const authRequiredDotlayoutRouteChildren: authRequiredDotlayoutRouteChildren = {
   indexRoute: indexRoute,
   adminLayoutRoute: adminLayoutRouteWithChildren,
-  newOrganizationRoute: newOrganizationRoute,
   slackConflictRoute: slackConflictRoute,
   orgLayoutRoute: orgLayoutRouteWithChildren,
   userSettingsRoute: userSettingsRoute,

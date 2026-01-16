@@ -8,11 +8,8 @@ export const routes = rootRoute("root.tsx", [
 
   // Auth required layout (underscore prefix = pathless)
   layout("_auth", "auth-required.layout.tsx", [
-    // Index redirects to first org
+    // Index - shows invites + create org for new users, redirects to org for existing
     index("index.tsx"),
-
-    // New organization
-    route("/new-organization", "new-organization.tsx"),
 
     // Slack conflict resolution
     route("/slack-conflict", "slack-conflict.tsx"),

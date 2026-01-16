@@ -117,6 +117,7 @@ export const organization = pgTable("organization", (t) => ({
 export const organizationRelations = relations(organization, ({ many, one }) => ({
   projects: many(project),
   members: many(organizationUserMembership),
+  invites: many(organizationInvite),
   billingAccount: one(billingAccount),
 }));
 
@@ -154,6 +155,40 @@ export const organizationUserMembershipRelations = relations(
     }),
   }),
 );
+
+// Organization invites (pending invitations by email)
+export const organizationInvite = pgTable(
+  "organization_invite",
+  (t) => ({
+    id: iterateId("inv"),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    email: t.text().notNull(),
+    invitedByUserId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: t
+      .text({ enum: [...UserRole] })
+      .notNull()
+      .default("member"),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.organizationId, t.email)],
+);
+
+export const organizationInviteRelations = relations(organizationInvite, ({ one }) => ({
+  organization: one(organization, {
+    fields: [organizationInvite.organizationId],
+    references: [organization.id],
+  }),
+  invitedBy: one(user, {
+    fields: [organizationInvite.invitedByUserId],
+    references: [user.id],
+  }),
+}));
 
 // Project (renamed from instance/estate)
 export const project = pgTable(

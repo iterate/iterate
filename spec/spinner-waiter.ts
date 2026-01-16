@@ -93,12 +93,14 @@ function setup(page: Page) {
   // undocumented playwright feature: library code is excluded from call stacks in html viewers, traces etc.
   // Add this file so that we say spec's `await page.locator(...).click()` expression rather than an unhelpful
   // line from this file like `return (this[`${method}_original`] as Function)(...argsList)`
-  setBoxedStackPrefixes([
-    path.dirname(require.resolve("@playwright/test/package.json")),
-    path.dirname(require.resolve("playwright/package.json")),
-    path.dirname(require.resolve("playwright-core/package.json")),
-    import.meta.filename,
-  ]);
+  if (!process.env.SPINNER_WAITER_DEBUG) {
+    setBoxedStackPrefixes([
+      path.dirname(require.resolve("@playwright/test/package.json")),
+      path.dirname(require.resolve("playwright/package.json")),
+      path.dirname(require.resolve("playwright-core/package.json")),
+      import.meta.filename,
+    ]);
+  }
 
   const dummyLocator = page.locator("body");
   const locatorPrototype = dummyLocator.constructor.prototype;

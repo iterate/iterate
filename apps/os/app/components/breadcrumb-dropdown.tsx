@@ -151,7 +151,7 @@ export function OrgBreadcrumbDropdown({
       })}
       addAction={{
         label: "Add organization",
-        linkProps: { to: "/new-organization" },
+        linkProps: { to: "/" },
       }}
     />
   );
