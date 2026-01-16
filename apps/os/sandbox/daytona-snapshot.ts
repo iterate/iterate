@@ -73,11 +73,11 @@ for (const relativePath of files) {
 // Only SANDBOX_ITERATE_GIT_REF is an ARG - other versions are ENV vars edited directly in Dockerfile
 let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
 
-if (process.env.SANDBOX_ITERATE_GIT_REF) {
-  console.log(`Using SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`);
+if (process.env.SANDBOX_ITERATE_REPO_REF) {
+  console.log(`Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
   dockerfileContent = dockerfileContent.replace(
-    /^ARG SANDBOX_ITERATE_GIT_REF=.+$/m,
-    `ARG SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`,
+    /^ARG SANDBOX_ITERATE_REPO_REF=.*$/m,
+    `ARG SANDBOX_ITERATE_REPO_REF="${process.env.SANDBOX_ITERATE_REPO_REF}"`,
   );
 }
 
