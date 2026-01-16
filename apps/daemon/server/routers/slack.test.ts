@@ -116,7 +116,7 @@ describe("slack router", () => {
         "New Slack message from <@U_TEST> in C_TEST: hello world",
         "",
         "Before responding, use the following CLI command to reply to the message:",
-        '`iterate tools send-slack-message --channel C_TEST --thread-ts 9999999999.999999 --message "<your response here>"` ',
+        '`iterate tool send-slack-message --channel C_TEST --thread-ts 9999999999.999999 --message "<your response here>"` ',
       ].join("\n"),
     );
   });
