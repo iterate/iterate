@@ -24,6 +24,12 @@ const Search = z.object({
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
   validateSearch: Search,
+  loader: ({ context, params }) => {
+    // Non-blocking prefetch - speeds up perceived load time
+    context.queryClient.prefetchQuery(
+      trpc.billing.getBillingAccount.queryOptions({ organizationSlug: params.organizationSlug }),
+    );
+  },
   component: BillingPage,
 });
 
