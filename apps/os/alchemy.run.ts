@@ -67,11 +67,14 @@ function ensureLocalDockerImage() {
   // This ensures we pick up Dockerfile changes without blocking dev server startup
   console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
 
-  // Build args from env vars (only SANDBOX_ITERATE_GIT_REF is a build arg - other versions are ENV in Dockerfile)
+  // Build args from env vars (only SANDBOX_ITERATE_REPO_REF is a build arg - other versions are ENV in Dockerfile)
   const buildArgs: string[] = [];
-  if (process.env.SANDBOX_ITERATE_GIT_REF) {
-    buildArgs.push("--build-arg", `SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`);
-    console.log(`[docker] Using SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`);
+  if (process.env.SANDBOX_ITERATE_REPO_REF) {
+    buildArgs.push(
+      "--build-arg",
+      `SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`,
+    );
+    console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
   }
 
   const buildProcess = spawn(

@@ -4,7 +4,7 @@ import { eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
-import { getOrCreateAgent } from "../services/agent-manager.ts";
+import { getOrCreateAgent, resetAgent as resetAgentService } from "../services/agent-manager.ts";
 import {
   createTmuxSession,
   hasTmuxSession,
@@ -120,6 +120,7 @@ export const trpcRouter = createTRPCRouter({
         slug: input.slug,
         harnessType: input.harnessType,
         workingDirectory: input.workingDirectory,
+        initialPrompt: input.initialPrompt,
       });
 
       return serializeAgent(result.agent);
@@ -245,21 +246,13 @@ export const trpcRouter = createTRPCRouter({
         return { success: false, error: "Agent not found" };
       }
 
-      // For opencode agents, create a new session
-      // This is done by creating a new agent via the harness
-      const result = await getOrCreateAgent({
+      // Archive old agent and create fresh session
+      await resetAgentService({
         slug: input.slug,
         harnessType: agent.harnessType,
         workingDirectory: agent.workingDirectory,
+        initialPrompt: agent.initialPrompt ?? undefined,
       });
-
-      // If agent already existed, it wasn't reset - just update status
-      if (!result.wasCreated) {
-        await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
-      }
 
       return { success: true };
     }),

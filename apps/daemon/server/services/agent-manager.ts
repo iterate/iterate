@@ -180,6 +180,7 @@ export interface GetOrCreateAgentParams {
   slug: string;
   harnessType: AgentType;
   workingDirectory: string;
+  initialPrompt?: string;
 }
 
 export interface GetOrCreateAgentResult {
@@ -224,7 +225,7 @@ export async function createAgent(
   params: GetOrCreateAgentParams,
   deps: HarnessAgentManagerDeps = defaultHarnessDeps,
 ): Promise<Agent> {
-  const { slug, harnessType, workingDirectory } = params;
+  const { slug, harnessType, workingDirectory, initialPrompt } = params;
   const { db, getHarness } = deps;
 
   // Create new agent using harness
@@ -247,6 +248,7 @@ export async function createAgent(
       harnessSessionId: result.harnessSessionId,
       tmuxSession: result.tmuxSession,
       workingDirectory,
+      initialPrompt,
       status: "running",
     })
     .returning();
@@ -279,6 +281,30 @@ export async function getOrCreateAgent(
     agent: newAgent,
     wasCreated: true,
   };
+}
+
+/**
+ * Reset an agent by archiving the old one and creating a fresh session.
+ * Returns the newly created agent.
+ */
+export async function resetAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<Agent> {
+  const { slug } = params;
+  const { db } = deps;
+
+  // Archive existing agent if present
+  const existingAgent = await getAgent(slug, deps);
+  if (existingAgent) {
+    await db
+      .update(schema.agents)
+      .set({ archivedAt: new Date(), status: "stopped" })
+      .where(eq(schema.agents.slug, slug));
+  }
+
+  // Create fresh agent
+  return createAgent(params, deps);
 }
 
 /**
