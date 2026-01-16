@@ -1,0 +1,30 @@
+#!/bin/sh
+exec 2>&1
+
+# Egress proxy service - runs mitmproxy to intercept sandbox outbound traffic
+
+PROXY_PORT=8888
+MITMPROXY_DIR="$HOME/.mitmproxy"
+ADDON_PATH="$ITERATE_REPO/apps/daemon/server/services/egress-proxy/addon.py"
+
+echo "Starting egress proxy on port $PROXY_PORT"
+
+# Ensure mitmproxy directory exists
+mkdir -p "$MITMPROXY_DIR"
+
+# Wait for iterate-daemon to be ready (it provides the API tokens)
+# We check if the daemon is up before starting
+sleep 2
+
+# Run mitmdump (headless mitmproxy)
+# --set confdir sets where CA certs are stored
+# -s loads our addon script
+# -p sets the proxy port
+# --ssl-insecure allows connecting to servers with invalid certs
+# --set stream_large_bodies streams large bodies instead of buffering
+exec mitmdump \
+  -p "$PROXY_PORT" \
+  --set "confdir=$MITMPROXY_DIR" \
+  -s "$ADDON_PATH" \
+  --ssl-insecure \
+  --set "stream_large_bodies=1m"

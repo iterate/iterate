@@ -1,0 +1,6 @@
+{
+  "name": "egress-proxy",
+  "description": "HTTPS MITM proxy for intercepting sandbox outbound traffic",
+  "port": 8888,
+  "healthEndpoint": null
+}
