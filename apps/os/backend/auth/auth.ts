@@ -42,7 +42,23 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
     secret: envParam.BETTER_AUTH_SECRET,
-    trustedOrigins: [envParam.VITE_PUBLIC_URL],
+    trustedOrigins: (request) => {
+      // In non-prod, allow any localhost/127.0.0.1 origin (any port)
+      if (isNonProd) {
+        const origin = request?.headers.get("origin");
+        if (origin) {
+          try {
+            const url = new URL(origin);
+            if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+              return [origin];
+            }
+          } catch {
+            // Invalid URL, fall through to default
+          }
+        }
+      }
+      return [envParam.VITE_PUBLIC_URL];
+    },
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: {
