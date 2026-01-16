@@ -69,7 +69,19 @@ for (const relativePath of files) {
   chmodSync(targetPath, stats.mode & 0o777);
 }
 
-writeFileSync(dockerfileTargetPath, readFileSync(dockerfileSourcePath, "utf-8"));
+// Read Dockerfile and inject env var overrides for ARG defaults
+// Only SANDBOX_ITERATE_GIT_REF is an ARG - other versions are ENV vars edited directly in Dockerfile
+let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
+
+if (process.env.SANDBOX_ITERATE_GIT_REF) {
+  console.log(`Using SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`);
+  dockerfileContent = dockerfileContent.replace(
+    /^ARG SANDBOX_ITERATE_GIT_REF=.+$/m,
+    `ARG SANDBOX_ITERATE_GIT_REF=${process.env.SANDBOX_ITERATE_GIT_REF}`,
+  );
+}
+
+writeFileSync(dockerfileTargetPath, dockerfileContent);
 
 const image = Image.fromDockerfile(dockerfileTargetPath);
 

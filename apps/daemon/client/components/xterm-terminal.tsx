@@ -11,6 +11,7 @@ import { LigaturesAddon } from "@xterm/addon-ligatures";
 interface XtermTerminalProps {
   wsBase?: string;
   tmuxSessionName?: string;
+  agentSlug?: string;
 }
 
 export interface XtermTerminalHandle {
@@ -30,7 +31,7 @@ const READY_STATE_MAP = {
 } as Record<number, string>;
 
 export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>(
-  function XtermTerminal({ wsBase, tmuxSessionName }, ref) {
+  function XtermTerminal({ wsBase, tmuxSessionName, agentSlug }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -40,8 +41,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const baseUri = new URL(document.baseURI);
       const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
       const base = wsBase || `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
-      return `${base}/api/pty/ws${tmuxSessionName ? `?tmuxSession=${tmuxSessionName}` : ""}`;
-    }, [wsBase, tmuxSessionName]);
+      const params = new URLSearchParams();
+      if (agentSlug) params.set("agentSlug", agentSlug);
+      if (tmuxSessionName) params.set("tmuxSession", tmuxSessionName);
+      const queryString = params.toString();
+      return `${base}/api/pty/ws${queryString ? `?${queryString}` : ""}`;
+    }, [wsBase, tmuxSessionName, agentSlug]);
 
     const socket = useWebSocket(wsUrl, undefined, {
       maxRetries: MAX_RECONNECTION_ATTEMPTS,
@@ -120,6 +125,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         sendResize();
       });
 
+      // For non-tmux connections (shell or agent), handle PageUp/PageDown for scrollback
       if (!tmuxSessionName) {
         terminal.attachCustomKeyEventHandler((event) => {
           if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
@@ -197,7 +203,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         termRef.current = null;
         container.innerHTML = "";
       };
-    }, [socket, tmuxSessionName]);
+    }, [socket, tmuxSessionName, agentSlug]);
 
     return (
       <div className="absolute inset-0 bg-[#1e1e1e]">
@@ -210,6 +216,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
             data-tmux-session={tmuxSessionName}
+            data-agent-slug={agentSlug}
             className="h-full w-full p-4"
             onClick={() => termRef.current?.focus()}
           />

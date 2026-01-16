@@ -1,9 +1,15 @@
+import { lazy, Suspense } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { AlertCircleIcon } from "lucide-react";
-import { XtermTerminal } from "@/components/xterm-terminal.tsx";
+import { AlertCircleIcon, LoaderIcon } from "lucide-react";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
+
+const XtermTerminal = lazy(() =>
+  import("@/components/xterm-terminal.tsx").then((mod) => ({
+    default: mod.XtermTerminal,
+  })),
+);
 
 export const Route = createFileRoute("/_app/agents/$slug")({
   beforeLoad: async ({ params }) => {
@@ -34,14 +40,16 @@ function AgentPage() {
     );
   }
 
-  if (!agent.tmuxSession) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-2">
-        <AlertCircleIcon className="size-8 text-red-500" />
-        <p className="text-muted-foreground">Agent has no tmux session configured</p>
-      </div>
-    );
-  }
-
-  return <XtermTerminal key={agent.tmuxSession} tmuxSessionName={agent.tmuxSession} />;
+  // Connect directly to agent CLI via PTY (no tmux)
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center bg-[#1e1e1e]">
+          <LoaderIcon className="size-6 animate-spin text-zinc-500" />
+        </div>
+      }
+    >
+      <XtermTerminal key={agent.slug} agentSlug={agent.slug} />
+    </Suspense>
+  );
 }

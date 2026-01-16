@@ -16,7 +16,7 @@ Expose s6-supervised daemons in the apps/os UI with full control and visibility.
 
 ## Background
 
-The sandbox now uses s6 for process supervision. Each service in `s6-daemons/` has a `metadata.json` file with UI-relevant information:
+The sandbox now uses s6 for process supervision. Each service in `apps/os/sandbox/s6-daemons/` has a `metadata.json` file with UI-relevant information:
 
 ```typescript
 interface S6DaemonMetadata {
@@ -36,7 +36,7 @@ Add new tRPC procedures in daemon to interact with s6:
 
 #### `s6.listDaemons`
 
-- Read all directories in `s6-daemons/`
+- Read all directories in `apps/os/sandbox/s6-daemons/`
 - Parse `metadata.json` from each
 - Return list with display names, ports, etc.
 

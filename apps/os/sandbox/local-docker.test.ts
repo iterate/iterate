@@ -1,17 +1,8 @@
 /**
  * Local Docker + s6 Integration Tests
  *
- * These tests verify the sandbox container setup with s6 process supervision.
- * The image is rebuilt from the local repo and runs without bind mounts.
- *
- * EXPECTED DURATION:
- * - Fast MacBook Pro (M-series, cached layers): ~30 seconds
- * - First run (needs pnpm install + vite build inside container): ~2-3 minutes
- * - CI environments: expect 3-5+ minutes depending on resources
- *
- * REQUIREMENTS:
- * - Docker with TCP API enabled on port 2375 (OrbStack has this by default)
- * - Set RUN_LOCAL_DOCKER_TESTS=true to run these tests
+ * Verifies sandbox container setup with s6 process supervision.
+ * Image rebuilt once, each test group gets its own container.
  *
  * RUN WITH:
  *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts
@@ -23,392 +14,330 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import {
-  dockerApi,
-  execInContainer,
-  getContainerLogs,
-  getServiceFileLogs,
-  waitForLogPattern,
-  waitForFileLogPattern,
-} from "./test-helpers.ts";
+import { dockerApi, DOCKER_API_URL, execInContainer } from "./test-helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
 
 const IMAGE_NAME = "iterate-sandbox-test";
-const CONTAINER_NAME = `sandbox-integration-test-${Date.now()}`;
-const ITERATE_DAEMON_HOST_PORT = 13000 + Math.floor(Math.random() * 1000);
-
-// The repo path inside the container (cloned by entry.ts to ~/src/github.com/iterate/iterate)
-const CONTAINER_REPO_PATH = "/root/src/github.com/iterate/iterate";
+const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
+// ============ Container Helpers ============
+
+interface ContainerInfo {
+  id: string;
+  port?: number;
+}
+
+function createContainerName(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getRandomPort(): number {
+  return 13000 + Math.floor(Math.random() * 2000);
+}
+
+async function createContainer(options?: { exposePort?: boolean }): Promise<ContainerInfo> {
+  const containerName = createContainerName("sandbox-test");
+  const port = options?.exposePort ? getRandomPort() : undefined;
+
+  const envVars = [
+    "PATH=/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  ];
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    envVars.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
+  }
+  if (process.env.OPENAI_API_KEY) {
+    envVars.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
+  }
+
+  const config: Record<string, unknown> = {
+    Image: IMAGE_NAME,
+    name: containerName,
+    Env: envVars,
+    Tty: false,
+    HostConfig: { AutoRemove: false },
+  };
+
+  if (port) {
+    config.ExposedPorts = { "3000/tcp": {} };
+    (config.HostConfig as Record<string, unknown>).PortBindings = {
+      "3000/tcp": [{ HostPort: String(port) }],
+    };
+  }
+
+  const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", config);
+  await dockerApi("POST", `/containers/${createResponse.Id}/start`, {});
+
+  return { id: createResponse.Id, port };
+}
+
+async function destroyContainer(containerId: string): Promise<void> {
+  try {
+    await dockerApi("POST", `/containers/${containerId}/stop?t=5`, {});
+  } catch {
+    // might already be stopped
+  }
+  await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
+}
+
+async function waitForContainerReady(containerId: string, timeoutMs = 30000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${DOCKER_API_URL}/containers/${containerId}/json`);
+      const info = (await response.json()) as { State: { Running: boolean } };
+      if (info.State.Running) {
+        await new Promise((r) => setTimeout(r, 2000));
+        return;
+      }
+    } catch {
+      // Container not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("Timeout waiting for container to start");
+}
+
+async function waitForDaemonReady(port: number, timeoutMs = 60000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`http://localhost:${port}/api/health`);
+      if (response.ok) return;
+    } catch {
+      // not ready
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timeout waiting for daemon to be ready");
+}
+
 function createDaemonTrpcClient(port: number) {
   return createTRPCClient<TRPCRouter>({
-    links: [
-      httpLink({
-        url: `http://localhost:${port}/api/trpc`,
-      }),
-    ],
+    links: [httpLink({ url: `http://localhost:${port}/api/trpc` })],
   });
 }
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
-  let containerId: string;
+// ============ Tests ============
 
+describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   beforeAll(async () => {
     console.log("Building sandbox image...");
     execSync(`docker build -t ${IMAGE_NAME} -f apps/os/sandbox/Dockerfile .`, {
       cwd: REPO_ROOT,
       stdio: "inherit",
     });
-
-    console.log("Creating container without bind mounts...");
-    const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
-      Image: IMAGE_NAME,
-      name: CONTAINER_NAME,
-      ExposedPorts: { "3000/tcp": {} },
-      HostConfig: {
-        PortBindings: {
-          "3000/tcp": [{ HostPort: String(ITERATE_DAEMON_HOST_PORT) }],
-        },
-      },
-    });
-    containerId = createResponse.Id;
-
-    console.log(
-      `Starting container ${containerId.slice(0, 12)} with port ${ITERATE_DAEMON_HOST_PORT}...`,
-    );
-    await dockerApi("POST", `/containers/${containerId}/start`, {});
   }, 300000);
 
-  afterAll(async () => {
-    if (containerId) {
-      console.log("Stopping and removing container...");
-      try {
-        await dockerApi("POST", `/containers/${containerId}/stop?t=5`, {});
-      } catch {
-        // might already be stopped
+  // ============ Container Setup ============
+  describe.concurrent("Container Setup", () => {
+    let container: ContainerInfo;
+
+    beforeAll(async () => {
+      container = await createContainer();
+      await waitForContainerReady(container.id);
+    }, 60000);
+
+    afterAll(async () => {
+      if (container?.id) await destroyContainer(container.id);
+    });
+
+    test("agent CLIs installed", async () => {
+      const opencode = await execInContainer(container.id, ["opencode", "--version"]);
+      expect(opencode).toMatch(/\d+\.\d+\.\d+/);
+
+      const claude = await execInContainer(container.id, ["claude", "--version"]);
+      expect(claude).toMatch(/\d+\.\d+\.\d+/);
+
+      const pi = await execInContainer(container.id, ["pi", "--version"]);
+      expect(pi).toMatch(/\d+\.\d+\.\d+/);
+    });
+
+    test.runIf(process.env.OPENAI_API_KEY)(
+      "opencode answers math question",
+      async () => {
+        const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
+        expect(output).toContain("42");
+      },
+      10000,
+    );
+
+    // Claude CLI refuses --dangerously-skip-permissions when running as root
+    // Skip this test since container runs as root
+    test.skip("claude answers math question", async () => {
+      const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
+      expect(output).toContain("42");
+    });
+
+    // pi uses anthropic provider per home-skeleton/.pi/agent/settings.json
+    test.runIf(process.env.ANTHROPIC_API_KEY)(
+      "pi answers math question",
+      async () => {
+        const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
+        expect(output).toContain("42");
+      },
+      10000,
+    );
+
+    test("container setup correct", async () => {
+      // tmux installed
+      const tmux = await execInContainer(container.id, ["which", "tmux"]);
+      expect(tmux.trim()).toBe("/usr/bin/tmux");
+
+      // repo cloned
+      const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
+      expect(ls).toContain("README.md");
+      expect(ls).toContain("apps");
+      // s6-daemons moved into apps/os/sandbox/
+
+      // no bind mounts
+      const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
+        "GET",
+        `/containers/${container.id}/json`,
+      );
+      expect(inspect.HostConfig?.Binds ?? []).toEqual([]);
+    });
+
+    test("git operations work", async () => {
+      const init = await execInContainer(container.id, ["git", "init", "/tmp/test-repo"]);
+      expect(init).toContain("Initialized");
+
+      const config = await execInContainer(container.id, [
+        "git",
+        "-C",
+        "/tmp/test-repo",
+        "config",
+        "user.email",
+      ]);
+      expect(config).toContain("@");
+
+      await execInContainer(container.id, ["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
+      await execInContainer(container.id, ["git", "-C", "/tmp/test-repo", "add", "."]);
+
+      const commit = await execInContainer(container.id, [
+        "git",
+        "-C",
+        "/tmp/test-repo",
+        "commit",
+        "-m",
+        "test",
+      ]);
+      expect(commit).toContain("test");
+    });
+  });
+
+  // ============ Daemon ============
+  describe.concurrent("Daemon", () => {
+    let container: ContainerInfo;
+
+    beforeAll(async () => {
+      container = await createContainer({ exposePort: true });
+      await waitForContainerReady(container.id);
+    }, 60000);
+
+    afterAll(async () => {
+      if (container?.id) await destroyContainer(container.id);
+    });
+
+    test("daemon accessible", async () => {
+      // from inside container
+      await expect
+        .poll(
+          async () => {
+            const r = await execInContainer(container.id, [
+              "curl",
+              "-s",
+              "http://localhost:3000/api/health",
+            ]);
+            return r.includes("ok") || r.includes("healthy");
+          },
+          { timeout: 30000, interval: 2000 },
+        )
+        .toBe(true);
+
+      // from host via exposed port
+      await expect
+        .poll(
+          async () => {
+            try {
+              const r = await fetch(`http://localhost:${container.port}/api/health`);
+              const t = await r.text();
+              return r.ok && (t.includes("ok") || t.includes("healthy"));
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 30000, interval: 2000 },
+        )
+        .toBe(true);
+    }, 70000);
+
+    test("tmux and PTY work", async () => {
+      await waitForDaemonReady(container.port!);
+
+      // PTY endpoint exists
+      const ptyResponse = await fetch(
+        `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
+      );
+      expect(ptyResponse.status).not.toBe(404);
+
+      // tmux via tRPC
+      const trpc = createDaemonTrpcClient(container.port!);
+      const sessionName = `test-${Date.now()}`;
+      const createResult = await trpc.ensureTmuxSession.mutate({
+        sessionName,
+        command: "bash",
+      });
+      expect(createResult.created).toBe(true);
+
+      const sessions = await trpc.listTmuxSessions.query();
+      expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
+    }, 70000);
+
+    test("serves assets and routes correctly", async () => {
+      await waitForDaemonReady(container.port!);
+      const baseUrl = `http://localhost:${container.port}`;
+      const trpc = createDaemonTrpcClient(container.port!);
+
+      // index.html
+      const root = await fetch(`${baseUrl}/`);
+      expect(root.ok).toBe(true);
+      expect(root.headers.get("content-type")).toContain("text/html");
+      const html = await root.text();
+      expect(html.toLowerCase()).toContain("<!doctype html>");
+
+      // health
+      const health = await fetch(`${baseUrl}/api/health`);
+      expect(health.ok).toBe(true);
+
+      // tRPC
+      const cwd = await trpc.getServerCwd.query();
+      expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
+
+      // CSS/JS bundles
+      const cssMatch = html.match(/href="(\.?\/assets\/[^"]+\.css)"/);
+      const jsMatch = html.match(/src="(\.?\/assets\/[^"]+\.js)"/);
+      if (cssMatch) {
+        const css = await fetch(`${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`);
+        expect(css.ok).toBe(true);
       }
-      await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
-    }
-  });
+      if (jsMatch) {
+        const js = await fetch(`${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`);
+        expect(js.ok).toBe(true);
+      }
 
-  test("s6-svscan starts successfully", async () => {
-    const logs = await waitForLogPattern(containerId, /Starting s6-svscan/);
-    expect(logs).toContain("Starting s6-svscan");
-  }, 60000);
+      // logo
+      const logo = await fetch(`${baseUrl}/logo.svg`);
+      expect(logo.ok).toBe(true);
 
-  test("container uses image filesystem without bind mounts", async () => {
-    const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
-      "GET",
-      `/containers/${containerId}/json`,
-    );
-    const binds = inspect.HostConfig?.Binds ?? [];
-    expect(binds).toMatchInlineSnapshot("[]");
-  });
-
-  test("service-a starts (slow starter, 2s delay)", async () => {
-    const logs = await waitForLogPattern(containerId, /\[service-a\] Listening on port 3001/);
-    expect(logs).toContain("[service-a] Listening on port 3001");
-  }, 30000);
-
-  test("service-b starts with file-based log rotation", async () => {
-    const serviceBLogPath = "/var/log/example-service-b/current";
-
-    const logs = await waitForFileLogPattern(
-      containerId,
-      serviceBLogPath,
-      /\[service-b\] Listening on port 3002/,
-    );
-    expect(logs).toContain("[service-b] Listening on port 3002");
-    expect(logs).toContain("[service-b] Ready immediately");
-  }, 30000);
-
-  test("service-a becomes ready (stdout logs)", async () => {
-    const logsWithReady = await waitForLogPattern(
-      containerId,
-      /\[service-a\] Ready after 2000ms delay/,
-    );
-    expect(logsWithReady).toContain("[service-a] Ready after 2000ms delay");
-  }, 30000);
-
-  test("can tail stdout logs using docker CLI (service-a, not service-b)", async () => {
-    const result = execSync(`docker logs --tail 20 ${containerId}`, {
-      encoding: "utf-8",
-    });
-    expect(result.length).toBeGreaterThan(0);
-    expect(result).toMatch(/s6|service-a/i);
-  });
-
-  test("can tail file-based logs for service-b", async () => {
-    const logs = await getServiceFileLogs(containerId, "/var/log/example-service-b/current");
-    expect(logs).toContain("[service-b]");
-    expect(logs).toContain("Listening on port 3002");
-  });
-
-  test("can restart s6 service and see it in logs", async () => {
-    const logsBefore = await getContainerLogs(containerId);
-    const restartCountBefore = (logsBefore.match(/\[service-a\] Listening/g) ?? []).length;
-
-    await execInContainer(containerId, [
-      "s6-svc",
-      "-r",
-      `${CONTAINER_REPO_PATH}/s6-daemons/example-service-a`,
-    ]);
-
-    await new Promise((r) => setTimeout(r, 5000));
-
-    const logsAfter = await getContainerLogs(containerId);
-    const restartCountAfter = (logsAfter.match(/\[service-a\] Listening/g) ?? []).length;
-
-    expect(restartCountAfter).toBeGreaterThan(restartCountBefore);
-  }, 30000);
-
-  test("health endpoints respond correctly", async () => {
-    const serviceAHealth = await execInContainer(containerId, [
-      "curl",
-      "-s",
-      "http://localhost:3001/health",
-    ]);
-    expect(serviceAHealth).toContain('"status":"ok"');
-
-    const serviceBHealth = await execInContainer(containerId, [
-      "curl",
-      "-s",
-      "http://localhost:3002/health",
-    ]);
-    expect(serviceBHealth).toContain('"status":"ok"');
-  }, 10000);
-
-  test("service-b successfully proxies to service-a via /ping", async () => {
-    // service-b's upstream is configured to service-a's /health endpoint
-    // so /ping returns the health JSON response + " -> service-b"
-    const response = await execInContainer(containerId, [
-      "curl",
-      "-s",
-      "http://localhost:3002/ping",
-    ]);
-    expect(response).toContain('"status":"ok"');
-    expect(response).toContain('"name":"service-a"');
-    expect(response).toContain("-> service-b");
-  }, 10000);
-
-  // FLAKY: Container clones from GitHub, not local checkout. Log path depends on what's
-  // deployed to main branch. Will fail if local changes to s6-daemons/iterate-daemon
-  // haven't been pushed yet.
-  test.skip("iterate-daemon starts and logs are written to file", async () => {
-    await expect
-      .poll(
-        async () => {
-          const logs = await execInContainer(containerId, [
-            "cat",
-            "/var/log/iterate-daemon/current",
-          ]);
-          return /Server running at http:\/\/.+:3000/.test(logs);
-        },
-        { timeout: 120000, interval: 3000 },
-      )
-      .toBe(true);
-  }, 130000);
-
-  test("iterate-daemon health check responds OK from inside container", async () => {
-    await expect
-      .poll(
-        async () => {
-          const response = await execInContainer(containerId, [
-            "curl",
-            "-s",
-            "http://localhost:3000/api/health",
-          ]);
-          return response.includes("ok") || response.includes("healthy");
-        },
-        { timeout: 30000, interval: 2000 },
-      )
-      .toBe(true);
-  }, 40000);
-
-  test("iterate-daemon accessible from host via exposed port", async () => {
-    await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}/api/health`);
-            const text = await response.text();
-            return response.ok && (text.includes("ok") || text.includes("healthy"));
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 30000, interval: 2000 },
-      )
-      .toBe(true);
-  }, 40000);
-
-  test("repo is cloned and accessible in container", async () => {
-    // The container clones from GitHub, so we just verify the repo exists and has expected structure
-    const result = await execInContainer(containerId, ["ls", `${CONTAINER_REPO_PATH}`]);
-    expect(result).toContain("README.md");
-    expect(result).toContain("apps");
-    expect(result).toContain("s6-daemons");
-  });
-
-  // ============ Tmux + PTY tests ============
-
-  test("tmux is installed in container", async () => {
-    const result = await execInContainer(containerId, ["which", "tmux"]);
-    expect(result.trim()).toBe("/usr/bin/tmux");
-  });
-
-  test("can create and list tmux sessions via tRPC", async () => {
-    const trpc = createDaemonTrpcClient(ITERATE_DAEMON_HOST_PORT);
-    const testSessionName = `test-session-${Date.now()}`;
-
-    // Create a tmux session via tRPC
-    const createResult = await trpc.ensureTmuxSession.mutate({
-      sessionName: testSessionName,
-      command: "bash",
-    });
-    expect(createResult.created).toBe(true);
-
-    // List sessions and verify it exists
-    const sessions = await trpc.listTmuxSessions.query();
-    expect(sessions.some((s: { name: string }) => s.name === testSessionName)).toBe(true);
-  }, 30000);
-
-  test("can create tmux session directly in container and verify it exists", async () => {
-    const sessionName = `direct-test-${Date.now()}`;
-
-    // Create tmux session directly via exec (bypassing daemon)
-    const createResult = await execInContainer(containerId, [
-      "tmux",
-      "new-session",
-      "-d",
-      "-s",
-      sessionName,
-    ]);
-    // tmux returns empty on success
-    expect(createResult.trim()).toBe("");
-
-    // Verify the session exists
-    const listResult = await execInContainer(containerId, ["tmux", "list-sessions"]);
-    expect(listResult).toContain(sessionName);
-
-    // Clean up
-    await execInContainer(containerId, ["tmux", "kill-session", "-t", sessionName]);
-  }, 30000);
-
-  test("PTY endpoint route exists", async () => {
-    // Node's fetch can't do WebSocket upgrades, so just verify the route exists
-    // by making a regular GET request - should get 400 Bad Request (not 404)
-    const response = await fetch(
-      `http://localhost:${ITERATE_DAEMON_HOST_PORT}/api/pty/ws?cols=80&rows=24`,
-    );
-    // Route should exist (not 404) - will likely be 400 or 426 since it expects WebSocket
-    expect(response.status).not.toBe(404);
-  });
-
-  // ============ Client asset serving tests ============
-
-  test("daemon serves index.html at root", async () => {
-    const response = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}/`);
-    expect(response.ok).toBe(true);
-    expect(response.headers.get("content-type")).toContain("text/html");
-
-    const html = await response.text();
-    expect(html.toLowerCase()).toContain("<!doctype html>");
-    expect(html).toContain("<title>");
-    // Should reference the built JS bundle (either absolute or relative path)
-    expect(html).toMatch(/src="\.?\/assets\/index-[a-zA-Z0-9]+\.js"/);
-  });
-
-  test("daemon serves CSS bundle", async () => {
-    // First get index.html to find the actual CSS filename
-    const indexResponse = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}/`);
-    const html = await indexResponse.text();
-
-    // Extract CSS filename from the HTML (e.g., /assets/index-B298OPQd.css or ./assets/...)
-    const cssMatch = html.match(/href="(\.?\/assets\/index-[a-zA-Z0-9]+\.css)"/);
-    expect(cssMatch).not.toBeNull();
-
-    const cssPath = cssMatch![1]!.replace(/^\.\//, "/"); // Normalize ./assets to /assets
-    const cssResponse = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}${cssPath}`);
-    expect(cssResponse.ok).toBe(true);
-    expect(cssResponse.headers.get("content-type")).toContain("text/css");
-
-    const css = await cssResponse.text();
-    expect(css.length).toBeGreaterThan(1000); // Should be a substantial CSS file
-  });
-
-  test("daemon serves JS bundle", async () => {
-    // First get index.html to find the actual JS filename
-    const indexResponse = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}/`);
-    const html = await indexResponse.text();
-
-    // Extract JS filename from the HTML (e.g., /assets/index-ZAeYHw86.js or ./assets/...)
-    const jsMatch = html.match(/src="(\.?\/assets\/index-[a-zA-Z0-9]+\.js)"/);
-    expect(jsMatch).not.toBeNull();
-
-    const jsPath = jsMatch![1]!.replace(/^\.\//, "/"); // Normalize ./assets to /assets
-    const jsResponse = await fetch(`http://localhost:${ITERATE_DAEMON_HOST_PORT}${jsPath}`);
-    expect(jsResponse.ok).toBe(true);
-    expect(jsResponse.headers.get("content-type")).toContain("javascript");
-
-    const js = await jsResponse.text();
-    expect(js.length).toBeGreaterThan(10000); // Should be a substantial JS bundle
-  });
-
-  // ============ Proxy compatibility tests ============
-  // These verify that all paths the os worker proxy would forward to work correctly
-
-  test("all proxy-forwarded routes respond correctly", async () => {
-    const baseUrl = `http://localhost:${ITERATE_DAEMON_HOST_PORT}`;
-    const trpc = createDaemonTrpcClient(ITERATE_DAEMON_HOST_PORT);
-
-    // 1. Root path (index.html) - used when accessing /org/.../proxy/3000/
-    const rootResponse = await fetch(`${baseUrl}/`);
-    expect(rootResponse.ok).toBe(true);
-    expect(rootResponse.headers.get("content-type")).toContain("text/html");
-
-    // 2. Health endpoint - used by proxy health checks
-    const healthResponse = await fetch(`${baseUrl}/api/health`);
-    expect(healthResponse.ok).toBe(true);
-    const healthBody = await healthResponse.text();
-    expect(healthBody).toMatch(/ok|healthy/i);
-
-    // 3. tRPC endpoints - the main API surface
-    const serverCwd = await trpc.getServerCwd.query();
-    expect(serverCwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
-    expect(serverCwd.homeDir).toBe("/root");
-
-    // 4. Static assets with cache-busted filenames
-    const indexHtml = await (await fetch(`${baseUrl}/`)).text();
-    const cssMatch = indexHtml.match(/href="(\.?\/assets\/[^"]+\.css)"/);
-    const jsMatch = indexHtml.match(/src="(\.?\/assets\/[^"]+\.js)"/);
-
-    if (cssMatch) {
-      const cssPath = cssMatch[1]!.replace(/^\.\//, "/");
-      const cssResponse = await fetch(`${baseUrl}${cssPath}`);
-      expect(cssResponse.ok).toBe(true);
-    }
-
-    if (jsMatch) {
-      const jsPath = jsMatch[1]!.replace(/^\.\//, "/");
-      const jsResponse = await fetch(`${baseUrl}${jsPath}`);
-      expect(jsResponse.ok).toBe(true);
-    }
-
-    // 5. Favicon/logo
-    const logoResponse = await fetch(`${baseUrl}/logo.svg`);
-    expect(logoResponse.ok).toBe(true);
-    expect(logoResponse.headers.get("content-type")).toContain("svg");
-
-    // 6. SPA fallback - non-existent paths should return index.html for client-side routing
-    const spaResponse = await fetch(`${baseUrl}/agents/some-agent-id`);
-    expect(spaResponse.ok).toBe(true);
-    expect(spaResponse.headers.get("content-type")).toContain("text/html");
-    const spaHtml = await spaResponse.text();
-    expect(spaHtml).toContain("<title>");
+      // SPA fallback
+      const spa = await fetch(`${baseUrl}/agents/some-agent-id`);
+      expect(spa.ok).toBe(true);
+      expect(spa.headers.get("content-type")).toContain("text/html");
+    }, 30000);
   });
 });

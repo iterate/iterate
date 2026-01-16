@@ -23,8 +23,8 @@ export interface CreateAgentParams {
 export interface CreateAgentResult {
   /** Harness-specific session ID (e.g., OpenCode session ID) */
   harnessSessionId: string;
-  /** Tmux session name for terminal UI */
-  tmuxSession: string;
+  /** Tmux session name for terminal UI (optional - opencode uses SDK streaming instead) */
+  tmuxSession?: string;
 }
 
 export interface AgentHarness {

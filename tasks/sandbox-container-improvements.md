@@ -131,32 +131,11 @@ if (stats.isSymbolicLink()) {
 }
 ```
 
-## Missing Log Service for example-service-a
-
-### Current State
-
-Only `iterate-daemon` and `example-service-b-depends-on-a` have log services.
-`example-service-a` logs go to stdout (inherited from s6-svscan).
-
-### Fix
-
-Add `s6-daemons/example-service-a/log/run`:
-
-```bash
-#!/bin/sh
-mkdir -p /var/log/example-service-a
-exec s6-log -b n20 s1000000 S50000000 T /var/log/example-service-a
-```
-
-### Note
-
-Current inconsistency is intentional to demonstrate both logging approaches (stdout vs file-based).
-
 ## Health Check Background Process Reliability
 
 ### Issue
 
-`s6-daemons/*/run` scripts spawn health check as background process:
+`apps/os/sandbox/s6-daemons/*/run` scripts spawn health check as background process:
 
 ```bash
 "$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3000/api/health &

@@ -23,7 +23,7 @@ curl http://127.0.0.1:2375/version
 
 ### Local Docker Snapshots
 
-When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built from the repo root using `apps/os/sandbox/Dockerfile` if it doesn't exist.
+When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background from the repo root using `apps/os/sandbox/Dockerfile`. Docker's layer caching ensures this is fast (~2s) if nothing changed, while still picking up Dockerfile changes without manual rebuilds.
 
 To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
 
@@ -135,7 +135,7 @@ The snapshot (`apps/os/sandbox/Dockerfile`) includes:
 - OpenCode CLI
 - Git (configured for iterate-bot)
 
-The entry point (`apps/os/sandbox/entry.ts`) runs `pnpm install` and starts the daemon server on port 3000.
+The entry point (`apps/os/sandbox/entry.sh`) sets up the environment and starts s6 process supervision.
 
 For detailed documentation on the s6 process supervision setup, see [`apps/os/sandbox/README.md`](./sandbox/README.md).
 

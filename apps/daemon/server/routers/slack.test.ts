@@ -20,7 +20,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     harnessType: "opencode",
     harnessSessionId: "opencode-session-123",
     tmuxSession: "tmux-1",
-    workingDirectory: "/root/src/github.com/iterate/iterate",
+    workingDirectory: "/home/iterate/src/github.com/iterate/iterate",
     status: "running",
     initialPrompt: null,
     createdAt: now,

@@ -24,6 +24,7 @@
     "snapshot:daytona:stg": "doppler run --config stg -- tsx sandbox/daytona-snapshot.ts",
     "snapshot:daytona:prd": "doppler run --config prd -- tsx sandbox/daytona-snapshot.ts",
     "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts",
+    "snapshot:local-docker:smoketest": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts'",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {

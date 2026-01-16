@@ -10,17 +10,47 @@ import { upgradeWebSocket } from "../utils/hono.ts";
 import { hasTmuxSession } from "../tmux-control.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { getHarness, getCommandString } from "../agent-harness.ts";
+import type { Agent, AgentType } from "../db/schema.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 const COMMAND_PREFIX = "\x00[command]\x00";
 
+// OpenCode server URL
+const OPENCODE_BASE_URL = "http://localhost:4096";
+
 interface PtyConnection {
   ptyProcess: pty.IPty;
-  tmuxSessionName: string | null;
+  connectionType: "tmux" | "agent" | "shell";
+  identifier: string | null;
 }
 
 const ptyConnections = new Map<WSContext<WebSocket>, PtyConnection>();
+
+/**
+ * Get the CLI command and args for spawning an agent
+ */
+function getAgentCommand(agent: Agent): { command: string; args: string[] } {
+  switch (agent.harnessType as AgentType) {
+    case "claude-code":
+      return { command: "claude", args: [] };
+
+    case "opencode":
+      // OpenCode uses attach command to connect to existing session
+      if (!agent.harnessSessionId) {
+        throw new Error("OpenCode agent has no session ID");
+      }
+      return {
+        command: "opencode",
+        args: ["attach", OPENCODE_BASE_URL, "--session", agent.harnessSessionId],
+      };
+
+    case "pi":
+      return { command: "pi", args: [] };
+
+    default:
+      throw new Error(`Unknown agent type: ${agent.harnessType}`);
+  }
+}
 
 export const ptyRouter = new Hono();
 
@@ -29,36 +59,68 @@ ptyRouter.get(
   upgradeWebSocket((c) => {
     const url = new URL(c.req.url);
     const tmuxSessionName = url.searchParams.get("tmuxSession");
+    const agentSlug = url.searchParams.get("agentSlug");
 
     return {
       async onOpen(_event, ws) {
         console.log(
-          `[PTY] New connection ${tmuxSessionName ? ` (tmux session: ${tmuxSessionName})` : ""}`,
+          `[PTY] New connection${tmuxSessionName ? ` (tmux: ${tmuxSessionName})` : ""}${agentSlug ? ` (agent: ${agentSlug})` : ""}`,
         );
 
         let ptyProcess: pty.IPty;
+        let connectionType: "tmux" | "agent" | "shell" = "shell";
+        let identifier: string | null = null;
+
         try {
-          if (tmuxSessionName) {
+          if (agentSlug) {
+            // ========== AGENT CONNECTION ==========
+            // Spawn the agent CLI directly (no tmux)
+            const [agent] = await db
+              .select()
+              .from(schema.agents)
+              .where(eq(schema.agents.slug, agentSlug))
+              .limit(1);
+
+            if (!agent) {
+              ws.send(`\x1b[31mAgent "${agentSlug}" not found.\x1b[0m\r\n`);
+              ws.close(4000, "Agent not found");
+              return;
+            }
+
+            const { command, args } = getAgentCommand(agent);
+
+            console.log(
+              `[PTY] Spawning agent CLI: ${command} ${args.join(" ")} in ${agent.workingDirectory}`,
+            );
+
+            ptyProcess = pty.spawn(command, args, {
+              name: "xterm-256color",
+              cwd: agent.workingDirectory,
+              env: {
+                ...process.env,
+                TERM: "xterm-256color",
+                COLORTERM: "truecolor",
+              } as Record<string, string>,
+            });
+
+            connectionType = "agent";
+            identifier = agentSlug;
+
+            // Update agent status to running
+            await db
+              .update(schema.agents)
+              .set({ status: "running" })
+              .where(eq(schema.agents.slug, agentSlug));
+          } else if (tmuxSessionName) {
+            // ========== TMUX CONNECTION (for utility tools like btop, logs) ==========
             if (!hasTmuxSession(tmuxSessionName)) {
-              let commandInfo = "";
-              const [agent] = await db
-                .select()
-                .from(schema.agents)
-                .where(eq(schema.agents.tmuxSession, tmuxSessionName))
-                .limit(1);
-              if (agent) {
-                const harness = getHarness(agent.harnessType);
-                const cmd = harness.getStartCommand(agent.workingDirectory, {
-                  prompt: agent.initialPrompt ?? undefined,
-                });
-                commandInfo = `\r\n\r\nCommand: cd "${agent.workingDirectory}" && ${getCommandString(cmd)}`;
-              }
-              const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.${commandInfo}\r\n\r\nThe session may have exited or was never created.\r\nTry restarting the agent or check if the command failed to start.`;
+              const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.\r\n\r\nThe session may have exited or was never created.`;
               ws.send(`\x1b[31m${errorMsg}\x1b[0m\r\n`);
               ws.close(4000, "Session does not exist");
               return;
             }
 
+            // Configure tmux session
             spawnSync("tmux", [
               "-S",
               TMUX_SOCKET,
@@ -91,7 +153,11 @@ ptyRouter.get(
                 } as Record<string, string>,
               },
             );
+
+            connectionType = "tmux";
+            identifier = tmuxSessionName;
           } else {
+            // ========== SHELL CONNECTION ==========
             const shell = process.env.SHELL || "/bin/bash";
             ptyProcess = pty.spawn(shell, [], {
               name: "xterm-256color",
@@ -102,6 +168,8 @@ ptyRouter.get(
                 COLORTERM: "truecolor",
               } as Record<string, string>,
             });
+
+            connectionType = "shell";
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -111,22 +179,39 @@ ptyRouter.get(
           return;
         }
 
-        ptyConnections.set(ws, { ptyProcess, tmuxSessionName });
+        ptyConnections.set(ws, { ptyProcess, connectionType, identifier });
 
         ptyProcess.onData((data) => {
           ws.send(data);
         });
 
-        ptyProcess.onExit(({ exitCode }) => {
-          console.log(`[PTY] Process exited: code=${exitCode}`);
+        ptyProcess.onExit(async ({ exitCode }) => {
+          console.log(`[PTY] Process exited: code=${exitCode}, type=${connectionType}`);
+
+          // Update agent status when process exits
+          if (connectionType === "agent" && identifier) {
+            await db
+              .update(schema.agents)
+              .set({ status: "stopped" })
+              .where(eq(schema.agents.slug, identifier));
+          }
+
           if (exitCode === 0) {
-            const exitMessage = tmuxSessionName ? `Tmux session detached` : `Shell exited`;
+            const exitMessage =
+              connectionType === "tmux"
+                ? "Tmux session detached"
+                : connectionType === "agent"
+                  ? "Agent exited"
+                  : "Shell exited";
             ws.send(`\r\n\x1b[33m${exitMessage}\x1b[0m\r\n`);
             ws.close(1000, "Process exited normally");
           } else {
-            const exitMessage = tmuxSessionName
-              ? `Tmux session exited (code: ${exitCode})`
-              : `Shell exited (code: ${exitCode})`;
+            const exitMessage =
+              connectionType === "tmux"
+                ? `Tmux session exited (code: ${exitCode})`
+                : connectionType === "agent"
+                  ? `Agent exited (code: ${exitCode})`
+                  : `Shell exited (code: ${exitCode})`;
             ws.send(`\r\n\x1b[31m${exitMessage}\x1b[0m\r\n`);
             ws.close(4000, `Process exited with code ${exitCode}`);
           }
@@ -160,7 +245,7 @@ ptyRouter.get(
         const conn = ptyConnections.get(ws);
         if (conn) {
           console.log(
-            `[PTY] Connection closed${conn.tmuxSessionName ? ` (tmux session: ${conn.tmuxSessionName})` : ""}`,
+            `[PTY] Connection closed (${conn.connectionType}: ${conn.identifier || "none"})`,
           );
           conn.ptyProcess.kill();
           ptyConnections.delete(ws);
