@@ -9,14 +9,17 @@
  * 5. Wait for bootstrap request, return API keys in response
  * 6. Verify daemon/opencode logs look sensible
  * 7. Run `opencode run "what is 50 - 8"` → assert "42"
- * 8. Always delete sandbox in finally block
+ * 8. Run `claude -p "what is 50 - 8"` → assert "42"
+ * 9. Run `pi -p "what is 50 - 8"` → assert "42"
+ * 10. Verify `git status` works in iterate repo
+ * 11. Always delete sandbox in finally block
  *
  * ENVIRONMENT VARIABLES:
  *
  * Required (from Doppler):
  *   DAYTONA_API_KEY          - Daytona API key
  *   OPENAI_API_KEY           - For opencode LLM calls
- *   ANTHROPIC_API_KEY        - Fallback LLM key
+ *   ANTHROPIC_API_KEY        - For claude and pi LLM calls
  *
  * Optional:
  *   DAYTONA_SNAPSHOT_NAME       - Use existing snapshot (skips build)
@@ -240,9 +243,8 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
       // Validate required env vars
       if (!DAYTONA_API_KEY) throw new Error("DAYTONA_API_KEY required");
       if (!snapshotName) throw new Error("Snapshot name not set (beforeAll should have built one)");
-      if (!OPENAI_API_KEY && !ANTHROPIC_API_KEY) {
-        throw new Error("At least one of OPENAI_API_KEY or ANTHROPIC_API_KEY required");
-      }
+      if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY required (for opencode)");
+      if (!ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY required (for claude and pi)");
 
       // Resources to clean up
       let mockServer: Server | null = null;
@@ -459,6 +461,88 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         expect(opencodeOutput).toContain("42");
         console.log("");
         console.log("✓ SUCCESS: opencode correctly computed 42");
+
+        // 11. Run claude smoketest
+        printSection("CLAUDE SMOKETEST: 'what is 50 - 8?'");
+        console.log('Running: claude -p "what is 50 - 8? respond with just the number"');
+        console.log("");
+
+        const claudePromise = sandbox.process.executeCommand(
+          'bash -c "source ~/.iterate/.env && claude -p \\"what is 50 - 8? respond with just the number\\""',
+        );
+        const claudeTimeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
+        );
+
+        const claudeResult = await Promise.race([claudePromise, claudeTimeoutPromise]);
+        const claudeOutput = claudeResult.result ?? "";
+
+        console.log(
+          "┌─────────────────────────────────────────────────────────────────────────────┐",
+        );
+        console.log(
+          "│ CLAUDE RESPONSE:                                                            │",
+        );
+        console.log(
+          "├─────────────────────────────────────────────────────────────────────────────┤",
+        );
+        for (const line of claudeOutput.split("\n")) {
+          console.log(`│ ${line}`);
+        }
+        console.log(
+          "└─────────────────────────────────────────────────────────────────────────────┘",
+        );
+
+        expect(claudeOutput).toContain("42");
+        console.log("");
+        console.log("✓ SUCCESS: claude correctly computed 42");
+
+        // 12. Run pi smoketest
+        printSection("PI SMOKETEST: 'what is 50 - 8?'");
+        console.log('Running: pi -p "what is 50 - 8? respond with just the number"');
+        console.log("");
+
+        const piPromise = sandbox.process.executeCommand(
+          'bash -c "source ~/.iterate/.env && pi -p \\"what is 50 - 8? respond with just the number\\""',
+        );
+        const piTimeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),
+        );
+
+        const piResult = await Promise.race([piPromise, piTimeoutPromise]);
+        const piOutput = piResult.result ?? "";
+
+        console.log(
+          "┌─────────────────────────────────────────────────────────────────────────────┐",
+        );
+        console.log(
+          "│ PI RESPONSE:                                                                │",
+        );
+        console.log(
+          "├─────────────────────────────────────────────────────────────────────────────┤",
+        );
+        for (const line of piOutput.split("\n")) {
+          console.log(`│ ${line}`);
+        }
+        console.log(
+          "└─────────────────────────────────────────────────────────────────────────────┘",
+        );
+
+        expect(piOutput).toContain("42");
+        console.log("");
+        console.log("✓ SUCCESS: pi correctly computed 42");
+
+        // 13. Verify git status works in iterate repo
+        printSection("GIT STATUS CHECK");
+        const gitStatusResult = await sandbox.process.executeCommand(
+          "git -C ~/src/github.com/iterate/iterate status",
+        );
+        const gitStatusOutput = gitStatusResult.result ?? "";
+        console.log(gitStatusOutput);
+
+        expect(gitStatusOutput).toContain("On branch");
+        console.log("");
+        console.log("✓ SUCCESS: git status works correctly");
       } finally {
         // Always clean up resources
         console.log("[test] Cleaning up...");
