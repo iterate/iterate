@@ -212,7 +212,8 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
     console.log("This may take several minutes...");
 
     // Run snapshot creation and capture output to get snapshot name
-    const output = execSync(`pnpm snapshot:daytona:prd`, {
+    // Uses current APP_STAGE from doppler (dev-$ITERATE_USER locally, prd in CI)
+    const output = execSync(`pnpm snapshot:daytona`, {
       cwd: join(REPO_ROOT, "apps/os"),
       encoding: "utf-8",
       env: { ...process.env, SANDBOX_ITERATE_REPO_REF: repoRef },
@@ -220,7 +221,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
     });
     console.log(output);
 
-    // Parse snapshot name from output (format: "Creating snapshot: prd--20260116-230007")
+    // Parse snapshot name from output (format: "Creating snapshot: dev-jonas--20260116-230007" or "prd--...")
     const match = output.match(/Creating snapshot: ([\w-]+)/);
     if (!match) {
       throw new Error("Could not parse snapshot name from build output");

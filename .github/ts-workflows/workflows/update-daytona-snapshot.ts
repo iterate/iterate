@@ -65,7 +65,8 @@ export default {
             RUN_DAYTONA_TESTS: "true",
             DAYTONA_SNAPSHOT_NAME: "${{ needs.build-snapshot.outputs.snapshot_name }}",
           },
-          run: "pnpm os snapshot:daytona:test",
+          // Use doppler prd config explicitly since this runs against the prd snapshot
+          run: "doppler run --config prd -- sh -c 'RUN_DAYTONA_TESTS=true pnpm vitest run --reporter=verbose apps/os/sandbox/daytona.test.ts'",
         },
       ],
     },
