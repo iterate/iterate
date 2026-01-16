@@ -11,6 +11,12 @@ import { LigaturesAddon } from "@xterm/addon-ligatures";
 interface XtermTerminalProps {
   wsBase?: string;
   tmuxSessionName?: string;
+  initialCommand?: {
+    command?: string;
+    autorun?: boolean;
+  };
+  ptyId?: string;
+  onParamsChange?: (params: { ptyId?: string; clearCommand?: boolean }) => void;
 }
 
 export interface XtermTerminalHandle {
@@ -30,7 +36,7 @@ const READY_STATE_MAP = {
 } as Record<number, string>;
 
 export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>(
-  function XtermTerminal({ wsBase, tmuxSessionName }, ref) {
+  function XtermTerminal({ wsBase, tmuxSessionName, initialCommand, ptyId, onParamsChange }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -40,8 +46,16 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const baseUri = new URL(document.baseURI);
       const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
       const base = wsBase || `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
-      return `${base}/api/pty/ws${tmuxSessionName ? `?tmuxSession=${tmuxSessionName}` : ""}`;
-    }, [wsBase, tmuxSessionName]);
+      const params = new URLSearchParams();
+      if (tmuxSessionName) params.set("tmuxSession", tmuxSessionName);
+      if (ptyId) params.set("ptyId", ptyId);
+      if (initialCommand?.command && !ptyId) {
+        params.set("command", initialCommand.command);
+        if (initialCommand.autorun) params.set("autorun", "true");
+      }
+      const query = params.toString();
+      return `${base}/api/pty/ws${query ? `?${query}` : ""}`;
+    }, [wsBase, tmuxSessionName, ptyId, initialCommand]);
 
     const socket = useWebSocket(wsUrl, undefined, {
       maxRetries: MAX_RECONNECTION_ATTEMPTS,
@@ -111,8 +125,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const sendResize = () => {
-        setTermSize({ cols: terminal.cols, rows: terminal.rows });
-        sendControl({ type: "resize", cols: terminal.cols, rows: terminal.rows });
+        const { cols, rows } = terminal;
+        setTermSize({ cols, rows });
+        sendControl({ type: "resize", cols, rows });
       };
 
       requestAnimationFrame(() => {
@@ -130,6 +145,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       }
 
       const handleOpen = () => {
+        terminal.reset();
         requestAnimationFrame(() => {
           fitAddon.fit();
           sendResize();
@@ -138,6 +154,23 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const handleMessage = (event: MessageEvent) => {
+        const data = typeof event.data === "string" ? event.data : "";
+        if (data.startsWith(COMMAND_PREFIX)) {
+          const parsed = JSON.parse(data.slice(COMMAND_PREFIX.length)) as {
+            type?: string;
+            ptyId?: string;
+            data?: string;
+          };
+          if (parsed.type === "ptyId" && parsed.ptyId) {
+            onParamsChange?.({ ptyId: parsed.ptyId });
+          } else if (parsed.type === "buffer" && parsed.data) {
+            terminal.reset();
+            terminal.write(parsed.data);
+          } else if (parsed.type === "commandExecuted") {
+            onParamsChange?.({ clearCommand: true });
+          }
+          return;
+        }
         terminal.write(event.data);
       };
 
@@ -180,7 +213,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       window.addEventListener("resize", handleWindowResize);
 
       const resizeObserver = new ResizeObserver(() => {
-        requestAnimationFrame(() => fitAddon.fit());
+        requestAnimationFrame(() => {
+          if (termRef.current) {
+            fitAddon.fit();
+          }
+        });
       });
       resizeObserver.observe(container);
 
@@ -197,20 +234,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         termRef.current = null;
         container.innerHTML = "";
       };
-    }, [socket, tmuxSessionName]);
+    }, [socket, tmuxSessionName, onParamsChange]);
 
     return (
-      <div className="absolute inset-0 bg-[#1e1e1e]">
-        <div className="absolute top-2 right-2 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
+      <div className="absolute inset-0 bg-[#1e1e1e] p-4">
+        <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
           {termSize.cols}x{termSize.rows}
         </div>
-        <div className="mx-auto h-full max-w-5xl">
+        <div className="relative h-full w-full overflow-hidden">
           <div
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
             data-tmux-session={tmuxSessionName}
-            className="h-full w-full p-4"
+            className="absolute inset-0"
             onClick={() => termRef.current?.focus()}
           />
         </div>

@@ -11,7 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
-import { Route as AppTerminalRouteImport } from './routes/_app/terminal'
+import { Route as LayoutLessTerminalRouteImport } from './routes/_layout-less/terminal'
 import { Route as AppOpencodeLogsRouteImport } from './routes/_app/opencode-logs'
 import { Route as AppDaemonLogsRouteImport } from './routes/_app/daemon-logs'
 import { Route as AppBtopRouteImport } from './routes/_app/btop'
@@ -31,10 +31,10 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTerminalRoute = AppTerminalRouteImport.update({
-  id: '/terminal',
+const LayoutLessTerminalRoute = LayoutLessTerminalRouteImport.update({
+  id: '/_layout-less/terminal',
   path: '/terminal',
-  getParentRoute: () => AppRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppOpencodeLogsRoute = AppOpencodeLogsRouteImport.update({
   id: '/opencode-logs',
@@ -88,7 +88,7 @@ export interface FileRoutesByFullPath {
   '/btop': typeof AppBtopRoute
   '/daemon-logs': typeof AppDaemonLogsRoute
   '/opencode-logs': typeof AppOpencodeLogsRoute
-  '/terminal': typeof AppTerminalRoute
+  '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
@@ -101,7 +101,7 @@ export interface FileRoutesByTo {
   '/btop': typeof AppBtopRoute
   '/daemon-logs': typeof AppDaemonLogsRoute
   '/opencode-logs': typeof AppOpencodeLogsRoute
-  '/terminal': typeof AppTerminalRoute
+  '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
@@ -116,7 +116,7 @@ export interface FileRoutesById {
   '/_app/btop': typeof AppBtopRoute
   '/_app/daemon-logs': typeof AppDaemonLogsRoute
   '/_app/opencode-logs': typeof AppOpencodeLogsRoute
-  '/_app/terminal': typeof AppTerminalRoute
+  '/_layout-less/terminal': typeof LayoutLessTerminalRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agent/new': typeof AppAgentNewRoute
   '/_app/agents/$slug': typeof AppAgentsSlugRoute
@@ -158,7 +158,7 @@ export interface FileRouteTypes {
     | '/_app/btop'
     | '/_app/daemon-logs'
     | '/_app/opencode-logs'
-    | '/_app/terminal'
+    | '/_layout-less/terminal'
     | '/_app/'
     | '/_app/agent/new'
     | '/_app/agents/$slug'
@@ -170,6 +170,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
+  LayoutLessTerminalRoute: typeof LayoutLessTerminalRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -188,12 +189,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/terminal': {
-      id: '/_app/terminal'
+    '/_layout-less/terminal': {
+      id: '/_layout-less/terminal'
       path: '/terminal'
       fullPath: '/terminal'
-      preLoaderRoute: typeof AppTerminalRouteImport
-      parentRoute: typeof AppRoute
+      preLoaderRoute: typeof LayoutLessTerminalRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/opencode-logs': {
       id: '/_app/opencode-logs'
@@ -280,7 +281,6 @@ interface AppRouteChildren {
   AppBtopRoute: typeof AppBtopRoute
   AppDaemonLogsRoute: typeof AppDaemonLogsRoute
   AppOpencodeLogsRoute: typeof AppOpencodeLogsRoute
-  AppTerminalRoute: typeof AppTerminalRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAgentNewRoute: typeof AppAgentNewRoute
   AppAgentsSlugRoute: typeof AppAgentsSlugRoute
@@ -293,7 +293,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppBtopRoute: AppBtopRoute,
   AppDaemonLogsRoute: AppDaemonLogsRoute,
   AppOpencodeLogsRoute: AppOpencodeLogsRoute,
-  AppTerminalRoute: AppTerminalRoute,
   AppIndexRoute: AppIndexRoute,
   AppAgentNewRoute: AppAgentNewRoute,
   AppAgentsSlugRoute: AppAgentsSlugRoute,
@@ -307,6 +306,7 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
+  LayoutLessTerminalRoute: LayoutLessTerminalRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

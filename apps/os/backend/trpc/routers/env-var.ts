@@ -4,6 +4,9 @@ import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectEnvVar } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+import { waitUntil } from "../../../env.ts";
+import { logger } from "../../tag-logger.ts";
 
 export const envVarRouter = router({
   list: projectProtectedProcedure
@@ -67,6 +70,14 @@ export const envVarRouter = router({
           .where(eq(projectEnvVar.id, existing.id))
           .returning();
 
+        // Poke running machines to refresh their env vars
+        waitUntil(
+          pokeRunningMachinesToRefresh(ctx.db, ctx.project.id, ctx.env).catch((err) => {
+            // Don't fail the mutation if poke fails
+            logger.error("[env-var] Failed to poke machines", err);
+          }),
+        );
+
         return {
           id: updated.id,
           key: updated.key,
@@ -93,6 +104,14 @@ export const envVarRouter = router({
           message: "Failed to create environment variable",
         });
       }
+
+      // Poke running machines to refresh their env vars
+      waitUntil(
+        pokeRunningMachinesToRefresh(ctx.db, ctx.project.id, ctx.env).catch((err) => {
+          // Don't fail the mutation if poke fails
+          logger.error("[env-var] Failed to poke machines", err);
+        }),
+      );
 
       return {
         id: created.id,
@@ -142,6 +161,14 @@ export const envVarRouter = router({
             input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
           ),
         );
+
+      // Poke running machines to refresh their env vars
+      waitUntil(
+        pokeRunningMachinesToRefresh(ctx.db, ctx.project.id, ctx.env).catch((err) => {
+          // Don't fail the mutation if poke fails
+          logger.error("[env-var] Failed to poke machines", err);
+        }),
+      );
 
       return { success: true };
     }),

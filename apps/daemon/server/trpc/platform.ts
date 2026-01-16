@@ -1,153 +1,184 @@
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { z } from "zod/v4";
 import { simpleGit } from "simple-git";
 import { quote } from "shell-quote";
 import { x } from "tinyexec";
+import { getTmuxSocketPath } from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
 // Store for platform-injected env vars
 const platformEnvVars: Record<string, string> = {};
 
 // Store for cloned repos status
-const clonedRepos: Array<{
+const clonedReposStatus: Map<
+  string,
+  {
+    status: "pending" | "cloning" | "cloned" | "error";
+    error?: string;
+  }
+> = new Map();
+
+/**
+ * Apply environment variables to the daemon process and tmux sessions.
+ * This function:
+ * 1. Replaces vars in memory and process.env (removes stale keys)
+ * 2. Writes them to ~/.iterate/.env file
+ * 3. Sources the file in all active tmux sessions
+ */
+export async function applyEnvVars(vars: Record<string, string>): Promise<{
+  injectedCount: number;
+  removedCount: number;
+  envFilePath: string;
+}> {
+  const envFilePath = join(homedir(), ".iterate/.env");
+
+  // Find keys to remove (were in platformEnvVars but not in new vars)
+  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in vars));
+
+  // Remove stale keys from process.env and platformEnvVars
+  for (const key of keysToRemove) {
+    delete process.env[key];
+    delete platformEnvVars[key];
+  }
+
+  // Clear platformEnvVars and replace with new vars
+  for (const key of Object.keys(platformEnvVars)) {
+    delete platformEnvVars[key];
+  }
+  Object.assign(platformEnvVars, vars);
+  Object.assign(process.env, vars);
+
+  console.log(
+    `[platform] Applied ${Object.keys(vars).length} env vars, removed ${keysToRemove.length} stale`,
+  );
+
+  // Write env vars to a file that tmux sessions can source
+  const envFileContent = Object.entries(platformEnvVars)
+    .map(([key, value]) => `export ${key}=${quote([value])}`)
+    .join("\n");
+  mkdirSync(dirname(envFilePath), { recursive: true });
+  writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
+
+  // Refresh tmux sessions with new env vars (using the daemon's tmux socket)
+  const tmuxSocket = getTmuxSocketPath();
+  const listResult = await x("tmux", ["-S", tmuxSocket, "list-sessions", "-F", "#{session_name}"]);
+  const sessions = listResult.stdout.trim().split("\n").filter(Boolean);
+
+  if (sessions.length > 0) {
+    // Send source command to each session in parallel
+    await Promise.all(
+      sessions.map((session) =>
+        x(
+          "tmux",
+          ["-S", tmuxSocket, "send-keys", "-t", session, `source ${envFilePath}`, "Enter"],
+          {
+            throwOnError: true,
+          },
+        ),
+      ),
+    );
+    console.log(`[platform] Refreshed env vars in ${sessions.length} tmux sessions`);
+  }
+
+  return {
+    injectedCount: Object.keys(vars).length,
+    removedCount: keysToRemove.length,
+    envFilePath,
+  };
+}
+
+/**
+ * Clear any existing GitHub URL rewrites from git config.
+ * Called when GitHub is disconnected or before setting a new token.
+ */
+export async function clearGitHubCredentials(): Promise<void> {
+  const git = simpleGit();
+
+  try {
+    const config = await git.listConfig("global");
+    const githubUrlKeys = Object.keys(config.all).filter(
+      (key) => key.startsWith("url.https://x-access-token:") && key.includes("github.com"),
+    );
+    for (const key of githubUrlKeys) {
+      // Remove the .insteadOf suffix to get the section name for --unset
+      const sectionKey = key.replace(/\.insteadof$/i, ".insteadOf");
+      await git.raw(["config", "--global", "--unset", sectionKey]).catch(() => {
+        // Ignore errors if key doesn't exist
+      });
+    }
+    if (githubUrlKeys.length > 0) {
+      console.log(
+        `[platform] Cleared ${githubUrlKeys.length} stale GitHub credentials from git config`,
+      );
+    }
+  } catch {
+    // Ignore errors reading config
+  }
+}
+
+/**
+ * Configure git to use a GitHub access token for authentication.
+ * Uses URL rewrite so all https://github.com/ URLs automatically use the token.
+ * Clears any previous tokens to avoid accumulating stale entries.
+ */
+export async function configureGitHubCredential(token: string): Promise<void> {
+  const git = simpleGit();
+
+  // Clear any existing GitHub URL rewrites (tokens rotate hourly)
+  await clearGitHubCredentials();
+
+  // Set new URL rewrite: https://github.com/ -> https://x-access-token:TOKEN@github.com/
+  await git.addConfig(
+    `url.https://x-access-token:${token}@github.com/.insteadOf`,
+    "https://github.com/",
+    false, // not append
+    "global",
+  );
+  console.log("[platform] Configured git credential helper for GitHub");
+}
+
+export type RepoInfo = {
+  url: string;
+  branch: string;
+  path: string;
   owner: string;
   name: string;
-  path: string;
-  branch: string;
-  status: "pending" | "cloning" | "cloned" | "error";
-  error?: string;
-}> = [];
+};
 
-export const platformRouter = createTRPCRouter({
-  /**
-   * Inject environment variables from the platform.
-   * These are stored and can be retrieved via GET.
-   */
-  setEnvVars: publicProcedure
-    .input(
-      z.object({
-        vars: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const envFilePath = join(homedir(), ".iterate/.env");
-      const { vars } = input;
+/**
+ * Clone repositories. Called directly by bootstrap-refresh.ts.
+ * Cloning happens asynchronously in the background.
+ */
+export function cloneRepos(repos: RepoInfo[]): void {
+  for (const repo of repos) {
+    const repoKey = `${repo.owner}/${repo.name}`;
+    const expandedPath = repo.path.replace("~", homedir());
+    const existing = clonedReposStatus.get(repoKey);
 
-      Object.assign(platformEnvVars, vars);
-      Object.assign(process.env, vars);
+    // Skip if already cloning to prevent concurrent git operations
+    if (existing?.status === "cloning") {
+      console.log(`[platform] Skipping ${repoKey} - already cloning`);
+      continue;
+    }
 
-      console.log(`[platform] Injected ${Object.keys(vars).length} env vars to ${envFilePath}`);
+    clonedReposStatus.set(repoKey, { status: "cloning" });
 
-      // Write env vars to a file that tmux sessions can source
-      const envFileContent = Object.entries(platformEnvVars)
-        .map(([key, value]) => `export ${key}=${quote([value])}`)
-        .join("\n");
-      mkdirSync(dirname(envFilePath), { recursive: true });
-      writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
-
-      // Refresh tmux sessions with new env vars
-      const listResult = await x("tmux", ["list-sessions", "-F", "#{session_name}"]);
-      const sessions = listResult.stdout.trim().split("\n").filter(Boolean);
-
-      if (sessions.length > 0) {
-        // Send source command to each session in parallel
-        await Promise.all(
-          sessions.map((session) =>
-            x("tmux", ["send-keys", "-t", session, `source ${envFilePath}`, "Enter"], {
-              throwOnError: true,
-            }),
-          ),
-        );
-        console.log(`[platform] Refreshed env vars in ${sessions.length} tmux sessions`);
-      }
-
-      return {
-        success: true,
-        injectedCount: Object.keys(vars).length,
-        envFilePath,
-      };
-    }),
-
-  /**
-   * Clone repositories from the platform.
-   * Cloning happens asynchronously.
-   */
-  cloneRepos: publicProcedure
-    .input(
-      z.object({
-        repos: z.array(
-          z.object({
-            url: z.string(),
-            branch: z.string(),
-            path: z.string(),
-            owner: z.string(),
-            name: z.string(),
-          }),
-        ),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const { repos } = input;
-
-      // Add repos to tracking (skip if already cloning to prevent concurrent operations)
-      for (const repo of repos) {
-        const expandedPath = repo.path.replace("~", homedir());
-        const existing = clonedRepos.find((r) => r.owner === repo.owner && r.name === repo.name);
-        if (existing) {
-          // Skip if already cloning to prevent concurrent git operations
-          if (existing.status === "cloning") {
-            console.log(`[platform] Skipping ${repo.owner}/${repo.name} - already cloning`);
-            continue;
-          }
-          existing.status = "pending";
-          existing.path = expandedPath;
-          existing.branch = repo.branch;
-          existing.error = undefined;
-        } else {
-          clonedRepos.push({
-            owner: repo.owner,
-            name: repo.name,
-            path: expandedPath,
-            branch: repo.branch,
-            status: "pending",
-          });
-        }
-      }
-
-      // Clone repos asynchronously
-      for (const repo of repos) {
-        const expandedPath = repo.path.replace("~", homedir());
-        const repoEntry = clonedRepos.find((r) => r.owner === repo.owner && r.name === repo.name);
-        // Skip if not found or already cloning (status wasn't set to pending above)
-        if (!repoEntry || repoEntry.status === "cloning") continue;
-
-        repoEntry.status = "cloning";
-
-        // Clone in background
-        cloneRepo(repo.url, expandedPath, repo.branch)
-          .then(() => {
-            repoEntry.status = "cloned";
-            console.log(`[platform] Cloned ${repo.owner}/${repo.name} to ${expandedPath}`);
-          })
-          .catch((err) => {
-            repoEntry.status = "error";
-            repoEntry.error = err instanceof Error ? err.message : String(err);
-            console.error(`[platform] Failed to clone ${repo.owner}/${repo.name}:`, err);
-          });
-      }
-
-      return {
-        success: true,
-        repos: clonedRepos.map((r) => ({
-          owner: r.owner,
-          name: r.name,
-          status: r.status,
-        })),
-      };
-    }),
-});
+    // Clone in background
+    cloneRepo(repo.url, expandedPath, repo.branch)
+      .then(() => {
+        clonedReposStatus.set(repoKey, { status: "cloned" });
+        console.log(`[platform] Cloned ${repoKey} to ${expandedPath}`);
+      })
+      .catch((err) => {
+        clonedReposStatus.set(repoKey, {
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+        console.error(`[platform] Failed to clone ${repoKey}:`, err);
+      });
+  }
+}
 
 /**
  * Clone a repository to the specified path.
@@ -199,5 +230,24 @@ async function cloneRepo(url: string, targetPath: string, branch: string): Promi
     }
   }
 }
+
+export const platformRouter = createTRPCRouter({
+  /**
+   * Trigger an immediate refresh of bootstrap data from the control plane.
+   * Called by the control plane after events like Slack OAuth to notify the daemon
+   * that new env vars or tokens are available.
+   */
+  refreshEnv: publicProcedure.mutation(async () => {
+    // Import dynamically to avoid circular dependencies
+    const { fetchBootstrapData } = await import("../bootstrap-refresh.ts");
+    try {
+      await fetchBootstrapData();
+      return { success: true };
+    } catch (err) {
+      console.error("[platform] Failed to refresh env:", err);
+      return { success: false };
+    }
+  }),
+});
 
 export type PlatformRouter = typeof platformRouter;

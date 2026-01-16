@@ -1,5 +1,13 @@
+import { expect } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
-import { test } from "./test-helpers.ts";
+import { baseTest as base } from "./test-helpers.ts";
+
+const test = base.extend({
+  page: async ({ page }, use) => {
+    spinnerWaiter.setup(page);
+    await use(page);
+  },
+});
 
 // normally I'd say just copy-paste the code, but it's v important that the actions are identical because test.fail is too "easy" to make pass succeed otherwise.
 async function run(page: import("@playwright/test").Page) {
@@ -12,19 +20,26 @@ test("slow button", async ({ page }) => {
   await run(page);
 });
 
-test.fail("slow button fails without spinner waiter", async ({ page }) => {
+/* eslint-disable no-restricted-syntax -- expect ok here */
+
+test("slow button fails without spinner waiter", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ disabled: true });
-  await run(page);
+  const error = await run(page).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
 });
 
-test.fail("slow button fails when spinner doesn't match selector", async ({ page }) => {
-  spinnerWaiter.settings.enterWith({ spinnerSelector: ".myCustomSpinnerClass" });
-  await run(page);
+test("slow button fails when spinner doesn't match selector", async ({ page }) => {
+  spinnerWaiter.settings.enterWith({ spinnerSelectors: [".myCustomSpinnerClass"] });
+  const error = await run(page).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
+  expect(error.message).toMatch(/If this is a slow operation.../);
 });
 
-test.fail("slow button when spinner times out", async ({ page }) => {
+test("slow button when spinner times out", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ spinnerTimeout: 1001 });
   // make the slow button even slower, must take longer than 1s (initial timeout) +1s (minimum spinner timeout) + 1s (last chance) + any time for chugging along
   await page.goto(`/dev?slowMutationTimeout=6000`);
-  await run(Object.assign(page, { goto: () => {} }));
+  const error = await run(Object.assign(page, { goto: () => {} })).catch((e) => e);
+  expect(error.message).toMatch(/Timeout .* exceeded/);
+  expect(error.message).toMatch(/spinner was still visible after .*/i);
 });

@@ -1,5 +1,5 @@
 import { useState, useRef, type FormEvent } from "react";
-import { useHydrated, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
@@ -9,7 +9,6 @@ import { InputOTP } from "./ui/input-otp.tsx";
 const EMAIL_OTP_ENABLED = import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true";
 
 function GoogleSignInButton() {
-  const isHydrated = useHydrated();
   const [isLoading, setIsLoading] = useState(false);
 
   const handleClick = async () => {
@@ -27,12 +26,7 @@ function GoogleSignInButton() {
   };
 
   return (
-    <Button
-      variant="outline"
-      className="w-full"
-      onClick={handleClick}
-      disabled={!isHydrated || isLoading}
-    >
+    <Button variant="outline" className="w-full" onClick={handleClick} disabled={isLoading}>
       <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24">
         <path
           fill="currentColor"
@@ -71,15 +65,12 @@ function OrDivider() {
 
 function EmailOtpSignIn() {
   const navigate = useNavigate();
-  const isHydrated = useHydrated();
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<"email" | "otp">("email");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
-
-  const isDisabled = !isHydrated || isLoading;
 
   const handleEmailSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -166,12 +157,12 @@ function EmailOtpSignIn() {
           </p>
         </div>
         <form onSubmit={handleOTPSubmit} className="space-y-4">
-          <InputOTP value={otp} onChange={handleOtpChange} disabled={isDisabled} autoFocus />
+          <InputOTP value={otp} onChange={handleOtpChange} disabled={isLoading} autoFocus />
           {error && <p className="text-sm text-destructive text-center">{error}</p>}
           <Button
             type="submit"
             className="w-full"
-            disabled={isDisabled || otp.length !== 6}
+            disabled={isLoading || otp.length !== 6}
             aria-label={isLoading ? "Loading" : undefined}
           >
             {isLoading ? "Verifying..." : "Verify"}
@@ -181,7 +172,7 @@ function EmailOtpSignIn() {
               type="button"
               onClick={handleBack}
               className="text-muted-foreground hover:text-foreground"
-              disabled={isDisabled}
+              disabled={isLoading}
             >
               ← Back
             </button>
@@ -189,7 +180,7 @@ function EmailOtpSignIn() {
               type="button"
               onClick={handleResendOTP}
               className="text-muted-foreground hover:text-foreground"
-              disabled={isDisabled}
+              disabled={isLoading}
             >
               Resend code
             </button>
@@ -206,7 +197,7 @@ function EmailOtpSignIn() {
         type="email"
         placeholder="you@example.com"
         defaultValue={email}
-        disabled={isDisabled}
+        disabled={isLoading}
         required
         autoFocus
         data-testid="email-input"
@@ -215,7 +206,7 @@ function EmailOtpSignIn() {
       <Button
         type="submit"
         className="w-full"
-        disabled={isDisabled}
+        disabled={isLoading}
         aria-label={isLoading ? "Loading" : undefined}
         data-testid="email-submit-button"
       >

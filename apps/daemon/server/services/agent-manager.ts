@@ -15,8 +15,11 @@ import {
   sendKeys as defaultSendKeys,
   isSessionProcessRunning as defaultIsSessionProcessRunning,
 } from "../tmux-control.ts";
-import { getHarness as defaultGetHarness, getCommandString } from "../agent-harness.ts";
-import { getHarness as defaultGetNewHarness, type AgentHarness } from "../agents/index.ts";
+import {
+  getHarness as defaultGetHarness,
+  getCommandString,
+  type AgentHarness,
+} from "../agents/index.ts";
 
 // Per-harness wait times (in ms) for tmux session to be ready
 const HARNESS_READY_WAIT_MS: Record<AgentType, number> = {
@@ -177,6 +180,7 @@ export interface GetOrCreateAgentParams {
   slug: string;
   harnessType: AgentType;
   workingDirectory: string;
+  initialPrompt?: string;
 }
 
 export interface GetOrCreateAgentResult {
@@ -191,35 +195,38 @@ export interface HarnessAgentManagerDeps {
 
 const defaultHarnessDeps: HarnessAgentManagerDeps = {
   db: defaultDb,
-  getHarness: defaultGetNewHarness,
+  getHarness: defaultGetHarness,
 };
 
 /**
- * Get or create an agent using the new harness system.
- * Uses SDK-based session management (for OpenCode) while preserving terminal UI.
+ * Get an agent by slug (lookup only, no creation).
+ * Returns null if no agent exists with the given slug.
  */
-export async function getOrCreateAgent(
-  params: GetOrCreateAgentParams,
+export async function getAgent(
+  slug: string,
   deps: HarnessAgentManagerDeps = defaultHarnessDeps,
-): Promise<GetOrCreateAgentResult> {
-  const { slug, harnessType, workingDirectory } = params;
-  const { db, getHarness } = deps;
+): Promise<Agent | null> {
+  const { db } = deps;
 
-  // Check if agent already exists (not archived)
   const existingAgents = await db
     .select()
     .from(schema.agents)
     .where(and(eq(schema.agents.slug, slug), isNull(schema.agents.archivedAt)))
     .limit(1);
 
-  const existingAgent = existingAgents[0];
+  return existingAgents[0] ?? null;
+}
 
-  if (existingAgent) {
-    return {
-      agent: existingAgent,
-      wasCreated: false,
-    };
-  }
+/**
+ * Create a new agent using the harness system.
+ * Throws if an agent with the slug already exists.
+ */
+export async function createAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<Agent> {
+  const { slug, harnessType, workingDirectory, initialPrompt } = params;
+  const { db, getHarness } = deps;
 
   // Create new agent using harness
   const harness = getHarness(harnessType);
@@ -241,14 +248,63 @@ export async function getOrCreateAgent(
       harnessSessionId: result.harnessSessionId,
       tmuxSession: result.tmuxSession,
       workingDirectory,
+      initialPrompt,
       status: "running",
     })
     .returning();
+
+  return newAgent;
+}
+
+/**
+ * Get or create an agent using the new harness system.
+ * Uses SDK-based session management (for OpenCode) while preserving terminal UI.
+ */
+export async function getOrCreateAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<GetOrCreateAgentResult> {
+  const { slug } = params;
+
+  const existingAgent = await getAgent(slug, deps);
+
+  if (existingAgent) {
+    return {
+      agent: existingAgent,
+      wasCreated: false,
+    };
+  }
+
+  const newAgent = await createAgent(params, deps);
 
   return {
     agent: newAgent,
     wasCreated: true,
   };
+}
+
+/**
+ * Reset an agent by archiving the old one and creating a fresh session.
+ * Returns the newly created agent.
+ */
+export async function resetAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<Agent> {
+  const { slug } = params;
+  const { db } = deps;
+
+  // Archive existing agent if present
+  const existingAgent = await getAgent(slug, deps);
+  if (existingAgent) {
+    await db
+      .update(schema.agents)
+      .set({ archivedAt: new Date(), status: "stopped" })
+      .where(eq(schema.agents.slug, slug));
+  }
+
+  // Create fresh agent
+  return createAgent(params, deps);
 }
 
 /**

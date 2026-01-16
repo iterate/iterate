@@ -7,6 +7,7 @@ const TEST_OTP = "424242";
 export type TestInputs = {
   spinnerWaiter: typeof spinnerWaiter;
 };
+export const baseTest = base;
 export const test = base.extend<TestInputs>({
   page: async ({ page }, use) => {
     spinnerWaiter.setup(page);

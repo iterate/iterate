@@ -144,7 +144,7 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         ]),
       );
 
-      // Add ITERATE_DEV=true for local-docker so entry.ts uses the right code path
+      // Add ITERATE_DEV=true for local-docker so entry.sh uses the right code path
       const envVarsWithDev = {
         ...rewrittenEnvVars,
         ITERATE_DEV: "true",
@@ -163,7 +163,6 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       });
 
       // Mount local repo for development (allows code changes without rebuilding image)
-      // Read-write so entry.ts can delete it after copying to avoid confusion
       const binds = [`${REPO_ROOT}:/local-iterate-repo`];
 
       const hostConfig: Record<string, unknown> = {

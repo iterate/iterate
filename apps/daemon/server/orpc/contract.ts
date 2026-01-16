@@ -15,6 +15,7 @@ export const workerContract = oc.router({
     reportStatus: oc
       .input(
         z.object({
+          machineId: z.string(),
           status: z
             .enum(["ready", "error", "stopping"])
             .or(z.templateLiteral([z.literal("working:"), z.string()])),
@@ -22,6 +23,26 @@ export const workerContract = oc.router({
         }),
       )
       .output(z.object({ success: z.boolean() })),
+
+    /**
+     * Get environment variables and config for this machine.
+     * Called by the daemon on startup and periodically to refresh tokens.
+     * Returns environment variables (GitHub token, Slack token, etc.) and repos to clone.
+     */
+    getEnv: oc.input(z.object({ machineId: z.string() })).output(
+      z.object({
+        envVars: z.record(z.string(), z.string()),
+        repos: z.array(
+          z.object({
+            url: z.string(),
+            branch: z.string(),
+            path: z.string(),
+            owner: z.string(),
+            name: z.string(),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 
