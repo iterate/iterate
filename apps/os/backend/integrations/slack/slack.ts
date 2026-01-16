@@ -128,7 +128,12 @@ export async function forwardSlackWebhookToMachine(
       signal: AbortSignal.timeout(10000),
     });
     if (!resp.ok) {
-      logger.error("[Slack Webhook] Forward failed", { status: resp.status });
+      logger.error("[Slack Webhook] Forward failed", {
+        machine,
+        targetUrl,
+        status: resp.status,
+        text: await resp.text(),
+      });
       return { success: false, error: `HTTP ${resp.status}` };
     }
     return { success: true };
@@ -566,16 +571,14 @@ slackApp.post("/webhook", async (c) => {
         }
 
         logger.debug("[Slack Webhook] Looking up connection", { teamId });
-        // Single optimized query: get connection + target machine (or fallback to first started machine)
+        // Find connection and the single active machine for its project
         const connection = await db.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
           with: {
-            webhookTargetMachine: true,
             project: {
               with: {
                 machines: {
                   where: (m, { eq }) => eq(m.state, "started"),
-                  orderBy: (m, { asc }) => asc(m.createdAt),
                   limit: 1,
                 },
               },
@@ -589,11 +592,8 @@ slackApp.post("/webhook", async (c) => {
           return;
         }
 
-        // Use explicit webhook target, or fall back to first started machine in project
-        const targetMachine =
-          connection.webhookTargetMachine?.state === "started"
-            ? connection.webhookTargetMachine
-            : (connection.project?.machines[0] ?? null);
+        // Get the single active machine for this project
+        const targetMachine = connection.project?.machines[0] ?? null;
 
         // Forward to machine if available
         if (targetMachine) {

@@ -1,19 +1,12 @@
 import { Suspense, useEffect } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Mail, MessageSquare, ExternalLink, Webhook } from "lucide-react";
+import { Mail, MessageSquare, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
 import { Button } from "../../../components/ui/button.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../../components/ui/select.tsx";
 import {
   Item,
   ItemMedia,
@@ -73,21 +66,6 @@ function ProjectConnectorsContent() {
     }),
   );
 
-  const { data: webhookTarget } = useSuspenseQuery(
-    trpc.project.getSlackWebhookTargetMachine.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
-  );
-
-  const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
-    }),
-  );
-
   const startSlackOAuth = useMutation({
     mutationFn: () =>
       trpcClient.project.startSlackOAuthFlow.mutate({
@@ -116,46 +94,11 @@ function ProjectConnectorsContent() {
           projectSlug: params.projectSlug,
         }),
       });
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackWebhookTargetMachine.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
     },
     onError: (error) => {
       toast.error(`Failed to disconnect Slack: ${error.message}`);
     },
   });
-
-  const setWebhookTarget = useMutation({
-    mutationFn: (machineId: string | null) =>
-      trpcClient.project.setSlackWebhookTargetMachine.mutate({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId,
-      }),
-    onSuccess: () => {
-      toast.success("Webhook target updated");
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackWebhookTargetMachine.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
-    },
-    onError: (error) => {
-      toast.error(`Failed to update webhook target: ${error.message}`);
-    },
-  });
-
-  // Filter to only show started machines as webhook targets
-  const availableMachines = machines.filter((m) => m.state === "started");
-
-  // Determine effective webhook target: explicit selection or auto-selected first machine
-  const explicitTarget = webhookTarget.webhookTargetMachine;
-  const autoSelectedTarget =
-    !explicitTarget && availableMachines.length > 0 ? availableMachines[0] : null;
 
   return (
     <div className="p-4 space-y-8">
@@ -227,49 +170,6 @@ function ProjectConnectorsContent() {
               )}
             </ItemActions>
           </Item>
-
-          {/* Slack Webhook Target - only show when Slack is connected */}
-          {slackConnection.connected && (
-            <Item variant="muted" className="ml-12">
-              <ItemMedia variant="icon">
-                <Webhook className="h-4 w-4" />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle>Webhook Target</ItemTitle>
-                <ItemDescription>
-                  {availableMachines.length === 0
-                    ? "No running machines available. Start a machine to receive webhooks."
-                    : "Forward incoming Slack webhooks to a machine's daemon."}
-                </ItemDescription>
-              </ItemContent>
-              <ItemActions>
-                <Select
-                  value={explicitTarget?.id ?? "auto"}
-                  onValueChange={(value) => {
-                    // "auto" means use default (null in DB), specific ID means explicit selection
-                    setWebhookTarget.mutate(value === "auto" ? null : value);
-                  }}
-                  disabled={setWebhookTarget.isPending || availableMachines.length === 0}
-                >
-                  <SelectTrigger className="w-[220px]">
-                    <SelectValue placeholder="Select machine" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">
-                      {autoSelectedTarget
-                        ? `Auto (${autoSelectedTarget.name})`
-                        : "Auto (first started)"}
-                    </SelectItem>
-                    {availableMachines.map((machine) => (
-                      <SelectItem key={machine.id} value={machine.id}>
-                        {machine.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </ItemActions>
-            </Item>
-          )}
         </ItemGroup>
       </section>
 

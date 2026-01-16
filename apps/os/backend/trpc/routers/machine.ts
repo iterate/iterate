@@ -103,7 +103,11 @@ async function createLocalMachine(
   machineId: string,
   name: string,
   metadata: Record<string, unknown>,
+  cloudflareEnv: CloudflareEnv,
 ): Promise<typeof schema.machine.$inferSelect> {
+  // Archive existing started machines first
+  await archiveExistingMachines(db, projectId, cloudflareEnv);
+
   const localMetadata = localMetadataSchema.parse(metadata);
   const [newMachine] = await db
     .insert(schema.machine)
@@ -126,6 +130,28 @@ async function createLocalMachine(
   }
 
   return newMachine;
+}
+
+// Archive all started machines in a project (both DB and provider)
+async function archiveExistingMachines(
+  db: DB,
+  projectId: string,
+  cloudflareEnv: CloudflareEnv,
+): Promise<void> {
+  // Find all started machines
+  const startedMachines = await db.query.machine.findMany({
+    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "started")),
+  });
+
+  // Archive each one via provider then DB
+  for (const machine of startedMachines) {
+    const provider = await createMachineProvider(machine.type, cloudflareEnv);
+    await provider.archive(machine.externalId);
+    await db
+      .update(schema.machine)
+      .set({ state: "archived" })
+      .where(eq(schema.machine.id, machine.id));
+  }
 }
 
 // Helper to get provider for a machine by looking up its type from the database
@@ -217,6 +243,7 @@ export const machineRouter = router({
           machineId,
           input.name,
           input.metadata ?? {},
+          ctx.env,
         );
       }
 
@@ -250,6 +277,9 @@ export const machineRouter = router({
       if (!envVars["ANTHROPIC_API_KEY"]) {
         envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
       }
+
+      // Archive any existing started machines before creating a new one
+      await archiveExistingMachines(ctx.db, ctx.project.id, ctx.env);
 
       // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
       // This allows the daemon to receive fresh GitHub tokens when it reports ready
@@ -347,46 +377,6 @@ export const machineRouter = router({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
-
-      return updated;
-    }),
-
-  // Unarchive a machine (restore)
-  unarchive: projectProtectedMutation
-    .input(
-      z.object({
-        machineId: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
-        ctx.db,
-        ctx.project.id,
-        input.machineId,
-        ctx.env,
-      );
-
-      const [updated] = await ctx.db
-        .update(schema.machine)
-        .set({ state: "started" })
-        .where(
-          and(eq(schema.machine.id, input.machineId), eq(schema.machine.projectId, ctx.project.id)),
-        )
-        .returning();
-
-      if (!updated) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
-      }
-
-      await provider.start(machine.externalId).catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to unarchive machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
 

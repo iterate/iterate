@@ -87,7 +87,8 @@ const setupIterateRepo = () => {
     cloneOrPullFromGit();
   }
 
-  rmSync(LOCAL_REPO_MOUNT, { recursive: true, force: true });
+  // race condition here, sometimes gets "Device or resource busy"
+  // rmSync(LOCAL_REPO_MOUNT, { recursive: true, force: true });
 
   console.log("");
   console.log("Running pnpm install...");
@@ -197,6 +198,12 @@ const main = () => {
   cleanupS6RuntimeState();
 
   const svscan = startS6Svscan();
+
+  console.log("");
+  console.log("========================================");
+  console.log("# Setup complete. Use `cat /var/log/iterate-daemon/current` to view logs.");
+  console.log("========================================");
+  console.log("");
 
   // Forward signals for clean shutdown
   const shutdown = (signal: string) => {

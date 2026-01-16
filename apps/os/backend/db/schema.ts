@@ -1,6 +1,6 @@
 import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 
 // Organization roles: owner, admin, member (simplified from OS)
@@ -257,15 +257,9 @@ export const projectConnection = pgTable(
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     providerData: t.jsonb().$type<Record<string, unknown>>().notNull().default({}),
     scopes: t.text(),
-    // Webhook target: forward incoming webhooks to this machine's daemon
-    webhookTargetMachineId: t.text().references(() => machine.id, { onDelete: "set null" }),
     ...withTimestamps,
   }),
-  (t) => [
-    uniqueIndex().on(t.provider, t.externalId),
-    index().on(t.projectId),
-    index("idx_project_connection_webhook_target_machine").on(t.webhookTargetMachineId),
-  ],
+  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId)],
 );
 
 export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({
@@ -276,10 +270,6 @@ export const projectConnectionRelations = relations(projectConnection, ({ one })
   user: one(user, {
     fields: [projectConnection.userId],
     references: [user.id],
-  }),
-  webhookTargetMachine: one(machine, {
-    fields: [projectConnection.webhookTargetMachineId],
-    references: [machine.id],
   }),
 }));
 // #endregion ========== Organization & Project ==========
@@ -307,7 +297,14 @@ export const machine = pgTable(
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
-  (t) => [index().on(t.projectId), index().on(t.state)],
+  (t) => [
+    index().on(t.projectId),
+    index().on(t.state),
+    // Only one active (non-archived) machine per project
+    uniqueIndex("machine_project_one_active")
+      .on(t.projectId)
+      .where(sql`state != 'archived'`),
+  ],
 );
 
 export const machineRelations = relations(machine, ({ one, many }) => ({
