@@ -35,9 +35,11 @@ RUN mkdir -p /var/log/iterate-daemon /var/log/opencode /var/log/example-service-
 # Global npm tools (as root for system-wide access)
 RUN npm install -g pnpm tsx
 
-# Copy entry script
+# Copy entry script and s6 daemon definitions
 COPY apps/os/sandbox/entry.sh /app/entry.sh
 RUN chmod +x /app/entry.sh
+COPY --chown=iterate:iterate apps/os/sandbox/s6-daemons /app/s6-daemons
+RUN chmod +x /app/s6-daemons/*/run /app/s6-daemons/*/log/run 2>/dev/null || true
 
 # Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
 RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
