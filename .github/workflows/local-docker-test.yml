@@ -36,6 +36,8 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Expose Docker TCP API
+        run: sudo socat TCP-LISTEN:2375,reuseaddr,fork UNIX-CLIENT:/var/run/docker.sock &
       - name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"

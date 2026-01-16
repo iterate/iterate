@@ -20,6 +20,10 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
         {
+          name: "Expose Docker TCP API",
+          run: "sudo socat TCP-LISTEN:2375,reuseaddr,fork UNIX-CLIENT:/var/run/docker.sock &",
+        },
+        {
           name: "Run Local Docker Tests",
           env: {
             RUN_LOCAL_DOCKER_TESTS: "true",
