@@ -120,6 +120,22 @@ function formatSlackMessage(payload: unknown): string {
   const userPart = user ? `<@${user}>` : "unknown";
   const channelPart = channel || "unknown channel";
   const textPart = text || "(no text)";
+  let ts = "";
+  let threadTs = "";
+  JSON.stringify(event, (key, value) => {
+    if (key === "ts") {
+      ts = value as string;
+    }
+    if (key === "thread_ts") {
+      threadTs = value as string;
+    }
+    return value;
+  });
 
-  return `New Slack message from ${userPart} in ${channelPart}: ${textPart}`;
+  return [
+    `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
+    "",
+    `Before responding, use the following CLI command to reply to the message:`,
+    `\`iterate tools send-slack-message --channel ${channelPart} --thread-ts ${threadTs || ts} --message "<your response here>"\` `,
+  ].join("\n");
 }
