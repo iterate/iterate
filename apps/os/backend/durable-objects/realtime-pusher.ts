@@ -37,8 +37,6 @@ export class RealtimePusher extends DurableObject<CloudflareEnv> {
     const websockets = this.ctx.getWebSockets();
     const message = JSON.stringify({ type: "INVALIDATE_ALL" });
 
-    logger.info(`Broadcasting invalidation to ${websockets.length} connected clients`);
-
     let sent = 0;
     let failed = 0;
     for (const ws of websockets) {
