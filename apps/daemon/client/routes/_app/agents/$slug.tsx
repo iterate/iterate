@@ -2,9 +2,9 @@ import { lazy, Suspense, useMemo } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, LoaderIcon } from "lucide-react";
+import type { SerializedAgent } from "../../../../server/trpc/router.ts";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
-import type { SerializedAgent } from "../../../../server/trpc/router.ts";
 
 const XtermTerminal = lazy(() =>
   import("@/components/xterm-terminal.tsx").then((mod) => ({
