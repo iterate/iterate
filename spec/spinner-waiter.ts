@@ -44,6 +44,9 @@ const overrideableMethods = [
   "focus",
   ...oneArgMethods,
 ] satisfies (keyof Locator)[];
+
+// Methods that require the element to be enabled (not disabled)
+const methodsRequiringEnabled = new Set(["click", "fill", "clear", "dblclick", "press", "type"]);
 type OverrideableMethod = (typeof overrideableMethods)[number];
 
 type Options<M extends OverrideableMethod> = (M extends OneArgMethod
@@ -109,7 +112,31 @@ function setup(page: Page) {
 
         settings.log(`union gotten. ${this}.isVisible(): ${await this.isVisible()}`);
 
+        // Wait for element to be enabled if this method requires it (handles hydration)
+        const waitForEnabled = async () => {
+          if (!methodsRequiringEnabled.has(method)) return;
+          const timeout = settings.spinnerTimeout;
+          const startTime = Date.now();
+          while (Date.now() - startTime < timeout) {
+            const isDisabled = await this.evaluate((el) => {
+              if (
+                el instanceof HTMLInputElement ||
+                el instanceof HTMLButtonElement ||
+                el instanceof HTMLSelectElement ||
+                el instanceof HTMLTextAreaElement
+              ) {
+                return el.disabled;
+              }
+              return false;
+            }).catch(() => false);
+            if (!isDisabled) return;
+            settings.log(`${this} is disabled (hydrating), waiting...`);
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        };
+
         if (await this.isVisible()) {
+          await waitForEnabled();
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, []);
             throw e;
@@ -143,6 +170,7 @@ function setup(page: Page) {
         }
 
         if (race.outcome === "success") {
+          await waitForEnabled();
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error);
             throw e;
@@ -150,6 +178,7 @@ function setup(page: Page) {
         }
 
         if (race.outcome === "spinner-hidden") {
+          await waitForEnabled();
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, [
               `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
