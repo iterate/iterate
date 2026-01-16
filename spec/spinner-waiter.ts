@@ -3,7 +3,7 @@ import { Locator, type Page } from "@playwright/test";
 
 export namespace spinnerWaiter {
   export type Settings = {
-    spinnerSelector: string;
+    spinnerSelectors: string[];
     spinnerTimeout: number;
     disabled: boolean;
     log: (message: string) => void;
@@ -13,7 +13,12 @@ export namespace spinnerWaiter {
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
 const defaults: spinnerWaiter.Settings = {
-  spinnerSelector: `[aria-label="Loading"],[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  spinnerSelectors: [
+    `[aria-label="Loading"]`,
+    `[data-spinner='true']`,
+    `:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+    `[data-hydrated='false']`, // app is not hydrated yet
+  ],
   spinnerTimeout: 30_000,
   disabled: false,
   log: () => {},
@@ -27,18 +32,23 @@ const getSettings = () => {
   return result;
 };
 
+const oneArgMethods = ["fill", "type", "press"] as const;
+type OneArgMethod = (typeof oneArgMethods)[number];
+
 const overrideableMethods = [
   "click",
   "waitFor",
-  "fill",
   "clear",
   "dblclick",
-  "press",
   "blur",
   "focus",
-  "type",
+  ...oneArgMethods,
 ] satisfies (keyof Locator)[];
 type OverrideableMethod = (typeof overrideableMethods)[number];
+
+type Options<M extends OverrideableMethod> = (M extends OneArgMethod
+  ? Parameters<Locator[M]>[1]
+  : Parameters<Locator[M]>[0]) & { skipSpinnerCheck?: boolean };
 
 export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
@@ -54,7 +64,9 @@ function setup(page: Page) {
     locatorPrototype[`${method}_original`] = locatorPrototype[method];
     Object.defineProperty(locatorPrototype, method, {
       value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
-        const _options = args.at(-1) as any;
+        const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
+        const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
+        const argsWithoutOptions = args.slice(0, optionIndex);
         const settings = getSettings();
         const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
@@ -77,7 +89,8 @@ function setup(page: Page) {
           });
         }
 
-        const spinnerLocator = this.page().locator(settings.spinnerSelector) as LocatorWithOriginal;
+        const spinnerSelector = settings.spinnerSelectors.join(",");
+        const spinnerLocator = this.page().locator(spinnerSelector) as LocatorWithOriginal;
         const union = this.or(spinnerLocator).first() as LocatorWithOriginal;
 
         settings.log(`waiting for union ${union}`);
@@ -109,7 +122,7 @@ function setup(page: Page) {
 
         const race = await Promise.race([
           callOriginal([
-            ...args.slice(0, -1),
+            ...argsWithoutOptions,
             { ..._options, timeout: settings.spinnerTimeout - 1000, trial: true },
           ])
             .then((result) => ({ outcome: "success" as const, result }))
