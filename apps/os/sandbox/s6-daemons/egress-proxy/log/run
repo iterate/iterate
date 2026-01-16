@@ -1,0 +1,2 @@
+#!/bin/sh
+exec s6-log T /var/log/egress-proxy

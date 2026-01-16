@@ -59,11 +59,27 @@ find "$S6_DAEMONS" -type d -name supervise -exec rm -rf {} + 2>/dev/null || true
 echo "Starting s6-svscan..."
 echo ""
 echo "Reminder - logs will be here:"
-echo "  Daemon:   /var/log/iterate-daemon/"
-echo "  Opencode: /var/log/opencode/"
+echo "  Daemon:       /var/log/iterate-daemon/"
+echo "  Opencode:     /var/log/opencode/"
+echo "  Egress proxy: /var/log/egress-proxy/"
 echo ""
 export ITERATE_REPO
 export HOSTNAME="0.0.0.0"
+
+# Egress proxy environment variables
+# These enable services to use the mitmproxy for outbound traffic interception
+PROXY_PORT=8888
+MITMPROXY_DIR="$HOME/.mitmproxy"
+CA_CERT_PATH="$MITMPROXY_DIR/mitmproxy-ca-cert.pem"
+
+export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
+export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
+export http_proxy="http://127.0.0.1:$PROXY_PORT"
+export https_proxy="http://127.0.0.1:$PROXY_PORT"
+export SSL_CERT_FILE="$CA_CERT_PATH"
+export REQUESTS_CA_BUNDLE="$CA_CERT_PATH"
+export CURL_CA_BUNDLE="$CA_CERT_PATH"
+export NODE_EXTRA_CA_CERTS="$CA_CERT_PATH"
 
 # Signal readiness via file (more reliable than stdout for docker log detection)
 touch /tmp/.iterate-sandbox-ready

@@ -18,6 +18,7 @@ import { githubApp } from "./integrations/github/github.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
+import { egressProxyApp } from "./routes/egress-proxy.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
@@ -150,6 +151,9 @@ app.get("/api/ws/realtime", (c) => {
   const stub = c.env.REALTIME_PUSHER.get(id);
   return stub.fetch(c.req.raw);
 });
+
+// Mount egress proxy (for sandbox outbound traffic)
+app.route("", egressProxyApp);
 
 // Mount machine proxy (Daytona, local-docker, etc.)
 app.route("", machineProxyApp);
