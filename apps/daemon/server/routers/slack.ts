@@ -144,10 +144,10 @@ function parseSlackPayload(payload: unknown): SlackMessageInfo {
   const event = p.event as Record<string, unknown> | undefined;
 
   const botUserId = (
-    p as Pick<typeof examplePayload_newMessage, "authorizations">
+    p as Pick<typeof _examplePayload_newMessage, "authorizations">
   )?.authorizations?.find((a) => a.is_bot)?.user_id;
 
-  const isBotMessage = !!(payload as typeof examplePayload_botResponseEcho).event?.bot_profile;
+  const isBotMessage = !!(payload as typeof _examplePayload_botResponseEcho).event?.bot_profile;
 
   const user = event?.user as string | undefined;
   const channel = event?.channel as string | undefined;
@@ -184,7 +184,7 @@ function formatFyiMessage(info: SlackMessageInfo, threadTs: string): string {
   ].join("\n");
 }
 
-const examplePayload_newMessage = {
+const _examplePayload_newMessage = {
   token: "OEdw6XpFLUAfJcE5HsGiIUT9",
   team_id: "T0675PSN873",
   api_app_id: "A09A308RAT0",
@@ -229,7 +229,7 @@ const examplePayload_newMessage = {
   event_context:
     "4-eyJldCI6ImFwcF9tZW50aW9uIiwidGlkIjoiVDA2NzVQU044NzMiLCJhaWQiOiJBMDlBMzA4UkFUMCIsImNpZCI6IkMwOUI0RUdRVDdFIn0",
 };
-const examplePayload_botResponseEcho = {
+const _examplePayload_botResponseEcho = {
   token: "OEdw6XpFLUAfJcE5HsGiIUT9",
   team_id: "T0675PSN873",
   context_team_id: "T0675PSN873",
