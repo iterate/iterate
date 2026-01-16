@@ -13,6 +13,20 @@ jobs:
   flake-detection:
     timeout-minutes: 60
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shardIndex:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,7 +52,7 @@ jobs:
         continue-on-error: true
         run: |-
           mkdir -p test-results
-          pnpm spec --repeat-each=10 --reporter=json
+          pnpm spec --repeat-each=10 --reporter=json --shard=${{ matrix.shardIndex }}/10
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/spec-results.json
       - name: Generate Flaky Test Report
@@ -48,6 +62,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flaky-test-results
+          name: flaky-test-results-${{ matrix.shardIndex }}
           path: test-results
           retention-days: 30
