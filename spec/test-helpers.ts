@@ -1,5 +1,5 @@
 // eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
-import { type Page, test as base, expect } from "@playwright/test";
+import { type Page, test as base } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
 
 const TEST_OTP = "424242";
@@ -18,9 +18,9 @@ export const test = base.extend<TestInputs>({
 export async function login(page: Page, email: string) {
   await page.goto("/login");
 
-  const emailInput = page.getByTestId("email-input");
-  // Wait for hydration to complete - input is disabled until then
-  await expect(emailInput).toBeEnabled();
+  // Wait for hydration - the email input is disabled until React hydrates
+  const emailInput = page.locator('[data-testid="email-input"]:not([disabled])');
+  await emailInput.waitFor();
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
