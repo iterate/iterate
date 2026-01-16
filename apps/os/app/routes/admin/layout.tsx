@@ -1,6 +1,8 @@
 import { createFileRoute, Outlet, Link, notFound } from "@tanstack/react-router";
 import { Shield, Terminal, Info } from "lucide-react";
+import { Suspense } from "react";
 import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
+import { Spinner } from "../../components/ui/spinner.tsx";
 import { cn } from "@/lib/utils.ts";
 
 const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
@@ -49,8 +51,19 @@ function AdminLayout() {
         </nav>
       </div>
       <main className="flex-1 overflow-auto">
-        <Outlet />
+        <Suspense fallback={<ContentSpinner />}>
+          <Outlet />
+        </Suspense>
       </main>
+    </div>
+  );
+}
+
+/** Content area loading spinner for child routes */
+function ContentSpinner() {
+  return (
+    <div className="flex h-full min-h-[200px] items-center justify-center p-4">
+      <Spinner className="size-6" />
     </div>
   );
 }
