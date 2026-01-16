@@ -2,14 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Agent } from "../db/schema.ts";
 
 vi.mock("../services/agent-manager.ts", () => ({
-  getOrCreateAgent: vi.fn(),
+  getAgent: vi.fn(),
+  createAgent: vi.fn(),
   appendToAgent: vi.fn(),
 }));
 
 const { slackRouter } = await import("./slack.ts");
-const { getOrCreateAgent, appendToAgent } = await import("../services/agent-manager.ts");
+const { getAgent, createAgent, appendToAgent } = await import("../services/agent-manager.ts");
 
-const mockedGetOrCreateAgent = vi.mocked(getOrCreateAgent);
+const mockedGetAgent = vi.mocked(getAgent);
+const mockedCreateAgent = vi.mocked(createAgent);
 const mockedAppendToAgent = vi.mocked(appendToAgent);
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -32,7 +34,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 
 describe("slack router", () => {
   beforeEach(() => {
-    mockedGetOrCreateAgent.mockReset();
+    mockedGetAgent.mockReset();
+    mockedCreateAgent.mockReset();
     mockedAppendToAgent.mockReset();
   });
 
@@ -50,21 +53,24 @@ describe("slack router", () => {
     expect(body.error).toContain("thread_id");
   });
 
-  it("creates agent and returns slug for new thread", async () => {
+  it("creates agent on @mention when no agent exists", async () => {
     const threadTs = "1234567890.123456";
+    const botUserId = "U_BOT";
     const agent = makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` });
-    mockedGetOrCreateAgent.mockResolvedValue({
-      agent,
-      wasCreated: true,
-    });
+
+    mockedGetAgent.mockResolvedValue(null);
+    mockedCreateAgent.mockResolvedValue(agent);
 
     const payload = {
       type: "event_callback",
       event: {
-        type: "message",
+        type: "app_mention",
         thread_ts: threadTs,
-        text: "hello",
+        text: `<@${botUserId}> hello`,
+        user: "U_USER",
+        channel: "C_TEST",
       },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
     };
 
     const response = await slackRouter.request("/webhook", {
@@ -78,27 +84,31 @@ describe("slack router", () => {
     expect(body.success).toBe(true);
     expect(body.agentSlug).toBe(`slack-${threadTs.replace(".", "-")}`);
     expect(body.created).toBe(true);
-    // Message is always sent via appendToAgent
+    expect(mockedCreateAgent).toHaveBeenCalled();
     expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("hello"));
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(
+      agent,
+      expect.stringContaining("Before responding, use the following CLI command"),
+    );
   });
 
-  it("sends message to existing agent when thread already exists", async () => {
+  it("sends @mention message to existing agent without creating new one", async () => {
     const ts = "9999999999.999999";
+    const botUserId = "U_BOT";
     const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
-    mockedGetOrCreateAgent.mockResolvedValue({
-      agent,
-      wasCreated: false,
-    });
+
+    mockedGetAgent.mockResolvedValue(agent);
 
     const payload = {
       type: "event_callback",
       event: {
-        type: "message",
+        type: "app_mention",
         ts,
         channel: "C_TEST",
         user: "U_TEST",
-        text: "hello world",
+        text: `<@${botUserId}> hello world`,
       },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
     };
 
     const response = await slackRouter.request("/webhook", {
@@ -110,14 +120,119 @@ describe("slack router", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.created).toBe(false);
+    expect(mockedCreateAgent).not.toHaveBeenCalled();
     expect(mockedAppendToAgent).toHaveBeenCalledWith(
       agent,
       [
-        "New Slack message from <@U_TEST> in C_TEST: hello world",
+        `New Slack message from <@U_TEST> in C_TEST: <@${botUserId}> hello world`,
         "",
         "Before responding, use the following CLI command to reply to the message:",
         '`iterate tool send-slack-message --channel C_TEST --thread-ts 9999999999.999999 --message "<your response here>"` ',
       ].join("\n"),
     );
+  });
+
+  it("sends FYI message when no @mention but agent exists", async () => {
+    const ts = "8888888888.888888";
+    const botUserId = "U_BOT";
+    const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
+
+    mockedGetAgent.mockResolvedValue(agent);
+
+    const payload = {
+      type: "event_callback",
+      event: {
+        type: "message",
+        ts,
+        channel: "C_TEST",
+        user: "U_TEST",
+        text: "just a regular message without mention",
+      },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
+    };
+
+    const response = await slackRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    expect(body.fyi).toBe(true);
+    expect(mockedCreateAgent).not.toHaveBeenCalled();
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(
+      agent,
+      expect.stringContaining("FYI, there was another message"),
+    );
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(
+      agent,
+      expect.stringContaining("If you are SURE this is a direct question to you"),
+    );
+  });
+
+  it("ignores message when no @mention and no agent exists", async () => {
+    const ts = "7777777777.777777";
+    const botUserId = "U_BOT";
+
+    mockedGetAgent.mockResolvedValue(null);
+
+    const payload = {
+      type: "event_callback",
+      event: {
+        type: "message",
+        ts,
+        channel: "C_TEST",
+        user: "U_TEST",
+        text: "just a regular message",
+      },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
+    };
+
+    const response = await slackRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    expect(body.message).toContain("no mention and no existing agent");
+    expect(mockedCreateAgent).not.toHaveBeenCalled();
+    expect(mockedAppendToAgent).not.toHaveBeenCalled();
+  });
+
+  it("ignores bot messages", async () => {
+    const ts = "6666666666.666666";
+    const botUserId = "U_BOT";
+
+    const payload = {
+      type: "event_callback",
+      event: {
+        type: "message",
+        ts,
+        channel: "C_TEST",
+        user: botUserId,
+        text: "bot response",
+        bot_profile: { id: "B_BOT", name: "Test Bot" },
+      },
+      authorizations: [{ user_id: botUserId, is_bot: true }],
+    };
+
+    const response = await slackRouter.request("/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.success).toBe(true);
+    expect(body.message).toContain("bot message");
+    expect(mockedGetAgent).not.toHaveBeenCalled();
+    expect(mockedCreateAgent).not.toHaveBeenCalled();
+    expect(mockedAppendToAgent).not.toHaveBeenCalled();
   });
 });
