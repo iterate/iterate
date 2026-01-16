@@ -59,16 +59,17 @@ async function resolveMachineOnly(
  * Single query to resolve org -> project -> machine and check membership.
  * Returns machine data if user has access, null otherwise.
  */
-async function resolveProxyAccess(
-  db: DB,
-  orgSlug: string,
-  projectSlug: string,
-  machineId: string,
-  userId: string,
-  isSystemAdmin: boolean,
-): Promise<{
+async function resolveProxyAccess(params: {
+  db: DB;
+  org: string;
+  project: string;
+  machine: string;
+  userId: string;
+  isSystemAdmin: boolean;
+}): Promise<{
   machine: typeof schema.machine.$inferSelect;
 } | null> {
+  const { db, org, project, machine, userId, isSystemAdmin } = params;
   const result = await db
     .select({
       machine: schema.machine,
@@ -86,9 +87,9 @@ async function resolveProxyAccess(
     )
     .where(
       and(
-        eq(schema.organization.slug, orgSlug),
-        eq(schema.project.slug, projectSlug),
-        eq(schema.machine.id, machineId),
+        eq(schema.organization.slug, org),
+        eq(schema.project.slug, project),
+        eq(schema.machine.id, machine),
       ),
     )
     .limit(1);
@@ -149,14 +150,15 @@ function extractToken(
  * Validate project access token (from header or query param).
  * Returns machine record if valid token, null otherwise.
  */
-async function validateAccessTokenAuth(
-  db: DB,
-  authHeader: string | undefined,
-  queryToken: string | undefined,
-  orgSlug: string,
-  projectSlug: string,
-  machineId: string,
-): Promise<{ machine: typeof schema.machine.$inferSelect } | null> {
+async function validateAccessTokenAuth(params: {
+  db: DB;
+  authHeader: string | undefined;
+  queryToken: string | undefined;
+  org: string;
+  project: string;
+  machine: string;
+}): Promise<{ machine: typeof schema.machine.$inferSelect } | null> {
+  const { db, authHeader, queryToken, org, project, machine } = params;
   const token = extractToken(authHeader, queryToken);
   if (!token) {
     return null;
@@ -179,8 +181,8 @@ async function validateAccessTokenAuth(
       and(
         eq(schema.projectAccessToken.tokenHash, tokenHash),
         isNull(schema.projectAccessToken.revokedAt),
-        eq(schema.project.slug, projectSlug),
-        eq(schema.organization.slug, orgSlug),
+        eq(schema.project.slug, project),
+        eq(schema.organization.slug, org),
       ),
     )
     .limit(1)
@@ -198,7 +200,7 @@ async function validateAccessTokenAuth(
     .catch(() => {});
 
   // Get machine record (no membership check needed for token auth)
-  return resolveMachineOnly(db, orgSlug, projectSlug, machineId);
+  return resolveMachineOnly(db, org, project, machine);
 }
 
 /**
@@ -220,14 +222,14 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   // 2. Try access token auth (Basic auth header or query param)
   const authHeader = c.req.header("Authorization");
   const queryToken = c.req.query("token");
-  const tokenAuth = await validateAccessTokenAuth(
+  const tokenAuth = await validateAccessTokenAuth({
     db,
     authHeader,
     queryToken,
     org,
     project,
     machine,
-  );
+  });
 
   if (tokenAuth) {
     // Valid access token - use machine from token auth
@@ -238,14 +240,14 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
       return c.json({ error: "Unauthorized" }, 401);
     }
 
-    const access = await resolveProxyAccess(
+    const access = await resolveProxyAccess({
       db,
       org,
       project,
       machine,
-      c.var.session.user.id,
-      c.var.session.user.role === "admin",
-    );
+      userId: c.var.session.user.id,
+      isSystemAdmin: c.var.session.user.role === "admin",
+    });
 
     if (!access) {
       return c.json({ error: "Not found or forbidden" }, 404);
