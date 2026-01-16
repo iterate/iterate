@@ -163,20 +163,32 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
-    test("opencode answers math question", async () => {
-      const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
-      expect(output).toContain("42");
-    }, 30000);
+    test.runIf(process.env.OPENAI_API_KEY)(
+      "opencode answers math question",
+      async () => {
+        const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
+        expect(output).toContain("42");
+      },
+      30000,
+    );
 
-    test("claude answers math question", async () => {
-      const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
-      expect(output).toContain("42");
-    }, 30000);
+    test.runIf(process.env.ANTHROPIC_API_KEY)(
+      "claude answers math question",
+      async () => {
+        const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
+        expect(output).toContain("42");
+      },
+      30000,
+    );
 
-    test("pi answers math question", async () => {
-      const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
-      expect(output).toContain("42");
-    }, 30000);
+    test.runIf(process.env.ANTHROPIC_API_KEY)(
+      "pi answers math question",
+      async () => {
+        const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
+        expect(output).toContain("42");
+      },
+      30000,
+    );
 
     test("container setup correct", async () => {
       // tmux installed

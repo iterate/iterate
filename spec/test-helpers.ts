@@ -7,6 +7,7 @@ const TEST_OTP = "424242";
 export type TestInputs = {
   spinnerWaiter: typeof spinnerWaiter;
 };
+export const baseTest = base;
 export const test = base.extend<TestInputs>({
   page: async ({ page }, use) => {
     spinnerWaiter.setup(page);
@@ -20,6 +21,11 @@ export async function login(page: Page, email: string) {
 
   const emailInput = page.getByTestId("email-input");
   await emailInput.waitFor();
+  // Wait for hydration to complete - input is disabled until then
+  await page.waitForFunction(
+    () => !document.querySelector('[data-testid="email-input"]')?.hasAttribute("disabled"),
+    { timeout: 10000 },
+  );
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");

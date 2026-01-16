@@ -15,7 +15,12 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
         name: config.machineId,
         snapshot: snapshotName,
         envVars: config.envVars,
-        autoStopInterval: 0,
+        autoStopInterval: snapshotPrefix.includes("dev")
+          ? 12 * 60 // 12 hours
+          : 0,
+        autoDeleteInterval: snapshotPrefix.includes("dev")
+          ? 12 * 60 // 12 hours
+          : 0,
         public: true,
       });
       return { externalId: sandbox.id, metadata: { snapshotName } };

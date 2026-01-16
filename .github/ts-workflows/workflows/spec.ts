@@ -40,6 +40,7 @@ export default workflow({
         {
           name: "Run specs",
           run: dedent`
+            set -o pipefail
             mkdir -p test-results
             # tee everything to a log file but filter out WebServer logs which are noisy
             pnpm spec | tee test-results/spec.txt | grep -v WebServer
@@ -47,6 +48,7 @@ export default workflow({
         },
         {
           name: "upload logs",
+          if: "always()",
           ...uses("actions/upload-artifact@v4", {
             name: "spec-results",
             path: "test-results",

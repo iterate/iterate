@@ -36,7 +36,7 @@
     "dev:website": "doppler run -- vite dev",
     "build": "doppler run -- vite build",
     "typecheck": "tsc -build",
-    "deploy": "pnpm run build && doppler run -- wrangler deploy",
+    "deploy": "doppler run --config prd -- vite build && doppler run --config prd -- wrangler deploy",
     "test:e2e:vitest": "VITEST_RUN_E2E=true pnpm vitest run --passWithNoTests"
   },
   "devDependencies": {

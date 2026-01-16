@@ -84,8 +84,8 @@ export async function fetchBootstrapData(): Promise<void> {
   );
 
   // Configure or clear git credentials based on GitHub token presence
-  if (result.envVars.GITHUB_ACCESS_TOKEN) {
-    await configureGitHubCredential(result.envVars.GITHUB_ACCESS_TOKEN);
+  if (result.envVars.ITERATE_GITHUB_ACCESS_TOKEN) {
+    await configureGitHubCredential(result.envVars.ITERATE_GITHUB_ACCESS_TOKEN);
   } else {
     // Clear stale GitHub credentials when GitHub is disconnected
     await clearGitHubCredentials();

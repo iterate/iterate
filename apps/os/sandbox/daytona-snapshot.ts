@@ -101,7 +101,11 @@ const image = Image.fromDockerfile(dockerfileTargetPath);
 const snapshot = await (async () => {
   try {
     return await daytona.snapshot.create(
-      { name: snapshotName, image, resources: { cpu: 4, memory: 4, disk: 10 } },
+      {
+        name: snapshotName,
+        image,
+        resources: { cpu: 1, memory: 1, disk: 10 },
+      },
       { onLogs: console.log },
     );
   } finally {

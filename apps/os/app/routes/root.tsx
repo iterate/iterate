@@ -30,10 +30,9 @@ import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx"
 import type { TanstackRouterContext } from "../router.tsx";
 import { getEnvLogo } from "../lib/env-logo.ts";
 
-// Check if PostHog should be enabled (only in production with key)
+// Check if PostHog should be enabled (when key is configured)
 const shouldEnablePostHog = () => {
   if (typeof window === "undefined") return false;
-  if (!import.meta.env.PROD) return false;
   if (!import.meta.env.VITE_POSTHOG_PUBLIC_KEY) return false;
   return true;
 };
@@ -54,7 +53,7 @@ const getBootstrapConfig = () => {
 // Initialize PostHog client-side with enhanced configuration
 if (shouldEnablePostHog()) {
   posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY!, {
-    api_host: import.meta.env.VITE_POSTHOG_PROXY_URI || "/ingest",
+    api_host: import.meta.env.VITE_POSTHOG_PROXY_URL || "/api/integrations/posthog/proxy",
     ui_host: "https://eu.posthog.com",
     // Bootstrap with cross-domain IDs if present (from iterate.com)
     bootstrap: getBootstrapConfig(),

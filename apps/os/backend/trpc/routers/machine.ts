@@ -660,6 +660,3 @@ export const machineRouter = router({
       }
     }),
 });
-
-// Note: GitHub env vars (GITHUB_ACCESS_TOKEN, GITHUB_REPOS) are now injected
-// via the bootstrap flow in machine-status.ts when the daemon reports ready.
