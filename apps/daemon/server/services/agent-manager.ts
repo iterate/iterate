@@ -195,31 +195,34 @@ const defaultHarnessDeps: HarnessAgentManagerDeps = {
 };
 
 /**
- * Get or create an agent using the new harness system.
- * Uses SDK-based session management (for OpenCode) while preserving terminal UI.
+ * Get an agent by slug (lookup only, no creation).
+ * Returns null if no agent exists with the given slug.
  */
-export async function getOrCreateAgent(
-  params: GetOrCreateAgentParams,
+export async function getAgent(
+  slug: string,
   deps: HarnessAgentManagerDeps = defaultHarnessDeps,
-): Promise<GetOrCreateAgentResult> {
-  const { slug, harnessType, workingDirectory } = params;
-  const { db, getHarness } = deps;
+): Promise<Agent | null> {
+  const { db } = deps;
 
-  // Check if agent already exists (not archived)
   const existingAgents = await db
     .select()
     .from(schema.agents)
     .where(and(eq(schema.agents.slug, slug), isNull(schema.agents.archivedAt)))
     .limit(1);
 
-  const existingAgent = existingAgents[0];
+  return existingAgents[0] ?? null;
+}
 
-  if (existingAgent) {
-    return {
-      agent: existingAgent,
-      wasCreated: false,
-    };
-  }
+/**
+ * Create a new agent using the harness system.
+ * Throws if an agent with the slug already exists.
+ */
+export async function createAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<Agent> {
+  const { slug, harnessType, workingDirectory } = params;
+  const { db, getHarness } = deps;
 
   // Create new agent using harness
   const harness = getHarness(harnessType);
@@ -244,6 +247,30 @@ export async function getOrCreateAgent(
       status: "running",
     })
     .returning();
+
+  return newAgent;
+}
+
+/**
+ * Get or create an agent using the new harness system.
+ * Uses SDK-based session management (for OpenCode) while preserving terminal UI.
+ */
+export async function getOrCreateAgent(
+  params: GetOrCreateAgentParams,
+  deps: HarnessAgentManagerDeps = defaultHarnessDeps,
+): Promise<GetOrCreateAgentResult> {
+  const { slug } = params;
+
+  const existingAgent = await getAgent(slug, deps);
+
+  if (existingAgent) {
+    return {
+      agent: existingAgent,
+      wasCreated: false,
+    };
+  }
+
+  const newAgent = await createAgent(params, deps);
 
   return {
     agent: newAgent,

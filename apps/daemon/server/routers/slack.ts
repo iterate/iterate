@@ -6,7 +6,7 @@
  * Uses the harness system for SDK-based session management.
  */
 import { Hono } from "hono";
-import { getOrCreateAgent, appendToAgent } from "../services/agent-manager.ts";
+import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 
 // Simple structured logger for daemon
 const logger = {
@@ -32,31 +32,52 @@ slackRouter.post("/webhook", async (c) => {
   }
 
   const agentSlug = `slack-${threadId}`;
-  const formattedMessageResult = formatSlackMessage(payload);
+  const messageInfo = parseSlackPayload(payload);
 
-  if (formattedMessageResult.result === "ignore") {
-    return c.json({
-      success: true,
-      message: `Ignored slack webhook: ${formattedMessageResult.message}`,
-    });
+  // Ignore bot messages
+  if (messageInfo.isBotMessage) {
+    return c.json({ success: true, message: "Ignored: bot message" });
+  }
+
+  // Ignore messages without bot authorization
+  if (!messageInfo.botUserId) {
+    return c.json({ success: true, message: "Ignored: no bot user recipient" });
   }
 
   try {
-    // Get or create agent using harness system
-    const result = await getOrCreateAgent({
-      slug: agentSlug,
-      harnessType: "opencode",
-      workingDirectory: ITERATE_REPO,
-    });
+    const existingAgent = await getAgent(agentSlug);
+    const isMention = messageInfo.isBotMentioned;
 
-    // Send message via SDK (for both new and existing agents)
-    await appendToAgent(result.agent, formattedMessageResult.message);
+    // Case 1: @mention - create agent if needed and send with CLI instructions
+    if (isMention) {
+      let agent = existingAgent;
+      let wasCreated = false;
 
-    return c.json({
-      success: true,
-      agentSlug,
-      created: result.wasCreated,
-    });
+      if (!agent) {
+        agent = await createAgent({
+          slug: agentSlug,
+          harnessType: "opencode",
+          workingDirectory: ITERATE_REPO,
+        });
+        wasCreated = true;
+      }
+
+      const message = formatMentionMessage(messageInfo, threadTs!);
+      await appendToAgent(agent, message);
+
+      return c.json({ success: true, agentSlug, created: wasCreated });
+    }
+
+    // Case 2: No @mention but agent exists - send FYI message
+    if (existingAgent) {
+      const message = formatFyiMessage(messageInfo, threadTs!);
+      await appendToAgent(existingAgent, message);
+
+      return c.json({ success: true, agentSlug, created: false, fyi: true });
+    }
+
+    // Case 3: No @mention and no agent - ignore
+    return c.json({ success: true, message: "Ignored: no mention and no existing agent" });
   } catch (error) {
     logger.error("[Slack Webhook] Failed to handle webhook", {
       error: error instanceof Error ? error.message : String(error),
@@ -109,46 +130,58 @@ function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
 
-function extractBotUserRecipientId(payload: unknown) {
-  const p = payload as Pick<typeof examplePayload_newMessage, "authorizations">;
-  const botUserId = p?.authorizations?.find((a) => a.is_bot)?.user_id;
-  return botUserId;
+interface SlackMessageInfo {
+  user: string | undefined;
+  channel: string | undefined;
+  text: string | undefined;
+  botUserId: string | undefined;
+  isBotMessage: boolean;
+  isBotMentioned: boolean;
 }
 
-function formatSlackMessage(payload: unknown): { result: "ignore" | "send"; message: string } {
-  const threadTs = extractThreadTs(payload);
+function parseSlackPayload(payload: unknown): SlackMessageInfo {
   const p = payload as Record<string, unknown>;
   const event = p.event as Record<string, unknown> | undefined;
 
-  if (!event) return { result: "ignore", message: "no event??" };
+  const botUserId = (
+    p as Pick<typeof examplePayload_newMessage, "authorizations">
+  )?.authorizations?.find((a) => a.is_bot)?.user_id;
 
-  const botUserRecipient = extractBotUserRecipientId(payload);
-  if (!botUserRecipient) return { result: "ignore", message: "no bot user recipient" };
+  const isBotMessage = !!(payload as typeof examplePayload_botResponseEcho).event?.bot_profile;
 
-  if ((payload as typeof examplePayload_botResponseEcho).event.bot_profile) {
-    return { result: "ignore", message: "this is a bot message" };
-  }
+  const user = event?.user as string | undefined;
+  const channel = event?.channel as string | undefined;
+  const text = event?.text as string | undefined;
 
-  if (!JSON.stringify(event).includes(botUserRecipient)) {
-    return { result: "ignore", message: "bot was not @ mentioned" };
-  }
+  const isBotMentioned = botUserId ? JSON.stringify(event).includes(botUserId) : false;
 
-  const user = event.user as string | undefined;
-  const channel = event.channel as string | undefined;
-  const text = event.text as string | undefined;
+  return { user, channel, text, botUserId, isBotMessage, isBotMentioned };
+}
 
-  const userPart = user ? `<@${user}>` : "unknown";
-  const channelPart = channel || "unknown channel";
-  const textPart = text || "(no text)";
+function formatMentionMessage(info: SlackMessageInfo, threadTs: string): string {
+  const userPart = info.user ? `<@${info.user}>` : "unknown";
+  const channelPart = info.channel || "unknown channel";
+  const textPart = info.text || "(no text)";
 
-  const lines = [
+  return [
     `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
     "",
     `Before responding, use the following CLI command to reply to the message:`,
     `\`iterate tool send-slack-message --channel ${channelPart} --thread-ts ${threadTs} --message "<your response here>"\` `,
-  ];
+  ].join("\n");
+}
 
-  return { result: "send", message: lines.join("\n") };
+function formatFyiMessage(info: SlackMessageInfo, threadTs: string): string {
+  const userPart = info.user ? `<@${info.user}>` : "unknown";
+  const channelPart = info.channel || "unknown channel";
+  const textPart = info.text || "(no text)";
+
+  return [
+    `FYI, there was another message in this Slack thread from ${userPart} in ${channelPart}: ${textPart}`,
+    "",
+    `If you are SURE this is a direct question to you, you can use the CLI to reply:`,
+    `\`iterate tool send-slack-message --channel ${channelPart} --thread-ts ${threadTs} --message "<your response here>"\` `,
+  ].join("\n");
 }
 
 const examplePayload_newMessage = {
