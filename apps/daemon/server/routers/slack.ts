@@ -101,10 +101,6 @@ function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
 
-/**
- * Format Slack webhook payload into a human-readable message.
- * Format: "New Slack message from <@user> in channel: {text}"
- */
 function formatSlackMessage(payload: unknown): string {
   const p = payload as Record<string, unknown>;
   const event = p.event as Record<string, unknown> | undefined;
