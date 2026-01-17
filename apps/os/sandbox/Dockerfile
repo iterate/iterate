@@ -67,15 +67,9 @@ ENV PATH="/home/iterate/.bun/bin:$PATH"
 
 # === Agent packages (npm, userspace) ===
 
-# Detect architecture and set opencode platform package
-# opencode-ai uses detect-libc which can misdetect in Docker, so we force the glibc binary
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then OPENCODE_PLATFORM="opencode-linux-x64"; \
-    elif [ "$ARCH" = "aarch64" ]; then OPENCODE_PLATFORM="opencode-linux-arm64"; \
-    else OPENCODE_PLATFORM=""; fi && \
-    npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
+RUN npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
     npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
-    npm install -g opencode-ai@${SANDBOX_OPENCODE_VERSION} ${OPENCODE_PLATFORM}@${SANDBOX_OPENCODE_VERSION}
+    npm install -g --libc=glibc opencode-ai@${SANDBOX_OPENCODE_VERSION}
 
 # Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
 # Note: npm creates a symlink, must rm first or echo writes through to cli.js
