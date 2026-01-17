@@ -77,6 +77,7 @@ export default {
           env: {
             RUN_DAYTONA_TESTS: "true",
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: "pnpm os snapshot:daytona:test",
         },
