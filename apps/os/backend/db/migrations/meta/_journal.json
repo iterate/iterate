@@ -36,6 +36,13 @@
       "when": 1768569185228,
       "tag": "0004_majestic_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1768597513012,
+      "tag": "0005_good_ricochet",
+      "breakpoints": true
     }
   ]
 }

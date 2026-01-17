@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User } from "lucide-react";
+import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User, Mail, X } from "lucide-react";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
@@ -45,6 +45,12 @@ function OrgTeamPage() {
     }),
   );
 
+  const { data: pendingInvites } = useSuspenseQuery(
+    trpc.organization.listInvites.queryOptions({
+      organizationSlug: params.organizationSlug,
+    }),
+  );
+
   const updateRole = useMutation({
     mutationFn: async ({
       userId,
@@ -67,19 +73,34 @@ function OrgTeamPage() {
     },
   });
 
-  const addMember = useMutation({
+  const createInvite = useMutation({
     mutationFn: async (emailAddress: string) => {
-      return trpcClient.organization.addMember.mutate({
+      return trpcClient.organization.createInvite.mutate({
         organizationSlug: params.organizationSlug,
         email: emailAddress,
       });
     },
     onSuccess: () => {
       setEmail("");
-      toast.success("Member added!");
+      toast.success("Invite sent!");
     },
-    onError: (error) => {
-      toast.error("Failed to add member: " + error.message);
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const cancelInvite = useMutation({
+    mutationFn: async (inviteId: string) => {
+      return trpcClient.organization.cancelInvite.mutate({
+        organizationSlug: params.organizationSlug,
+        inviteId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Invite cancelled");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
     },
   });
 
@@ -108,28 +129,28 @@ function OrgTeamPage() {
           onSubmit={(event) => {
             event.preventDefault();
             if (email.trim()) {
-              addMember.mutate(email.trim());
+              createInvite.mutate(email.trim());
             }
           }}
         >
           <FieldGroup>
             <FieldSet>
               <Field>
-                <FieldLabel htmlFor="member-email">Add member by email</FieldLabel>
+                <FieldLabel htmlFor="member-email">Invite by email</FieldLabel>
                 <Input
                   id="member-email"
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="name@company.com"
-                  disabled={addMember.isPending}
+                  disabled={createInvite.isPending}
                   autoFocus
                 />
               </Field>
             </FieldSet>
             <Field orientation="horizontal">
-              <Button type="submit" disabled={!email.trim() || addMember.isPending}>
-                {addMember.isPending ? "Adding..." : "Add member"}
+              <Button type="submit" disabled={!email.trim() || createInvite.isPending}>
+                {createInvite.isPending ? "Sending..." : "Invite"}
               </Button>
             </Field>
           </FieldGroup>
@@ -231,6 +252,35 @@ function OrgTeamPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+          {pendingInvites?.map((invite) => (
+            <TableRow key={invite.id} className="text-muted-foreground">
+              <TableCell>
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="font-medium">{invite.email}</div>
+                    <div className="text-sm">Pending invite</div>
+                  </div>
+                </div>
+              </TableCell>
+              <TableCell>
+                <Badge variant="outline">{invite.role}</Badge>
+              </TableCell>
+              {canManageMembers && (
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => cancelInvite.mutate(invite.id)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
                 </TableCell>
               )}
             </TableRow>

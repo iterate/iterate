@@ -67,7 +67,7 @@ export function OrgSwitcher({ organizations, currentOrg }: OrgSwitcherProps) {
             ))}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild className="gap-2 p-2">
-              <Link to="/new-organization">
+              <Link to="/">
                 <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
                   <Plus className="size-4" />
                 </div>

@@ -40,7 +40,7 @@ export async function login(page: Page, email: string) {
 
   await page
     .locator("h1")
-    .filter({ hasText: /Create organization|Dashboard|Projects/ })
+    .filter({ hasText: /Welcome to Iterate|Create organization|Dashboard|Projects/ })
     .first()
     .waitFor();
 }
