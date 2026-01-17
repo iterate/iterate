@@ -6,10 +6,20 @@ export default workflow({
   on: {
     push: {
       branches: ["main"],
-      paths: ["apps/os/sandbox/**", "apps/daemon/**", ".github/workflows/local-docker-test.yml"],
+      paths: [
+        "apps/os/sandbox/**",
+        "apps/os/backend/providers/local-docker.ts",
+        "apps/daemon/**",
+        ".github/workflows/local-docker-test.yml",
+      ],
     },
     pull_request: {
-      paths: ["apps/os/sandbox/**", "apps/daemon/**", ".github/workflows/local-docker-test.yml"],
+      paths: [
+        "apps/os/sandbox/**",
+        "apps/os/backend/providers/local-docker.ts",
+        "apps/daemon/**",
+        ".github/workflows/local-docker-test.yml",
+      ],
     },
     workflow_dispatch: {},
   },
@@ -24,8 +34,9 @@ export default workflow({
           env: {
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "doppler run -- pnpm vitest run apps/os/sandbox/local-docker.test.ts",
+          run: "pnpm os snapshot:local-docker:test",
         },
         {
           name: "Upload test results",

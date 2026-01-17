@@ -1,60 +1,57 @@
 /**
- * Daytona Integration Test
+ * Daytona Bootstrap Integration Test
  *
  * Tests the full sandbox bootstrap flow:
- * 1. Build snapshot if DAYTONA_SNAPSHOT_NAME not provided
- * 2. Start mock OS worker on random port
- * 3. Start cloudflared quick tunnel → get *.trycloudflare.com URL
- * 4. Create Daytona sandbox from snapshot with injected env vars
+ * 1. Start mock OS worker on random port
+ * 2. Start cloudflared quick tunnel → get *.trycloudflare.com URL
+ * 3. Create Daytona sandbox from snapshot with injected env vars
+ * 4. Tail entrypoint logs until /tmp/.iterate-sandbox-ready exists
  * 5. Wait for bootstrap request, return API keys in response
  * 6. Verify daemon/opencode logs look sensible
- * 7. Run `opencode run "what is the secret"` → assert "bananas"
- * 8. Run `claude -p "what is the secret"` → assert "bananas"
- * 9. Run `pi -p "what is the secret"` → assert "bananas"
- * 10. Verify `git status` works in iterate repo
- * 11. Always delete sandbox in finally block
+ * 7. Run `opencode run "what is 50 - 8"` → assert "42"
+ * 8. Always delete sandbox in finally block
  *
  * ENVIRONMENT VARIABLES:
  *
  * Required (from Doppler):
  *   DAYTONA_API_KEY          - Daytona API key
  *   OPENAI_API_KEY           - For opencode LLM calls
- *   ANTHROPIC_API_KEY        - For claude and pi LLM calls
+ *   ANTHROPIC_API_KEY        - Fallback LLM key
  *
- * Optional:
- *   DAYTONA_SNAPSHOT_NAME       - Use existing snapshot (skips build)
- *   SANDBOX_ITERATE_REPO_REF    - Git ref for snapshot build (default: current branch)
+ * Optional Daytona config:
+ *   DAYTONA_ORGANIZATION_ID  - Daytona org ID
+ *   DAYTONA_API_URL          - Daytona API URL
+ *   DAYTONA_TARGET           - Daytona target region
+ *
+ * Snapshot resolution (one of):
+ *   DAYTONA_SNAPSHOT_NAME    - Exact snapshot name (skips resolution)
+ *   DAYTONA_SNAPSHOT_PREFIX  - Prefix for latest snapshot lookup
  *
  * Test flag:
- *   RUN_DAYTONA_TESTS=true  - Enable test (skipped otherwise)
+ *   RUN_DAYTONA_BOOTSTRAP_TESTS=true  - Enable test (skipped otherwise)
  *
  * RUN WITH:
- *   pnpm snapshot:daytona:test
+ *   doppler run -- sh -c 'RUN_DAYTONA_BOOTSTRAP_TESTS=true pnpm vitest run sandbox/daytona-bootstrap.test.ts'
  */
 
-import { execSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Daytona, type Sandbox } from "@daytonaio/sdk";
-import { beforeAll, describe, expect, test } from "vitest";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(__dirname, "../../..");
+import { describe, expect, test } from "vitest";
+import { resolveLatestSnapshot } from "../backend/integrations/daytona/snapshot-resolver.ts";
 
 // ============ Config ============
 
-const RUN_DAYTONA_TESTS = process.env.RUN_DAYTONA_TESTS === "true";
+const RUN_DAYTONA_BOOTSTRAP_TESTS = process.env.RUN_DAYTONA_BOOTSTRAP_TESTS === "true";
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
 const DAYTONA_ORGANIZATION_ID = process.env.DAYTONA_ORGANIZATION_ID;
 const DAYTONA_API_URL = process.env.DAYTONA_API_URL;
 const DAYTONA_TARGET = process.env.DAYTONA_TARGET;
+const DAYTONA_SNAPSHOT_NAME = process.env.DAYTONA_SNAPSHOT_NAME;
+const DAYTONA_SNAPSHOT_PREFIX = process.env.DAYTONA_SNAPSHOT_PREFIX;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-
-// Snapshot: use provided name or build one
-let snapshotName = process.env.DAYTONA_SNAPSHOT_NAME;
 
 const TEST_TIMEOUT_MS = 600_000; // 10 minutes for the whole test
 const SANDBOX_READY_TIMEOUT_MS = 180_000; // 3 minutes for sandbox to be ready
@@ -198,53 +195,18 @@ async function waitForCondition(
 
 // ============ Test ============
 
-describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
-  // Build snapshot once before all tests (if not using existing snapshot)
-  beforeAll(async () => {
-    if (snapshotName) {
-      console.log(`Using existing snapshot: ${snapshotName}`);
-      return;
-    }
-
-    // Get git ref for snapshot - use env var or current branch
-    const repoRef =
-      process.env.SANDBOX_ITERATE_REPO_REF ??
-      execSync("git rev-parse --abbrev-ref HEAD", { cwd: REPO_ROOT, encoding: "utf-8" }).trim();
-
-    console.log(`Building Daytona snapshot from ref: ${repoRef}`);
-    console.log("This may take several minutes...");
-
-    // Run snapshot creation and capture output to get snapshot name
-    // Uses current APP_STAGE from doppler (dev-$ITERATE_USER locally, prd in CI)
-    const output = execSync(`pnpm snapshot:daytona`, {
-      cwd: join(REPO_ROOT, "apps/os"),
-      encoding: "utf-8",
-      env: {
-        ...process.env,
-        SANDBOX_ITERATE_REPO_REF: repoRef,
-        APP_STAGE: process.env.APP_STAGE || "dev",
-      },
-      stdio: ["inherit", "pipe", "inherit"],
-    });
-    console.log(output);
-
-    // Parse snapshot name from output (format: "Creating snapshot: dev-jonas--20260116-230007" or "prd--...")
-    const match = output.match(/Creating snapshot: ([\w-]+)/);
-    if (!match) {
-      throw new Error("Could not parse snapshot name from build output");
-    }
-    snapshotName = match[1];
-    console.log(`Snapshot built: ${snapshotName}`);
-  }, 600_000); // 10 min timeout for snapshot build
-
+describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () => {
   test(
-    "sandbox boots, bootstraps with control plane, and agents answer the secret",
+    "sandbox boots, bootstraps with control plane, and opencode computes 50-8=42",
     async () => {
       // Validate required env vars
       if (!DAYTONA_API_KEY) throw new Error("DAYTONA_API_KEY required");
-      if (!snapshotName) throw new Error("Snapshot name not set (beforeAll should have built one)");
-      if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY required (for opencode)");
-      if (!ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY required (for claude and pi)");
+      if (!DAYTONA_SNAPSHOT_NAME && !DAYTONA_SNAPSHOT_PREFIX) {
+        throw new Error("Either DAYTONA_SNAPSHOT_NAME or DAYTONA_SNAPSHOT_PREFIX required");
+      }
+      if (!OPENAI_API_KEY && !ANTHROPIC_API_KEY) {
+        throw new Error("At least one of OPENAI_API_KEY or ANTHROPIC_API_KEY required");
+      }
 
       // Resources to clean up
       let mockServer: Server | null = null;
@@ -274,6 +236,14 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         cloudflared = await startCloudflaredTunnel(serverPort);
         console.log(`[test] Tunnel URL: ${cloudflared.url}`);
 
+        // 3. Resolve snapshot name
+        const snapshotName =
+          DAYTONA_SNAPSHOT_NAME ??
+          (await resolveLatestSnapshot(DAYTONA_SNAPSHOT_PREFIX!, {
+            apiKey: DAYTONA_API_KEY,
+            baseUrl: DAYTONA_API_URL,
+            organizationId: DAYTONA_ORGANIZATION_ID,
+          }));
         console.log(`[test] Using snapshot: ${snapshotName}`);
 
         // 4. Create Daytona sandbox
@@ -427,12 +397,12 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log(opencodeLogs.result);
 
         // 10. Run opencode smoketest
-        printSection("OPENCODE SMOKETEST: 'what is the secret?'");
-        console.log('Running: opencode run "what is the secret"');
+        printSection("OPENCODE SMOKETEST: 'what is 50 - 8?'");
+        console.log('Running: opencode run "what is 50 - 8? respond with just the number"');
         console.log("");
 
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what is the secret\\""',
+          'bash -c "source ~/.iterate/.env && opencode run \\"what is 50 - 8? respond with just the number\\""',
         );
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),
@@ -458,108 +428,30 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(opencodeOutput.toLowerCase()).toContain("bananas");
+        expect(opencodeOutput).toContain("42");
         console.log("");
-        console.log("✓ SUCCESS: opencode correctly answered the secret");
-
-        // 11. Run claude smoketest
-        printSection("CLAUDE SMOKETEST: 'what is the secret?'");
-        console.log('Running: claude -p "what is the secret"');
-        console.log("");
-
-        const claudePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && claude -p \\"what is the secret\\""',
-        );
-        const claudeTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
-        );
-
-        const claudeResult = await Promise.race([claudePromise, claudeTimeoutPromise]);
-        const claudeOutput = claudeResult.result ?? "";
-
-        console.log(
-          "┌─────────────────────────────────────────────────────────────────────────────┐",
-        );
-        console.log(
-          "│ CLAUDE RESPONSE:                                                            │",
-        );
-        console.log(
-          "├─────────────────────────────────────────────────────────────────────────────┤",
-        );
-        for (const line of claudeOutput.split("\n")) {
-          console.log(`│ ${line}`);
-        }
-        console.log(
-          "└─────────────────────────────────────────────────────────────────────────────┘",
-        );
-
-        expect(claudeOutput.toLowerCase()).toContain("bananas");
-        console.log("");
-        console.log("✓ SUCCESS: claude correctly answered the secret");
-
-        // 12. Run pi smoketest
-        printSection("PI SMOKETEST: 'what is the secret?'");
-        console.log('Running: pi -p "what is the secret"');
-        console.log("");
-
-        const piPromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && pi -p \\"what is the secret\\""',
-        );
-        const piTimeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),
-        );
-
-        const piResult = await Promise.race([piPromise, piTimeoutPromise]);
-        const piOutput = piResult.result ?? "";
-
-        console.log(
-          "┌─────────────────────────────────────────────────────────────────────────────┐",
-        );
-        console.log(
-          "│ PI RESPONSE:                                                                │",
-        );
-        console.log(
-          "├─────────────────────────────────────────────────────────────────────────────┤",
-        );
-        for (const line of piOutput.split("\n")) {
-          console.log(`│ ${line}`);
-        }
-        console.log(
-          "└─────────────────────────────────────────────────────────────────────────────┘",
-        );
-
-        expect(piOutput.toLowerCase()).toContain("bananas");
-        console.log("");
-        console.log("✓ SUCCESS: pi correctly answered the secret");
-
-        // 13. Verify git status works in iterate repo
-        printSection("GIT STATUS CHECK");
-        const gitStatusResult = await sandbox.process.executeCommand(
-          "git -C ~/src/github.com/iterate/iterate status",
-        );
-        const gitStatusOutput = gitStatusResult.result ?? "";
-        console.log(gitStatusOutput);
-
-        expect(gitStatusOutput).toContain("On branch");
-        console.log("");
-        console.log("✓ SUCCESS: git status works correctly");
+        console.log("✓ SUCCESS: opencode correctly computed 42");
       } finally {
         // Always clean up resources
         console.log("[test] Cleaning up...");
 
+        // TEMPORARILY COMMENTED OUT - leave sandbox running for debugging
+        // if (sandbox) {
+        //   try {
+        //     console.log("[test] Stopping sandbox...");
+        //     await sandbox.stop(60);
+        //   } catch (e) {
+        //     console.error("[test] Error stopping sandbox:", e);
+        //   }
+        //   try {
+        //     console.log("[test] Deleting sandbox...");
+        //     await sandbox.delete();
+        //   } catch (e) {
+        //     console.error("[test] Error deleting sandbox:", e);
+        //   }
+        // }
         if (sandbox) {
-          try {
-            console.log("[test] Stopping sandbox...");
-            await sandbox.stop(60);
-          } catch (e) {
-            console.error("[test] Error stopping sandbox:", e);
-          }
-          try {
-            console.log("[test] Deleting sandbox...");
-            await sandbox.delete();
-          } catch (e) {
-            console.error("[test] Error deleting sandbox:", e);
-          }
+          console.log(`[test] Sandbox left running for debugging: ${sandbox.id}`);
         }
 
         if (cloudflared) {

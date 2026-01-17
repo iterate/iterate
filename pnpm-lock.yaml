@@ -903,6 +903,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      undici:
+        specifier: ^7.18.2
+        version: 7.18.2
       vite:
         specifier: 7.2.4
         version: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
@@ -10095,6 +10098,10 @@ packages:
     resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.18.2:
+    resolution: {integrity: sha512-y+8YjDFzWdQlSE9N5nzKMT3g4a5UBX1HKowfdXh0uvAnTaqqwqB92Jt4UXBAeKekDs5IaDKyJFR4X1gYVCgXcw==}
+    engines: {node: '>=20.18.1'}
+
   unenv@2.0.0-rc.21:
     resolution: {integrity: sha512-Wj7/AMtE9MRnAXa6Su3Lk0LNCfqDYgfwVjwRFVum9U7wsto1imuHqk4kTm7Jni+5A0Hn7dttL6O/zjvUvoo+8A==}
 
@@ -12163,7 +12170,7 @@ snapshots:
       '@effect/sql': 0.34.1(@effect/experimental@0.44.21(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14)
       effect: 3.19.14
       mime: 3.0.0
-      undici: 7.16.0
+      undici: 7.18.2
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
@@ -21573,6 +21580,8 @@ snapshots:
   undici@7.14.0: {}
 
   undici@7.16.0: {}
+
+  undici@7.18.2: {}
 
   unenv@2.0.0-rc.21:
     dependencies:

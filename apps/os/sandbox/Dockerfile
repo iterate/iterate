@@ -1,5 +1,8 @@
 FROM node:24
 
+# Build cache buster: 2026-01-16T23:10
+# (change this comment to force Daytona to rebuild when cache is stale)
+
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
@@ -66,7 +69,7 @@ ENV PATH="/home/iterate/.bun/bin:$PATH"
 
 RUN npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
     npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
-    npm install -g opencode-ai@${SANDBOX_OPENCODE_VERSION}
+    npm install -g --libc=glibc opencode-ai@${SANDBOX_OPENCODE_VERSION}
 
 # Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
 # Note: npm creates a symlink, must rm first or echo writes through to cli.js

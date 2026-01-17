@@ -16,13 +16,17 @@ The Docker **build context** determines what version of iterate is bundled in th
 
 ## Key Files
 
-| File             | Purpose                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| `Dockerfile`     | Image definition; COPY repo from build context                                       |
-| `entry.sh`       | Container entrypoint; rsync in local mode, then start s6                             |
-| `setup-home.sh`  | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
-| `home-skeleton/` | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
-| `s6-daemons/`    | Service definitions for s6 process supervisor                                        |
+| File                       | Purpose                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `Dockerfile`               | Image definition; COPY repo from build context                                       |
+| `entry.sh`                 | Container entrypoint; rsync in local mode, then start s6                             |
+| `setup-home.sh`            | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
+| `home-skeleton/`           | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
+| `s6-daemons/`              | Service definitions for s6 process supervisor                                        |
+| `daytona-snapshot.ts`      | Script to build Daytona snapshot from git ref                                        |
+| `local-docker-snapshot.ts` | Script to build local Docker image                                                   |
+| `daytona.test.ts`          | Integration test for Daytona sandbox bootstrap                                       |
+| `local-docker.test.ts`     | Integration test for local Docker sandbox                                            |
 
 ## Version Configuration
 
@@ -37,13 +41,40 @@ Agent versions are `ENV` vars at the top of the Dockerfile (prefix `SANDBOX_`):
 
 To update: edit `ENV` values in `Dockerfile`, rebuild image.
 
-## Building
+## Building & Testing
+
+### Local Docker
 
 ```bash
-# Local development (uses your working directory)
-pnpm run snapshot:local-docker
+# Build local image (uses your working directory)
+pnpm snapshot:local-docker
 
-# Or directly:
+# Run tests against local Docker
+pnpm snapshot:local-docker:test
+```
+
+### Daytona
+
+```bash
+# Build snapshot from current branch
+SANDBOX_ITERATE_REPO_REF=$(git branch --show-current) pnpm snapshot:daytona:prd
+
+# Build snapshot from specific branch/SHA
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:prd
+
+# Run tests (auto-builds snapshot from current branch if not specified)
+pnpm snapshot:daytona:test
+
+# Run tests with specific branch
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:test
+
+# Run tests with existing snapshot (skips build)
+DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
+```
+
+### Direct Docker Build
+
+```bash
 docker build -t iterate-sandbox:local -f apps/os/sandbox/Dockerfile .
 ```
 

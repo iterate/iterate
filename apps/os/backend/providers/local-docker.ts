@@ -1,39 +1,74 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Agent, request } from "undici";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
-export const DOCKER_API_URL = "http://127.0.0.1:2375";
+// Support DOCKER_HOST env var, defaulting to TCP for local dev (OrbStack)
+// Examples: unix:///var/run/docker.sock, tcp://127.0.0.1:2375
+const DOCKER_HOST = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
+
+function parseDockerHost(): { socketPath?: string; url: string } {
+  if (DOCKER_HOST.startsWith("unix://")) {
+    return { socketPath: DOCKER_HOST.slice(7), url: "http://localhost" };
+  }
+  if (DOCKER_HOST.startsWith("tcp://")) {
+    return { url: `http://${DOCKER_HOST.slice(6)}` };
+  }
+  // Assume it's a URL
+  return { url: DOCKER_HOST };
+}
+
+const dockerHostConfig = parseDockerHost();
+export const DOCKER_API_URL = dockerHostConfig.url;
+
+// Create dispatcher for Unix socket if needed
+const dockerDispatcher = dockerHostConfig.socketPath
+  ? new Agent({ connect: { socketPath: dockerHostConfig.socketPath } })
+  : undefined;
 
 // Repo root is ../../../../ from apps/os/backend/providers/
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+
+/** Raw docker request for when you need the response body as stream/buffer */
+export function dockerRequest(endpoint: string, options: Parameters<typeof request>[1] = {}) {
+  return request(`${DOCKER_API_URL}${endpoint}`, {
+    ...options,
+    dispatcher: dockerDispatcher,
+  });
+}
 
 export async function dockerApi<T>(
   method: string,
   endpoint: string,
   body?: Record<string, unknown>,
 ): Promise<T> {
-  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
-    method,
+  const options: Parameters<typeof request>[1] = {
+    method: method as "GET" | "POST" | "DELETE",
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
-  }).catch((e: unknown) => {
+    dispatcher: dockerDispatcher,
+  };
+
+  const response = await request(`${DOCKER_API_URL}${endpoint}`, options).catch((e: unknown) => {
     throw new Error(
       `Docker API error: ${e}. ` +
-        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
+        `DOCKER_HOST=${DOCKER_HOST}. ` +
+        `For local dev, enable TCP API on port 2375 (OrbStack: Docker Engine settings). ` +
+        `For CI, set DOCKER_HOST=unix:///var/run/docker.sock`,
     );
   });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.status }));
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    const error = await response.body.json().catch(() => ({ message: response.statusCode }));
     throw new Error(
-      `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
-        `Make sure OrbStack/Docker is running with TCP API enabled on port 2375. Look for "Docker Engine" config in docs.`,
+      `Docker API error: ${(error as { message?: string }).message ?? response.statusCode}. ` +
+        `DOCKER_HOST=${DOCKER_HOST}`,
     );
   }
 
-  const text = await response.text();
+  const text = await response.body.text();
   return text ? JSON.parse(text) : ({} as T);
 }
 
