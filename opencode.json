@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "playmium": {
+      "type": "local",
+      "command": ["npx", "https://pkg.pr.new/mmkal/playwriter@22e668a", "--chromium"],
+      "enabled": true
+    }
+  }
+}
