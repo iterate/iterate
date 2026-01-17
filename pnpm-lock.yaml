@@ -952,6 +952,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.0
         version: 1.19.6(hono@4.11.3)
+      '@mariozechner/pi-coding-agent':
+        specifier: '*'
+        version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)
       effect:
         specifier: ^3.19.0
         version: 3.19.14
@@ -13426,6 +13429,18 @@ snapshots:
       - ws
       - zod
 
+  '@mariozechner/pi-agent-core@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.42.0
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-ai@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.1.12)
@@ -13466,6 +13481,26 @@ snapshots:
       - ws
       - zod
 
+  '@mariozechner/pi-ai@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.71.2(zod@4.1.13)
+      '@google/genai': 1.34.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.47
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chalk: 5.6.2
+      openai: 6.10.0(zod@4.1.13)
+      partial-json: 0.1.7
+      zod-to-json-schema: 3.25.0(zod@4.1.13)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-coding-agent@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
@@ -13495,6 +13530,30 @@ snapshots:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/pi-agent-core': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
       '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.42.0
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.2
+      file-type: 21.3.0
+      glob: 11.1.0
+      jiti: 2.6.1
+      marked: 15.0.12
+      minimatch: 10.1.1
+      proper-lockfile: 4.1.2
+      sharp: 0.34.5
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)':
+    dependencies:
+      '@mariozechner/clipboard': 0.3.0
+      '@mariozechner/pi-agent-core': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)
+      '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(zod@4.1.13)
       '@mariozechner/pi-tui': 0.42.0
       chalk: 5.6.2
       cli-highlight: 2.1.11
@@ -20205,6 +20264,10 @@ snapshots:
   openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13):
     optionalDependencies:
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      zod: 4.1.13
+
+  openai@6.10.0(zod@4.1.13):
+    optionalDependencies:
       zod: 4.1.13
 
   openapi-types@12.1.3: {}

@@ -15,6 +15,7 @@
     "@effect/platform": "^0.82.0",
     "@effect/platform-node": "^0.78.0",
     "@hono/node-server": "^1.13.0",
+    "@mariozechner/pi-coding-agent": "*",
     "effect": "^3.19.0",
     "hono": "^4.11.3"
   },
