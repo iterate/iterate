@@ -73,6 +73,22 @@ export default {
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
         {
+          name: "Install cloudflared",
+          run: dedent`
+            # Detect architecture and download appropriate cloudflared binary
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+              CLOUDFLARED_ARCH="arm64"
+            else
+              CLOUDFLARED_ARCH="amd64"
+            fi
+            curl -L "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$CLOUDFLARED_ARCH" -o cloudflared
+            chmod +x cloudflared
+            sudo mv cloudflared /usr/local/bin/
+            cloudflared --version
+          `,
+        },
+        {
           name: "Run Daytona Tests",
           env: {
             RUN_DAYTONA_TESTS: "true",
