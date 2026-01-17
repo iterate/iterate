@@ -76,9 +76,15 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const { org, project, machine, port } = c.req.param();
+  const params = c.req.param();
+  // Decode URL-encoded slugs to handle legacy data with periods or special chars
+  const org = decodeURIComponent(params.org);
+  const project = decodeURIComponent(params.project);
+  const machine = params.machine;
+  const port = params.port;
   const db = c.var.db;
-  const proxyBasePath = `/org/${org}/proj/${project}/${machine}/proxy/${port}`;
+  // Keep the proxy base path encoded to match incoming requests
+  const proxyBasePath = `/org/${params.org}/proj/${params.project}/${machine}/proxy/${port}`;
 
   // 2. Validate port (must be valid TCP port number)
   const portNum = parseInt(port, 10);

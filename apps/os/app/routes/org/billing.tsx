@@ -61,7 +61,8 @@ function BillingContent() {
   const createCheckout = useMutation({
     mutationFn: () => {
       const baseUrl = window.location.origin;
-      const billingPath = `/orgs/${params.organizationSlug}/billing`;
+      // Encode slug to handle legacy data with periods or special chars
+      const billingPath = `/orgs/${encodeURIComponent(params.organizationSlug)}/billing`;
       return trpcClient.billing.createCheckoutSession.mutate({
         organizationSlug: params.organizationSlug,
         successUrl: `${baseUrl}${billingPath}?success=true`,

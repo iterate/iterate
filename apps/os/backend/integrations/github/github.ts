@@ -204,9 +204,12 @@ githubApp.get(
       });
     });
 
+    // Encode slugs to handle legacy data with periods or special chars
     const redirectPath =
       callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/repo` : "/");
+      (project
+        ? `/orgs/${encodeURIComponent(project.organization.slug)}/projects/${encodeURIComponent(project.slug)}/repo`
+        : "/");
     return c.redirect(redirectPath);
   },
 );

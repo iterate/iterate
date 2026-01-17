@@ -71,8 +71,10 @@ export const billingRouter = router({
       });
 
       const baseUrl = env.VITE_PUBLIC_URL;
-      const defaultSuccessUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?success=true`;
-      const defaultCancelUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?canceled=true`;
+      // Encode slug to handle legacy data with periods or special chars
+      const encodedOrgSlug = encodeURIComponent(ctx.organization.slug);
+      const defaultSuccessUrl = `${baseUrl}/orgs/${encodedOrgSlug}/billing?success=true`;
+      const defaultCancelUrl = `${baseUrl}/orgs/${encodedOrgSlug}/billing?canceled=true`;
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
@@ -118,7 +120,8 @@ export const billingRouter = router({
     }
 
     const baseUrl = env.VITE_PUBLIC_URL;
-    const returnUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing`;
+    // Encode slug to handle legacy data with periods or special chars
+    const returnUrl = `${baseUrl}/orgs/${encodeURIComponent(ctx.organization.slug)}/billing`;
 
     const session = await stripe.billingPortal.sessions.create({
       customer: account.stripeCustomerId,

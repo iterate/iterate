@@ -536,8 +536,9 @@ export const machineRouter = router({
         });
       }
 
+      // Encode slugs to handle legacy data that might contain periods or special chars
       const buildProxyUrl = (port: number) =>
-        `/org/${ctx.organization.slug}/proj/${ctx.project.slug}/${machineRecord.id}/proxy/${port}/`;
+        `/org/${encodeURIComponent(ctx.organization.slug)}/proj/${encodeURIComponent(ctx.project.slug)}/${machineRecord.id}/proxy/${port}/`;
 
       // Metadata can have old format { port, containerId } or new format { ports, containerId }
       const metadata = machineRecord.metadata as {
