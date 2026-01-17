@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, DOCKER_API_URL, execInContainer } from "./test-helpers.ts";
+import { dockerApi, execInContainer } from "./test-helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
@@ -92,8 +92,10 @@ async function waitForContainerReady(containerId: string, timeoutMs = 30000): Pr
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const response = await fetch(`${DOCKER_API_URL}/containers/${containerId}/json`);
-      const info = (await response.json()) as { State: { Running: boolean } };
+      const info = await dockerApi<{ State: { Running: boolean } }>(
+        "GET",
+        `/containers/${containerId}/json`,
+      );
       if (info.State.Running) {
         await new Promise((r) => setTimeout(r, 2000));
         return;
@@ -164,28 +166,32 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     });
 
     test.runIf(process.env.OPENAI_API_KEY)(
-      "opencode answers math question",
+      "opencode answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
-        expect(output).toContain("42");
+        const output = await execInContainer(container.id, [
+          "opencode",
+          "run",
+          "what is the secret",
+        ]);
+        expect(output.toLowerCase()).toContain("bananas");
       },
       30000,
     );
 
     test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "claude answers math question",
+      "claude answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
-        expect(output).toContain("42");
+        const output = await execInContainer(container.id, ["claude", "-p", "what is the secret"]);
+        expect(output.toLowerCase()).toContain("bananas");
       },
       30000,
     );
 
     test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "pi answers math question",
+      "pi answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
-        expect(output).toContain("42");
+        const output = await execInContainer(container.id, ["pi", "-p", "what is the secret"]);
+        expect(output.toLowerCase()).toContain("bananas");
       },
       30000,
     );

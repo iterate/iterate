@@ -2,7 +2,7 @@
  * Shared test helpers for sandbox integration tests.
  */
 
-import { DOCKER_API_URL, dockerApi } from "../backend/providers/local-docker.ts";
+import { DOCKER_API_URL, dockerApi, dockerRequest } from "../backend/providers/local-docker.ts";
 
 export { DOCKER_API_URL, dockerApi };
 
@@ -37,22 +37,25 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
     Cmd: cmd,
   });
 
-  const response = await fetch(`${DOCKER_API_URL}/exec/${execCreate.Id}/start`, {
+  const response = await dockerRequest(`/exec/${execCreate.Id}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ Detach: false, Tty: false }),
   });
 
-  const buffer = await response.arrayBuffer();
+  const buffer = await response.body.arrayBuffer();
   return decodeDockerLogs(new Uint8Array(buffer));
 }
 
 export async function getContainerLogs(containerId: string): Promise<string> {
-  const response = await fetch(
-    `${DOCKER_API_URL}/containers/${containerId}/logs?stdout=true&stderr=true&timestamps=true`,
+  const response = await dockerRequest(
+    `/containers/${containerId}/logs?stdout=true&stderr=true&timestamps=true`,
+    { method: "GET" },
   );
-  if (!response.ok) throw new Error("Failed to get logs");
-  const buffer = await response.arrayBuffer();
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error("Failed to get logs");
+  }
+  const buffer = await response.body.arrayBuffer();
   return decodeDockerLogs(new Uint8Array(buffer));
 }
 

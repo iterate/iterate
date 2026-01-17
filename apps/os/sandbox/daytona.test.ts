@@ -8,9 +8,9 @@
  * 4. Create Daytona sandbox from snapshot with injected env vars
  * 5. Wait for bootstrap request, return API keys in response
  * 6. Verify daemon/opencode logs look sensible
- * 7. Run `opencode run "what is 50 - 8"` → assert "42"
- * 8. Run `claude -p "what is 50 - 8"` → assert "42"
- * 9. Run `pi -p "what is 50 - 8"` → assert "42"
+ * 7. Run `opencode run "what is the secret"` → assert "bananas"
+ * 8. Run `claude -p "what is the secret"` → assert "bananas"
+ * 9. Run `pi -p "what is the secret"` → assert "bananas"
  * 10. Verify `git status` works in iterate repo
  * 11. Always delete sandbox in finally block
  *
@@ -238,7 +238,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
   }, 600_000); // 10 min timeout for snapshot build
 
   test(
-    "sandbox boots, bootstraps with control plane, and opencode computes 50-8=42",
+    "sandbox boots, bootstraps with control plane, and agents answer the secret",
     async () => {
       // Validate required env vars
       if (!DAYTONA_API_KEY) throw new Error("DAYTONA_API_KEY required");
@@ -427,12 +427,12 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log(opencodeLogs.result);
 
         // 10. Run opencode smoketest
-        printSection("OPENCODE SMOKETEST: 'what is 50 - 8?'");
-        console.log('Running: opencode run "what is 50 - 8? respond with just the number"');
+        printSection("OPENCODE SMOKETEST: 'what is the secret?'");
+        console.log('Running: opencode run "what is the secret"');
         console.log("");
 
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what is 50 - 8? respond with just the number\\""',
+          'bash -c "source ~/.iterate/.env && opencode run \\"what is the secret\\""',
         );
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),
@@ -458,17 +458,17 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(opencodeOutput).toContain("42");
+        expect(opencodeOutput.toLowerCase()).toContain("bananas");
         console.log("");
-        console.log("✓ SUCCESS: opencode correctly computed 42");
+        console.log("✓ SUCCESS: opencode correctly answered the secret");
 
         // 11. Run claude smoketest
-        printSection("CLAUDE SMOKETEST: 'what is 50 - 8?'");
-        console.log('Running: claude -p "what is 50 - 8? respond with just the number"');
+        printSection("CLAUDE SMOKETEST: 'what is the secret?'");
+        console.log('Running: claude -p "what is the secret"');
         console.log("");
 
         const claudePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && claude -p \\"what is 50 - 8? respond with just the number\\""',
+          'bash -c "source ~/.iterate/.env && claude -p \\"what is the secret\\""',
         );
         const claudeTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
@@ -493,17 +493,17 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(claudeOutput).toContain("42");
+        expect(claudeOutput.toLowerCase()).toContain("bananas");
         console.log("");
-        console.log("✓ SUCCESS: claude correctly computed 42");
+        console.log("✓ SUCCESS: claude correctly answered the secret");
 
         // 12. Run pi smoketest
-        printSection("PI SMOKETEST: 'what is 50 - 8?'");
-        console.log('Running: pi -p "what is 50 - 8? respond with just the number"');
+        printSection("PI SMOKETEST: 'what is the secret?'");
+        console.log('Running: pi -p "what is the secret"');
         console.log("");
 
         const piPromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && pi -p \\"what is 50 - 8? respond with just the number\\""',
+          'bash -c "source ~/.iterate/.env && pi -p \\"what is the secret\\""',
         );
         const piTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),
@@ -528,9 +528,9 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(piOutput).toContain("42");
+        expect(piOutput.toLowerCase()).toContain("bananas");
         console.log("");
-        console.log("✓ SUCCESS: pi correctly computed 42");
+        console.log("✓ SUCCESS: pi correctly answered the secret");
 
         // 13. Verify git status works in iterate repo
         printSection("GIT STATUS CHECK");
