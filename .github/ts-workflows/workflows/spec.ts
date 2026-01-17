@@ -9,6 +9,7 @@ export default workflow({
   },
   env: {
     SLACK_CLIENT_ID: "fake123",
+    DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
   },
   jobs: {
     run: {
@@ -29,9 +30,6 @@ export default workflow({
         {
           name: "Setup Doppler",
           run: "doppler setup --project os --config dev",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
         },
         {
           name: "Install Playwright browsers",
