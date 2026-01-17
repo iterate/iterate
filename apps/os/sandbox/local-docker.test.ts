@@ -88,24 +88,39 @@ async function destroyContainer(containerId: string): Promise<void> {
   await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
 }
 
-async function waitForContainerReady(containerId: string, timeoutMs = 30000): Promise<void> {
+async function waitForContainerReady(containerId: string, timeoutMs = 180000): Promise<void> {
   const start = Date.now();
+
+  // First wait for container to be running
   while (Date.now() - start < timeoutMs) {
     try {
       const info = await dockerApi<{ State: { Running: boolean } }>(
         "GET",
         `/containers/${containerId}/json`,
       );
-      if (info.State.Running) {
-        await new Promise((r) => setTimeout(r, 2000));
-        return;
-      }
+      if (info.State.Running) break;
     } catch {
       // Container not ready yet
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error("Timeout waiting for container to start");
+
+  // Then wait for entry.sh to complete setup (creates ready file after setup-home.sh)
+  while (Date.now() - start < timeoutMs) {
+    try {
+      // Use sh -c with && echo to get output only on success
+      const result = await execInContainer(containerId, [
+        "sh",
+        "-c",
+        "test -f /tmp/.iterate-sandbox-ready && echo ready",
+      ]);
+      if (result.trim() === "ready") return;
+    } catch {
+      // File doesn't exist yet or container not ready
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timeout waiting for container setup to complete");
 }
 
 async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
@@ -148,7 +163,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     beforeAll(async () => {
       container = await createContainer();
       await waitForContainerReady(container.id);
-    }, 60000);
+    }, 300000);
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
@@ -250,7 +265,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         CONTAINER_REPO_PATH,
         "status",
       ]);
-      expect(status).toContain("On branch");
+      // CI checks out PR merge commits in detached HEAD state, which is fine
+      expect(status).toMatch(/On branch|HEAD detached/);
     });
   });
 
@@ -261,7 +277,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     beforeAll(async () => {
       container = await createContainer({ exposePort: true });
       await waitForContainerReady(container.id);
-    }, 60000);
+    }, 300000);
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
