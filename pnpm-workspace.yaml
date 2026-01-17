@@ -5,6 +5,9 @@ packages:
   - apps/os
   - packages/*
   - .github/ts-workflows
+  - kiterate/cli
+  - kiterate/server
+  - kiterate/web
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:

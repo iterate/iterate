@@ -922,6 +922,93 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
+  kiterate/cli:
+    dependencies:
+      eventsource:
+        specifier: ^3.0.7
+        version: 3.0.7
+    devDependencies:
+      '@types/eventsource':
+        specifier: ^1.1.15
+        version: 1.1.15
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  kiterate/server:
+    dependencies:
+      '@effect/platform':
+        specifier: ^0.82.0
+        version: 0.82.8(effect@3.19.14)
+      '@effect/platform-node':
+        specifier: ^0.78.0
+        version: 0.78.1(@effect/cluster@0.31.1(@effect/platform@0.82.8(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(bufferutil@4.0.9)(effect@3.19.14)(utf-8-validate@5.0.10)
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.6(hono@4.11.3)
+      effect:
+        specifier: ^3.19.0
+        version: 3.19.14
+      hono:
+        specifier: ^4.11.3
+        version: 4.11.3
+    devDependencies:
+      '@effect/vitest':
+        specifier: ^0.27.0
+        version: 0.27.0(effect@3.19.14)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+
+  kiterate/web:
+    dependencies:
+      react:
+        specifier: ^19.2.3
+        version: 19.2.3
+      react-dom:
+        specifier: ^19.2.3
+        version: 19.2.3(react@19.2.3)
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.0.6
+        version: 4.1.17(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      '@types/react':
+        specifier: ^19.2.7
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.7)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.1
+        version: 5.1.2(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
+      tailwindcss:
+        specifier: ^4.0.6
+        version: 4.1.17
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.7
+        version: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+
   packages/shared:
     devDependencies:
       vite:
@@ -5435,6 +5522,9 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/eventsource@1.1.15':
+    resolution: {integrity: sha512-XQmGcbnxUNa06HR3VBVkc9+A2Vpi9ZyLJcdS5dwaQQ/4ZMWFO+5c90FnMUpbtMZwB/FChoYHwuVg8TvkECacTA==}
+
   '@types/geojson@7946.0.16':
     resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
 
@@ -7186,6 +7276,10 @@ packages:
 
   eventsource-parser@3.0.6:
     resolution: {integrity: sha512-Vo1ab+QXPzZ4tCa8SwIHJFaSzy4R6SHf7BY79rFBDf0idraZWAkYrDjDj8uWaSm3S2TK+hJ7/t1CEmZ7jXw+pg==}
+    engines: {node: '>=18.0.0'}
+
+  eventsource@3.0.7:
+    resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
     engines: {node: '>=18.0.0'}
 
   execa@9.6.0:
@@ -10094,10 +10188,6 @@ packages:
     resolution: {integrity: sha512-Vqs8HTzjpQXZeXdpsfChQTlafcMQaaIwnGwLam1wudSSjlJeQ3bw1j+TLPePgrCnCpUXx7Ba5Pdpf5OBih62NQ==}
     engines: {node: '>=20.18.1'}
 
-  undici@7.16.0:
-    resolution: {integrity: sha512-QEg3HPMll0o3t2ourKwOeUAZ159Kn9mx5pnzHRQO8+Wixmh88YdZRiIwat0iNzNNXn0yoEtXJqFpyW7eM8BV7g==}
-    engines: {node: '>=20.18.1'}
-
   undici@7.18.2:
     resolution: {integrity: sha512-y+8YjDFzWdQlSE9N5nzKMT3g4a5UBX1HKowfdXh0uvAnTaqqwqB92Jt4UXBAeKekDs5IaDKyJFR4X1gYVCgXcw==}
     engines: {node: '>=20.18.1'}
@@ -12185,7 +12275,7 @@ snapshots:
       '@effect/sql': 0.34.1(@effect/experimental@0.44.21(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.82.8(effect@3.19.14))(effect@3.19.14)
       effect: 3.19.14
       mime: 3.0.0
-      undici: 7.16.0
+      undici: 7.18.2
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
@@ -16258,6 +16348,8 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/eventsource@1.1.15': {}
+
   '@types/geojson@7946.0.16': {}
 
   '@types/glob@7.1.3':
@@ -17107,7 +17199,7 @@ snapshots:
       parse5: 7.3.0
       parse5-htmlparser2-tree-adapter: 7.1.0
       parse5-parser-stream: 7.1.2
-      undici: 7.16.0
+      undici: 7.18.2
       whatwg-mimetype: 4.0.0
 
   chevrotain-allstar@0.3.1(chevrotain@11.0.3):
@@ -17681,7 +17773,7 @@ snapshots:
 
   effect@3.19.14:
     dependencies:
-      '@standard-schema/spec': 1.0.0
+      '@standard-schema/spec': 1.1.0
       fast-check: 3.23.2
 
   electron-to-chromium@1.5.243: {}
@@ -18183,6 +18275,10 @@ snapshots:
   events@3.3.0: {}
 
   eventsource-parser@3.0.6: {}
+
+  eventsource@3.0.7:
+    dependencies:
+      eventsource-parser: 3.0.6
 
   execa@9.6.0:
     dependencies:
@@ -21578,8 +21674,6 @@ snapshots:
       '@fastify/busboy': 2.1.1
 
   undici@7.14.0: {}
-
-  undici@7.16.0: {}
 
   undici@7.18.2: {}
 
