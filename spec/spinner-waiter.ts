@@ -125,12 +125,66 @@ function setup(page: Page) {
   }
 }
 
+const isFromTestHelpers = () => {
+  const stack = new Error().stack || "";
+  return stack.includes("test-helpers.ts");
+};
+
+const videoModePause = async () => {
+  if (process.env.VIDEO_MODE && !isFromTestHelpers()) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+};
+
+const videoModeHighlight = async (locator: LocatorWithOriginal) => {
+  if (!process.env.VIDEO_MODE) return;
+
+  try {
+    await locator.evaluate((el) => {
+      const prev = el.getAttribute("style") || "";
+      el.setAttribute("data-video-prev-style", prev);
+      el.setAttribute(
+        "style",
+        `${prev}; outline: 3px solid gold !important; outline-offset: 2px !important;`,
+      );
+    });
+  } catch {
+    // Element may not be ready yet, ignore
+  }
+};
+
+const videoModeUnhighlight = async (locator: LocatorWithOriginal) => {
+  if (!process.env.VIDEO_MODE) return;
+
+  try {
+    await locator.evaluate((el) => {
+      const prev = el.getAttribute("data-video-prev-style") || "";
+      el.setAttribute("style", prev);
+      el.removeAttribute("data-video-prev-style");
+    });
+  } catch {
+    // Element may be gone, ignore
+  }
+};
+
 const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
   return async function loopUntilVisibleImpl(this: LocatorWithOriginal, ...args: unknown[]) {
     const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
     const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
     const settings = getSettings();
     const skipSpinnerCheck = settings.disabled || !!_options?.skipSpinnerCheck;
+
+    const unhydratedLocator = this.page().locator('[data-hydrated="false"]') as LocatorWithOriginal;
+    const isUnhydrated = await unhydratedLocator.isVisible();
+    if (isUnhydrated) {
+      await unhydratedLocator.waitFor_original({ state: "hidden", timeout: 10_000 });
+    }
+
+    // Add highlight and pause for video mode (except waitFor)
+    if (method !== "waitFor") {
+      await videoModeHighlight(this);
+      await videoModePause();
+    }
 
     settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
     let called = false;
@@ -141,7 +195,9 @@ const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
       }
       const options = argsList.at(-1) as { trial?: boolean } | undefined;
       called = !options?.trial;
-      return (this[`${method}_original`] as Function)(...argsList);
+      const result = await (this[`${method}_original`] as Function)(...argsList);
+      await videoModeUnhighlight(this);
+      return result;
     };
 
     if (skipSpinnerCheck) {

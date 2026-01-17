@@ -12,6 +12,9 @@ export const test = base.extend<TestInputs>({
   page: async ({ page }, use) => {
     spinnerWaiter.setup(page);
     await use(page);
+    if (process.env.VIDEO_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
   },
   spinnerWaiter,
 });
@@ -22,10 +25,6 @@ export async function login(page: Page, email: string) {
   const emailInput = page.getByTestId("email-input");
   await emailInput.waitFor();
   // Wait for hydration to complete - input is disabled until then
-  await page.waitForFunction(
-    () => !document.querySelector('[data-testid="email-input"]')?.hasAttribute("disabled"),
-    { timeout: 10000 },
-  );
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
@@ -73,6 +72,12 @@ export function getOrganizationSlug(pathname: string) {
 
 export function sidebarButton(page: Page, text: string | RegExp) {
   return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
+}
+
+export async function logout(page: Page) {
+  await page.locator(`[data-slot="sidebar-footer"] button`).click();
+  await page.getByRole("menuitem", { name: "Log out" }).click();
+  await page.getByTestId("email-input").waitFor();
 }
 
 function toastLocator(page: Page, type: "error" | "success", text?: string | RegExp) {
