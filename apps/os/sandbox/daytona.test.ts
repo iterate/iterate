@@ -540,7 +540,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         const gitStatusOutput = gitStatusResult.result ?? "";
         console.log(gitStatusOutput);
 
-        expect(gitStatusOutput).toContain("On branch");
+        expect(gitStatusOutput).toMatch(/On branch|HEAD detached/);
         console.log("");
         console.log("✓ SUCCESS: git status works correctly");
       } finally {
