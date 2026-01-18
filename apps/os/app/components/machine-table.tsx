@@ -42,6 +42,17 @@ interface Machine {
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
   } & Record<string, unknown>;
+  displayInfo: {
+    label: string;
+    isDevOnly?: boolean;
+  };
+  capabilities: {
+    hasNativeTerminal: boolean;
+    hasProxyTerminal: boolean;
+    hasDockerExec: boolean;
+    hasContainerLogs: boolean;
+    hasS6Services: boolean;
+  };
 }
 
 interface MachineTableProps {
@@ -139,7 +150,7 @@ export function MachineTable({
 
   const copyDaemonLogsCommand = (machine: Machine) => {
     const command = "tail -f /var/log/iterate-daemon/current";
-    if (machine.type === "local-docker") {
+    if (machine.capabilities.hasDockerExec) {
       const containerId = machine.metadata.containerId;
       if (!containerId) {
         toast.error("Container ID not found");
@@ -157,7 +168,7 @@ export function MachineTable({
 
   const copyOpencodeLogsCommand = (machine: Machine) => {
     const command = "tail -f /var/log/opencode/current";
-    if (machine.type === "local-docker") {
+    if (machine.capabilities.hasDockerExec) {
       const containerId = machine.metadata.containerId;
       if (!containerId) {
         toast.error("Container ID not found");
@@ -178,26 +189,22 @@ export function MachineTable({
   };
 
   const copyEntryLogsCommand = (machine: Machine) => {
-    if (machine.type === "local-docker") {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker logs -f ${containerId}`,
-        "Copied container logs command:",
-        "Run in your local terminal",
-      );
-    } else {
-      toast.info("Entry logs for Daytona machines go to container stdout");
+    const containerId = machine.metadata.containerId;
+    if (!containerId) {
+      toast.error("Container ID not found");
+      return;
     }
+    copyToClipboard(
+      `docker logs -f ${containerId}`,
+      "Copied container logs command:",
+      "Run in your local terminal",
+    );
   };
 
   const copyServiceStatusCommand = (machine: Machine) => {
     const command =
       'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
-    if (machine.type === "local-docker") {
+    if (machine.capabilities.hasDockerExec) {
       const containerId = machine.metadata.containerId;
       if (!containerId) {
         toast.error("Container ID not found");
@@ -220,20 +227,20 @@ export function MachineTable({
   // === Dropdown menu (terminal, logs, machine actions) ===
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
-      {/* Terminal options */}
-      {machine.type === "daytona" && (
-        <>
-          <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
-            <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (direct)
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
-            <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (proxy)
-          </DropdownMenuItem>
-        </>
+      {/* Terminal options - based on capabilities */}
+      {machine.capabilities.hasNativeTerminal && (
+        <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
+          <SquareTerminal className="h-4 w-4 mr-2" />
+          Terminal (direct)
+        </DropdownMenuItem>
       )}
-      {machine.type === "local-docker" && (
+      {machine.capabilities.hasProxyTerminal && (
+        <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
+          <SquareTerminal className="h-4 w-4 mr-2" />
+          Terminal (proxy)
+        </DropdownMenuItem>
+      )}
+      {machine.capabilities.hasDockerExec && (
         <DropdownMenuItem onClick={() => copyTerminalCommand(machine)}>
           <Terminal className="h-4 w-4 mr-2" />
           Copy terminal command
@@ -250,16 +257,18 @@ export function MachineTable({
         <ScrollText className="h-4 w-4 mr-2" />
         Copy OpenCode logs command
       </DropdownMenuItem>
-      {machine.type === "local-docker" && (
+      {machine.capabilities.hasContainerLogs && (
         <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
           <ScrollText className="h-4 w-4 mr-2" />
           Copy entry.ts logs command
         </DropdownMenuItem>
       )}
-      <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
-        <Activity className="h-4 w-4 mr-2" />
-        Copy s6 service status command
-      </DropdownMenuItem>
+      {machine.capabilities.hasS6Services && (
+        <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
+          <Activity className="h-4 w-4 mr-2" />
+          Copy s6 service status command
+        </DropdownMenuItem>
+      )}
       <DropdownMenuSeparator />
 
       {/* Machine actions */}
@@ -286,20 +295,7 @@ export function MachineTable({
   );
 
   const getTypeLabel = (machine: Machine) => {
-    if (machine.type === "local-docker") {
-      // Show first daemon port from ports map, or legacy port
-      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
-      return `Local Docker :${port ?? "?"}`;
-    }
-    if (machine.type === "local-vanilla") {
-      return "Local Vanilla";
-    }
-    if (machine.type === "local") {
-      const host = machine.metadata?.host ?? "localhost";
-      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
-      return `Local ${host}:${port ?? "?"}`;
-    }
-    return "Daytona";
+    return machine.displayInfo.label;
   };
 
   return (
@@ -327,7 +323,7 @@ export function MachineTable({
 
               {/* Meta info */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                <span className={machine.type === "local-docker" ? "text-orange-600" : ""}>
+                <span className={machine.displayInfo.isDevOnly ? "text-orange-600" : ""}>
                   {getTypeLabel(machine)}
                 </span>
                 <span>·</span>

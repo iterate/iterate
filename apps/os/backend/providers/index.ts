@@ -2,6 +2,7 @@ import type { MachineType } from "../db/schema.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
+import { createLocalProvider, createLocalVanillaProvider } from "./local-docker.ts";
 
 export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
@@ -22,12 +23,11 @@ export async function createMachineProvider(
     }
 
     case "local":
+      return createLocalProvider();
+
     case "local-vanilla":
-      // Local machines point to already-running services (e.g., local daemon)
-      // They don't need a provider for creation/destruction
-      throw new Error(
-        "Local machines do not require a provider - they reference existing services",
-      );
+      return createLocalVanillaProvider();
+
     default: {
       const _exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${_exhaustiveCheck}`);

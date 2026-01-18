@@ -1,6 +1,12 @@
 import { Daytona } from "@daytonaio/sdk";
 import { resolveLatestSnapshot } from "../integrations/daytona/snapshot-resolver.ts";
-import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
+import type {
+  MachineProvider,
+  CreateMachineConfig,
+  MachineProviderResult,
+  MachineDisplayInfo,
+  MachineCapabilities,
+} from "./types.ts";
 
 export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): MachineProvider {
   const daytona = new Daytona({ apiKey });
@@ -64,6 +70,23 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
 
     getPreviewUrl(externalId: string, _metadata?: Record<string, unknown>, port = 3000): string {
       return `https://${port}-${externalId}.proxy.daytona.works`;
+    },
+
+    getDisplayInfo(_metadata?: Record<string, unknown>): MachineDisplayInfo {
+      return {
+        label: "Daytona",
+        isDevOnly: false,
+      };
+    },
+
+    getCapabilities(): MachineCapabilities {
+      return {
+        hasNativeTerminal: true,
+        hasProxyTerminal: true,
+        hasDockerExec: false,
+        hasContainerLogs: false,
+        hasS6Services: true,
+      };
     },
   };
 }

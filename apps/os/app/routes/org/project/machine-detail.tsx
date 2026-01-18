@@ -85,9 +85,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  const isLocalDocker = machine.type === "local-docker";
-  const isLocal = machine.type === "local";
-  const isDaytona = machine.type === "daytona";
+  // Use capabilities from backend
+  const { capabilities } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -194,7 +193,7 @@ function MachineDetailPage() {
 
   const copyLogsCommand = (service: (typeof SERVICE_DEFS)[number]) => {
     const command = `tail -f ${service.logPath}`;
-    if (isLocalDocker && metadata.containerId) {
+    if (capabilities.hasDockerExec && metadata.containerId) {
       copyToClipboard(`docker exec ${metadata.containerId} ${command}`);
     } else {
       copyToClipboard(command);
@@ -202,15 +201,15 @@ function MachineDetailPage() {
   };
 
   const copyEntryLogsCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
+    if (capabilities.hasContainerLogs && metadata.containerId) {
       copyToClipboard(`docker logs -f ${metadata.containerId}`);
-    } else if (isDaytona) {
-      toast.info("Entry logs for Daytona machines go to container stdout");
+    } else {
+      toast.info("Entry logs for this machine type go to container stdout");
     }
   };
 
   const copyTerminalCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
+    if (capabilities.hasDockerExec && metadata.containerId) {
       copyToClipboard(`docker exec -it ${metadata.containerId} /bin/bash`);
     }
   };
@@ -221,7 +220,7 @@ function MachineDetailPage() {
   };
 
   // Check if machine supports dual access (proxy + direct)
-  const hasDualAccess = isDaytona || isLocalDocker;
+  const hasDualAccess = capabilities.hasNativeTerminal && capabilities.hasProxyTerminal;
 
   // Query agents from the daemon
   const { data: agentsData } = useQuery(
@@ -422,38 +421,38 @@ function MachineDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              {isDaytona && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: true })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Direct
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: false })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Proxy
-                  </Button>
-                </>
+              {capabilities.hasNativeTerminal && (
+                <Button variant="ghost" size="sm" onClick={() => openTerminal({ useNative: true })}>
+                  <ExternalLink className="h-4 w-4 mr-1" />
+                  Direct
+                </Button>
               )}
-              {isLocalDocker && (
+              {capabilities.hasProxyTerminal && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openTerminal({ useNative: false })}
+                >
+                  <ExternalLink className="h-4 w-4 mr-1" />
+                  Proxy
+                </Button>
+              )}
+              {capabilities.hasDockerExec && (
                 <Button variant="ghost" size="sm" onClick={copyTerminalCommand}>
                   <Copy className="h-4 w-4 mr-1" />
                   Copy command
                 </Button>
               )}
-              {isLocal && <span className="text-xs text-muted-foreground">SSH or local</span>}
+              {!capabilities.hasNativeTerminal &&
+                !capabilities.hasProxyTerminal &&
+                !capabilities.hasDockerExec && (
+                  <span className="text-xs text-muted-foreground">SSH or local</span>
+                )}
             </div>
           </div>
 
           {/* Entry logs (boot logs) */}
-          {(isLocalDocker || isDaytona) && (
+          {(capabilities.hasContainerLogs || capabilities.hasS6Services) && (
             <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
               <div className="flex items-center gap-3 min-w-0">
                 <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -465,7 +464,7 @@ function MachineDetailPage() {
               <div className="flex items-center gap-1">
                 <Button variant="ghost" size="sm" onClick={copyEntryLogsCommand}>
                   <Copy className="h-4 w-4 mr-1" />
-                  {isLocalDocker ? "Copy command" : "Info"}
+                  {capabilities.hasContainerLogs ? "Copy command" : "Info"}
                 </Button>
               </div>
             </div>

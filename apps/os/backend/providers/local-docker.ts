@@ -2,7 +2,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agent, request } from "undici";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
-import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
+import type {
+  MachineProvider,
+  CreateMachineConfig,
+  MachineProviderResult,
+  MachineDisplayInfo,
+  MachineCapabilities,
+} from "./types.ts";
 
 // Support DOCKER_HOST env var, defaulting to TCP for local dev (OrbStack)
 // Examples: unix:///var/run/docker.sock, tcp://127.0.0.1:2375
@@ -107,11 +113,103 @@ export interface LocalDockerConfig {
   imageName: string;
 }
 
+/**
+ * Provider for local machines that reference an already-running daemon.
+ * All operations are no-ops since the daemon is externally managed.
+ * Returns ready status immediately since the daemon is assumed to be running.
+ */
+export function createLocalProvider(): MachineProvider {
+  return {
+    type: "local",
+    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      return {
+        externalId: machineConfig.machineId,
+        // Mark as ready immediately - local machines reference already-running daemons
+        metadata: {
+          daemonStatus: "ready",
+          daemonReadyAt: new Date().toISOString(),
+        },
+      };
+    },
+    async start(_externalId: string): Promise<void> {
+      return;
+    },
+    async stop(_externalId: string): Promise<void> {
+      return;
+    },
+    async restart(_externalId: string): Promise<void> {
+      return;
+    },
+    async archive(_externalId: string): Promise<void> {
+      return;
+    },
+    async delete(_externalId: string): Promise<void> {
+      return;
+    },
+    getPreviewUrl(_externalId: string, metadata?: Record<string, unknown>, port?: number): string {
+      const host = (metadata?.host as string) ?? "localhost";
+      const ports = metadata?.ports as Record<string, number> | undefined;
+
+      // Find the host port for the requested internal port
+      if (ports) {
+        // Find which daemon this internal port corresponds to
+        const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
+        if (daemon && ports[daemon.id]) {
+          return `http://${host}:${ports[daemon.id]}`;
+        }
+        // Terminal port
+        if (port === 22222 && ports["terminal"]) {
+          return `http://${host}:${ports["terminal"]}`;
+        }
+        // Default to iterate-daemon
+        if (ports["iterate-daemon"]) {
+          return `http://${host}:${ports["iterate-daemon"]}`;
+        }
+      }
+
+      // Legacy fallback
+      const legacyPort = (metadata?.port as number) ?? 3000;
+      return `http://${host}:${legacyPort}`;
+    },
+
+    getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo {
+      const host = (metadata?.host as string) ?? "localhost";
+      const ports = metadata?.ports as Record<string, number> | undefined;
+      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number) ?? 3000;
+      return {
+        label: `Local ${host}:${port}`,
+        isDevOnly: true,
+      };
+    },
+
+    getCapabilities(): MachineCapabilities {
+      return {
+        hasNativeTerminal: false,
+        hasProxyTerminal: true,
+        hasDockerExec: false,
+        hasContainerLogs: false,
+        hasS6Services: false,
+      };
+    },
+  };
+}
+
+/**
+ * Provider for local-vanilla machines (legacy, similar to local).
+ * All operations are no-ops since the daemon is externally managed.
+ */
 export function createLocalVanillaProvider(): MachineProvider {
   return {
     type: "local-vanilla",
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      return { externalId: machineConfig.machineId };
+      return {
+        externalId: machineConfig.machineId,
+        // Mark as ready immediately - local-vanilla machines reference already-running daemons
+        metadata: {
+          daemonStatus: "ready",
+          daemonReadyAt: new Date().toISOString(),
+        },
+      };
     },
     async start(_externalId: string): Promise<void> {
       return;
@@ -134,6 +232,23 @@ export function createLocalVanillaProvider(): MachineProvider {
       _port?: number,
     ): string {
       return "http://localhost:3000";
+    },
+
+    getDisplayInfo(_metadata?: Record<string, unknown>): MachineDisplayInfo {
+      return {
+        label: "Local Vanilla",
+        isDevOnly: true,
+      };
+    },
+
+    getCapabilities(): MachineCapabilities {
+      return {
+        hasNativeTerminal: false,
+        hasProxyTerminal: true,
+        hasDockerExec: false,
+        hasContainerLogs: false,
+        hasS6Services: false,
+      };
     },
   };
 }
@@ -282,6 +397,25 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       const baseHostPort = meta?.port ?? 3000;
       const hostPort = port === 22222 ? baseHostPort + 1 : baseHostPort;
       return `http://localhost:${hostPort}`;
+    },
+
+    getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo {
+      const meta = metadata as { ports?: Record<string, number>; port?: number };
+      const port = meta?.ports?.["iterate-daemon"] ?? meta?.port;
+      return {
+        label: `Local Docker :${port ?? "?"}`,
+        isDevOnly: true,
+      };
+    },
+
+    getCapabilities(): MachineCapabilities {
+      return {
+        hasNativeTerminal: false,
+        hasProxyTerminal: true,
+        hasDockerExec: true,
+        hasContainerLogs: true,
+        hasS6Services: true,
+      };
     },
   };
 }
