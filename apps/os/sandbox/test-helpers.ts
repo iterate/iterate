@@ -1,8 +1,10 @@
 /**
  * Shared test helpers for sandbox integration tests.
+ * These run in Node.js (not workerd), so we can use undici directly.
  */
 
-import { DOCKER_API_URL, dockerApi, dockerRequest } from "../backend/providers/local-docker.ts";
+import { request } from "undici";
+import { DOCKER_API_URL, dockerApi } from "../backend/providers/local-docker.ts";
 
 export { DOCKER_API_URL, dockerApi };
 
@@ -37,7 +39,7 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
     Cmd: cmd,
   });
 
-  const response = await dockerRequest(`/exec/${execCreate.Id}/start`, {
+  const response = await request(`${DOCKER_API_URL}/exec/${execCreate.Id}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ Detach: false, Tty: false }),
@@ -48,8 +50,8 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
 }
 
 export async function getContainerLogs(containerId: string): Promise<string> {
-  const response = await dockerRequest(
-    `/containers/${containerId}/logs?stdout=true&stderr=true&timestamps=true`,
+  const response = await request(
+    `${DOCKER_API_URL}/containers/${containerId}/logs?stdout=true&stderr=true&timestamps=true`,
     { method: "GET" },
   );
   if (response.statusCode < 200 || response.statusCode >= 300) {

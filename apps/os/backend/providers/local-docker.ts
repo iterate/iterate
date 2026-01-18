@@ -1,6 +1,5 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Agent, request } from "undici";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
@@ -10,7 +9,10 @@ const DOCKER_HOST = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
 
 function parseDockerHost(): { socketPath?: string; url: string } {
   if (DOCKER_HOST.startsWith("unix://")) {
-    return { socketPath: DOCKER_HOST.slice(7), url: "http://localhost" };
+    // Unix sockets not supported in workerd - must use TCP
+    throw new Error(
+      "Unix socket not supported in workerd environment. Use TCP instead: DOCKER_HOST=tcp://127.0.0.1:2375",
+    );
   }
   if (DOCKER_HOST.startsWith("tcp://")) {
     return { url: `http://${DOCKER_HOST.slice(6)}` };
@@ -22,21 +24,21 @@ function parseDockerHost(): { socketPath?: string; url: string } {
 const dockerHostConfig = parseDockerHost();
 export const DOCKER_API_URL = dockerHostConfig.url;
 
-// Create dispatcher for Unix socket if needed
-const dockerDispatcher = dockerHostConfig.socketPath
-  ? new Agent({ connect: { socketPath: dockerHostConfig.socketPath } })
-  : undefined;
-
 // Repo root is ../../../../ from apps/os/backend/providers/
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
-/** Raw docker request for when you need the response body as stream/buffer */
-export function dockerRequest(endpoint: string, options: Parameters<typeof request>[1] = {}) {
-  return request(`${DOCKER_API_URL}${endpoint}`, {
-    ...options,
-    dispatcher: dockerDispatcher,
+/** Raw docker request using fetch (workerd-compatible) */
+export async function dockerRequest(
+  endpoint: string,
+  options: { method?: string; body?: string; headers?: Record<string, string> } = {},
+) {
+  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
+    method: options.method ?? "GET",
+    headers: options.headers,
+    body: options.body,
   });
+  return response;
 }
 
 export async function dockerApi<T>(
@@ -44,14 +46,11 @@ export async function dockerApi<T>(
   endpoint: string,
   body?: Record<string, unknown>,
 ): Promise<T> {
-  const options: Parameters<typeof request>[1] = {
-    method: method as "GET" | "POST" | "DELETE",
+  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
+    method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
-    dispatcher: dockerDispatcher,
-  };
-
-  const response = await request(`${DOCKER_API_URL}${endpoint}`, options).catch((e: unknown) => {
+  }).catch((e: unknown) => {
     throw new Error(
       `Docker API error: ${e}. ` +
         `DOCKER_HOST=${DOCKER_HOST}. ` +
@@ -60,15 +59,15 @@ export async function dockerApi<T>(
     );
   });
 
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    const error = await response.body.json().catch(() => ({ message: response.statusCode }));
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: response.status }));
     throw new Error(
-      `Docker API error: ${(error as { message?: string }).message ?? response.statusCode}. ` +
+      `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
         `DOCKER_HOST=${DOCKER_HOST}`,
     );
   }
 
-  const text = await response.body.text();
+  const text = await response.text();
   return text ? JSON.parse(text) : ({} as T);
 }
 
