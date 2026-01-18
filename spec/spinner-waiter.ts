@@ -157,7 +157,7 @@ const setupVideoMode = async (locator: LocatorWithOriginal, method: Overrideable
       try {
         await locator.evaluate((el) => {
           const prev = el.getAttribute("data-video-prev-style");
-          if (prev) {
+          if (typeof prev === "string") {
             el.setAttribute("style", prev);
             el.removeAttribute("data-video-prev-style");
           }
