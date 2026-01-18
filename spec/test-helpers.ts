@@ -9,11 +9,12 @@ export type TestInputs = {
 };
 export const baseTest = base;
 export const test = base.extend<TestInputs>({
-  page: async ({ page }, use) => {
+  page: async ({ page }, use, testInfo) => {
     spinnerWaiter.setup(page);
     await use(page);
     if (process.env.VIDEO_MODE) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
+      console.log(`video will be written to ${testInfo.outputDir}/video.webm`);
     }
   },
   spinnerWaiter,

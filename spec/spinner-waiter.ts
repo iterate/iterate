@@ -130,14 +130,12 @@ const isFromTestHelpers = () => {
   return stack.includes("test-helpers.ts");
 };
 
-const videoModePause = async () => {
-  if (process.env.VIDEO_MODE && !isFromTestHelpers()) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+/**  Highlight targeted UI and pause for actions in video mode, unhighlight on dispose */
+const setupVideoMode = async (locator: LocatorWithOriginal, method: OverrideableMethod) => {
+  const isEnabled = method !== "waitFor" && process.env.VIDEO_MODE && !isFromTestHelpers();
+  if (!isEnabled) {
+    return { [Symbol.asyncDispose]: async () => {} };
   }
-};
-
-const videoModeHighlight = async (locator: LocatorWithOriginal) => {
-  if (!process.env.VIDEO_MODE) return;
 
   try {
     await locator.evaluate((el) => {
@@ -151,20 +149,22 @@ const videoModeHighlight = async (locator: LocatorWithOriginal) => {
   } catch {
     // Element may not be ready yet, ignore
   }
-};
 
-const videoModeUnhighlight = async (locator: LocatorWithOriginal) => {
-  if (!process.env.VIDEO_MODE) return;
+  await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  try {
-    await locator.evaluate((el) => {
-      const prev = el.getAttribute("data-video-prev-style") || "";
-      el.setAttribute("style", prev);
-      el.removeAttribute("data-video-prev-style");
-    });
-  } catch {
-    // Element may be gone, ignore
-  }
+  return {
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await locator.evaluate((el) => {
+          const prev = el.getAttribute("data-video-prev-style") || "";
+          el.setAttribute("style", prev);
+          el.removeAttribute("data-video-prev-style");
+        });
+      } catch {
+        // Element may be gone, ignore
+      }
+    },
+  };
 };
 
 const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
@@ -180,11 +180,7 @@ const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
       await unhydratedLocator.waitFor_original({ state: "hidden", timeout: 10_000 });
     }
 
-    // Add highlight and pause for video mode (except waitFor)
-    if (method !== "waitFor") {
-      await videoModeHighlight(this);
-      await videoModePause();
-    }
+    await using _videoMode = await setupVideoMode(this, method);
 
     settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
     let called = false;
@@ -195,9 +191,7 @@ const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
       }
       const options = argsList.at(-1) as { trial?: boolean } | undefined;
       called = !options?.trial;
-      const result = await (this[`${method}_original`] as Function)(...argsList);
-      await videoModeUnhighlight(this);
-      return result;
+      return (this[`${method}_original`] as Function)(...argsList);
     };
 
     if (skipSpinnerCheck) {
