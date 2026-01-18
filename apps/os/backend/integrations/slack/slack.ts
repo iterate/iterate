@@ -10,67 +10,33 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { getDaemonById } from "../../daemons.ts";
+import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 /**
  * Build URL to forward webhooks to a machine's daemon.
- * Supports all machine types: daytona, local-docker, local.
+ * Uses the provider's getPreviewUrl to get the base URL.
  */
-function buildMachineForwardUrl(
+async function buildMachineForwardUrl(
   machine: typeof schema.machine.$inferSelect,
   path: string,
-): string | null {
+  env: CloudflareEnv,
+): Promise<string | null> {
   const metadata = machine.metadata as Record<string, unknown> | null;
+  const daemonPort = getDaemonById("iterate-daemon")?.internalPort ?? 3000;
 
-  switch (machine.type) {
-    case "local":
-    case "local-vanilla": {
-      // Local machines are dev-only and reference already-running daemons
-      // No SSRF protection needed since these types can't be created in production
-      const host = metadata?.host as string | undefined;
-      // Support both new format (ports map) and legacy (single port)
-      const ports = metadata?.ports as Record<string, number> | undefined;
-      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
-      if (!host || !port) {
-        logger.warn("[Slack Webhook] Local machine missing host/port config", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      return `http://${host}:${port}${path}`;
-    }
-
-    case "local-docker": {
-      // Local docker: forward to localhost with mapped port
-      // Support both new format (ports map) and legacy (single port)
-      const ports = metadata?.ports as Record<string, number> | undefined;
-      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
-      if (!port) {
-        logger.warn("[Slack Webhook] Local docker machine missing port", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      return `http://localhost:${port}${path}`;
-    }
-
-    case "daytona":
-      // Daytona: use external proxy URL
-      if (!machine.externalId) {
-        logger.warn("[Slack Webhook] Daytona machine missing externalId", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      return `https://${getDaemonById("iterate-daemon")?.internalPort}-${machine.externalId}.proxy.daytona.works${path}`;
-
-    default:
-      logger.warn("[Slack Webhook] Unknown machine type for forwarding", {
-        machineId: machine.id,
-        type: machine.type,
-      });
-      return null;
+  try {
+    const provider = await createMachineProvider(machine.type, env);
+    const baseUrl = provider.getPreviewUrl(machine.externalId, metadata ?? {}, daemonPort);
+    return `${baseUrl}${path}`;
+  } catch (err) {
+    logger.warn("[Slack Webhook] Failed to build forward URL", {
+      machineId: machine.id,
+      type: machine.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
 }
 
@@ -81,8 +47,9 @@ function buildMachineForwardUrl(
 export async function forwardSlackWebhookToMachine(
   machine: typeof schema.machine.$inferSelect,
   payload: Record<string, unknown>,
+  env: CloudflareEnv,
 ): Promise<{ success: boolean; error?: string }> {
-  const targetUrl = buildMachineForwardUrl(machine, "/api/integrations/slack/webhook");
+  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/slack/webhook", env);
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
@@ -418,8 +385,9 @@ slackApp.post("/webhook", async (c) => {
   // Log full payload for debugging
   logger.debug("[Slack Webhook] Received", { payload });
 
-  // Get db reference before returning (needed in background)
+  // Get references before returning (needed in background)
   const db = c.var.db;
+  const env = c.env;
 
   // RETURN IMMEDIATELY - process in background for Slack compliance
   waitUntil(
@@ -469,7 +437,7 @@ slackApp.post("/webhook", async (c) => {
         // Forward to machine if available
         if (targetMachine) {
           logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
-          await forwardSlackWebhookToMachine(targetMachine, payload);
+          await forwardSlackWebhookToMachine(targetMachine, payload, env);
         }
 
         // Save event with type slack:webhook-received, detailed info in payload
