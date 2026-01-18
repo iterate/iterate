@@ -14,32 +14,6 @@ import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 /**
- * Check if a host is an internal/blocked address (SSRF protection).
- * Blocks: localhost, private IPs (10.x, 172.16-31.x, 192.168.x), link-local, cloud metadata.
- */
-function isBlockedHost(host: string): boolean {
-  const h = host.toLowerCase().trim();
-
-  // Block localhost
-  if (h === "localhost" || h.startsWith("127.")) return true;
-
-  // Block cloud metadata endpoints
-  if (h === "169.254.169.254" || h === "metadata.google.internal") return true;
-
-  // Block private IPs
-  const ip = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (ip) {
-    const [, a, b] = ip.map(Number);
-    if (a === 10) return true; // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-    if (a === 192 && b === 168) return true; // 192.168.0.0/16
-    if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local)
-  }
-
-  return false;
-}
-
-/**
  * Build URL to forward webhooks to a machine's daemon.
  * Supports all machine types: daytona, local-docker, local.
  */
@@ -50,22 +24,16 @@ function buildMachineForwardUrl(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   switch (machine.type) {
-    case "local": {
-      // Local machine: forward to configured host:port
+    case "local":
+    case "local-vanilla": {
+      // Local machines are dev-only and reference already-running daemons
+      // No SSRF protection needed since these types can't be created in production
       const host = metadata?.host as string | undefined;
       // Support both new format (ports map) and legacy (single port)
       const ports = metadata?.ports as Record<string, number> | undefined;
       const port = ports?.["iterate-daemon"] ?? (metadata?.port as number | undefined);
       if (!host || !port) {
         logger.warn("[Slack Webhook] Local machine missing host/port config", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      // SSRF protection: block internal IPs
-      if (isBlockedHost(host)) {
-        logger.warn("[Slack Webhook] Blocked internal IP", {
-          host,
           machineId: machine.id,
         });
         return null;

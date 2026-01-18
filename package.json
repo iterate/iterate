@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --reporter-hide-prefix --parallel dev",
+    "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
