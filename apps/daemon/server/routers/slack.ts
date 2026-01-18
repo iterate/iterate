@@ -62,7 +62,16 @@ slackRouter.post("/webhook", async (c) => {
         wasCreated = true;
       }
 
-      const message = formatMentionMessage(messageInfo, threadTs!);
+      let message = formatMentionMessage(messageInfo, threadTs!);
+
+      if (wasCreated) {
+        message += [
+          "",
+          "",
+          `Start by adding the eyes emoji (\`slack.reactions.add({ channel: "${messageInfo.channel}", timestamp: "${threadTs}", name: "eyes" })\`).
+          And remove it again while you reply (e.g. \`await Promise.all([slack.reactions.remove(...), slack.chat.postMessage(...)])\`)`,
+        ].join("\n");
+      }
       await appendToAgent(agent, message);
 
       return c.json({ success: true, agentSlug, created: wasCreated });
@@ -167,7 +176,12 @@ function formatMentionMessage(info: SlackMessageInfo, threadTs: string): string 
     `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
     "",
     `Before responding, use the following CLI command to reply to the message:`,
-    `\`iterate tool send-slack-message --channel ${channelPart} --thread-ts ${threadTs} --message "<your response here>"\` `,
+    `\`iterate tool slack 'await slack.chat.postMessage({
+        channel: "${channelPart}",
+        thread_ts: "${threadTs}",
+        text: "<your response here>",
+      })'`,
+    `You can also use any method from the Slack API like \`slack.reactions.add(...)\``,
   ].join("\n");
 }
 
