@@ -45,6 +45,7 @@
     "@types/node": "^24.10.1",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
     "@typescript-eslint/parser": "^8.48.0",
+    "emittery": "1.2.0",
     "eslint": "^9.39.1",
     "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",
