@@ -156,9 +156,11 @@ const setupVideoMode = async (locator: LocatorWithOriginal, method: Overrideable
     [Symbol.asyncDispose]: async () => {
       try {
         await locator.evaluate((el) => {
-          const prev = el.getAttribute("data-video-prev-style") || "";
-          el.setAttribute("style", prev);
-          el.removeAttribute("data-video-prev-style");
+          const prev = el.getAttribute("data-video-prev-style");
+          if (prev) {
+            el.setAttribute("style", prev);
+            el.removeAttribute("data-video-prev-style");
+          }
         });
       } catch {
         // Element may be gone, ignore
