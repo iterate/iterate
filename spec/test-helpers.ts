@@ -1,5 +1,4 @@
-// eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
-import { type Page, test as base } from "@playwright/test";
+import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
 import { addPlugins } from "./playwright-plugin.ts";
 import { hydrationWaiter, spinnerWaiter, videoMode, toastErrorReporter } from "./plugins/index.ts";
 

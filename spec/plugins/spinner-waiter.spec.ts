@@ -1,5 +1,4 @@
-// eslint-disable-next-line no-restricted-imports -- ok here
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
 import { addPlugins } from "../playwright-plugin.ts";
 import { spinnerWaiter } from "./index.ts";
 
