@@ -5,7 +5,10 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  baseline-browser-mapping: ^2.9.14
+  agents>x402: '-'
+  agents>viem: '-'
+  quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
+  better-sqlite3: npm:libsql@0.5.22
 
 importers:
 
@@ -927,6 +930,25 @@ importers:
       vite:
         specifier: 7.2.4
         version: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+
+  spec:
+    dependencies:
+      emittery:
+        specifier: ^1.2.0
+        version: 1.2.0
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.57.0
+        version: 1.57.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      playwright:
+        specifier: ^1.57.0
+        version: 1.57.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
 packages:
 
@@ -6922,6 +6944,10 @@ packages:
 
   embla-carousel@8.6.0:
     resolution: {integrity: sha512-SjWyZBHJPbqxHOzckOfo8lHisEaJWmwd23XppYFYVh10bU66/Pn5tkVkbkCMZVdbUE5eTCI2nD8OyIP4Z+uwkA==}
+
+  emittery@1.2.0:
+    resolution: {integrity: sha512-KxdRyyFcS85pH3dnU8Y5yFUm2YJdaHwcBZWrfG8o89ZY9a13/f9itbN+YG3ELbBo9Pg5zvIozstmuV8bX13q6g==}
+    engines: {node: '>=14.16'}
 
   emoji-regex@10.6.0:
     resolution: {integrity: sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A==}
@@ -17697,6 +17723,8 @@ snapshots:
       embla-carousel: 8.6.0
 
   embla-carousel@8.6.0: {}
+
+  emittery@1.2.0: {}
 
   emoji-regex@10.6.0: {}
 

@@ -1,13 +1,6 @@
 import { expect } from "@playwright/test";
-import { spinnerWaiter } from "./spinner-waiter.ts";
-import { baseTest as base } from "./test-helpers.ts";
-
-const test = base.extend({
-  page: async ({ page }, use) => {
-    spinnerWaiter.setup(page);
-    await use(page);
-  },
-});
+import { spinnerWaiter } from "./plugins/index.ts";
+import { test } from "./test-helpers.ts";
 
 // normally I'd say just copy-paste the code, but it's v important that the actions are identical because test.fail is too "easy" to make pass succeed otherwise.
 async function run(page: import("@playwright/test").Page) {
@@ -16,7 +9,7 @@ async function run(page: import("@playwright/test").Page) {
   await page.locator("button", { hasText: "i have been clicked" }).waitFor();
 }
 
-test("slow button", async ({ page }) => {
+test("slow button succeeds when there's a spinner", async ({ page }) => {
   await run(page);
 });
 
@@ -35,7 +28,7 @@ test("slow button fails when spinner doesn't match selector", async ({ page }) =
   expect(error.message).toMatch(/If this is a slow operation.../);
 });
 
-test("slow button when spinner times out", async ({ page }) => {
+test("slow button fails when spinner times out", async ({ page }) => {
   spinnerWaiter.settings.enterWith({ spinnerTimeout: 1001 });
   // make the slow button even slower, must take longer than 1s (initial timeout) +1s (minimum spinner timeout) + 1s (last chance) + any time for chugging along
   await page.goto(`/dev?slowMutationTimeout=6000`);

@@ -1,23 +1,22 @@
 // eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
 import { type Page, test as base } from "@playwright/test";
-import { spinnerWaiter } from "./spinner-waiter.ts";
+import { addPlugins } from "./playwright-plugin.ts";
+import { hydrationWaiter, spinnerWaiter, videoMode } from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
 
-export type TestInputs = {
-  spinnerWaiter: typeof spinnerWaiter;
-};
 export const baseTest = base;
-export const test = base.extend<TestInputs>({
-  page: async ({ page }, use, testInfo) => {
-    spinnerWaiter.setup(page);
+
+export const test = base.extend({
+  page: async ({ page: basePage }, use, testInfo) => {
+    await using page = await addPlugins(basePage, testInfo, [
+      hydrationWaiter(),
+      spinnerWaiter(),
+      process.env.VIDEO_MODE && videoMode(),
+    ]);
+
     await use(page);
-    if (process.env.VIDEO_MODE) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      console.log(`video will be written to ${testInfo.outputDir}/video.webm`);
-    }
   },
-  spinnerWaiter,
 });
 
 export async function login(page: Page, email: string) {
