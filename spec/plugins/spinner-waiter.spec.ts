@@ -1,12 +1,14 @@
-import { expect } from "@playwright/test";
-import { spinnerWaiter } from "./plugins/index.ts";
-import { test as base } from "./test-helpers.ts";
+// eslint-disable-next-line no-restricted-imports -- ok here
+import { test as base, expect } from "@playwright/test";
+import { addPlugins } from "../playwright-plugin.ts";
+import { spinnerWaiter } from "./index.ts";
 
 const test = base.extend<{ slowMutationTimeout: number }>({
   slowMutationTimeout: 2000,
-  page: async ({ page, slowMutationTimeout }, use) => {
-    await page.setContent(getTestPageHtml(slowMutationTimeout));
-    await use(page);
+  page: async ({ page, slowMutationTimeout }, use, testInfo) => {
+    await using _page = await addPlugins(page, testInfo, [spinnerWaiter()]);
+    await _page.setContent(getTestPageHtml(slowMutationTimeout));
+    await use(_page);
   },
 });
 
@@ -32,13 +34,6 @@ test("slow button fails when spinner doesn't match selector", async ({ page }) =
   const error = await run(page).catch((e) => e);
   expect(error.message).toMatch(/Timeout .* exceeded/);
   expect(error.message).toMatch(/If this is a slow operation.../);
-});
-
-test.extend({ slowMutationTimeout: 6000 })("xyz", async ({ page }) => {
-  spinnerWaiter.settings.enterWith({ spinnerTimeout: 3001 });
-  const error = await run(page).catch((e) => e);
-  expect(error.message).toMatch(/Timeout .* exceeded/);
-  expect(error.message).toMatch(/spinner was still visible after .*/i);
 });
 
 const testSlower = test.extend({ slowMutationTimeout: 6000 });
