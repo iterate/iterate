@@ -85,7 +85,7 @@ export type Plugin = {
 const PLUGIN_STATE = Symbol("playwrightPluginState");
 
 type PluginState = {
-  middlewares: ActionMiddleware[];
+  actionMiddlewares: ActionMiddleware[];
   lifecycleEmitter: Emittery<TestLifecycleEvents>;
   lifecycleCleanups: (() => void)[];
 };
@@ -125,7 +125,7 @@ export const addPlugins = async (
 
   // Initialize state on page
   const state: PluginState = {
-    middlewares: [],
+    actionMiddlewares: [],
     lifecycleEmitter: new Emittery(),
     lifecycleCleanups: [],
   };
@@ -135,7 +135,7 @@ export const addPlugins = async (
     if (!plugin) continue;
 
     if (plugin.middleware) {
-      state.middlewares.push(plugin.middleware);
+      state.actionMiddlewares.push(plugin.middleware);
     }
 
     if (plugin.testLifecycle) {
@@ -185,7 +185,7 @@ const patchLocatorPrototype = (page: Page) => {
       ...args: unknown[]
     ): Promise<unknown> {
       const state = getPluginState(this.page());
-      const middlewares = state?.middlewares ?? [];
+      const actionMiddlewares = state?.actionMiddlewares ?? [];
 
       const ctx: ActionContext = { locator: this, method, args, page: this.page() };
 
@@ -194,8 +194,8 @@ const patchLocatorPrototype = (page: Page) => {
 
       let index = 0;
       const next: NextFn = async () => {
-        if (index < middlewares.length) {
-          const middleware = middlewares[index++];
+        if (index < actionMiddlewares.length) {
+          const middleware = actionMiddlewares[index++];
           return middleware(ctx, next);
         }
         return callOriginal();
