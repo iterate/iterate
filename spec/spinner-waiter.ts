@@ -125,12 +125,64 @@ function setup(page: Page) {
   }
 }
 
+const isFromTestHelpers = () => {
+  const stack = new Error().stack || "";
+  return stack.includes("test-helpers.ts");
+};
+
+/**  Highlight targeted UI and pause for actions in video mode, unhighlight on dispose */
+const setupVideoMode = async (locator: LocatorWithOriginal, method: OverrideableMethod) => {
+  const isEnabled = method !== "waitFor" && process.env.VIDEO_MODE && !isFromTestHelpers();
+  if (!isEnabled) {
+    return { [Symbol.asyncDispose]: async () => {} };
+  }
+
+  try {
+    await locator.evaluate((el) => {
+      const prev = el.getAttribute("style") || "";
+      el.setAttribute("data-video-prev-style", prev);
+      el.setAttribute(
+        "style",
+        `${prev}; outline: 3px solid gold !important; outline-offset: 2px !important;`,
+      );
+    });
+  } catch {
+    // Element may not be ready yet, ignore
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  return {
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await locator.evaluate((el) => {
+          const prev = el.getAttribute("data-video-prev-style");
+          if (typeof prev === "string") {
+            el.setAttribute("style", prev);
+            el.removeAttribute("data-video-prev-style");
+          }
+        });
+      } catch {
+        // Element may be gone, ignore
+      }
+    },
+  };
+};
+
 const getLoopUntilVisibleImpl = (method: OverrideableMethod) => {
   return async function loopUntilVisibleImpl(this: LocatorWithOriginal, ...args: unknown[]) {
     const optionIndex = oneArgMethods.includes(method as OneArgMethod) ? 1 : 0;
     const _options = (args.at(optionIndex) || {}) as Options<OverrideableMethod>;
     const settings = getSettings();
     const skipSpinnerCheck = settings.disabled || !!_options?.skipSpinnerCheck;
+
+    const unhydratedLocator = this.page().locator('[data-hydrated="false"]') as LocatorWithOriginal;
+    const isUnhydrated = await unhydratedLocator.isVisible();
+    if (isUnhydrated) {
+      await unhydratedLocator.waitFor_original({ state: "hidden", timeout: 10_000 });
+    }
+
+    await using _videoMode = await setupVideoMode(this, method);
 
     settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
     let called = false;

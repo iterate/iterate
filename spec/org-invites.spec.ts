@@ -1,4 +1,4 @@
-import { login, test, createOrganization, sidebarButton, toast } from "./test-helpers.ts";
+import { login, logout, test, createOrganization, sidebarButton, toast } from "./test-helpers.ts";
 
 test.describe("organization invites", () => {
   test("owner can invite and cancel an invite from team page", async ({ page }) => {
@@ -69,10 +69,7 @@ test.describe("organization invites", () => {
     await page.getByRole("button", { name: "Invite", exact: true }).click();
     await toast.success(page, "Invite sent").waitFor();
 
-    // Log out via UI
-    await page.getByRole("button", { name: ownerEmail }).click();
-    await page.getByRole("menuitem", { name: "Log out" }).click();
-    await page.getByTestId("email-input").waitFor();
+    await logout(page);
 
     // Invitee logs in and sees the pending invite
     await login(page, inviteeEmail);
@@ -105,10 +102,7 @@ test.describe("organization invites", () => {
     await page.getByRole("button", { name: "Invite", exact: true }).click();
     await toast.success(page, "Invite sent").waitFor();
 
-    // Log out via UI
-    await page.getByRole("button", { name: ownerEmail }).click();
-    await page.getByRole("menuitem", { name: "Log out" }).click();
-    await page.getByTestId("email-input").waitFor();
+    await logout(page);
 
     // Invitee logs in
     await login(page, inviteeEmail);

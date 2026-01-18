@@ -15,7 +15,7 @@ import {
   UserRole,
   user,
 } from "../../db/schema.ts";
-import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
+import { slugify } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
   create: protectedMutation
@@ -25,12 +25,17 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const baseSlug = slugify(input.name);
+      const slug = slugify(input.name);
       const existing = await ctx.db.query.organization.findFirst({
-        where: eq(organization.slug, baseSlug),
+        where: eq(organization.slug, slug),
       });
 
-      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "An organization with this name already exists",
+        });
+      }
 
       const [newOrg] = await ctx.db
         .insert(organization)
