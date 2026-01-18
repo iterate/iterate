@@ -29,8 +29,8 @@ test("slow button fails when spinner doesn't match selector", async ({ page }) =
 });
 
 test("slow button fails when spinner times out", async ({ page }) => {
-  spinnerWaiter.settings.enterWith({ spinnerTimeout: 1001 });
-  // make the slow button even slower, must take longer than 1s (initial timeout) +1s (minimum spinner timeout) + 1s (last chance) + any time for chugging along
+  spinnerWaiter.settings.enterWith({ spinnerTimeout: 3001 });
+  // make the slow button even slower, must take longer than 1s (initial visibility check) + 1s (extended wait = 3001-2000) + any overhead
   await page.goto(`/dev?slowMutationTimeout=6000`);
   const error = await run(Object.assign(page, { goto: () => {} })).catch((e) => e);
   expect(error.message).toMatch(/Timeout .* exceeded/);

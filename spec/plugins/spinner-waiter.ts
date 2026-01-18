@@ -36,8 +36,8 @@ const settingsStorage = new AsyncLocalStorage<Partial<SpinnerWaiterSettings>>();
 const getSettings = (baseOptions: SpinnerWaiterSettings = {}) => {
   const runtimeOverrides = settingsStorage.getStore() ?? {};
   const result = { ...defaults, ...baseOptions, ...runtimeOverrides };
-  if (result.spinnerTimeout <= 1000) {
-    throw new Error("spinnerTimeout must be greater than 1000ms");
+  if (result.spinnerTimeout <= 3000) {
+    throw new Error("spinnerTimeout must be greater than 3000ms");
   }
   return result;
 };
