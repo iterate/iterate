@@ -67,7 +67,7 @@ export const videoMode = (options: VideoModeOptions = {}): Plugin => {
       if (stack.includes("test-helpers.ts")) return next();
 
       await using _ = await setupHighlight(locator, highlightStyle, pauseBefore);
-      return next();
+      return await next();
     },
 
     testLifecycle: (emitter) => {

@@ -20,15 +20,12 @@ export const toastErrorReporter = (options: ToastErrorReporterOptions = {}): Plu
       try {
         return await next();
       } catch (error) {
-        const messages = await page.locator(selector).allTextContents();
+        const getToastErrors = () => page.locator(selector).allTextContents();
+        const messages = await getToastErrors().catch(() => []);
 
         if (messages.length > 0 && error instanceof Error) {
-          adjustError(
-            error,
-            [`Error toast(s) visible:`, ...messages.map((m) => `🍞 ${m.trim()}`)],
-            import.meta.filename,
-            { color: 31 },
-          );
+          const info = [`Error toast(s) visible:`, ...messages.map((m) => `🍞 ${m.trim()}`)];
+          adjustError(error, info, import.meta.filename, { color: 31 });
         }
 
         throw error;
