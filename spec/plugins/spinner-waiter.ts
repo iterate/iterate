@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Locator } from "@playwright/test";
 import type { Plugin, LocatorWithOriginal, OneArgMethod } from "../playwright-plugin.ts";
-import { oneArgMethods } from "../playwright-plugin.ts";
+import { oneArgMethods, adjustError } from "../playwright-plugin.ts";
 
 export type SpinnerWaiterSettings = {
   /** Selectors that indicate loading state */
@@ -42,6 +42,13 @@ const getSettings = (baseOptions: SpinnerWaiterSettings = {}) => {
   return result;
 };
 
+const suggestSpinnerMessage = (spinnerLocator: Locator) => [
+  `If this is a slow operation, update the product code to add a spinner while it's running.`,
+  `This will improve the user experience and buy you more time for this assertion.`,
+  `To add a spinner, show any UI element matching this locator:`,
+  `  ${spinnerLocator}`,
+];
+
 /**
  * Creates a spinner-waiter plugin.
  * Runtime settings can be overridden via `spinnerWaiter.settings.enterWith(...)`.
@@ -75,16 +82,12 @@ export const spinnerWaiter = Object.assign(
         const spinnerVisible = await spinnerLocator.isVisible();
 
         if (!spinnerVisible) {
-          // No spinner - call action, adjust error if it fails
+          // No spinner - call action, suggest adding one if it fails
           settings.log(`${locator} not visible, no spinner, proceeding anyway`);
           try {
             return await next();
           } catch (error) {
-            adjustError(error as Error, spinnerLocator, {
-              spinnerStillVisible: false,
-              spinnerTimeout: settings.spinnerTimeout,
-              noSpinnerSeen: true,
-            });
+            adjustError(error as Error, suggestSpinnerMessage(spinnerLocator), "spinner-waiter.ts");
             throw error;
           }
         }
@@ -115,11 +118,10 @@ export const spinnerWaiter = Object.assign(
         try {
           return await next();
         } catch (error) {
-          adjustError(error as Error, spinnerLocator, {
-            spinnerStillVisible,
-            spinnerTimeout: settings.spinnerTimeout,
-            noSpinnerSeen: false,
-          });
+          const message = spinnerStillVisible
+            ? `Spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`
+            : `Neither spinner nor the element is visible after ${settings.spinnerTimeout}ms.`;
+          adjustError(error as Error, [message], "spinner-waiter.ts");
           throw error;
         }
       },
@@ -140,51 +142,6 @@ async function waitForVisible(locator: Locator, { timeout = 1000 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
-}
-
-type ErrorContext = {
-  spinnerStillVisible: boolean;
-  spinnerTimeout: number;
-  noSpinnerSeen: boolean;
-};
-
-function adjustError(e: Error, spinnerLocator: Locator, ctx: ErrorContext) {
-  if (!e?.message) return;
-
-  Object.assign(e, { originalMessage: e.message, originalStack: e.stack });
-
-  let info: string[];
-
-  if (ctx.spinnerStillVisible) {
-    // Spinner was visible and never went away - UI is stuck
-    info = [`Spinner was still visible after ${ctx.spinnerTimeout}ms, the UI is likely stuck.`];
-  } else if (!ctx.noSpinnerSeen) {
-    // Spinner was visible but disappeared, yet element never appeared
-    info = [`Neither spinner nor the element is visible after ${ctx.spinnerTimeout}ms.`];
-  } else {
-    // No spinner was seen - suggest adding one
-    info = [
-      `If this is a slow operation, update the product code to add a spinner while it's running.`,
-      `This will improve the user experience and buy you more time for this assertion.`,
-      `To add a spinner, show any UI element matching this locator:`,
-      `  ${spinnerLocator}`,
-    ];
-  }
-
-  const lines = e.message.split("\n");
-  lines[0] += `\x1b[33m`;
-  info.forEach((line) => (lines[0] += `\n  ${line}`));
-  lines[0] += `\x1b[0m`;
-
-  e.message = lines.join("\n");
-
-  // Remove this file from stack trace
-  if (e.stack) {
-    e.stack = e.stack
-      .split("\n")
-      .filter((line: string) => !line.includes("spinner-waiter.ts"))
-      .join("\n");
-  }
 }
 
 export { defaultSelectors };

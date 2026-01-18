@@ -26,6 +26,36 @@ export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
 };
 
+/**
+ * Append info to an error message and clean up stack trace.
+ * @param error - The error to modify
+ * @param info - Lines to append to the error message
+ * @param filterFile - Filename to remove from stack trace (e.g., "my-plugin.ts")
+ * @param color - ANSI color code (default: 33 = yellow). Use 31 for red.
+ */
+export const adjustError = (
+  error: Error,
+  info: string[],
+  filterFile?: string,
+  { color = 33 } = {},
+) => {
+  if (!error?.message) return;
+
+  Object.assign(error, { originalMessage: error.message, originalStack: error.stack });
+
+  if (info.length > 0) {
+    const infoBlock = info.map((line) => `  ${line}`).join("\n");
+    error.message = `${error.message}\n\x1b[${color}m${infoBlock}\x1b[0m\n`;
+  }
+
+  if (filterFile && error.stack) {
+    error.stack = error.stack
+      .split("\n")
+      .filter((line) => !line.includes(filterFile))
+      .join("\n");
+  }
+};
+
 export type ActionContext = {
   locator: LocatorWithOriginal;
   method: OverrideableMethod;
@@ -83,14 +113,12 @@ const getPluginState = (page: Page): PluginState | undefined => {
  *   spinnerWaiter(),
  *   videoMode(),
  * ]);
- *
- * await use(page);
  * ```
  */
 export const addPlugins = async (
   page: Page,
   testInfo: TestInfo,
-  plugins: (Plugin | false | null | undefined | "")[],
+  plugins: (Plugin | false | null | undefined)[],
 ): Promise<PageWithPlugins> => {
   // Patch Locator prototype once globally
   patchLocatorPrototype(page);

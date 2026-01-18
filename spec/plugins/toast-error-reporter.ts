@@ -1,4 +1,5 @@
 import type { Plugin } from "../playwright-plugin.ts";
+import { adjustError } from "../playwright-plugin.ts";
 
 export type ToastErrorReporterOptions = {
   /** Selector for error toasts. Default: '[data-sonner-toast][data-type="error"]' */
@@ -19,22 +20,15 @@ export const toastErrorReporter = (options: ToastErrorReporterOptions = {}): Plu
       try {
         return await next();
       } catch (error) {
-        // Check for error toasts
-        const toasts = page.locator(selector);
-        const count = await toasts.count();
-
-        const messages: string[] = [];
-        for (let i = 0; i < count; i++) {
-          const text = await toasts
-            .nth(i)
-            .textContent()
-            .catch(() => null);
-          if (text) messages.push(text.trim());
-        }
+        const messages = await page.locator(selector).allTextContents();
 
         if (messages.length > 0 && error instanceof Error) {
-          const toastInfo = messages.map((m) => `  🍞 ${m}`).join("\n");
-          error.message = `${error.message}\n\x1b[31mError toast(s) visible:\n${toastInfo}\x1b[0m`;
+          adjustError(
+            error,
+            [`Error toast(s) visible:`, ...messages.map((m) => `🍞 ${m.trim()}`)],
+            import.meta.filename,
+            { color: 31 },
+          );
         }
 
         throw error;
