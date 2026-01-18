@@ -1,7 +1,7 @@
 // eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
 import { type Page, test as base } from "@playwright/test";
 import { addPlugins } from "./playwright-plugin.ts";
-import { hydrationWaiter, spinnerWaiter, videoMode } from "./plugins/index.ts";
+import { hydrationWaiter, spinnerWaiter, videoMode, toastErrorReporter } from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
 
@@ -12,7 +12,8 @@ export const test = base.extend({
     await using page = await addPlugins(basePage, testInfo, [
       hydrationWaiter(),
       spinnerWaiter(),
-      process.env.VIDEO_MODE && videoMode(),
+      toastErrorReporter(),
+      !!process.env.VIDEO_MODE && videoMode(),
     ]);
 
     await use(page);
