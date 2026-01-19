@@ -172,11 +172,7 @@ function formatFyiMessage(info: SlackMessageInfo, threadTs: string): string {
     `FYI, there was another message in this Slack thread from ${userPart} in ${channelPart}: ${textPart}`,
     "",
     `If you are SURE this is a direct question to you, you can use the CLI to reply:`,
-    `\`iterate tool slack 'await slack.chat.postMessage({
-      channel: "${channelPart}",
-      thread_ts: "${threadTs}",
-      text: "<your response here>",
-    })'`,
+    `\`iterate tool send-slack-message --channel ${channelPart} --thread-ts ${threadTs} --message "<your response here>"\` `,
   ].join("\n");
 }
 
