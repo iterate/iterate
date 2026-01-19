@@ -28,6 +28,12 @@ function createDaemonTrpcClient(baseUrl: string) {
   });
 }
 
+/** Service URL options for a daemon */
+interface ServiceOption {
+  label: string;
+  url: string;
+}
+
 /** Enrich a machine with display info and commands from its provider */
 async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
   machine: T,
@@ -45,11 +51,33 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     metadata,
     buildProxyUrl,
   });
+
+  // Build service options for each daemon with web UI
+  const services = getDaemonsWithWebUI().map((daemon) => {
+    const nativeUrl = provider.getPreviewUrl(daemon.internalPort);
+    const proxyUrl = buildProxyUrl(daemon.internalPort);
+    const options: ServiceOption[] = [];
+
+    // Add native URL if different from proxy (e.g., Daytona has direct access)
+    if (nativeUrl && !nativeUrl.startsWith("/")) {
+      options.push({ label: "Direct", url: nativeUrl });
+    }
+    options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
+
+    return {
+      id: daemon.id,
+      name: daemon.name,
+      port: daemon.internalPort,
+      options,
+    };
+  });
+
   return {
     ...machine,
     displayInfo: provider.displayInfo,
     commands: provider.commands,
     terminalOptions: provider.terminalOptions,
+    services,
   };
 }
 
