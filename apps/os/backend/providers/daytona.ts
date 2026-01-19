@@ -88,10 +88,8 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
     getCommands(_metadata?: Record<string, unknown>): MachineCommands {
       // Daytona: commands run in web terminal, no docker exec needed
       return {
-        terminalShell: null, // Use web terminal instead
         daemonLogs: `tail -f ${DAEMON_LOG}`,
         opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-        entryLogs: null, // Entry logs go to container stdout, not easily accessible
         serviceStatus: S6_STATUS_CMD,
       };
     },

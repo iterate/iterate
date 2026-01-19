@@ -19,18 +19,18 @@ export interface MachineDisplayInfo {
   isDevOnly?: boolean;
 }
 
-/** Shell commands for interacting with the machine - null means not available */
+/** Shell commands for interacting with the machine - only includes available commands */
 export interface MachineCommands {
   /** Command to open a terminal shell (e.g., `docker exec -it <id> /bin/bash`) */
-  terminalShell: string | null;
+  terminalShell?: string;
   /** Command to tail daemon logs */
-  daemonLogs: string | null;
+  daemonLogs?: string;
   /** Command to tail opencode logs */
-  opencodeLogs: string | null;
+  opencodeLogs?: string;
   /** Command to view container/entry logs */
-  entryLogs: string | null;
+  entryLogs?: string;
   /** Command to check s6 service status */
-  serviceStatus: string | null;
+  serviceStatus?: string;
 }
 
 export interface MachineProvider {

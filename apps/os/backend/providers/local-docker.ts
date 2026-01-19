@@ -190,11 +190,8 @@ export function createLocalProvider(): MachineProvider {
     getCommands(_metadata?: Record<string, unknown>): MachineCommands {
       // Local machines: user runs daemon directly, no docker
       return {
-        terminalShell: null,
         daemonLogs: `tail -f ${DAEMON_LOG}`,
         opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-        entryLogs: null,
-        serviceStatus: null, // No s6 in local dev
       };
     },
 
@@ -258,11 +255,8 @@ export function createLocalVanillaProvider(): MachineProvider {
     getCommands(_metadata?: Record<string, unknown>): MachineCommands {
       // Local vanilla: same as local, user runs daemon directly
       return {
-        terminalShell: null,
         daemonLogs: `tail -f ${DAEMON_LOG}`,
         opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-        entryLogs: null,
-        serviceStatus: null,
       };
     },
 
@@ -435,13 +429,7 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       const meta = metadata as { containerId?: string };
       const id = meta?.containerId;
       if (!id) {
-        return {
-          terminalShell: null,
-          daemonLogs: null,
-          opencodeLogs: null,
-          entryLogs: null,
-          serviceStatus: null,
-        };
+        return {}; // No commands available without container ID
       }
       return {
         terminalShell: `docker exec -it ${id} /bin/bash`,

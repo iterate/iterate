@@ -47,11 +47,11 @@ interface Machine {
     isDevOnly?: boolean;
   };
   commands: {
-    terminalShell: string | null;
-    daemonLogs: string | null;
-    opencodeLogs: string | null;
-    entryLogs: string | null;
-    serviceStatus: string | null;
+    terminalShell?: string;
+    daemonLogs?: string;
+    opencodeLogs?: string;
+    entryLogs?: string;
+    serviceStatus?: string;
   };
   hasNativeTerminal: boolean;
   hasProxyTerminal: boolean;
@@ -137,11 +137,7 @@ export function MachineTable({
     );
   };
 
-  const copyCommand = (command: string | null, label: string) => {
-    if (!command) {
-      toast.error("Command not available");
-      return;
-    }
+  const copyCommand = (command: string, label: string) => {
     copyToClipboard(command, `Copied ${label}:`, "");
   };
 
@@ -163,7 +159,7 @@ export function MachineTable({
       )}
       {machine.commands.terminalShell && (
         <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.terminalShell, "terminal command")}
+          onClick={() => copyCommand(machine.commands.terminalShell!, "terminal command")}
         >
           <Terminal className="h-4 w-4 mr-2" />
           Copy terminal command
@@ -174,7 +170,7 @@ export function MachineTable({
       {/* Log commands - show if available */}
       {machine.commands.daemonLogs && (
         <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.daemonLogs, "daemon logs command")}
+          onClick={() => copyCommand(machine.commands.daemonLogs!, "daemon logs command")}
         >
           <ScrollText className="h-4 w-4 mr-2" />
           Copy daemon logs command
@@ -182,7 +178,7 @@ export function MachineTable({
       )}
       {machine.commands.opencodeLogs && (
         <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.opencodeLogs, "OpenCode logs command")}
+          onClick={() => copyCommand(machine.commands.opencodeLogs!, "OpenCode logs command")}
         >
           <ScrollText className="h-4 w-4 mr-2" />
           Copy OpenCode logs command
@@ -190,7 +186,7 @@ export function MachineTable({
       )}
       {machine.commands.entryLogs && (
         <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.entryLogs, "entry logs command")}
+          onClick={() => copyCommand(machine.commands.entryLogs!, "entry logs command")}
         >
           <ScrollText className="h-4 w-4 mr-2" />
           Copy entry logs command
@@ -198,7 +194,7 @@ export function MachineTable({
       )}
       {machine.commands.serviceStatus && (
         <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.serviceStatus, "service status command")}
+          onClick={() => copyCommand(machine.commands.serviceStatus!, "service status command")}
         >
           <Activity className="h-4 w-4 mr-2" />
           Copy s6 service status command

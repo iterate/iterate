@@ -191,12 +191,8 @@ function MachineDetailPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const copyCommand = (cmd: string | null, fallbackMsg?: string) => {
-    if (cmd) {
-      copyToClipboard(cmd);
-    } else if (fallbackMsg) {
-      toast.info(fallbackMsg);
-    }
+  const copyCommand = (cmd: string) => {
+    copyToClipboard(cmd);
   };
 
   // Get port for a service (from metadata or default)
@@ -345,6 +341,12 @@ function MachineDetailPage() {
           {SERVICE_DEFS.map((service) => {
             const Icon = service.icon;
             const port = getServicePort(service.id, service.port);
+            const logsCommand =
+              service.id === "iterate-daemon"
+                ? commands.daemonLogs
+                : service.id === "opencode"
+                  ? commands.opencodeLogs
+                  : undefined;
             return (
               <div
                 key={service.id}
@@ -387,23 +389,12 @@ function MachineDetailPage() {
                       Open
                     </Button>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      // Use the service-specific command from backend
-                      const cmd =
-                        service.id === "iterate-daemon"
-                          ? commands.daemonLogs
-                          : service.id === "opencode"
-                            ? commands.opencodeLogs
-                            : null;
-                      copyCommand(cmd, "No logs command available");
-                    }}
-                  >
-                    <FileText className="h-4 w-4 mr-1" />
-                    Logs
-                  </Button>
+                  {logsCommand && (
+                    <Button variant="ghost" size="sm" onClick={() => copyCommand(logsCommand)}>
+                      <FileText className="h-4 w-4 mr-1" />
+                      Logs
+                    </Button>
+                  )}
                 </div>
               </div>
             );
@@ -439,7 +430,7 @@ function MachineDetailPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => copyCommand(commands.terminalShell)}
+                  onClick={() => copyCommand(commands.terminalShell!)}
                 >
                   <Copy className="h-4 w-4 mr-1" />
                   Copy command
@@ -462,7 +453,7 @@ function MachineDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={() => copyCommand(commands.entryLogs)}>
+                <Button variant="ghost" size="sm" onClick={() => copyCommand(commands.entryLogs!)}>
                   <Copy className="h-4 w-4 mr-1" />
                   Copy command
                 </Button>
