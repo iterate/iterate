@@ -132,7 +132,24 @@ function MachineDetailPage() {
     ),
   );
 
-  const agents = agentsData?.agents ?? [];
+  // Sort agents by updatedAt descending (most recent first)
+  const agents = [...(agentsData?.agents ?? [])].sort(
+    (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+  );
+
+  // Format agent time: show time, add date if >12h ago
+  const formatAgentTime = (dateStr: string | null) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const hoursAgo = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+    const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    if (hoursAgo > 12) {
+      const dateFormatted = date.toLocaleDateString([], { month: "short", day: "numeric" });
+      return `${dateFormatted} ${time}`;
+    }
+    return time;
+  };
 
   // Get iterate-daemon service for agent terminal access
   const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
@@ -329,7 +346,7 @@ function MachineDetailPage() {
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{agent.slug}</div>
                       <div className="text-xs text-muted-foreground">
-                        {agent.harnessType} · {agent.status}
+                        {agent.status} · {agent.harnessType} · {formatAgentTime(agent.updatedAt)}
                       </div>
                     </div>
                   </div>

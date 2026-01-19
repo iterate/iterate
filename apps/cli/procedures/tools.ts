@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
@@ -9,6 +10,31 @@ function getSlackClient() {
 }
 
 export const toolsRouter = t.router({
+  slack: t.procedure
+    .input(
+      z.object({
+        code: z.string().meta({ positional: true }).describe(dedent`
+          An JavaScript script that uses a slack client named \`slack\`. For example:
+
+          await slack.chat.postMessage({
+            channel: "C1234567890",
+            text: "Hello, world!",
+          });
+
+          await slack.reactions.add({
+            channel: "C1234567890",
+            timestamp: "1234567890.123456",
+            name: "thumbsup",
+          });
+        `),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const _execute = new AsyncFunction("slack", input.code);
+      const result = await _execute(getSlackClient());
+      return result;
+    }),
   sendSlackMessage: t.procedure
     .meta({ description: "Send a message to Slack" })
     .input(
