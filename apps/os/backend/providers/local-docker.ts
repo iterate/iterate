@@ -14,40 +14,73 @@ const DEFAULT_DAEMON_PORT = 3000;
 
 // Support DOCKER_HOST env var, defaulting to TCP for local dev (OrbStack)
 // Examples: unix:///var/run/docker.sock, tcp://127.0.0.1:2375
-const DOCKER_HOST = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
 
-function parseDockerHost(): { socketPath?: string; url: string } {
-  if (DOCKER_HOST.startsWith("unix://")) {
-    // Unix sockets not supported in workerd - must use TCP
-    throw new Error(
-      "Unix socket not supported in workerd environment. Use TCP instead: DOCKER_HOST=tcp://127.0.0.1:2375",
-    );
-  }
-  if (DOCKER_HOST.startsWith("tcp://")) {
-    return { url: `http://${DOCKER_HOST.slice(6)}` };
-  }
-  // Assume it's a URL
-  return { url: DOCKER_HOST };
+interface DockerHostConfig {
+  socketPath?: string;
+  url: string;
 }
 
-const dockerHostConfig = parseDockerHost();
-export const DOCKER_API_URL = dockerHostConfig.url;
+function parseDockerHost(): DockerHostConfig {
+  const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
+
+  if (dockerHost.startsWith("unix://")) {
+    // Unix socket - will need undici for this
+    return { socketPath: dockerHost.slice(7), url: "http://localhost" };
+  }
+  if (dockerHost.startsWith("tcp://")) {
+    return { url: `http://${dockerHost.slice(6)}` };
+  }
+  // Assume it's a URL
+  return { url: dockerHost };
+}
+
+/** Get Docker API URL and socket path. Used by test helpers. */
+export function getDockerHostConfig(): DockerHostConfig {
+  return parseDockerHost();
+}
 
 // Repo root is ../../../../ from apps/os/backend/providers/
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 
-/** Raw docker request using fetch (workerd-compatible) */
+// Lazy-loaded undici dispatcher for Unix socket support
+let undiciDispatcher: unknown | undefined;
+
+async function getUndiciDispatcher(socketPath: string): Promise<unknown> {
+  if (!undiciDispatcher) {
+    // Dynamic import to avoid loading undici in workerd
+    const { Agent } = await import("undici");
+    undiciDispatcher = new Agent({ connect: { socketPath } });
+  }
+  return undiciDispatcher;
+}
+
+/** Raw docker request - uses undici for Unix sockets, fetch for TCP */
 export async function dockerRequest(
   endpoint: string,
   options: { method?: string; body?: string; headers?: Record<string, string> } = {},
 ) {
-  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
+  const config = parseDockerHost();
+  const url = `${config.url}${endpoint}`;
+
+  if (config.socketPath) {
+    // Use undici for Unix socket
+    const { request } = await import("undici");
+    const dispatcher = await getUndiciDispatcher(config.socketPath);
+    return request(url, {
+      method: options.method as "GET" | "POST" | "DELETE",
+      headers: options.headers,
+      body: options.body,
+      dispatcher: dispatcher as import("undici").Dispatcher,
+    });
+  }
+
+  // Use native fetch for TCP
+  return fetch(url, {
     method: options.method ?? "GET",
     headers: options.headers,
     body: options.body,
   });
-  return response;
 }
 
 export async function dockerApi<T>(
@@ -55,16 +88,47 @@ export async function dockerApi<T>(
   endpoint: string,
   body?: Record<string, unknown>,
 ): Promise<T> {
-  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
+  const config = parseDockerHost();
+  const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
+  const url = `${config.url}${endpoint}`;
+
+  if (config.socketPath) {
+    // Use undici for Unix socket
+    const { request } = await import("undici");
+    const dispatcher = await getUndiciDispatcher(config.socketPath);
+    const response = await request(url, {
+      method: method as "GET" | "POST" | "DELETE",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      dispatcher: dispatcher as import("undici").Dispatcher,
+    }).catch((e: unknown) => {
+      throw new Error(
+        `Docker API error: ${e}. DOCKER_HOST=${dockerHost}. ` +
+          `For CI, set DOCKER_HOST=unix:///var/run/docker.sock`,
+      );
+    });
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      const error = await response.body.json().catch(() => ({ message: response.statusCode }));
+      throw new Error(
+        `Docker API error: ${(error as { message?: string }).message ?? response.statusCode}. ` +
+          `DOCKER_HOST=${dockerHost}`,
+      );
+    }
+
+    const text = await response.body.text();
+    return text ? JSON.parse(text) : ({} as T);
+  }
+
+  // Use native fetch for TCP
+  const response = await fetch(url, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   }).catch((e: unknown) => {
     throw new Error(
-      `Docker API error: ${e}. ` +
-        `DOCKER_HOST=${DOCKER_HOST}. ` +
-        `For local dev, enable TCP API on port 2375 (OrbStack: Docker Engine settings). ` +
-        `For CI, set DOCKER_HOST=unix:///var/run/docker.sock`,
+      `Docker API error: ${e}. DOCKER_HOST=${dockerHost}. ` +
+        `For local dev, enable TCP API on port 2375 (OrbStack: Docker Engine settings).`,
     );
   });
 
@@ -72,7 +136,7 @@ export async function dockerApi<T>(
     const error = await response.json().catch(() => ({ message: response.status }));
     throw new Error(
       `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
-        `DOCKER_HOST=${DOCKER_HOST}`,
+        `DOCKER_HOST=${dockerHost}`,
     );
   }
 
@@ -126,7 +190,7 @@ export interface LocalProviderConfig {
 
 export function createLocalProvider(config: LocalProviderConfig): MachineProvider {
   const { metadata, buildProxyUrl } = config;
-  const host = metadata.host ?? "localhost";
+  const host = metadata.host || "localhost"; // Use || to handle empty string
   const ports = metadata.ports;
 
   const getUrl = (port: number): string => {
