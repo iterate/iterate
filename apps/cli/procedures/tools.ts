@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import dedent from "dedent";
 import { WebClient } from "@slack/web-api";
 import { z } from "zod/v4";
@@ -30,6 +31,8 @@ export const toolsRouter = t.router({
       }),
     )
     .mutation(async ({ input }) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- sometimes LLMs assume require is available
+      const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
       const _execute = new AsyncFunction("slack", input.code);
       const result = await _execute(getSlackClient());
