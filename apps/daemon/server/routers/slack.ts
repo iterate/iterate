@@ -231,7 +231,7 @@ function formatMentionMessage(info: SlackMessageInfo, threadTs: string, eventId:
     `    thread_ts: "${threadTs}",`,
     `    text: "<your response here>",`,
     `  })'\``,
-    `You can also use any method from the Slack API like \`slack.reactions.add(...)\``,
+    `You can also use any method from the Slack API like \`slack.reactions.add(...)\`. If needed for plain \`fetch\` requests, you can get the token from \`slack.token\`. If downloading files, make sure you follow redirects. Also, \`require\` is not available, use \`import\` if you need to import a module.`,
   ].join("\n");
 }
 
