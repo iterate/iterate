@@ -92,11 +92,11 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
       isDevOnly: false,
     },
 
-    commands: {
-      daemonLogs: `tail -f ${DAEMON_LOG}`,
-      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-      serviceStatus: S6_STATUS_CMD,
-    },
+    commands: [
+      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+      { label: "Service status", command: S6_STATUS_CMD },
+    ],
 
     terminalOptions: [
       { label: "Direct", url: getNativeUrl(TERMINAL_PORT) },

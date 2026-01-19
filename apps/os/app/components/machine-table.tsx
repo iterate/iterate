@@ -5,11 +5,9 @@ import {
   MoreHorizontal,
   Archive,
   Trash2,
-  ScrollText,
   SquareTerminal,
   Terminal,
   RefreshCw,
-  Activity,
   Circle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -45,13 +43,10 @@ interface Machine {
     label: string;
     isDevOnly?: boolean;
   };
-  commands: {
-    terminalShell?: string;
-    daemonLogs?: string;
-    opencodeLogs?: string;
-    entryLogs?: string;
-    serviceStatus?: string;
-  };
+  commands: Array<{
+    label: string;
+    command: string;
+  }>;
   terminalOptions: Array<{
     label: string;
     url: string;
@@ -120,48 +115,16 @@ export function MachineTable({
           Terminal ({option.label})
         </DropdownMenuItem>
       ))}
-      {machine.commands.terminalShell && (
-        <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.terminalShell!, "terminal command")}
-        >
-          <Terminal className="h-4 w-4 mr-2" />
-          Copy terminal command
-        </DropdownMenuItem>
-      )}
-      <DropdownMenuSeparator />
-
-      {/* Log commands - show if available */}
-      {machine.commands.daemonLogs && (
-        <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.daemonLogs!, "daemon logs command")}
-        >
-          <ScrollText className="h-4 w-4 mr-2" />
-          Copy daemon logs command
-        </DropdownMenuItem>
-      )}
-      {machine.commands.opencodeLogs && (
-        <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.opencodeLogs!, "OpenCode logs command")}
-        >
-          <ScrollText className="h-4 w-4 mr-2" />
-          Copy OpenCode logs command
-        </DropdownMenuItem>
-      )}
-      {machine.commands.entryLogs && (
-        <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.entryLogs!, "entry logs command")}
-        >
-          <ScrollText className="h-4 w-4 mr-2" />
-          Copy entry logs command
-        </DropdownMenuItem>
-      )}
-      {machine.commands.serviceStatus && (
-        <DropdownMenuItem
-          onClick={() => copyCommand(machine.commands.serviceStatus!, "service status command")}
-        >
-          <Activity className="h-4 w-4 mr-2" />
-          Copy s6 service status command
-        </DropdownMenuItem>
+      {machine.commands.length > 0 && (
+        <>
+          <DropdownMenuSeparator />
+          {machine.commands.map((cmd, index) => (
+            <DropdownMenuItem key={index} onClick={() => copyCommand(cmd.command, cmd.label)}>
+              <Terminal className="h-4 w-4 mr-2" />
+              Copy: {cmd.label}
+            </DropdownMenuItem>
+          ))}
+        </>
       )}
       <DropdownMenuSeparator />
 

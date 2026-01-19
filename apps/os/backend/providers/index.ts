@@ -9,7 +9,7 @@ export type {
   CreateMachineConfig,
   MachineProviderResult,
   MachineDisplayInfo,
-  MachineCommands,
+  MachineCommand,
   TerminalOption,
 } from "./types.ts";
 

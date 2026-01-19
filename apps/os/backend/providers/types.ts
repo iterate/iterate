@@ -19,21 +19,13 @@ export interface MachineDisplayInfo {
   isDevOnly?: boolean;
 }
 
-/** Shell commands for interacting with the machine - only includes available commands */
-export interface MachineCommands {
-  /** Command to open a terminal shell (e.g., `docker exec -it <id> /bin/bash`) */
-  terminalShell?: string;
-  /** Command to tail daemon logs */
-  daemonLogs?: string;
-  /** Command to tail opencode logs */
-  opencodeLogs?: string;
-  /** Command to view container/entry logs */
-  entryLogs?: string;
-  /** Command to check s6 service status */
-  serviceStatus?: string;
+/** A copyable shell command for interacting with the machine */
+export interface MachineCommand {
+  label: string;
+  command: string;
 }
 
-/** Terminal option for accessing the machine */
+/** Terminal option for accessing the machine via web UI */
 export interface TerminalOption {
   label: string;
   url: string;
@@ -62,7 +54,7 @@ export interface MachineProvider {
   // Simple getters - computed at construction time with full context
   readonly previewUrl: string;
   readonly displayInfo: MachineDisplayInfo;
-  readonly commands: MachineCommands;
+  readonly commands: MachineCommand[];
   readonly terminalOptions: TerminalOption[];
 
   /** Get preview URL for a specific port (for services on different ports) */

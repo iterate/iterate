@@ -2,18 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  ExternalLink,
-  Trash2,
-  RefreshCw,
-  Server,
-  Code2,
-  Terminal,
-  Copy,
-  FileText,
-  ScrollText,
-  Bot,
-} from "lucide-react";
+import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -335,15 +324,10 @@ function MachineDetailPage() {
       {/* Services List */}
       {machine.state === "started" && (
         <div className="space-y-2">
+          {/* Services */}
           {SERVICE_DEFS.map((service) => {
             const Icon = service.icon;
             const port = getServicePort(service.id, service.port);
-            const logsCommand =
-              service.id === "iterate-daemon"
-                ? commands.daemonLogs
-                : service.id === "opencode"
-                  ? commands.opencodeLogs
-                  : undefined;
             return (
               <div
                 key={service.id}
@@ -386,71 +370,61 @@ function MachineDetailPage() {
                       Open
                     </Button>
                   ) : null}
-                  {logsCommand && (
-                    <Button variant="ghost" size="sm" onClick={() => copyCommand(logsCommand)}>
-                      <FileText className="h-4 w-4 mr-1" />
-                      Logs
-                    </Button>
-                  )}
                 </div>
               </div>
             );
           })}
 
-          {/* Shell */}
-          <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-            <div className="flex items-center gap-3 min-w-0">
-              <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Shell</div>
-                <div className="text-xs text-muted-foreground">Terminal access</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              {terminalOptions.map((option, index) => (
-                <Button
-                  key={index}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => window.open(option.url, "_blank")}
-                >
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  {option.label}
-                </Button>
-              ))}
-              {commands.terminalShell && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => copyCommand(commands.terminalShell!)}
-                >
-                  <Copy className="h-4 w-4 mr-1" />
-                  Copy command
-                </Button>
-              )}
-              {terminalOptions.length === 0 && !commands.terminalShell && (
-                <span className="text-xs text-muted-foreground">SSH or local</span>
-              )}
-            </div>
-          </div>
-
-          {/* Entry logs (boot logs) */}
-          {commands.entryLogs && (
+          {/* Shell - terminal options */}
+          {terminalOptions.length > 0 && (
             <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
               <div className="flex items-center gap-3 min-w-0">
-                <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Entry Logs</div>
-                  <div className="text-xs text-muted-foreground">Container boot logs</div>
+                  <div className="text-sm font-medium">Shell</div>
+                  <div className="text-xs text-muted-foreground">Terminal access</div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={() => copyCommand(commands.entryLogs!)}>
-                  <Copy className="h-4 w-4 mr-1" />
-                  Copy command
-                </Button>
+                {terminalOptions.map((option, index) => (
+                  <Button
+                    key={index}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => window.open(option.url, "_blank")}
+                  >
+                    <ExternalLink className="h-4 w-4 mr-1" />
+                    {option.label}
+                  </Button>
+                ))}
               </div>
             </div>
+          )}
+
+          {/* Commands - copyable shell commands */}
+          {commands.length > 0 && (
+            <>
+              <div className="pt-4 border-t">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Commands</h3>
+              </div>
+              {commands.map((cmd, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{cmd.label}</div>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => copyCommand(cmd.command)}>
+                    <Copy className="h-4 w-4 mr-1" />
+                    Copy
+                  </Button>
+                </div>
+              ))}
+            </>
           )}
 
           {/* Agents */}

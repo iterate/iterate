@@ -175,10 +175,10 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
       isDevOnly: true,
     },
 
-    commands: {
-      daemonLogs: `tail -f ${DAEMON_LOG}`,
-      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-    },
+    commands: [
+      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+    ],
 
     terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
@@ -222,10 +222,10 @@ export function createLocalVanillaProvider(config: LocalVanillaProviderConfig): 
       isDevOnly: true,
     },
 
-    commands: {
-      daemonLogs: `tail -f ${DAEMON_LOG}`,
-      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-    },
+    commands: [
+      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+    ],
 
     terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
@@ -384,14 +384,17 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
     },
 
     commands: containerId
-      ? {
-          terminalShell: `docker exec -it ${containerId} /bin/bash`,
-          daemonLogs: `docker exec ${containerId} tail -f ${DAEMON_LOG}`,
-          opencodeLogs: `docker exec ${containerId} tail -f ${OPENCODE_LOG}`,
-          entryLogs: `docker logs -f ${containerId}`,
-          serviceStatus: `docker exec ${containerId} sh -c '${S6_STATUS_CMD}'`,
-        }
-      : {},
+      ? [
+          { label: "Terminal shell", command: `docker exec -it ${containerId} /bin/bash` },
+          { label: "Daemon logs", command: `docker exec ${containerId} tail -f ${DAEMON_LOG}` },
+          { label: "OpenCode logs", command: `docker exec ${containerId} tail -f ${OPENCODE_LOG}` },
+          { label: "Entry logs", command: `docker logs -f ${containerId}` },
+          {
+            label: "Service status",
+            command: `docker exec ${containerId} sh -c '${S6_STATUS_CMD}'`,
+          },
+        ]
+      : [],
 
     terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
