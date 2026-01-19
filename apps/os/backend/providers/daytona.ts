@@ -45,36 +45,36 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
       return { externalId: sandbox.id, metadata: { snapshotName } };
     },
 
-    async start(extId: string): Promise<void> {
-      const sandbox = await daytona.get(extId);
+    async start(): Promise<void> {
+      const sandbox = await daytona.get(externalId);
       await sandbox.start();
     },
 
-    async stop(extId: string): Promise<void> {
-      const sandbox = await daytona.get(extId);
+    async stop(): Promise<void> {
+      const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
     },
 
-    async restart(extId: string): Promise<void> {
-      const sandbox = await daytona.get(extId);
+    async restart(): Promise<void> {
+      const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
       await sandbox.start();
     },
 
-    async archive(extId: string): Promise<void> {
-      const sandbox = await daytona.get(extId);
+    async archive(): Promise<void> {
+      const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
       await sandbox.archive();
     },
 
-    async delete(extId: string): Promise<void> {
-      const sandbox = await daytona.get(extId);
+    async delete(): Promise<void> {
+      const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }

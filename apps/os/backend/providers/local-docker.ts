@@ -161,11 +161,11 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
       };
     },
 
-    async start(_extId: string): Promise<void> {},
-    async stop(_extId: string): Promise<void> {},
-    async restart(_extId: string): Promise<void> {},
-    async archive(_extId: string): Promise<void> {},
-    async delete(_extId: string): Promise<void> {},
+    async start(): Promise<void> {},
+    async stop(): Promise<void> {},
+    async restart(): Promise<void> {},
+    async archive(): Promise<void> {},
+    async delete(): Promise<void> {},
 
     getPreviewUrl: getUrl,
     previewUrl: getUrl(DEFAULT_DAEMON_PORT),
@@ -208,11 +208,11 @@ export function createLocalVanillaProvider(config: LocalVanillaProviderConfig): 
       };
     },
 
-    async start(_extId: string): Promise<void> {},
-    async stop(_extId: string): Promise<void> {},
-    async restart(_extId: string): Promise<void> {},
-    async archive(_extId: string): Promise<void> {},
-    async delete(_extId: string): Promise<void> {},
+    async start(): Promise<void> {},
+    async stop(): Promise<void> {},
+    async restart(): Promise<void> {},
+    async archive(): Promise<void> {},
+    async delete(): Promise<void> {},
 
     getPreviewUrl: () => `http://localhost:${DEFAULT_DAEMON_PORT}`,
     previewUrl: `http://localhost:${DEFAULT_DAEMON_PORT}`,
@@ -351,28 +351,28 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       };
     },
 
-    async start(extId: string): Promise<void> {
-      await dockerApi("POST", `/containers/${extId}/start`, {});
+    async start(): Promise<void> {
+      await dockerApi("POST", `/containers/${externalId}/start`, {});
     },
 
-    async stop(extId: string): Promise<void> {
+    async stop(): Promise<void> {
       try {
-        await dockerApi("POST", `/containers/${extId}/stop`, {});
+        await dockerApi("POST", `/containers/${externalId}/stop`, {});
       } catch {
         // Container might already be stopped
       }
     },
 
-    async restart(extId: string): Promise<void> {
-      await dockerApi("POST", `/containers/${extId}/restart`, {});
+    async restart(): Promise<void> {
+      await dockerApi("POST", `/containers/${externalId}/restart`, {});
     },
 
-    async archive(extId: string): Promise<void> {
-      await this.stop(extId);
+    async archive(): Promise<void> {
+      await this.stop();
     },
 
-    async delete(extId: string): Promise<void> {
-      await dockerApi("DELETE", `/containers/${extId}?force=true`, undefined);
+    async delete(): Promise<void> {
+      await dockerApi("DELETE", `/containers/${externalId}?force=true`, undefined);
     },
 
     getPreviewUrl: getUrl,

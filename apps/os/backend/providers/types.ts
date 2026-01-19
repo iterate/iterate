@@ -43,13 +43,13 @@ export interface TerminalOption {
 export interface MachineProvider {
   readonly type: MachineType;
 
-  // Lifecycle methods - take externalId for flexibility during create/cleanup
+  // Lifecycle methods - use externalId from construction
   create(config: CreateMachineConfig): Promise<MachineProviderResult>;
-  start(externalId: string): Promise<void>;
-  stop(externalId: string): Promise<void>;
-  restart(externalId: string): Promise<void>;
-  archive(externalId: string): Promise<void>;
-  delete(externalId: string): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  restart(): Promise<void>;
+  archive(): Promise<void>;
+  delete(): Promise<void>;
 
   // Simple getters - computed at construction time with full context
   readonly previewUrl: string;

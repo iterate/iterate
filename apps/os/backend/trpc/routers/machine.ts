@@ -145,7 +145,7 @@ async function archiveExistingMachines(
       metadata: (machine.metadata as Record<string, unknown>) ?? {},
       buildProxyUrl: () => "", // Not used for lifecycle operations
     });
-    await provider.archive(machine.externalId);
+    await provider.archive();
     await db
       .update(schema.machine)
       .set({ state: "archived" })
@@ -325,8 +325,16 @@ export const machineRouter = router({
         .returning()
         .catch(async (err) => {
           // Cleanup: delete the provider resource if DB insert fails
+          // Need a new provider instance with the actual externalId for cleanup
           try {
-            await provider.delete(providerResult.externalId);
+            const cleanupProvider = await createMachineProvider({
+              type: input.type,
+              env: ctx.env,
+              externalId: providerResult.externalId,
+              metadata: providerResult.metadata ?? {},
+              buildProxyUrl: () => "",
+            });
+            await cleanupProvider.delete();
           } catch {
             // Ignore cleanup errors
           }
@@ -356,7 +364,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { provider } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -378,7 +386,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.archive(machine.externalId).catch((err) => {
+      await provider.archive().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -421,7 +429,7 @@ export const machineRouter = router({
         logger.error("Failed to broadcast invalidation", err);
       });
 
-      await provider.restart(machine.externalId).catch((err) => {
+      await provider.restart().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -439,7 +447,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { provider } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -461,7 +469,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.delete(machine.externalId).catch((err) => {
+      await provider.delete().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
