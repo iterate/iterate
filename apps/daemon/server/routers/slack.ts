@@ -5,13 +5,25 @@
  * Creates/reuses agents per Slack thread and sends formatted messages.
  * Uses the harness system for SDK-based session management.
  */
+import path from "node:path";
 import { Hono } from "hono";
+import { nanoid } from "nanoid";
+import { eq } from "drizzle-orm";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
+import { db } from "../db/index.ts";
+import * as schema from "../db/schema.ts";
 
 const logger = console;
 
 // Working directory for agents - uses ITERATE_REPO env var with fallback to sandbox path
 const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+
+// SQLite database path - daemon runs from apps/daemon, so db.sqlite is relative to that
+const DAEMON_SQLITE_PATH = path.resolve(
+  process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate",
+  "apps/daemon",
+  process.env.DATABASE_URL || "db.sqlite",
+);
 
 export const slackRouter = new Hono();
 
@@ -38,6 +50,10 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: "Ignored: no bot user recipient" });
   }
 
+  // Store the raw event for later inspection
+  const slackEventId = extractSlackEventId(payload);
+  const eventId = await storeEvent(payload, slackEventId);
+
   try {
     const existingAgent = await getAgent(agentSlug);
     const isMention = messageInfo.isBotMentioned;
@@ -56,31 +72,31 @@ slackRouter.post("/webhook", async (c) => {
         wasCreated = true;
       }
 
-      let message = formatMentionMessage(messageInfo, threadTs!);
+      let message = formatMentionMessage(messageInfo, threadTs!, eventId);
 
       if (wasCreated) {
         message += [
           "",
           "",
-          `Start by adding the eyes emoji (\`slack.reactions.add({ channel: "${messageInfo.channel}", timestamp: "${threadTs}", name: "eyes" })\`).
-          And remove it again while you reply (e.g. \`await Promise.all([slack.reactions.remove(...), slack.chat.postMessage(...)])\`)`,
+          `Start by adding the eyes emoji (\`slack.reactions.add({ channel: "${messageInfo.channel}", timestamp: "${threadTs}", name: "eyes" })\`).`,
+          `And remove it again while you reply (e.g. \`await Promise.all([slack.reactions.remove(...), slack.chat.postMessage(...)])\`)`,
         ].join("\n");
       }
       await appendToAgent(agent, message);
 
-      return c.json({ success: true, agentSlug, created: wasCreated });
+      return c.json({ success: true, agentSlug, created: wasCreated, eventId });
     }
 
     // Case 2: No @mention but agent exists - send FYI message
     if (existingAgent) {
-      const message = formatFyiMessage(messageInfo, threadTs!);
+      const message = formatFyiMessage(messageInfo, threadTs!, eventId);
       await appendToAgent(existingAgent, message);
 
-      return c.json({ success: true, agentSlug, created: false, fyi: true });
+      return c.json({ success: true, agentSlug, created: false, fyi: true, eventId });
     }
 
     // Case 3: No @mention and no agent - ignore
-    return c.json({ success: true, message: "Ignored: no mention and no existing agent" });
+    return c.json({ success: true, message: "Ignored: no mention and no existing agent", eventId });
   } catch (error) {
     logger.error("[Slack Webhook] Failed to handle webhook", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -131,6 +147,46 @@ function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
 
+/**
+ * Extract Slack's event_id from the webhook payload.
+ */
+function extractSlackEventId(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const p = payload as Record<string, unknown>;
+  return typeof p.event_id === "string" ? p.event_id : undefined;
+}
+
+/**
+ * Store the raw webhook event in SQLite for later inspection.
+ * Uses Slack's event_id for deduplication - if already stored, returns existing ID.
+ */
+async function storeEvent(
+  payload: Record<string, unknown>,
+  slackEventId?: string,
+): Promise<string> {
+  // Check for existing event with same Slack event_id (dedup)
+  if (slackEventId) {
+    const existing = await db
+      .select()
+      .from(schema.events)
+      .where(eq(schema.events.externalId, slackEventId))
+      .limit(1);
+    if (existing[0]) {
+      return existing[0].id;
+    }
+  }
+
+  const eventId = `evt_${nanoid(12)}`;
+  await db.insert(schema.events).values({
+    id: eventId,
+    type: "slack:webhook",
+    externalId: slackEventId,
+    payload,
+  });
+
+  return eventId;
+}
+
 interface SlackMessageInfo {
   user: string | undefined;
   channel: string | undefined;
@@ -159,7 +215,7 @@ function parseSlackPayload(payload: unknown): SlackMessageInfo {
   return { user, channel, text, botUserId, isBotMessage, isBotMentioned };
 }
 
-function formatMentionMessage(info: SlackMessageInfo, threadTs: string): string {
+function formatMentionMessage(info: SlackMessageInfo, threadTs: string, eventId: string): string {
   const userPart = info.user ? `<@${info.user}>` : "unknown";
   const channelPart = info.channel || "unknown channel";
   const textPart = info.text || "(no text)";
@@ -167,17 +223,19 @@ function formatMentionMessage(info: SlackMessageInfo, threadTs: string): string 
   return [
     `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
     "",
-    `Before responding, use the following CLI command to reply to the message:`,
-    `\`iterate tool slack 'await slack.chat.postMessage({
-        channel: "${channelPart}",
-        thread_ts: "${threadTs}",
-        text: "<your response here>",
-      })'`,
-    `You can also use any method from the Slack API like \`slack.reactions.add(...)\``,
+    `Raw event (for files/attachments/reactions): sqlite3 ${DAEMON_SQLITE_PATH} "SELECT payload FROM events WHERE id='${eventId}'"`,
+    "",
+    `To reply:`,
+    `\`iterate tool slack 'await slack.chat.postMessage({`,
+    `    channel: "${channelPart}",`,
+    `    thread_ts: "${threadTs}",`,
+    `    text: "<your response here>",`,
+    `  })'\``,
+    `You can also use any method from the Slack API like \`slack.reactions.add(...)\`. If needed for plain \`fetch\` requests, you can get the token from \`slack.token\`. If downloading files, make sure you follow redirects. Also, \`require\` is not available, use \`import\` if you need to import a module.`,
   ].join("\n");
 }
 
-function formatFyiMessage(info: SlackMessageInfo, threadTs: string): string {
+function formatFyiMessage(info: SlackMessageInfo, threadTs: string, eventId: string): string {
   const userPart = info.user ? `<@${info.user}>` : "unknown";
   const channelPart = info.channel || "unknown channel";
   const textPart = info.text || "(no text)";
@@ -185,12 +243,14 @@ function formatFyiMessage(info: SlackMessageInfo, threadTs: string): string {
   return [
     `FYI, there was another message in this Slack thread from ${userPart} in ${channelPart}: ${textPart}`,
     "",
-    `If you are SURE this is a direct question to you, you can use the CLI to reply:`,
-    `\`iterate tool slack 'await slack.chat.postMessage({
-      channel: "${channelPart}",
-      thread_ts: "${threadTs}",
-      text: "<your response here>",
-    })'`,
+    `Raw event: sqlite3 ${DAEMON_SQLITE_PATH} "SELECT payload FROM events WHERE id='${eventId}'"`,
+    "",
+    `If you are SURE this is a direct question to you, you can reply:`,
+    `\`iterate tool slack 'await slack.chat.postMessage({`,
+    `    channel: "${channelPart}",`,
+    `    thread_ts: "${threadTs}",`,
+    `    text: "<your response here>",`,
+    `  })'\``,
   ].join("\n");
 }
 

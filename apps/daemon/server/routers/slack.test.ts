@@ -7,6 +7,22 @@ vi.mock("../services/agent-manager.ts", () => ({
   appendToAgent: vi.fn(),
 }));
 
+// Mock the database to avoid needing migrations in tests
+vi.mock("../db/index.ts", () => ({
+  db: {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve([])),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => Promise.resolve()),
+    })),
+  },
+}));
+
 const { slackRouter } = await import("./slack.ts");
 const { getAgent, createAgent, appendToAgent } = await import("../services/agent-manager.ts");
 
@@ -86,10 +102,7 @@ describe("slack router", () => {
     expect(body.created).toBe(true);
     expect(mockedCreateAgent).toHaveBeenCalled();
     expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("hello"));
-    expect(mockedAppendToAgent).toHaveBeenCalledWith(
-      agent,
-      expect.stringContaining("Before responding, use the following CLI command"),
-    );
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("To reply:"));
   });
 
   it("sends @mention message to existing agent without creating new one", async () => {
@@ -123,17 +136,16 @@ describe("slack router", () => {
     expect(mockedCreateAgent).not.toHaveBeenCalled();
     expect(mockedAppendToAgent).toHaveBeenCalledWith(
       agent,
-      [
+      expect.stringContaining(
         `New Slack message from <@U_TEST> in C_TEST: <@${botUserId}> hello world`,
-        "",
-        "Before responding, use the following CLI command to reply to the message:",
-        `\`iterate tool slack 'await slack.chat.postMessage({
-        channel: "C_TEST",
-        thread_ts: "9999999999.999999",
-        text: "<your response here>",
-      })'`,
-        "You can also use any method from the Slack API like `slack.reactions.add(...)`",
-      ].join("\n"),
+      ),
+    );
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("Raw event"));
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("sqlite3"));
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("To reply:"));
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(
+      agent,
+      expect.stringContaining("slack.chat.postMessage"),
     );
   });
 
@@ -171,6 +183,7 @@ describe("slack router", () => {
       agent,
       expect.stringContaining("FYI, there was another message"),
     );
+    expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("Raw event:"));
     expect(mockedAppendToAgent).toHaveBeenCalledWith(
       agent,
       expect.stringContaining("If you are SURE this is a direct question to you"),

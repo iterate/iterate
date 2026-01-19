@@ -9,12 +9,6 @@
       }
     }
   },
-  "permission": {
-    "read": "allow",
-    "write": "allow",
-    "edit": "allow",
-    "bash": "allow",
-    "webfetch": "allow"
-  },
+  "permission": "allow",
   "mcp": {}
 }
