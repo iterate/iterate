@@ -5,7 +5,7 @@ import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { createMachineProvider } from "../providers/index.ts";
-import { getDaemonById } from "../daemons.ts";
+
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {

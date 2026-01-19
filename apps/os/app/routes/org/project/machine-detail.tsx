@@ -143,37 +143,6 @@ function MachineDetailPage() {
     }
   };
 
-  const openTerminal = async ({
-    useNative,
-    command,
-    autorun,
-  }: {
-    useNative: boolean;
-    command?: string;
-    autorun?: boolean;
-  }) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const urlBase = useNative ? result.nativeTerminalUrl : result.terminalUrl;
-      if (urlBase) {
-        const url = new URL(urlBase, window.location.origin);
-        if (command) {
-          url.searchParams.set("command", command);
-          url.searchParams.set("autorun", autorun ? "true" : "false");
-        }
-        window.open(url, "_blank");
-      } else {
-        toast.error("Terminal URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // Copy helpers
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);

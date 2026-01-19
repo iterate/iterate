@@ -9,7 +9,7 @@ import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { getDaemonById } from "../../daemons.ts";
+
 import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
