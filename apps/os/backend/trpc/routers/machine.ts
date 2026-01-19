@@ -50,8 +50,7 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     ...machine,
     displayInfo: provider.getDisplayInfo(metadata),
     commands: provider.getCommands(metadata),
-    hasNativeTerminal: provider.hasNativeTerminal(),
-    hasProxyTerminal: provider.hasProxyTerminal(),
+    terminalOptions: provider.getTerminalOptions(),
   };
 }
 

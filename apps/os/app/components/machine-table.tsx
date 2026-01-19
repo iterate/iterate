@@ -53,8 +53,10 @@ interface Machine {
     entryLogs?: string;
     serviceStatus?: string;
   };
-  hasNativeTerminal: boolean;
-  hasProxyTerminal: boolean;
+  terminalOptions: Array<{
+    type: "native" | "proxy";
+    label: string;
+  }>;
 }
 
 interface MachineTableProps {
@@ -145,18 +147,19 @@ export function MachineTable({
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
       {/* Terminal options */}
-      {machine.hasNativeTerminal && (
-        <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
+      {machine.terminalOptions.map((option) => (
+        <DropdownMenuItem
+          key={option.type}
+          onClick={() =>
+            option.type === "native"
+              ? openTerminalNative(machine.id)
+              : openTerminalProxy(machine.id)
+          }
+        >
           <SquareTerminal className="h-4 w-4 mr-2" />
-          Terminal (direct)
+          Terminal ({option.label})
         </DropdownMenuItem>
-      )}
-      {machine.hasProxyTerminal && (
-        <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
-          <SquareTerminal className="h-4 w-4 mr-2" />
-          Terminal (proxy)
-        </DropdownMenuItem>
-      )}
+      ))}
       {machine.commands.terminalShell && (
         <DropdownMenuItem
           onClick={() => copyCommand(machine.commands.terminalShell!, "terminal command")}

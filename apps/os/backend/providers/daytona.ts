@@ -6,6 +6,7 @@ import type {
   MachineProviderResult,
   MachineDisplayInfo,
   MachineCommands,
+  TerminalOption,
 } from "./types.ts";
 
 // Common log paths in sandbox
@@ -94,12 +95,11 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       };
     },
 
-    hasNativeTerminal(): boolean {
-      return true;
-    },
-
-    hasProxyTerminal(): boolean {
-      return true;
+    getTerminalOptions(): TerminalOption[] {
+      return [
+        { type: "native", label: "Direct" },
+        { type: "proxy", label: "Proxy" },
+      ];
     },
   };
 }

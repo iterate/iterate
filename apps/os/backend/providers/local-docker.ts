@@ -7,6 +7,7 @@ import type {
   MachineProviderResult,
   MachineDisplayInfo,
   MachineCommands,
+  TerminalOption,
 } from "./types.ts";
 
 // Common log paths in sandbox
@@ -195,12 +196,8 @@ export function createLocalProvider(): MachineProvider {
       };
     },
 
-    hasNativeTerminal(): boolean {
-      return false;
-    },
-
-    hasProxyTerminal(): boolean {
-      return true;
+    getTerminalOptions(): TerminalOption[] {
+      return [{ type: "proxy", label: "Proxy" }];
     },
   };
 }
@@ -260,12 +257,8 @@ export function createLocalVanillaProvider(): MachineProvider {
       };
     },
 
-    hasNativeTerminal(): boolean {
-      return false;
-    },
-
-    hasProxyTerminal(): boolean {
-      return true;
+    getTerminalOptions(): TerminalOption[] {
+      return [{ type: "proxy", label: "Proxy" }];
     },
   };
 }
@@ -440,12 +433,8 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       };
     },
 
-    hasNativeTerminal(): boolean {
-      return false;
-    },
-
-    hasProxyTerminal(): boolean {
-      return true;
+    getTerminalOptions(): TerminalOption[] {
+      return [{ type: "proxy", label: "Proxy" }];
     },
   };
 }

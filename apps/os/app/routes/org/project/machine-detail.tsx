@@ -86,7 +86,7 @@ function MachineDetailPage() {
   };
 
   // Use commands and terminal info from backend
-  const { commands, hasNativeTerminal, hasProxyTerminal } = machine;
+  const { commands, terminalOptions } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -199,9 +199,6 @@ function MachineDetailPage() {
   const getServicePort = (serviceId: string, defaultPort: number) => {
     return metadata.ports?.[serviceId] ?? defaultPort;
   };
-
-  // Check if machine supports dual access (proxy + direct)
-  const hasDualAccess = hasNativeTerminal && hasProxyTerminal;
 
   // Query agents from the daemon
   const { data: agentsData } = useQuery(
@@ -360,35 +357,17 @@ function MachineDetailPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {hasDualAccess ? (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, true)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Direct
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, false)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Proxy
-                      </Button>
-                    </>
-                  ) : (
+                  {terminalOptions.map((option) => (
                     <Button
+                      key={option.type}
                       variant="ghost"
                       size="sm"
-                      onClick={() => openServiceUrl(service.id, true)}
+                      onClick={() => openServiceUrl(service.id, option.type === "native")}
                     >
                       <ExternalLink className="h-4 w-4 mr-1" />
-                      Open
+                      {terminalOptions.length === 1 ? "Open" : option.label}
                     </Button>
-                  )}
+                  ))}
                   {logsCommand && (
                     <Button variant="ghost" size="sm" onClick={() => copyCommand(logsCommand)}>
                       <FileText className="h-4 w-4 mr-1" />
@@ -410,22 +389,17 @@ function MachineDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              {hasNativeTerminal && (
-                <Button variant="ghost" size="sm" onClick={() => openTerminal({ useNative: true })}>
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  Direct
-                </Button>
-              )}
-              {hasProxyTerminal && (
+              {terminalOptions.map((option) => (
                 <Button
+                  key={option.type}
                   variant="ghost"
                   size="sm"
-                  onClick={() => openTerminal({ useNative: false })}
+                  onClick={() => openTerminal({ useNative: option.type === "native" })}
                 >
                   <ExternalLink className="h-4 w-4 mr-1" />
-                  Proxy
+                  {option.label}
                 </Button>
-              )}
+              ))}
               {commands.terminalShell && (
                 <Button
                   variant="ghost"
@@ -436,7 +410,7 @@ function MachineDetailPage() {
                   Copy command
                 </Button>
               )}
-              {!hasNativeTerminal && !hasProxyTerminal && !commands.terminalShell && (
+              {terminalOptions.length === 0 && !commands.terminalShell && (
                 <span className="text-xs text-muted-foreground">SSH or local</span>
               )}
             </div>
@@ -482,56 +456,24 @@ function MachineDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {hasDualAccess ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: true,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Direct
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: false,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Proxy
-                        </Button>
-                      </>
-                    ) : (
+                    {terminalOptions.map((option) => (
                       <Button
+                        key={option.type}
                         variant="ghost"
                         size="sm"
                         onClick={() =>
                           openAgentTerminal({
                             agentSlug: agent.slug,
-                            useNative: true,
+                            useNative: option.type === "native",
                             command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
                             autorun: true,
                           })
                         }
                       >
                         <ExternalLink className="h-4 w-4 mr-1" />
-                        Open
+                        {terminalOptions.length === 1 ? "Open" : option.label}
                       </Button>
-                    )}
+                    ))}
                   </div>
                 </div>
               ))}

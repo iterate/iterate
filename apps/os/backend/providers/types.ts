@@ -33,6 +33,15 @@ export interface MachineCommands {
   serviceStatus?: string;
 }
 
+/** Terminal access type */
+export type TerminalType = "native" | "proxy";
+
+/** Terminal option for accessing the machine */
+export interface TerminalOption {
+  type: TerminalType;
+  label: string;
+}
+
 export interface MachineProvider {
   readonly type: MachineType;
   create(config: CreateMachineConfig): Promise<MachineProviderResult>;
@@ -46,8 +55,6 @@ export interface MachineProvider {
   getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo;
   /** Get shell commands for interacting with the machine */
   getCommands(metadata?: Record<string, unknown>): MachineCommands;
-  /** Whether web terminal is available via native URL */
-  hasNativeTerminal(): boolean;
-  /** Whether web terminal is available via proxy URL */
-  hasProxyTerminal(): boolean;
+  /** Get available terminal options for this machine type */
+  getTerminalOptions(): TerminalOption[];
 }
