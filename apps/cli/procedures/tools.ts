@@ -31,11 +31,10 @@ export const toolsRouter = t.router({
       }),
     )
     .mutation(async ({ input }) => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- sometimes LLMs assume require is available
       const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const _execute = new AsyncFunction("slack", input.code);
-      const result = await _execute(getSlackClient());
+      const _execute = new AsyncFunction("slack", "require", input.code);
+      const result = await _execute(getSlackClient(), require);
       return result;
     }),
   sendSlackMessage: t.procedure
