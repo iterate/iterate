@@ -7,7 +7,7 @@ import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-
 export const startServer = async (params: { port: number; hostname: string }) => {
   return new Promise<ServerType>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, ...params }, () => {
-      console.log(`\nServer running at http://${params.hostname}:${params.port}`);
+      console.log(`\n[daemon] Server running at http://${params.hostname}:${params.port}`);
 
       // Bootstrap: report status, fetch env vars, start refresh scheduler
       // Exit on errors so process manager can restart us

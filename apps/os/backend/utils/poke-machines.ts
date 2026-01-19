@@ -4,7 +4,8 @@ import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { createDaytonaProvider } from "../providers/daytona.ts";
+import { createMachineProvider } from "../providers/index.ts";
+
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {
@@ -18,8 +19,7 @@ function createDaemonTrpcClient(baseUrl: string) {
 }
 
 /**
- * Build the daemon tRPC base URL for a machine.
- * Uses port 3000 which is where the daemon's tRPC server runs.
+ * Build the daemon tRPC base URL for a machine using the provider.
  */
 async function buildDaemonBaseUrl(
   machine: typeof schema.machine.$inferSelect,
@@ -27,35 +27,22 @@ async function buildDaemonBaseUrl(
 ): Promise<string | null> {
   const metadata = machine.metadata as Record<string, unknown>;
 
-  switch (machine.type) {
-    case "daytona": {
-      const provider = createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
-      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
-    }
-    case "local-docker": {
-      if (!import.meta.env.DEV) {
-        logger.warn("[poke-machines] local-docker provider only available in development", {
-          machineId: machine.id,
-        });
-        return null;
-      }
-      const { createLocalDockerProvider } = await import("../providers/local-docker.ts");
-      const provider = createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
-      return provider.getPreviewUrl(machine.externalId, metadata, 3000);
-    }
-    case "local-vanilla":
-    case "local": {
-      const host = (metadata.host as string) ?? "localhost";
-      const ports = metadata.ports as Record<string, number> | undefined;
-      const port = ports?.["iterate-daemon"] ?? (metadata.port as number | undefined) ?? 3000;
-      return `http://${host}:${port}`;
-    }
-    default:
-      logger.warn("[poke-machines] Unknown machine type for daemon URL", {
-        machineId: machine.id,
-        type: machine.type,
-      });
-      return null;
+  try {
+    const provider = await createMachineProvider({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata,
+      buildProxyUrl: () => "", // Not used here
+    });
+    return provider.previewUrl;
+  } catch (err) {
+    logger.warn("[poke-machines] Failed to build daemon URL", {
+      machineId: machine.id,
+      type: machine.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
 }
 
