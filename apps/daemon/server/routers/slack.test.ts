@@ -127,7 +127,12 @@ describe("slack router", () => {
         `New Slack message from <@U_TEST> in C_TEST: <@${botUserId}> hello world`,
         "",
         "Before responding, use the following CLI command to reply to the message:",
-        '`iterate tool send-slack-message --channel C_TEST --thread-ts 9999999999.999999 --message "<your response here>"` ',
+        `\`iterate tool slack 'await slack.chat.postMessage({
+        channel: "C_TEST",
+        thread_ts: "9999999999.999999",
+        text: "<your response here>",
+      })'`,
+        "You can also use any method from the Slack API like `slack.reactions.add(...)`",
       ].join("\n"),
     );
   });
