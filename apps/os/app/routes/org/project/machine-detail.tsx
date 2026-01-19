@@ -17,23 +17,11 @@ export const Route = createFileRoute(
   component: MachineDetailPage,
 });
 
-// Service definitions
-const SERVICE_DEFS = [
-  {
-    id: "iterate-daemon",
-    name: "Iterate Daemon",
-    port: 3000,
-    logPath: "/var/log/iterate-daemon/current",
-    icon: Server,
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    port: 4096,
-    logPath: "/var/log/opencode/current",
-    icon: Code2,
-  },
-];
+// Icon map for services
+const SERVICE_ICONS: Record<string, typeof Server> = {
+  "iterate-daemon": Server,
+  opencode: Code2,
+};
 
 function MachineDetailPage() {
   const params = useParams({
@@ -74,8 +62,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  // Use commands and terminal info from backend
-  const { commands, terminalOptions } = machine;
+  // Use commands, terminal info, and services from backend
+  const { commands, services } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -119,30 +107,6 @@ function MachineDetailPage() {
     },
   });
 
-  // URL helpers
-  const openServiceUrl = async (serviceId: string, useNative: boolean) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const daemon = result.daemons.find((d: { id: string }) => d.id === serviceId);
-      if (!daemon) {
-        toast.error(`Service ${serviceId} not found`);
-        return;
-      }
-      const url = useNative ? daemon.nativeUrl : daemon.proxyUrl;
-      if (url) {
-        window.open(url, "_blank");
-      } else {
-        toast.error("URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // Copy helpers
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -151,11 +115,6 @@ function MachineDetailPage() {
 
   const copyCommand = (cmd: string) => {
     copyToClipboard(cmd);
-  };
-
-  // Get port for a service (from metadata or default)
-  const getServicePort = (serviceId: string, defaultPort: number) => {
-    return metadata.ports?.[serviceId] ?? defaultPort;
   };
 
   // Query agents from the daemon
@@ -175,45 +134,20 @@ function MachineDetailPage() {
 
   const agents = agentsData?.agents ?? [];
 
-  // URL helpers for agents - opens terminal with prefilled command
-  const openAgentTerminal = async ({
-    agentSlug,
-    useNative,
-    command,
-    autorun,
-  }: {
-    agentSlug: string;
-    useNative: boolean;
-    command?: string;
-    autorun?: boolean;
-  }) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const daemon = result.daemons.find((d: { id: string }) => d.id === "iterate-daemon");
-      if (!daemon) {
-        toast.error("Daemon URL not found");
-        return;
-      }
-      const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
-      if (baseUrl) {
-        agentSlug; // fill in this and construct the command
-        const url = new URL(`${baseUrl}/terminal`, window.location.origin);
-        if (command) {
-          url.searchParams.set("command", command);
-          url.searchParams.set("autorun", autorun ? "true" : "false");
-        }
-        window.open(url, "_blank");
-      } else {
-        toast.error("URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  // Get iterate-daemon service for agent terminal access
+  const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
+
+  // Build URL for agent terminal with command (uses iterate-daemon's /terminal endpoint)
+  const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
+    const url = new URL(`${daemonBaseUrl}/terminal`, window.location.origin);
+    url.searchParams.set("command", command);
+    url.searchParams.set("autorun", "true");
+    return url.toString();
   };
+
+  // Get attach command for an agent using its harness session ID
+  const getAgentAttachCommand = (harnessSessionId: string) =>
+    `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
 
   return (
     <div className="p-4 space-y-6">
@@ -294,9 +228,8 @@ function MachineDetailPage() {
       {machine.state === "started" && (
         <div className="space-y-2">
           {/* Services */}
-          {SERVICE_DEFS.map((service) => {
-            const Icon = service.icon;
-            const port = getServicePort(service.id, service.port);
+          {services.map((service) => {
+            const Icon = SERVICE_ICONS[service.id] ?? Server;
             return (
               <div
                 key={service.id}
@@ -306,46 +239,29 @@ function MachineDetailPage() {
                   <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate">{service.name}</div>
-                    <div className="text-xs text-muted-foreground font-mono">:{port}</div>
+                    <div className="text-xs text-muted-foreground font-mono">:{service.port}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {terminalOptions.length > 1 ? (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, true)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Direct
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, false)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Proxy
-                      </Button>
-                    </>
-                  ) : terminalOptions.length === 1 ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openServiceUrl(service.id, false)}
+                  {service.options.map((option, index) => (
+                    <a
+                      key={index}
+                      href={option.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
                     >
-                      <ExternalLink className="h-4 w-4 mr-1" />
-                      Open
-                    </Button>
-                  ) : null}
+                      <ExternalLink className="h-4 w-4" />
+                      {option.label}
+                    </a>
+                  ))}
                 </div>
               </div>
             );
           })}
 
-          {/* Shell - terminal options */}
-          {terminalOptions.length > 0 && (
+          {/* Shell - terminal access via iterate-daemon */}
+          {iterateDaemonService && (
             <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
               <div className="flex items-center gap-3 min-w-0">
                 <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -355,16 +271,17 @@ function MachineDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                {terminalOptions.map((option, index) => (
-                  <Button
+                {iterateDaemonService?.options.map((option, index) => (
+                  <a
                     key={index}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => window.open(option.url, "_blank")}
+                    href={`${option.url}/terminal`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
                   >
-                    <ExternalLink className="h-4 w-4 mr-1" />
+                    <ExternalLink className="h-4 w-4" />
                     {option.label}
-                  </Button>
+                  </a>
                 ))}
               </div>
             </div>
@@ -417,56 +334,22 @@ function MachineDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {terminalOptions.length > 1 ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: true,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
+                    {agent.harnessSessionId &&
+                      iterateDaemonService?.options.map((option, index) => (
+                        <a
+                          key={index}
+                          href={buildAgentTerminalUrl(
+                            option.url,
+                            getAgentAttachCommand(agent.harnessSessionId!),
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
                         >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Direct
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: false,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Proxy
-                        </Button>
-                      </>
-                    ) : terminalOptions.length === 1 ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() =>
-                          openAgentTerminal({
-                            agentSlug: agent.slug,
-                            useNative: false,
-                            command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                            autorun: true,
-                          })
-                        }
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Open
-                      </Button>
-                    ) : null}
+                          <ExternalLink className="h-4 w-4" />
+                          {option.label}
+                        </a>
+                      ))}
                   </div>
                 </div>
               ))}
