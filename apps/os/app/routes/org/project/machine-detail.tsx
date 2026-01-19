@@ -160,7 +160,7 @@ function MachineDetailPage() {
       });
       const urlBase = useNative ? result.nativeTerminalUrl : result.terminalUrl;
       if (urlBase) {
-        const url = new URL(urlBase);
+        const url = new URL(urlBase, window.location.origin);
         if (command) {
           url.searchParams.set("command", command);
           url.searchParams.set("autorun", autorun ? "true" : "false");
@@ -232,7 +232,7 @@ function MachineDetailPage() {
       const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
       if (baseUrl) {
         agentSlug; // fill in this and construct the command
-        const url = new URL(`${baseUrl}/terminal`);
+        const url = new URL(`${baseUrl}/terminal`, window.location.origin);
         if (command) {
           url.searchParams.set("command", command);
           url.searchParams.set("autorun", autorun ? "true" : "false");
