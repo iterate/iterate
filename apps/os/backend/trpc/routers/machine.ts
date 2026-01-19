@@ -39,7 +39,7 @@ async function getDaemonBaseUrl(
   return provider.getPreviewUrl(externalId, metadata);
 }
 
-/** Enrich a machine with display info and capabilities from its provider */
+/** Enrich a machine with display info and commands from its provider */
 async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
   machine: T,
   cloudflareEnv: CloudflareEnv,
@@ -49,7 +49,9 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   return {
     ...machine,
     displayInfo: provider.getDisplayInfo(metadata),
-    capabilities: provider.getCapabilities(),
+    commands: provider.getCommands(metadata),
+    hasNativeTerminal: provider.hasNativeTerminal(),
+    hasProxyTerminal: provider.hasProxyTerminal(),
   };
 }
 

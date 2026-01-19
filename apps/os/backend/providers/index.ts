@@ -4,7 +4,13 @@ import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
 import { createLocalProvider, createLocalVanillaProvider } from "./local-docker.ts";
 
-export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
+export type {
+  MachineProvider,
+  CreateMachineConfig,
+  MachineProviderResult,
+  MachineDisplayInfo,
+  MachineCommands,
+} from "./types.ts";
 
 export async function createMachineProvider(
   type: MachineType,

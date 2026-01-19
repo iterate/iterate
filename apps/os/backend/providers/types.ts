@@ -19,18 +19,18 @@ export interface MachineDisplayInfo {
   isDevOnly?: boolean;
 }
 
-/** Capabilities that determine what UI actions are available */
-export interface MachineCapabilities {
-  /** Has a web-based terminal accessible via native URL */
-  hasNativeTerminal: boolean;
-  /** Has a web-based terminal accessible via proxy URL */
-  hasProxyTerminal: boolean;
-  /** Has a docker container that can be accessed via `docker exec` */
-  hasDockerExec: boolean;
-  /** Has container logs accessible via `docker logs` */
-  hasContainerLogs: boolean;
-  /** Has s6 service status (sandbox-based machines) */
-  hasS6Services: boolean;
+/** Shell commands for interacting with the machine - null means not available */
+export interface MachineCommands {
+  /** Command to open a terminal shell (e.g., `docker exec -it <id> /bin/bash`) */
+  terminalShell: string | null;
+  /** Command to tail daemon logs */
+  daemonLogs: string | null;
+  /** Command to tail opencode logs */
+  opencodeLogs: string | null;
+  /** Command to view container/entry logs */
+  entryLogs: string | null;
+  /** Command to check s6 service status */
+  serviceStatus: string | null;
 }
 
 export interface MachineProvider {
@@ -44,6 +44,10 @@ export interface MachineProvider {
   getPreviewUrl(externalId: string, metadata?: Record<string, unknown>, port?: number): string;
   /** Get display info for the machine, including dynamic label based on metadata */
   getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo;
-  /** Get capabilities for determining available UI actions */
-  getCapabilities(): MachineCapabilities;
+  /** Get shell commands for interacting with the machine */
+  getCommands(metadata?: Record<string, unknown>): MachineCommands;
+  /** Whether web terminal is available via native URL */
+  hasNativeTerminal(): boolean;
+  /** Whether web terminal is available via proxy URL */
+  hasProxyTerminal(): boolean;
 }

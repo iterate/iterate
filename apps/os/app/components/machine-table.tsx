@@ -46,13 +46,15 @@ interface Machine {
     label: string;
     isDevOnly?: boolean;
   };
-  capabilities: {
-    hasNativeTerminal: boolean;
-    hasProxyTerminal: boolean;
-    hasDockerExec: boolean;
-    hasContainerLogs: boolean;
-    hasS6Services: boolean;
+  commands: {
+    terminalShell: string | null;
+    daemonLogs: string | null;
+    opencodeLogs: string | null;
+    entryLogs: string | null;
+    serviceStatus: string | null;
   };
+  hasNativeTerminal: boolean;
+  hasProxyTerminal: boolean;
 }
 
 interface MachineTableProps {
@@ -135,136 +137,69 @@ export function MachineTable({
     );
   };
 
-  const copyTerminalCommand = (machine: Machine) => {
-    const containerId = machine.metadata.containerId;
-    if (!containerId) {
-      toast.error("Container ID not found");
+  const copyCommand = (command: string | null, label: string) => {
+    if (!command) {
+      toast.error("Command not available");
       return;
     }
-    copyToClipboard(
-      `docker exec -it ${containerId} /bin/bash`,
-      "Copied terminal command:",
-      "Run this in your local terminal",
-    );
-  };
-
-  const copyDaemonLogsCommand = (machine: Machine) => {
-    const command = "tail -f /var/log/iterate-daemon/current";
-    if (machine.capabilities.hasDockerExec) {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} ${command}`,
-        "Copied daemon logs command:",
-        "Run in your local terminal. Won't work until entry.sh starts daemons.",
-      );
-    } else {
-      copyToClipboard(command, "Copied daemon logs command:", "Paste this in the sandbox terminal");
-    }
-  };
-
-  const copyOpencodeLogsCommand = (machine: Machine) => {
-    const command = "tail -f /var/log/opencode/current";
-    if (machine.capabilities.hasDockerExec) {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} ${command}`,
-        "Copied OpenCode logs command:",
-        "Run in your local terminal. Won't work until entry.sh starts daemons.",
-      );
-    } else {
-      copyToClipboard(
-        command,
-        "Copied OpenCode logs command:",
-        "Paste this in the sandbox terminal",
-      );
-    }
-  };
-
-  const copyEntryLogsCommand = (machine: Machine) => {
-    const containerId = machine.metadata.containerId;
-    if (!containerId) {
-      toast.error("Container ID not found");
-      return;
-    }
-    copyToClipboard(
-      `docker logs -f ${containerId}`,
-      "Copied container logs command:",
-      "Run in your local terminal",
-    );
-  };
-
-  const copyServiceStatusCommand = (machine: Machine) => {
-    const command =
-      'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
-    if (machine.capabilities.hasDockerExec) {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} sh -c '${command}'`,
-        "Copied service status command:",
-        "Run in your local terminal to see s6 service status",
-      );
-    } else {
-      copyToClipboard(
-        command,
-        "Copied service status command:",
-        "Paste in the sandbox terminal to check s6 service status",
-      );
-    }
+    copyToClipboard(command, `Copied ${label}:`, "");
   };
 
   // === Dropdown menu (terminal, logs, machine actions) ===
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
-      {/* Terminal options - based on capabilities */}
-      {machine.capabilities.hasNativeTerminal && (
+      {/* Terminal options */}
+      {machine.hasNativeTerminal && (
         <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
           <SquareTerminal className="h-4 w-4 mr-2" />
           Terminal (direct)
         </DropdownMenuItem>
       )}
-      {machine.capabilities.hasProxyTerminal && (
+      {machine.hasProxyTerminal && (
         <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
           <SquareTerminal className="h-4 w-4 mr-2" />
           Terminal (proxy)
         </DropdownMenuItem>
       )}
-      {machine.capabilities.hasDockerExec && (
-        <DropdownMenuItem onClick={() => copyTerminalCommand(machine)}>
+      {machine.commands.terminalShell && (
+        <DropdownMenuItem
+          onClick={() => copyCommand(machine.commands.terminalShell, "terminal command")}
+        >
           <Terminal className="h-4 w-4 mr-2" />
           Copy terminal command
         </DropdownMenuItem>
       )}
       <DropdownMenuSeparator />
 
-      {/* Log commands */}
-      <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
-        <ScrollText className="h-4 w-4 mr-2" />
-        Copy daemon logs command
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => copyOpencodeLogsCommand(machine)}>
-        <ScrollText className="h-4 w-4 mr-2" />
-        Copy OpenCode logs command
-      </DropdownMenuItem>
-      {machine.capabilities.hasContainerLogs && (
-        <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
+      {/* Log commands - show if available */}
+      {machine.commands.daemonLogs && (
+        <DropdownMenuItem
+          onClick={() => copyCommand(machine.commands.daemonLogs, "daemon logs command")}
+        >
           <ScrollText className="h-4 w-4 mr-2" />
-          Copy entry.ts logs command
+          Copy daemon logs command
         </DropdownMenuItem>
       )}
-      {machine.capabilities.hasS6Services && (
-        <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
+      {machine.commands.opencodeLogs && (
+        <DropdownMenuItem
+          onClick={() => copyCommand(machine.commands.opencodeLogs, "OpenCode logs command")}
+        >
+          <ScrollText className="h-4 w-4 mr-2" />
+          Copy OpenCode logs command
+        </DropdownMenuItem>
+      )}
+      {machine.commands.entryLogs && (
+        <DropdownMenuItem
+          onClick={() => copyCommand(machine.commands.entryLogs, "entry logs command")}
+        >
+          <ScrollText className="h-4 w-4 mr-2" />
+          Copy entry logs command
+        </DropdownMenuItem>
+      )}
+      {machine.commands.serviceStatus && (
+        <DropdownMenuItem
+          onClick={() => copyCommand(machine.commands.serviceStatus, "service status command")}
+        >
           <Activity className="h-4 w-4 mr-2" />
           Copy s6 service status command
         </DropdownMenuItem>

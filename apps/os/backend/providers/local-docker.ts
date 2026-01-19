@@ -6,8 +6,14 @@ import type {
   CreateMachineConfig,
   MachineProviderResult,
   MachineDisplayInfo,
-  MachineCapabilities,
+  MachineCommands,
 } from "./types.ts";
+
+// Common log paths in sandbox
+const DAEMON_LOG = "/var/log/iterate-daemon/current";
+const OPENCODE_LOG = "/var/log/opencode/current";
+const S6_STATUS_CMD =
+  'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
 
 // Support DOCKER_HOST env var, defaulting to TCP for local dev (OrbStack)
 // Examples: unix:///var/run/docker.sock, tcp://127.0.0.1:2375
@@ -181,14 +187,23 @@ export function createLocalProvider(): MachineProvider {
       };
     },
 
-    getCapabilities(): MachineCapabilities {
+    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
+      // Local machines: user runs daemon directly, no docker
       return {
-        hasNativeTerminal: false,
-        hasProxyTerminal: true,
-        hasDockerExec: false,
-        hasContainerLogs: false,
-        hasS6Services: false,
+        terminalShell: null,
+        daemonLogs: `tail -f ${DAEMON_LOG}`,
+        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
+        entryLogs: null,
+        serviceStatus: null, // No s6 in local dev
       };
+    },
+
+    hasNativeTerminal(): boolean {
+      return false;
+    },
+
+    hasProxyTerminal(): boolean {
+      return true;
     },
   };
 }
@@ -240,14 +255,23 @@ export function createLocalVanillaProvider(): MachineProvider {
       };
     },
 
-    getCapabilities(): MachineCapabilities {
+    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
+      // Local vanilla: same as local, user runs daemon directly
       return {
-        hasNativeTerminal: false,
-        hasProxyTerminal: true,
-        hasDockerExec: false,
-        hasContainerLogs: false,
-        hasS6Services: false,
+        terminalShell: null,
+        daemonLogs: `tail -f ${DAEMON_LOG}`,
+        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
+        entryLogs: null,
+        serviceStatus: null,
       };
+    },
+
+    hasNativeTerminal(): boolean {
+      return false;
+    },
+
+    hasProxyTerminal(): boolean {
+      return true;
     },
   };
 }
@@ -407,14 +431,33 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       };
     },
 
-    getCapabilities(): MachineCapabilities {
+    getCommands(metadata?: Record<string, unknown>): MachineCommands {
+      const meta = metadata as { containerId?: string };
+      const id = meta?.containerId;
+      if (!id) {
+        return {
+          terminalShell: null,
+          daemonLogs: null,
+          opencodeLogs: null,
+          entryLogs: null,
+          serviceStatus: null,
+        };
+      }
       return {
-        hasNativeTerminal: false,
-        hasProxyTerminal: true,
-        hasDockerExec: true,
-        hasContainerLogs: true,
-        hasS6Services: true,
+        terminalShell: `docker exec -it ${id} /bin/bash`,
+        daemonLogs: `docker exec ${id} tail -f ${DAEMON_LOG}`,
+        opencodeLogs: `docker exec ${id} tail -f ${OPENCODE_LOG}`,
+        entryLogs: `docker logs -f ${id}`,
+        serviceStatus: `docker exec ${id} sh -c '${S6_STATUS_CMD}'`,
       };
+    },
+
+    hasNativeTerminal(): boolean {
+      return false;
+    },
+
+    hasProxyTerminal(): boolean {
+      return true;
     },
   };
 }

@@ -5,8 +5,14 @@ import type {
   CreateMachineConfig,
   MachineProviderResult,
   MachineDisplayInfo,
-  MachineCapabilities,
+  MachineCommands,
 } from "./types.ts";
+
+// Common log paths in sandbox
+const DAEMON_LOG = "/var/log/iterate-daemon/current";
+const OPENCODE_LOG = "/var/log/opencode/current";
+const S6_STATUS_CMD =
+  'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
 
 export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): MachineProvider {
   const daytona = new Daytona({ apiKey });
@@ -79,14 +85,23 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       };
     },
 
-    getCapabilities(): MachineCapabilities {
+    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
+      // Daytona: commands run in web terminal, no docker exec needed
       return {
-        hasNativeTerminal: true,
-        hasProxyTerminal: true,
-        hasDockerExec: false,
-        hasContainerLogs: false,
-        hasS6Services: true,
+        terminalShell: null, // Use web terminal instead
+        daemonLogs: `tail -f ${DAEMON_LOG}`,
+        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
+        entryLogs: null, // Entry logs go to container stdout, not easily accessible
+        serviceStatus: S6_STATUS_CMD,
       };
+    },
+
+    hasNativeTerminal(): boolean {
+      return true;
+    },
+
+    hasProxyTerminal(): boolean {
+      return true;
     },
   };
 }
