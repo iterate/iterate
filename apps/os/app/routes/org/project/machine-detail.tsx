@@ -2,18 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  ExternalLink,
-  Trash2,
-  RefreshCw,
-  Server,
-  Code2,
-  Terminal,
-  Copy,
-  FileText,
-  ScrollText,
-  Bot,
-} from "lucide-react";
+import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -85,9 +74,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  const isLocalDocker = machine.type === "local-docker";
-  const isLocal = machine.type === "local";
-  const isDaytona = machine.type === "daytona";
+  // Use commands and terminal info from backend
+  const { commands, terminalOptions } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -155,73 +143,20 @@ function MachineDetailPage() {
     }
   };
 
-  const openTerminal = async ({
-    useNative,
-    command,
-    autorun,
-  }: {
-    useNative: boolean;
-    command?: string;
-    autorun?: boolean;
-  }) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const urlBase = useNative ? result.nativeTerminalUrl : result.terminalUrl;
-      if (urlBase) {
-        const url = new URL(urlBase);
-        if (command) {
-          url.searchParams.set("command", command);
-          url.searchParams.set("autorun", autorun ? "true" : "false");
-        }
-        window.open(url, "_blank");
-      } else {
-        toast.error("Terminal URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // Copy helpers
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
     toast.success(`Copied: ${text}`);
   };
 
-  const copyLogsCommand = (service: (typeof SERVICE_DEFS)[number]) => {
-    const command = `tail -f ${service.logPath}`;
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker exec ${metadata.containerId} ${command}`);
-    } else {
-      copyToClipboard(command);
-    }
-  };
-
-  const copyEntryLogsCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker logs -f ${metadata.containerId}`);
-    } else if (isDaytona) {
-      toast.info("Entry logs for Daytona machines go to container stdout");
-    }
-  };
-
-  const copyTerminalCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker exec -it ${metadata.containerId} /bin/bash`);
-    }
+  const copyCommand = (cmd: string) => {
+    copyToClipboard(cmd);
   };
 
   // Get port for a service (from metadata or default)
   const getServicePort = (serviceId: string, defaultPort: number) => {
     return metadata.ports?.[serviceId] ?? defaultPort;
   };
-
-  // Check if machine supports dual access (proxy + direct)
-  const hasDualAccess = isDaytona || isLocalDocker;
 
   // Query agents from the daemon
   const { data: agentsData } = useQuery(
@@ -266,7 +201,7 @@ function MachineDetailPage() {
       const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
       if (baseUrl) {
         agentSlug; // fill in this and construct the command
-        const url = new URL(`${baseUrl}/terminal`);
+        const url = new URL(`${baseUrl}/terminal`, window.location.origin);
         if (command) {
           url.searchParams.set("command", command);
           url.searchParams.set("autorun", autorun ? "true" : "false");
@@ -358,6 +293,7 @@ function MachineDetailPage() {
       {/* Services List */}
       {machine.state === "started" && (
         <div className="space-y-2">
+          {/* Services */}
           {SERVICE_DEFS.map((service) => {
             const Icon = service.icon;
             const port = getServicePort(service.id, service.port);
@@ -374,7 +310,7 @@ function MachineDetailPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {hasDualAccess ? (
+                  {terminalOptions.length > 1 ? (
                     <>
                       <Button
                         variant="ghost"
@@ -393,82 +329,71 @@ function MachineDetailPage() {
                         Proxy
                       </Button>
                     </>
-                  ) : (
+                  ) : terminalOptions.length === 1 ? (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => openServiceUrl(service.id, true)}
+                      onClick={() => openServiceUrl(service.id, false)}
                     >
                       <ExternalLink className="h-4 w-4 mr-1" />
                       Open
                     </Button>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => copyLogsCommand(service)}>
-                    <FileText className="h-4 w-4 mr-1" />
-                    Logs
-                  </Button>
+                  ) : null}
                 </div>
               </div>
             );
           })}
 
-          {/* Shell */}
-          <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-            <div className="flex items-center gap-3 min-w-0">
-              <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Shell</div>
-                <div className="text-xs text-muted-foreground">Terminal access</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              {isDaytona && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: true })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Direct
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: false })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Proxy
-                  </Button>
-                </>
-              )}
-              {isLocalDocker && (
-                <Button variant="ghost" size="sm" onClick={copyTerminalCommand}>
-                  <Copy className="h-4 w-4 mr-1" />
-                  Copy command
-                </Button>
-              )}
-              {isLocal && <span className="text-xs text-muted-foreground">SSH or local</span>}
-            </div>
-          </div>
-
-          {/* Entry logs (boot logs) */}
-          {(isLocalDocker || isDaytona) && (
+          {/* Shell - terminal options */}
+          {terminalOptions.length > 0 && (
             <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
               <div className="flex items-center gap-3 min-w-0">
-                <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Entry Logs</div>
-                  <div className="text-xs text-muted-foreground">Container boot logs</div>
+                  <div className="text-sm font-medium">Shell</div>
+                  <div className="text-xs text-muted-foreground">Terminal access</div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={copyEntryLogsCommand}>
-                  <Copy className="h-4 w-4 mr-1" />
-                  {isLocalDocker ? "Copy command" : "Info"}
-                </Button>
+                {terminalOptions.map((option, index) => (
+                  <Button
+                    key={index}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => window.open(option.url, "_blank")}
+                  >
+                    <ExternalLink className="h-4 w-4 mr-1" />
+                    {option.label}
+                  </Button>
+                ))}
               </div>
             </div>
+          )}
+
+          {/* Commands - copyable shell commands */}
+          {commands.length > 0 && (
+            <>
+              <div className="pt-4 border-t">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Commands</h3>
+              </div>
+              {commands.map((cmd, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{cmd.label}</div>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => copyCommand(cmd.command)}>
+                    <Copy className="h-4 w-4 mr-1" />
+                    Copy
+                  </Button>
+                </div>
+              ))}
+            </>
           )}
 
           {/* Agents */}
@@ -492,7 +417,7 @@ function MachineDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {hasDualAccess ? (
+                    {terminalOptions.length > 1 ? (
                       <>
                         <Button
                           variant="ghost"
@@ -501,7 +426,8 @@ function MachineDetailPage() {
                             openAgentTerminal({
                               agentSlug: agent.slug,
                               useNative: true,
-                              command: `echo ${agent.slug}`,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
                             })
                           }
                         >
@@ -515,7 +441,8 @@ function MachineDetailPage() {
                             openAgentTerminal({
                               agentSlug: agent.slug,
                               useNative: false,
-                              command: `echo ${agent.slug}`,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
                             })
                           }
                         >
@@ -523,22 +450,23 @@ function MachineDetailPage() {
                           Proxy
                         </Button>
                       </>
-                    ) : (
+                    ) : terminalOptions.length === 1 ? (
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() =>
                           openAgentTerminal({
                             agentSlug: agent.slug,
-                            useNative: true,
-                            command: `echo ${agent.slug}`,
+                            useNative: false,
+                            command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                            autorun: true,
                           })
                         }
                       >
                         <ExternalLink className="h-4 w-4 mr-1" />
                         Open
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               ))}

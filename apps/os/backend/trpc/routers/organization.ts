@@ -1,9 +1,21 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, protectedMutation, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
-import { organization, organizationUserMembership, UserRole, user } from "../../db/schema.ts";
-import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
+import {
+  router,
+  protectedProcedure,
+  protectedMutation,
+  orgProtectedProcedure,
+  orgAdminMutation,
+} from "../trpc.ts";
+import {
+  organization,
+  organizationUserMembership,
+  organizationInvite,
+  UserRole,
+  user,
+} from "../../db/schema.ts";
+import { slugify } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
   create: protectedMutation
@@ -13,12 +25,17 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const baseSlug = slugify(input.name);
+      const slug = slugify(input.name);
       const existing = await ctx.db.query.organization.findFirst({
-        where: eq(organization.slug, baseSlug),
+        where: eq(organization.slug, slug),
       });
 
-      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "An organization with this name already exists",
+        });
+      }
 
       const [newOrg] = await ctx.db
         .insert(organization)
@@ -257,4 +274,191 @@ export const organizationRouter = router({
 
     return { success: true };
   }),
+
+  // Create an invite for someone to join the organization
+  createInvite: orgAdminMutation
+    .input(
+      z.object({
+        email: z.email(),
+        role: z.enum(UserRole).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Check if user is already a member
+      const existingUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email),
+      });
+
+      if (existingUser) {
+        const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
+          where: and(
+            eq(organizationUserMembership.organizationId, ctx.organization.id),
+            eq(organizationUserMembership.userId, existingUser.id),
+          ),
+        });
+
+        if (existingMembership) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "User is already a member of this organization",
+          });
+        }
+      }
+
+      // Check if invite already exists
+      const existingInvite = await ctx.db.query.organizationInvite.findFirst({
+        where: and(
+          eq(organizationInvite.organizationId, ctx.organization.id),
+          eq(organizationInvite.email, input.email),
+        ),
+      });
+
+      if (existingInvite) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Invite already sent to this email",
+        });
+      }
+
+      // Only owners can invite as owner
+      if (input.role === "owner" && ctx.membership?.role !== "owner") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners can invite other owners",
+        });
+      }
+
+      const [invite] = await ctx.db
+        .insert(organizationInvite)
+        .values({
+          organizationId: ctx.organization.id,
+          email: input.email,
+          invitedByUserId: ctx.user.id,
+          role: input.role ?? "member",
+        })
+        .returning();
+
+      return invite;
+    }),
+
+  // List pending invites for the organization
+  listInvites: orgProtectedProcedure.query(async ({ ctx }) => {
+    const invites = await ctx.db.query.organizationInvite.findMany({
+      where: eq(organizationInvite.organizationId, ctx.organization.id),
+      with: {
+        invitedBy: true,
+      },
+    });
+
+    return invites.map((inv) => ({
+      id: inv.id,
+      email: inv.email,
+      role: inv.role,
+      invitedBy: {
+        id: inv.invitedBy.id,
+        name: inv.invitedBy.name,
+        email: inv.invitedBy.email,
+      },
+      createdAt: inv.createdAt,
+    }));
+  }),
+
+  // Cancel/delete an invite
+  cancelInvite: orgAdminMutation
+    .input(z.object({ inviteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .delete(organizationInvite)
+        .where(
+          and(
+            eq(organizationInvite.id, input.inviteId),
+            eq(organizationInvite.organizationId, ctx.organization.id),
+          ),
+        );
+
+      return { success: true };
+    }),
+
+  // Get invites for the current user (across all orgs)
+  myPendingInvites: protectedProcedure.query(async ({ ctx }) => {
+    const invites = await ctx.db.query.organizationInvite.findMany({
+      where: eq(organizationInvite.email, ctx.user.email),
+      with: {
+        organization: true,
+        invitedBy: true,
+      },
+    });
+
+    return invites.map((inv) => ({
+      id: inv.id,
+      role: inv.role,
+      organization: {
+        id: inv.organization.id,
+        name: inv.organization.name,
+        slug: inv.organization.slug,
+      },
+      invitedBy: {
+        id: inv.invitedBy.id,
+        name: inv.invitedBy.name,
+      },
+      createdAt: inv.createdAt,
+    }));
+  }),
+
+  // Accept an invite
+  acceptInvite: protectedMutation
+    .input(z.object({ inviteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const invite = await ctx.db.query.organizationInvite.findFirst({
+        where: and(
+          eq(organizationInvite.id, input.inviteId),
+          eq(organizationInvite.email, ctx.user.email),
+        ),
+        with: {
+          organization: true,
+        },
+      });
+
+      if (!invite) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Invite not found or not for this user",
+        });
+      }
+
+      // Add user to organization
+      await ctx.db.insert(organizationUserMembership).values({
+        organizationId: invite.organizationId,
+        userId: ctx.user.id,
+        role: invite.role as (typeof UserRole)[number],
+      });
+
+      // Delete the invite
+      await ctx.db.delete(organizationInvite).where(eq(organizationInvite.id, invite.id));
+
+      return invite.organization;
+    }),
+
+  // Decline an invite
+  declineInvite: protectedMutation
+    .input(z.object({ inviteId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const invite = await ctx.db.query.organizationInvite.findFirst({
+        where: and(
+          eq(organizationInvite.id, input.inviteId),
+          eq(organizationInvite.email, ctx.user.email),
+        ),
+      });
+
+      if (!invite) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Invite not found or not for this user",
+        });
+      }
+
+      await ctx.db.delete(organizationInvite).where(eq(organizationInvite.id, invite.id));
+
+      return { success: true };
+    }),
 });

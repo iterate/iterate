@@ -1,5 +1,8 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import dedent from "dedent";
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
+
+const shardTotal = 1;
 
 export default workflow({
   name: "Flake Detection",
@@ -9,11 +12,23 @@ export default workflow({
     },
     workflow_dispatch: {},
   },
+  env: {
+    SLACK_CLIENT_ID: "fake123",
+    DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+  },
   jobs: {
     "flake-detection": {
+      "timeout-minutes": 60,
       ...utils.runsOn,
+      strategy: {
+        "fail-fast": false,
+        matrix: {
+          shardIndex: Array.from({ length: shardTotal }, (_, i) => i + 1),
+        },
+      },
       steps: [
         ...utils.setupRepo,
+        { run: "pnpm docker:up" },
         ...utils.setupDoppler({ config: "dev" }),
         {
           name: "Install Playwright Browsers",
@@ -22,25 +37,27 @@ export default workflow({
         {
           name: "Run Tests with Repeats",
           "continue-on-error": true,
+          run: dedent`
+            mkdir -p test-results
+            pnpm spec --repeat-each=10 --reporter=json --shard=$\{{ matrix.shardIndex }}/${shardTotal}
+          `,
           env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            PLAYWRIGHT_JSON_OUTPUT_FILE: "test-results/spec-results.json",
           },
-          run: "doppler run -- pnpm spec --repeat-each=10 --reporter=json > spec-results.json 2>&1 || true",
         },
         {
           name: "Generate Flaky Test Report",
-          id: "report",
-          run: "node spec/analyze-flaky-tests.cjs spec-results.json spec/flaky-report.md",
+          if: "always()",
+          run: "node spec/analyze-flaky-tests.cjs test-results/spec-results.json test-results/flaky-report.md",
         },
         {
-          name: "Upload Flaky Test Report",
+          name: "Upload Test Results",
           if: "always()",
-          uses: "actions/upload-artifact@v4",
-          with: {
-            name: "flaky-test-report",
-            path: "spec/flaky-report.md",
+          ...uses("actions/upload-artifact@v4", {
+            name: "flaky-test-results-${{ matrix.shardIndex }}",
+            path: "test-results",
             "retention-days": 30,
-          },
+          }),
         },
       ],
     },

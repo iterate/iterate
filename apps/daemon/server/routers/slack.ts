@@ -8,16 +8,10 @@
 import { Hono } from "hono";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 
-// Simple structured logger for daemon
-const logger = {
-  info: (msg: string, data?: Record<string, unknown>) =>
-    console.log(JSON.stringify({ level: "info", msg, ...data })),
-  error: (msg: string, data?: Record<string, unknown>) =>
-    console.error(JSON.stringify({ level: "error", msg, ...data })),
-};
+const logger = console;
 
-// Working directory for agents - root of iterate repo
-const ITERATE_REPO = "/root/src/github.com/iterate/iterate";
+// Working directory for agents - uses ITERATE_REPO env var with fallback to sandbox path
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
 
 export const slackRouter = new Hono();
 
@@ -88,9 +82,7 @@ slackRouter.post("/webhook", async (c) => {
     // Case 3: No @mention and no agent - ignore
     return c.json({ success: true, message: "Ignored: no mention and no existing agent" });
   } catch (error) {
-    logger.error("[Slack Webhook] Failed to handle webhook", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error("[Slack Webhook] Failed to handle webhook", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });

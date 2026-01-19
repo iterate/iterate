@@ -1,22 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { z } from "zod/v4";
 import { eq, isNull } from "drizzle-orm";
-import {
-  createTmuxSession,
-  gracefulStop,
-  hasTmuxSession,
-  listTmuxSessions,
-  propagateApiKeysToTmux,
-  respawnPane,
-  type TmuxSession,
-} from "../tmux-control.ts";
-
-propagateApiKeysToTmux();
-import { getHarness, getCommandString } from "../agent-harness.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
+import { getOrCreateAgent, resetAgent as resetAgentService } from "../services/agent-manager.ts";
+import {
+  createTmuxSession,
+  hasTmuxSession,
+  listTmuxSessions,
+  type TmuxSession,
+} from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 import { platformRouter } from "./platform.ts";
 
@@ -58,7 +52,8 @@ export const trpcRouter = createTRPCRouter({
     return { cwd: process.cwd(), homeDir: homedir() };
   }),
 
-  // Legacy tmux session procedures (for backwards compatibility)
+  // ============ Utility tmux sessions (for btop, logs, etc - NOT agents) ============
+
   listTmuxSessions: publicProcedure.query((): SerializedTmuxSession[] => {
     return listTmuxSessions().map(serializeTmuxSession);
   }),
@@ -104,6 +99,10 @@ export const trpcRouter = createTRPCRouter({
       return serializeAgent(agent);
     }),
 
+  /**
+   * Create an agent using the harness system.
+   * For opencode agents, this creates an SDK session - no tmux.
+   */
   createAgent: publicProcedure
     .input(
       z.object({
@@ -117,23 +116,14 @@ export const trpcRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ input }): Promise<SerializedAgent> => {
-      const id = randomUUID();
-      const tmuxSession = `agent-${id.slice(0, 8)}`;
+      const result = await getOrCreateAgent({
+        slug: input.slug,
+        harnessType: input.harnessType,
+        workingDirectory: input.workingDirectory,
+        initialPrompt: input.initialPrompt,
+      });
 
-      const [agent] = await db
-        .insert(schema.agents)
-        .values({
-          id,
-          slug: input.slug,
-          harnessType: input.harnessType,
-          tmuxSession,
-          workingDirectory: input.workingDirectory,
-          status: "stopped",
-          initialPrompt: input.initialPrompt,
-        })
-        .returning();
-
-      return serializeAgent(agent);
+      return serializeAgent(result.agent);
     }),
 
   deleteAgent: publicProcedure
@@ -148,9 +138,8 @@ export const trpcRouter = createTRPCRouter({
         return { success: false };
       }
 
-      if (agent.tmuxSession && hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
-      }
+      // For opencode agents, sessions are managed by opencode server
+      // Just delete from DB - opencode server handles cleanup
 
       await db.delete(schema.agents).where(eq(schema.agents.slug, input.slug));
       return { success: true };
@@ -168,9 +157,8 @@ export const trpcRouter = createTRPCRouter({
         return { success: false };
       }
 
-      if (agent.tmuxSession && hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
-      }
+      // For opencode agents, sessions are managed by opencode server
+      // Just archive in DB
 
       await db
         .update(schema.agents)
@@ -186,17 +174,8 @@ export const trpcRouter = createTRPCRouter({
       .from(schema.agents)
       .where(isNull(schema.agents.archivedAt));
 
-    for (const agent of activeAgents) {
-      if (agent.tmuxSession) {
-        try {
-          if (hasTmuxSession(agent.tmuxSession)) {
-            await gracefulStop(agent.tmuxSession);
-          }
-        } catch {
-          // Best effort - ignore tmux cleanup failures
-        }
-      }
-    }
+    // For opencode agents, sessions are managed by opencode server
+    // Just archive in DB
 
     const now = new Date();
     await db
@@ -208,6 +187,8 @@ export const trpcRouter = createTRPCRouter({
   }),
 
   // ============ Agent Lifecycle ============
+  // For opencode agents, sessions are always running via SDK
+  // These procedures just update DB status
 
   startAgent: publicProcedure
     .input(z.object({ slug: z.string() }))
@@ -221,39 +202,14 @@ export const trpcRouter = createTRPCRouter({
         return { success: false, error: "Agent not found" };
       }
 
-      if (!agent.tmuxSession) {
-        return { success: false, error: "Agent has no tmux session configured" };
-      }
+      // For opencode agents, the session is already running via SDK
+      // Just update DB status
+      await db
+        .update(schema.agents)
+        .set({ status: "running" })
+        .where(eq(schema.agents.slug, input.slug));
 
-      if (hasTmuxSession(agent.tmuxSession)) {
-        await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
-        return { success: true };
-      }
-
-      const harness = getHarness(agent.harnessType);
-      const command = harness.getStartCommand(agent.workingDirectory, {
-        prompt: agent.initialPrompt ?? undefined,
-      });
-
-      const wrapperCommand = buildTmuxCommand(command, agent.workingDirectory);
-      const success = createTmuxSession(agent.tmuxSession, wrapperCommand);
-
-      if (success) {
-        await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
-      } else {
-        await db
-          .update(schema.agents)
-          .set({ status: "error" })
-          .where(eq(schema.agents.slug, input.slug));
-      }
-
-      return { success };
+      return { success: true };
     }),
 
   stopAgent: publicProcedure
@@ -264,18 +220,17 @@ export const trpcRouter = createTRPCRouter({
         .from(schema.agents)
         .where(eq(schema.agents.slug, input.slug))
         .limit(1);
-      if (!agent || !agent.tmuxSession) {
+      if (!agent) {
         return { success: false };
       }
 
-      if (hasTmuxSession(agent.tmuxSession)) {
-        await gracefulStop(agent.tmuxSession);
-      }
-
+      // For opencode agents, sessions are managed by opencode server
+      // Just update DB status
       await db
         .update(schema.agents)
         .set({ status: "stopped" })
         .where(eq(schema.agents.slug, input.slug));
+
       return { success: true };
     }),
 
@@ -291,43 +246,17 @@ export const trpcRouter = createTRPCRouter({
         return { success: false, error: "Agent not found" };
       }
 
-      if (!agent.tmuxSession) {
-        return { success: false, error: "Agent not properly configured" };
-      }
-
-      const harness = getHarness(agent.harnessType);
-      const command = harness.getStartCommand(agent.workingDirectory, {
-        prompt: agent.initialPrompt ?? undefined,
+      // Archive old agent and create fresh session
+      await resetAgentService({
+        slug: input.slug,
+        harnessType: agent.harnessType,
+        workingDirectory: agent.workingDirectory,
+        initialPrompt: agent.initialPrompt ?? undefined,
       });
-      const wrapperCommand = buildTmuxCommand(command, agent.workingDirectory);
 
-      if (!hasTmuxSession(agent.tmuxSession)) {
-        const success = createTmuxSession(agent.tmuxSession, wrapperCommand);
-        if (success) {
-          await db
-            .update(schema.agents)
-            .set({ status: "running" })
-            .where(eq(schema.agents.slug, input.slug));
-        }
-        return { success };
-      }
-
-      const success = respawnPane(agent.tmuxSession, wrapperCommand);
-      if (success) {
-        await db
-          .update(schema.agents)
-          .set({ status: "running" })
-          .where(eq(schema.agents.slug, input.slug));
-      }
-      return { success };
+      return { success: true };
     }),
 });
-
-function buildTmuxCommand(agentCommand: string[], workingDirectory: string): string {
-  const cmd = getCommandString(agentCommand);
-  const script = `cd "${workingDirectory}" && ${cmd}; exit_code=$?; if [ $exit_code -ne 0 ]; then echo ""; echo "Process exited with code: $exit_code"; echo "Press Enter to close..."; read; fi`;
-  return `bash -c ${JSON.stringify(script)}`;
-}
 
 export type TRPCRouter = typeof trpcRouter;
 

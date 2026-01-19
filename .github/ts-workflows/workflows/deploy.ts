@@ -35,6 +35,14 @@ export default {
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
+          name: "Build and push Daytona snapshot",
+          env: {
+            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
+          },
+          run: "pnpm os snapshot:daytona:prd",
+        },
+        {
           name: "Deploy apps/os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",

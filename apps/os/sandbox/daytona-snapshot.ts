@@ -16,6 +16,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
+// Daytona snapshots MUST have a git ref - there's no local mount to sync from
+const repoRef = process.env.SANDBOX_ITERATE_REPO_REF;
+if (!repoRef) {
+  console.error("ERROR: SANDBOX_ITERATE_REPO_REF is required for Daytona snapshots.");
+  console.error("");
+  console.error("Daytona snapshots must include the iterate repo baked in.");
+  console.error("Set SANDBOX_ITERATE_REPO_REF to a branch name or commit SHA:");
+  console.error("");
+  console.error("  SANDBOX_ITERATE_REPO_REF=main pnpm snapshot:daytona:prd");
+  console.error("  SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona:prd");
+  console.error("");
+  process.exit(1);
+}
+
 const stage = getStage();
 // Generate snapshot name: <stage>--<timestamp>
 // e.g., "dev-jonas--20260111-193045", "stg--20260111-193045"
@@ -69,14 +83,29 @@ for (const relativePath of files) {
   chmodSync(targetPath, stats.mode & 0o777);
 }
 
-writeFileSync(dockerfileTargetPath, readFileSync(dockerfileSourcePath, "utf-8"));
+// Read Dockerfile and inject the git ref into ALL ARG declarations
+// Docker ARG values don't persist across USER switches, so both declarations need the value
+let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
+
+console.log(`Using SANDBOX_ITERATE_REPO_REF=${repoRef}`);
+// Replace all ARG SANDBOX_ITERATE_REPO_REF declarations (with or without default value)
+dockerfileContent = dockerfileContent.replace(
+  /^ARG SANDBOX_ITERATE_REPO_REF(=.*)?$/gm,
+  `ARG SANDBOX_ITERATE_REPO_REF="${repoRef}"`,
+);
+
+writeFileSync(dockerfileTargetPath, dockerfileContent);
 
 const image = Image.fromDockerfile(dockerfileTargetPath);
 
 const snapshot = await (async () => {
   try {
     return await daytona.snapshot.create(
-      { name: snapshotName, image, resources: { cpu: 4, memory: 4, disk: 10 } },
+      {
+        name: snapshotName,
+        image,
+        resources: { cpu: 1, memory: 1, disk: 10 },
+      },
       { onLogs: console.log },
     );
   } finally {

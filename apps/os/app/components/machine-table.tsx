@@ -5,15 +5,12 @@ import {
   MoreHorizontal,
   Archive,
   Trash2,
-  ScrollText,
   SquareTerminal,
   Terminal,
   RefreshCw,
-  Activity,
   Circle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { trpcClient } from "../lib/trpc.tsx";
 import { DaemonStatus } from "./daemon-status.tsx";
 import { TypeId } from "./type-id.tsx";
 import { Button } from "./ui/button.tsx";
@@ -42,6 +39,18 @@ interface Machine {
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
   } & Record<string, unknown>;
+  displayInfo: {
+    label: string;
+    isDevOnly?: boolean;
+  };
+  commands: Array<{
+    label: string;
+    command: string;
+  }>;
+  terminalOptions: Array<{
+    label: string;
+    url: string;
+  }>;
 }
 
 interface MachineTableProps {
@@ -77,38 +86,6 @@ export function MachineTable({
     return null;
   }
 
-  // === Open URL helpers ===
-
-  const getPreviewInfo = async (machineId: string) => {
-    return trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-  };
-
-  const openTerminalProxy = async (machineId: string) => {
-    try {
-      const result = await getPreviewInfo(machineId);
-      window.open(result.terminalUrl, "_blank");
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const openTerminalNative = async (machineId: string) => {
-    try {
-      const result = await getPreviewInfo(machineId);
-      if (result.nativeTerminalUrl) {
-        window.open(result.nativeTerminalUrl, "_blank");
-      } else {
-        toast.error("Native terminal URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // === Copy command helpers ===
 
   const copyToClipboard = async (command: string, description: string, hint?: string) => {
@@ -124,142 +101,31 @@ export function MachineTable({
     );
   };
 
-  const copyTerminalCommand = (machine: Machine) => {
-    const containerId = machine.metadata.containerId;
-    if (!containerId) {
-      toast.error("Container ID not found");
-      return;
-    }
-    copyToClipboard(
-      `docker exec -it ${containerId} /bin/bash`,
-      "Copied terminal command:",
-      "Run this in your local terminal",
-    );
-  };
-
-  const copyDaemonLogsCommand = (machine: Machine) => {
-    const command = "tail -f /var/log/iterate-daemon/current";
-    if (machine.type === "local-docker") {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} ${command}`,
-        "Copied daemon logs command:",
-        "Run in your local terminal. Won't work until entry.ts starts daemons.",
-      );
-    } else {
-      copyToClipboard(command, "Copied daemon logs command:", "Paste this in the sandbox terminal");
-    }
-  };
-
-  const copyOpencodeLogsCommand = (machine: Machine) => {
-    const command = "tail -f /var/log/opencode/current";
-    if (machine.type === "local-docker") {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} ${command}`,
-        "Copied OpenCode logs command:",
-        "Run in your local terminal. Won't work until entry.ts starts daemons.",
-      );
-    } else {
-      copyToClipboard(
-        command,
-        "Copied OpenCode logs command:",
-        "Paste this in the sandbox terminal",
-      );
-    }
-  };
-
-  const copyEntryLogsCommand = (machine: Machine) => {
-    if (machine.type === "local-docker") {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker logs -f ${containerId}`,
-        "Copied entry.ts logs command:",
-        "Run in your local terminal",
-      );
-    } else {
-      toast.info("Entry logs for Daytona machines go to container stdout");
-    }
-  };
-
-  const copyServiceStatusCommand = (machine: Machine) => {
-    const command =
-      'export S6DIR=/root/src/github.com/iterate/iterate/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
-    if (machine.type === "local-docker") {
-      const containerId = machine.metadata.containerId;
-      if (!containerId) {
-        toast.error("Container ID not found");
-        return;
-      }
-      copyToClipboard(
-        `docker exec ${containerId} sh -c '${command}'`,
-        "Copied service status command:",
-        "Run in your local terminal to see s6 service status",
-      );
-    } else {
-      copyToClipboard(
-        command,
-        "Copied service status command:",
-        "Paste in the sandbox terminal to check s6 service status",
-      );
-    }
+  const copyCommand = (command: string, label: string) => {
+    copyToClipboard(command, `Copied ${label}:`, "");
   };
 
   // === Dropdown menu (terminal, logs, machine actions) ===
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
       {/* Terminal options */}
-      {machine.type === "daytona" && (
+      {machine.terminalOptions.map((option, index) => (
+        <DropdownMenuItem key={index} onClick={() => window.open(option.url, "_blank")}>
+          <SquareTerminal className="h-4 w-4 mr-2" />
+          Terminal ({option.label})
+        </DropdownMenuItem>
+      ))}
+      {machine.commands.length > 0 && (
         <>
-          <DropdownMenuItem onClick={() => openTerminalNative(machine.id)}>
-            <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (direct)
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openTerminalProxy(machine.id)}>
-            <SquareTerminal className="h-4 w-4 mr-2" />
-            Terminal (proxy)
-          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {machine.commands.map((cmd, index) => (
+            <DropdownMenuItem key={index} onClick={() => copyCommand(cmd.command, cmd.label)}>
+              <Terminal className="h-4 w-4 mr-2" />
+              Copy: {cmd.label}
+            </DropdownMenuItem>
+          ))}
         </>
       )}
-      {machine.type === "local-docker" && (
-        <DropdownMenuItem onClick={() => copyTerminalCommand(machine)}>
-          <Terminal className="h-4 w-4 mr-2" />
-          Copy terminal command
-        </DropdownMenuItem>
-      )}
-      <DropdownMenuSeparator />
-
-      {/* Log commands */}
-      <DropdownMenuItem onClick={() => copyDaemonLogsCommand(machine)}>
-        <ScrollText className="h-4 w-4 mr-2" />
-        Copy daemon logs command
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => copyOpencodeLogsCommand(machine)}>
-        <ScrollText className="h-4 w-4 mr-2" />
-        Copy OpenCode logs command
-      </DropdownMenuItem>
-      {machine.type === "local-docker" && (
-        <DropdownMenuItem onClick={() => copyEntryLogsCommand(machine)}>
-          <ScrollText className="h-4 w-4 mr-2" />
-          Copy entry.ts logs command
-        </DropdownMenuItem>
-      )}
-      <DropdownMenuItem onClick={() => copyServiceStatusCommand(machine)}>
-        <Activity className="h-4 w-4 mr-2" />
-        Copy s6 service status command
-      </DropdownMenuItem>
       <DropdownMenuSeparator />
 
       {/* Machine actions */}
@@ -286,20 +152,7 @@ export function MachineTable({
   );
 
   const getTypeLabel = (machine: Machine) => {
-    if (machine.type === "local-docker") {
-      // Show first daemon port from ports map, or legacy port
-      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
-      return `Local Docker :${port ?? "?"}`;
-    }
-    if (machine.type === "local-vanilla") {
-      return "Local Vanilla";
-    }
-    if (machine.type === "local") {
-      const host = machine.metadata?.host ?? "localhost";
-      const port = machine.metadata?.ports?.["iterate-daemon"] ?? machine.metadata?.port;
-      return `Local ${host}:${port ?? "?"}`;
-    }
-    return "Daytona";
+    return machine.displayInfo.label;
   };
 
   return (
@@ -327,7 +180,7 @@ export function MachineTable({
 
               {/* Meta info */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                <span className={machine.type === "local-docker" ? "text-orange-600" : ""}>
+                <span className={machine.displayInfo.isDevOnly ? "text-orange-600" : ""}>
                   {getTypeLabel(machine)}
                 </span>
                 <span>·</span>

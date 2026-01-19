@@ -1,11 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.APP_URL || "http://localhost:5173";
+const videoMode = !!process.env.VIDEO_MODE;
 
 export default defineConfig({
   testDir: "spec",
   testMatch: "**/*.spec.ts",
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
@@ -15,13 +16,13 @@ export default defineConfig({
     ["html", { outputFolder: "test-results/html", open: "never" }],
     ["json", { outputFile: "test-results/json/results.json" }],
   ],
-  timeout: 120_000,
+  timeout: videoMode ? 300_000 : 120_000,
   use: {
-    actionTimeout: 1_000,
+    actionTimeout: videoMode ? 10_000 : 1_000,
     baseURL,
     trace: process.env.CI ? "on-first-retry" : "on",
     video: {
-      mode: "retain-on-failure",
+      mode: videoMode ? "on" : "retain-on-failure",
     },
     screenshot: {
       mode: "only-on-failure",
@@ -30,7 +31,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 712 } },
     },
   ],
   webServer: {

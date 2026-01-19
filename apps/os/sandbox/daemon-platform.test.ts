@@ -120,25 +120,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
       });
     });
 
-    // Compute hash of entry.ts to bust Docker cache when file changes
-    const entryTsHash = execSync(
-      "md5 -q apps/os/sandbox/entry.ts || md5sum apps/os/sandbox/entry.ts | cut -d' ' -f1",
-      {
-        cwd: REPO_ROOT,
-        encoding: "utf-8",
-      },
-    ).trim();
+    console.log("Building sandbox image...");
+    execSync(`docker build -t ${IMAGE_NAME} -f apps/os/sandbox/Dockerfile .`, {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+    });
 
-    console.log(`Building sandbox image (entry.ts hash: ${entryTsHash})...`);
-    execSync(
-      `docker build --build-arg ENTRY_TS_HASH=${entryTsHash} -t ${IMAGE_NAME} -f apps/os/sandbox/Dockerfile .`,
-      {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      },
-    );
-
-    // Mount local repo at /local-iterate-repo - entry.ts will detect and copy from there
+    // Mount local repo at /local-iterate-repo - entry.sh will detect and copy from there
     // Pass control plane URL pointing to host machine
     console.log("Creating container with local repo mounted and mock control plane...");
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
@@ -197,7 +185,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
 
     // Verify the env file was written with our test vars
     // Format is: export VAR=value (shell-quote escapes values as needed)
-    const envFileContent = await execInContainer(containerId, ["cat", "/root/.iterate/.env"]);
+    const envFileContent = await execInContainer(containerId, [
+      "cat",
+      "/home/iterate/.iterate/.env",
+    ]);
     expect(envFileContent).toContain(`export TEST_API_KEY=${testEnvVars.TEST_API_KEY}`);
     expect(envFileContent).toContain(`export CUSTOM_VAR=${testEnvVars.CUSTOM_VAR}`);
   });
@@ -212,7 +203,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     const output = await execInContainer(containerId, [
       "bash",
       "-c",
-      `source /root/.iterate/.env && echo $TEST_API_KEY`,
+      `source /home/iterate/.iterate/.env && echo $TEST_API_KEY`,
     ]);
     expect(output.trim()).toBe(testEnvVars.TEST_API_KEY);
   });
@@ -224,7 +215,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     await client.platform.refreshEnv.mutate();
 
     // Verify initial value
-    const envFileContent = await execInContainer(containerId, ["cat", "/root/.iterate/.env"]);
+    const envFileContent = await execInContainer(containerId, [
+      "cat",
+      "/home/iterate/.iterate/.env",
+    ]);
     expect(envFileContent).toContain(testEnvVars.TEST_API_KEY);
 
     // Update the mock server's env vars (we'll just verify the file timestamp changes)
@@ -232,7 +226,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
       "stat",
       "-c",
       "%Y",
-      "/root/.iterate/.env",
+      "/home/iterate/.iterate/.env",
     ]);
 
     // Wait a second so mtime changes
@@ -245,7 +239,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
       "stat",
       "-c",
       "%Y",
-      "/root/.iterate/.env",
+      "/home/iterate/.iterate/.env",
     ]);
 
     // File should have been rewritten
@@ -253,7 +247,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
   });
 
   test("git clone works for public repositories", async () => {
-    const repoPath = "/root/src/github.com/octocat/Hello-World";
+    const repoPath = "/home/iterate/src/github.com/octocat/Hello-World";
 
     // Clone a real public repo directly using git
     await execInContainer(containerId, [

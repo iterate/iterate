@@ -1,117 +1,125 @@
-# Sandbox Supervision (s6)
+# Sandbox
 
-The sandbox container uses [s6](https://skarnet.org/software/s6/) to supervise services in `s6-daemons/`. `s6-svscan` starts everything on boot.
+The sandbox container runs agents in isolated Docker environments.
 
-## Service Layout
+## How It Works
 
-Minimal service:
+The Docker **build context** determines what version of iterate is bundled in the image. The entire repo (including `.git`) is COPYed into the container at build time.
 
-```
-s6-daemons/example-service-a/
-└── run
-```
+### Deployment Scenarios
 
-Full service with logs:
+- **Production (Daytona)**: CI builds from `main` branch → image pushed to registry → Daytona uses that image. Agent versions (OpenCode, Claude Code, Bun, etc.) are locked in the Dockerfile.
 
-```
-s6-daemons/iterate-daemon/
-├── run
-├── finish
-├── notification-fd
-├── timeout-kill
-├── metadata.json
-└── log/
-    └── run
-```
+- **Staging/Feature Branch (CI)**: CI builds from that branch → special image created → pushed to Daytona. Allows testing branch-specific changes.
 
-## Current Services
+- **Local Docker Development**: Build from your local working directory. On container restart, `entry.sh` rsyncs your local files into the container, runs `pnpm install`, rebuilds the daemon, and re-copies `home-skeleton/`. Edit code locally, restart container to pick up changes.
 
-| Service                        | Port | Logs                         | Description                    |
-| ------------------------------ | ---- | ---------------------------- | ------------------------------ |
-| iterate-daemon                 | 3000 | `/var/log/iterate-daemon`    | Main daemon + web UI           |
-| example-service-a              | 3001 | stdout                       | Test daemon (2s startup delay) |
-| example-service-b-depends-on-a | 3002 | `/var/log/example-service-b` | Test daemon proxying service-a |
+## Key Files
 
-## Managing Services
+| File                       | Purpose                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `Dockerfile`               | Image definition; COPY repo from build context                                       |
+| `entry.sh`                 | Container entrypoint; rsync in local mode, then start s6                             |
+| `setup-home.sh`            | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
+| `home-skeleton/`           | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
+| `s6-daemons/`              | Service definitions for s6 process supervisor                                        |
+| `daytona-snapshot.ts`      | Script to build Daytona snapshot from git ref                                        |
+| `local-docker-snapshot.ts` | Script to build local Docker image                                                   |
+| `daytona.test.ts`          | Integration test for Daytona sandbox bootstrap                                       |
+| `local-docker.test.ts`     | Integration test for local Docker sandbox                                            |
 
-All commands assume you're inside the container. Set up the path shortcut first:
+## Version Configuration
 
-```bash
-export S6DIR=/root/src/github.com/iterate/iterate/s6-daemons
-```
+Agent versions are `ENV` vars at the top of the Dockerfile (prefix `SANDBOX_`):
 
-### Check Service Status
+| ENV var                           | Description                 |
+| --------------------------------- | --------------------------- |
+| `SANDBOX_OPENCODE_VERSION`        | npm version for OpenCode    |
+| `SANDBOX_CLAUDE_CODE_VERSION`     | npm version for Claude Code |
+| `SANDBOX_PI_CODING_AGENT_VERSION` | npm version for Pi          |
+| `SANDBOX_BUN_VERSION`             | Bun version                 |
 
-```bash
-# Single service status
-s6-svstat $S6DIR/iterate-daemon
-# Output: up (pid 563) 471 seconds, ready 471 seconds
+To update: edit `ENV` values in `Dockerfile`, rebuild image.
 
-# All services status
-for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done
-```
+## Building & Testing
 
-### Restart a Service
+### Local Docker
 
 ```bash
-# Send SIGTERM and restart (graceful restart)
-s6-svc -t $S6DIR/iterate-daemon
+# Build local image (uses your working directory)
+pnpm snapshot:local-docker
 
-# Hard restart: stop then start
-s6-svc -d $S6DIR/iterate-daemon  # stop (down)
-s6-svc -u $S6DIR/iterate-daemon  # start (up)
+# Run tests against local Docker
+pnpm snapshot:local-docker:test
 ```
 
-### Other Service Controls
+### Daytona
 
 ```bash
-# Stop a service (stays down until manually started)
-s6-svc -d $S6DIR/iterate-daemon
+# Build snapshot from current branch
+SANDBOX_ITERATE_REPO_REF=$(git branch --show-current) pnpm snapshot:daytona:prd
 
-# Start a stopped service
-s6-svc -u $S6DIR/iterate-daemon
+# Build snapshot from specific branch/SHA
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:prd
 
-# Send SIGKILL (force kill)
-s6-svc -k $S6DIR/iterate-daemon
+# Run tests (auto-builds snapshot from current branch if not specified)
+pnpm snapshot:daytona:test
 
-# Wait for service to be up and ready (5s timeout)
-s6-svwait -U -t 5000 $S6DIR/iterate-daemon
+# Run tests with specific branch
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:test
+
+# Run tests with existing snapshot (skips build)
+DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
 ```
 
-### Quick Reference
+### Direct Docker Build
 
-| Command                      | Action                               |
-| ---------------------------- | ------------------------------------ |
-| `s6-svstat <svc>`            | Show status (pid, uptime, readiness) |
-| `s6-svc -t <svc>`            | Restart (SIGTERM + auto-restart)     |
-| `s6-svc -d <svc>`            | Stop (down)                          |
-| `s6-svc -u <svc>`            | Start (up)                           |
-| `s6-svc -k <svc>`            | Force kill (SIGKILL)                 |
-| `s6-svwait -U -t <ms> <svc>` | Wait for ready state                 |
+```bash
+docker build -t iterate-sandbox:local -f apps/os/sandbox/Dockerfile .
+```
+
+## Entry Script Flow
+
+`entry.sh` runs on container start:
+
+```
+Local mode (mount at /local-iterate-repo exists):
+  1. rsync local repo → ~/src/github.com/iterate/iterate
+  2. pnpm install
+  3. vite build daemon
+  4. setup-home.sh (copy home-skeleton to $HOME)
+  5. Start s6-svscan
+
+Daytona/CI mode (no mount):
+  1. Start s6-svscan (code + configs already baked in)
+```
+
+---
+
+# s6 Supervision
+
+Services in `s6-daemons/` are supervised by [s6](https://skarnet.org/software/s6/).
+
+## Services
+
+| Service        | Port | Logs                      | Description          |
+| -------------- | ---- | ------------------------- | -------------------- |
+| iterate-daemon | 3000 | `/var/log/iterate-daemon` | Main daemon + web UI |
+| opencode       | 4096 | `/var/log/opencode`       | OpenCode server      |
+
+## Commands
+
+```bash
+export S6DIR=~/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons
+
+s6-svstat $S6DIR/iterate-daemon   # status
+s6-svc -t $S6DIR/iterate-daemon   # restart (SIGTERM)
+s6-svc -d $S6DIR/iterate-daemon   # stop
+s6-svc -u $S6DIR/iterate-daemon   # start
+```
 
 ## Logs
 
 ```bash
-docker logs <container-id>
-docker exec <container-id> tail -f /var/log/iterate-daemon/current
-```
-
-## Health Checks
-
-```bash
-curl http://localhost:3000/api/health
-curl http://localhost:3001/health
-curl http://localhost:3002/health
-```
-
-## Run Script Pattern
-
-Run scripts get `$ITERATE_REPO`:
-
-```bash
-#!/bin/sh
-exec 2>&1
-cd "$ITERATE_REPO/apps/daemon"
-"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3000/api/health &
-exec env HOSTNAME=0.0.0.0 PORT=3000 tsx server.ts
+tail -f /var/log/iterate-daemon/current
 ```

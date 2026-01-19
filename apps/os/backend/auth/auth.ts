@@ -90,9 +90,12 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 distinctId: user.id,
                 event: "user_signed_up",
                 properties: {
-                  email: user.email,
-                  name: user.name,
                   signup_method: "oauth", // Could be refined based on context
+                  // $set creates/updates person properties so the event is linked to a person profile
+                  $set: {
+                    email: user.email,
+                    name: user.name,
+                  },
                 },
               }).catch((error) => {
                 logger.error("Failed to track user_signed_up event", { error, userId: user.id });

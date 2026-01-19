@@ -65,6 +65,40 @@ export default {
         stage: "${{ needs.variables.outputs.stage }}",
       },
     },
+    "daytona-test": {
+      needs: ["variables", "deploy"],
+      if: "needs.variables.outputs.stage == 'prd'",
+      ...utils.runsOn,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "prd" }),
+        {
+          name: "Install cloudflared",
+          run: dedent`
+            # Detect architecture and download appropriate cloudflared binary
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+              CLOUDFLARED_ARCH="arm64"
+            else
+              CLOUDFLARED_ARCH="amd64"
+            fi
+            curl -L "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$CLOUDFLARED_ARCH" -o cloudflared
+            chmod +x cloudflared
+            sudo mv cloudflared /usr/local/bin/
+            cloudflared --version
+          `,
+        },
+        {
+          name: "Run Daytona Tests",
+          env: {
+            RUN_DAYTONA_TESTS: "true",
+            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
+          },
+          run: "pnpm os snapshot:daytona:test",
+        },
+      ],
+    },
     release: {
       needs: ["variables", "deploy"],
       ...utils.runsOnUbuntuLatest,
@@ -140,7 +174,7 @@ export default {
       ],
     },
     slack_failure: {
-      needs: ["variables", "deploy", "release"],
+      needs: ["variables", "deploy", "daytona-test", "release"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       env: { NEEDS: "${{ toJson(needs) }}" },

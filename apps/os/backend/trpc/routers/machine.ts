@@ -28,27 +28,29 @@ function createDaemonTrpcClient(baseUrl: string) {
   });
 }
 
-/** Get daemon base URL for a machine */
-function getDaemonBaseUrl(
-  machineType: schema.MachineType,
-  externalId: string,
-  metadata: Record<string, unknown>,
-): string {
-  if (machineType === "daytona") {
-    return `https://3000-${externalId}.proxy.daytona.works`;
-  }
-  if (machineType === "local-docker") {
-    const ports = metadata.ports as Record<string, number> | undefined;
-    const port = ports?.["iterate-daemon"] ?? (metadata.port as number | undefined) ?? 3000;
-    return `http://localhost:${port}`;
-  }
-  if (machineType === "local" || machineType === "local-vanilla") {
-    const host = (metadata.host as string) ?? "localhost";
-    const ports = metadata.ports as Record<string, number> | undefined;
-    const port = ports?.["iterate-daemon"] ?? (metadata.port as number | undefined) ?? 3000;
-    return `http://${host}:${port}`;
-  }
-  throw new Error(`Unknown machine type: ${machineType}`);
+/** Enrich a machine with display info and commands from its provider */
+async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
+  machine: T,
+  cloudflareEnv: CloudflareEnv,
+  orgSlug: string,
+  projectSlug: string,
+) {
+  const metadata = (machine.metadata as Record<string, unknown>) ?? {};
+  const buildProxyUrl = (port: number) =>
+    `/org/${orgSlug}/proj/${projectSlug}/${machine.id}/proxy/${port}/`;
+  const provider = await createMachineProvider({
+    type: machine.type,
+    env: cloudflareEnv,
+    externalId: machine.externalId,
+    metadata,
+    buildProxyUrl,
+  });
+  return {
+    ...machine,
+    displayInfo: provider.displayInfo,
+    commands: provider.commands,
+    terminalOptions: provider.terminalOptions,
+  };
 }
 
 // Generate a project access token API key
@@ -122,52 +124,6 @@ async function getOrCreateProjectMachineToken(
   return { tokenId, apiKey };
 }
 
-// Schema for local machine metadata: host + per-daemon ports
-const localMetadataSchema = z
-  .object({
-    host: z.string().min(1),
-    ports: z.record(z.string(), z.coerce.number().int().min(1).max(65535)),
-    // Legacy field - kept for backward compatibility
-    port: z.coerce.number().int().min(1).max(65535).optional(),
-  })
-  .passthrough();
-
-/**
- * Create a local machine (DB-only, no provider).
- * Extracted for consistency with provider-based machine types.
- */
-async function createLocalMachine(
-  db: DB,
-  projectId: string,
-  machineId: string,
-  name: string,
-  metadata: Record<string, unknown>,
-  cloudflareEnv: CloudflareEnv,
-): Promise<typeof schema.machine.$inferSelect> {
-  // Archive existing started machines first
-  await archiveExistingMachines(db, projectId, cloudflareEnv);
-
-  const localMetadata = localMetadataSchema.parse(metadata);
-  const [newMachine] = await db
-    .insert(schema.machine)
-    .values({
-      id: machineId,
-      name,
-      type: "local",
-      projectId,
-      state: "started",
-      metadata: localMetadata,
-      externalId: machineId,
-    })
-    .returning();
-
-  if (!newMachine) {
-    throw new Error("Failed to create machine");
-  }
-
-  return newMachine;
-}
-
 // Archive all started machines in a project (both DB and provider)
 async function archiveExistingMachines(
   db: DB,
@@ -182,8 +138,14 @@ async function archiveExistingMachines(
   // Archive each one via provider then DB
   for (const machine of startedMachines) {
     // todo: flip and outboxify this
-    const provider = await createMachineProvider(machine.type, cloudflareEnv);
-    await provider.archive(machine.externalId);
+    const provider = await createMachineProvider({
+      type: machine.type,
+      env: cloudflareEnv,
+      externalId: machine.externalId,
+      metadata: (machine.metadata as Record<string, unknown>) ?? {},
+      buildProxyUrl: () => "", // Not used for lifecycle operations
+    });
+    await provider.archive();
     await db
       .update(schema.machine)
       .set({ state: "archived" })
@@ -209,7 +171,13 @@ async function getProviderForMachine(
     });
   }
 
-  const provider = await createMachineProvider(machine.type, cloudflareEnv);
+  const provider = await createMachineProvider({
+    type: machine.type,
+    env: cloudflareEnv,
+    externalId: machine.externalId,
+    metadata: (machine.metadata as Record<string, unknown>) ?? {},
+    buildProxyUrl: () => "", // Not used for lifecycle operations
+  });
 
   return { provider, machine };
 }
@@ -232,7 +200,12 @@ export const machineRouter = router({
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
-      return machines;
+      // Enrich each machine with provider info
+      return Promise.all(
+        machines.map((m) =>
+          enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug),
+        ),
+      );
     }),
 
   // Get machine by ID
@@ -257,7 +230,7 @@ export const machineRouter = router({
         });
       }
 
-      return m;
+      return enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug);
     }),
 
   // Create a new machine
@@ -276,29 +249,14 @@ export const machineRouter = router({
       // Get or create the project-level access token (shared by all machines)
       const { apiKey } = await getOrCreateProjectMachineToken(ctx.db, ctx.project.id);
 
-      // Local machines are DB-only (no provider) - just create machine in DB
-      if (input.type === "local") {
-        const newMachine = await createLocalMachine(
-          ctx.db,
-          ctx.project.id,
-          machineId,
-          input.name,
-          input.metadata ?? {},
-          ctx.env,
-        );
-        if (!newMachine) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to create machine",
-          });
-        }
-
-        // Return apiKey for local machines - user needs this to configure their daemon
-        return { ...newMachine, apiKey };
-      }
-
-      // For provider-based machines, create provider first
-      const provider = await createMachineProvider(input.type, ctx.env);
+      // Create provider for creation - externalId not known yet, will use result
+      const provider = await createMachineProvider({
+        type: input.type,
+        env: ctx.env,
+        externalId: "", // Not known until create() returns
+        metadata: input.metadata ?? {},
+        buildProxyUrl: () => "", // Not used during creation
+      });
 
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
         where: and(
@@ -367,8 +325,16 @@ export const machineRouter = router({
         .returning()
         .catch(async (err) => {
           // Cleanup: delete the provider resource if DB insert fails
+          // Need a new provider instance with the actual externalId for cleanup
           try {
-            await provider.delete(providerResult.externalId);
+            const cleanupProvider = await createMachineProvider({
+              type: input.type,
+              env: ctx.env,
+              externalId: providerResult.externalId,
+              metadata: providerResult.metadata ?? {},
+              buildProxyUrl: () => "",
+            });
+            await cleanupProvider.delete();
           } catch {
             // Ignore cleanup errors
           }
@@ -382,6 +348,11 @@ export const machineRouter = router({
         });
       }
 
+      // Return apiKey for local machines - user needs this to configure their daemon
+      if (input.type === "local" || input.type === "local-vanilla") {
+        return { ...newMachine, apiKey };
+      }
+
       return newMachine;
     }),
 
@@ -393,7 +364,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { provider } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -415,7 +386,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.archive(machine.externalId).catch((err) => {
+      await provider.archive().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -458,7 +429,7 @@ export const machineRouter = router({
         logger.error("Failed to broadcast invalidation", err);
       });
 
-      await provider.restart(machine.externalId).catch((err) => {
+      await provider.restart().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -476,7 +447,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { provider } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -498,7 +469,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.delete(machine.externalId).catch((err) => {
+      await provider.delete().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -547,63 +518,27 @@ export const machineRouter = router({
         host?: string;
       };
 
-      // Build native URLs based on machine type
-      const buildNativeUrl = (daemonId: string, internalPort: number) => {
-        if (machineRecord.type === "daytona" && machineRecord.externalId) {
-          return `https://${internalPort}-${machineRecord.externalId}.proxy.daytona.works`;
-        }
-        if (machineRecord.type === "local-docker") {
-          // New format: use ports map
-          if (metadata.ports?.[daemonId]) {
-            return `http://localhost:${metadata.ports[daemonId]}`;
-          }
-          // Legacy fallback
-          if (metadata.port) {
-            const hostPort = internalPort === 3000 ? metadata.port : metadata.port + 1;
-            return `http://localhost:${hostPort}`;
-          }
-        }
-        if (machineRecord.type === "local") {
-          const host = metadata.host ?? "localhost";
-          // New format: use ports map
-          if (metadata.ports?.[daemonId]) {
-            return `http://${host}:${metadata.ports[daemonId]}`;
-          }
-          // Legacy fallback
-          if (metadata.port) {
-            return `http://${host}:${metadata.port}`;
-          }
-        }
-        if (machineRecord.type === "local-vanilla") {
-          return `http://localhost:3000`;
-        }
-        return null;
-      };
+      // Get the provider to build native URLs
+      const provider = await createMachineProvider({
+        type: machineRecord.type,
+        env: ctx.env,
+        externalId: machineRecord.externalId,
+        metadata,
+        buildProxyUrl,
+      });
 
-      // Build per-daemon URLs
+      // Build per-daemon URLs using provider
       const daemons = getDaemonsWithWebUI().map((daemon) => ({
         id: daemon.id,
         name: daemon.name,
         internalPort: daemon.internalPort,
         proxyUrl: buildProxyUrl(daemon.internalPort),
-        nativeUrl: buildNativeUrl(daemon.id, daemon.internalPort),
+        nativeUrl: provider.getPreviewUrl(daemon.internalPort),
       }));
 
       // Terminal URL
       const terminalInternalPort = 22222;
-      const terminalNativeUrl = (() => {
-        if (machineRecord.type === "daytona" && machineRecord.externalId) {
-          return `https://${terminalInternalPort}-${machineRecord.externalId}.proxy.daytona.works`;
-        }
-        if (machineRecord.type === "local-docker" && metadata.ports?.["terminal"]) {
-          return `http://localhost:${metadata.ports["terminal"]}`;
-        }
-        // Legacy local-docker fallback
-        if (machineRecord.type === "local-docker" && metadata.port) {
-          return `http://localhost:${metadata.port + 1}`;
-        }
-        return null;
-      })();
+      const terminalNativeUrl = provider.getPreviewUrl(terminalInternalPort);
 
       // Legacy fields for backward compatibility
       const iterateDaemon = DAEMON_DEFINITIONS.find((d) => d.id === "iterate-daemon");
@@ -616,7 +551,7 @@ export const machineRouter = router({
         // Legacy fields (kept for backward compatibility)
         url: buildProxyUrl(iterateDaemon?.internalPort ?? 3000),
         daemonUrl: buildProxyUrl(iterateDaemon?.internalPort ?? 3000),
-        nativeDaemonUrl: buildNativeUrl("iterate-daemon", iterateDaemon?.internalPort ?? 3000),
+        nativeDaemonUrl: provider.getPreviewUrl(iterateDaemon?.internalPort ?? 3000),
         machineType: machineRecord.type,
         containerId: metadata.containerId,
         hostPort: metadata.ports?.["iterate-daemon"] ?? metadata.port,
@@ -645,12 +580,14 @@ export const machineRouter = router({
       }
 
       try {
-        const daemonBaseUrl = getDaemonBaseUrl(
-          machineRecord.type,
-          machineRecord.externalId,
-          (machineRecord.metadata as Record<string, unknown>) ?? {},
-        );
-        const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
+        const provider = await createMachineProvider({
+          type: machineRecord.type,
+          env: ctx.env,
+          externalId: machineRecord.externalId,
+          metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
+          buildProxyUrl: () => "", // Not used here
+        });
+        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
         const agents = await daemonClient.listAgents.query();
         return { agents };
       } catch (err) {
@@ -660,6 +597,3 @@ export const machineRouter = router({
       }
     }),
 });
-
-// Note: GitHub env vars (GITHUB_ACCESS_TOKEN, GITHUB_REPOS) are now injected
-// via the bootstrap flow in machine-status.ts when the daemon reports ready.
