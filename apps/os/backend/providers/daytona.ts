@@ -1,13 +1,6 @@
 import { Daytona } from "@daytonaio/sdk";
 import { resolveLatestSnapshot } from "../integrations/daytona/snapshot-resolver.ts";
-import type {
-  MachineProvider,
-  CreateMachineConfig,
-  MachineProviderResult,
-  MachineDisplayInfo,
-  MachineCommands,
-  TerminalOption,
-} from "./types.ts";
+import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
 // Common log paths in sandbox
 const DAEMON_LOG = "/var/log/iterate-daemon/current";
@@ -15,19 +8,32 @@ const OPENCODE_LOG = "/var/log/opencode/current";
 const S6_STATUS_CMD =
   'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
 
-export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): MachineProvider {
+const TERMINAL_PORT = 22222;
+const DEFAULT_DAEMON_PORT = 3000;
+
+export interface DaytonaProviderConfig {
+  apiKey: string;
+  snapshotPrefix: string;
+  externalId: string;
+  buildProxyUrl: (port: number) => string;
+}
+
+export function createDaytonaProvider(config: DaytonaProviderConfig): MachineProvider {
+  const { apiKey, snapshotPrefix, externalId, buildProxyUrl } = config;
   const daytona = new Daytona({ apiKey });
+
+  const getNativeUrl = (port: number) => `https://${port}-${externalId}.proxy.daytona.works`;
 
   return {
     type: "daytona",
 
-    async create(config: CreateMachineConfig): Promise<MachineProviderResult> {
+    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const snapshotName = await resolveLatestSnapshot(snapshotPrefix, { apiKey });
 
       const sandbox = await daytona.create({
-        name: config.machineId,
+        name: machineConfig.machineId,
         snapshot: snapshotName,
-        envVars: config.envVars,
+        envVars: machineConfig.envVars,
         autoStopInterval: snapshotPrefix.includes("dev")
           ? 12 * 60 // 12 hours
           : 0,
@@ -39,67 +45,62 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       return { externalId: sandbox.id, metadata: { snapshotName } };
     },
 
-    async start(externalId: string): Promise<void> {
-      const sandbox = await daytona.get(externalId);
+    async start(extId: string): Promise<void> {
+      const sandbox = await daytona.get(extId);
       await sandbox.start();
     },
 
-    async stop(externalId: string): Promise<void> {
-      const sandbox = await daytona.get(externalId);
+    async stop(extId: string): Promise<void> {
+      const sandbox = await daytona.get(extId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
     },
 
-    async restart(externalId: string): Promise<void> {
-      const sandbox = await daytona.get(externalId);
+    async restart(extId: string): Promise<void> {
+      const sandbox = await daytona.get(extId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
       await sandbox.start();
     },
 
-    async archive(externalId: string): Promise<void> {
-      const sandbox = await daytona.get(externalId);
+    async archive(extId: string): Promise<void> {
+      const sandbox = await daytona.get(extId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
       await sandbox.archive();
     },
 
-    async delete(externalId: string): Promise<void> {
-      const sandbox = await daytona.get(externalId);
+    async delete(extId: string): Promise<void> {
+      const sandbox = await daytona.get(extId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
       await sandbox.delete();
     },
 
-    getPreviewUrl(externalId: string, _metadata?: Record<string, unknown>, port = 3000): string {
-      return `https://${port}-${externalId}.proxy.daytona.works`;
+    getPreviewUrl(port: number): string {
+      return getNativeUrl(port);
     },
 
-    getDisplayInfo(_metadata?: Record<string, unknown>): MachineDisplayInfo {
-      return {
-        label: "Daytona",
-        isDevOnly: false,
-      };
+    previewUrl: getNativeUrl(DEFAULT_DAEMON_PORT),
+
+    displayInfo: {
+      label: "Daytona",
+      isDevOnly: false,
     },
 
-    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
-      // Daytona: commands run in web terminal, no docker exec needed
-      return {
-        daemonLogs: `tail -f ${DAEMON_LOG}`,
-        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-        serviceStatus: S6_STATUS_CMD,
-      };
+    commands: {
+      daemonLogs: `tail -f ${DAEMON_LOG}`,
+      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
+      serviceStatus: S6_STATUS_CMD,
     },
 
-    getTerminalOptions(): TerminalOption[] {
-      return [
-        { type: "native", label: "Direct" },
-        { type: "proxy", label: "Proxy" },
-      ];
-    },
+    terminalOptions: [
+      { label: "Direct", url: getNativeUrl(TERMINAL_PORT) },
+      { label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) },
+    ],
   };
 }

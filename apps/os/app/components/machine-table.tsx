@@ -13,7 +13,6 @@ import {
   Circle,
 } from "lucide-react";
 import { toast } from "sonner";
-import { trpcClient } from "../lib/trpc.tsx";
 import { DaemonStatus } from "./daemon-status.tsx";
 import { TypeId } from "./type-id.tsx";
 import { Button } from "./ui/button.tsx";
@@ -54,8 +53,8 @@ interface Machine {
     serviceStatus?: string;
   };
   terminalOptions: Array<{
-    type: "native" | "proxy";
     label: string;
+    url: string;
   }>;
 }
 
@@ -92,38 +91,6 @@ export function MachineTable({
     return null;
   }
 
-  // === Open URL helpers ===
-
-  const getPreviewInfo = async (machineId: string) => {
-    return trpcClient.machine.getPreviewInfo.query({
-      organizationSlug,
-      projectSlug,
-      machineId,
-    });
-  };
-
-  const openTerminalProxy = async (machineId: string) => {
-    try {
-      const result = await getPreviewInfo(machineId);
-      window.open(result.terminalUrl, "_blank");
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const openTerminalNative = async (machineId: string) => {
-    try {
-      const result = await getPreviewInfo(machineId);
-      if (result.nativeTerminalUrl) {
-        window.open(result.nativeTerminalUrl, "_blank");
-      } else {
-        toast.error("Native terminal URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
   // === Copy command helpers ===
 
   const copyToClipboard = async (command: string, description: string, hint?: string) => {
@@ -147,15 +114,8 @@ export function MachineTable({
   const renderDropdownContent = (machine: Machine) => (
     <DropdownMenuContent align="end" className="w-56">
       {/* Terminal options */}
-      {machine.terminalOptions.map((option) => (
-        <DropdownMenuItem
-          key={option.type}
-          onClick={() =>
-            option.type === "native"
-              ? openTerminalNative(machine.id)
-              : openTerminalProxy(machine.id)
-          }
-        >
+      {machine.terminalOptions.map((option, index) => (
+        <DropdownMenuItem key={index} onClick={() => window.open(option.url, "_blank")}>
           <SquareTerminal className="h-4 w-4 mr-2" />
           Terminal ({option.label})
         </DropdownMenuItem>

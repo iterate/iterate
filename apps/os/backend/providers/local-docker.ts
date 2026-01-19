@@ -1,20 +1,16 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
-import type {
-  MachineProvider,
-  CreateMachineConfig,
-  MachineProviderResult,
-  MachineDisplayInfo,
-  MachineCommands,
-  TerminalOption,
-} from "./types.ts";
+import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
 // Common log paths in sandbox
 const DAEMON_LOG = "/var/log/iterate-daemon/current";
 const OPENCODE_LOG = "/var/log/opencode/current";
 const S6_STATUS_CMD =
   'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
+
+const TERMINAL_PORT = 22222;
+const DEFAULT_DAEMON_PORT = 3000;
 
 // Support DOCKER_HOST env var, defaulting to TCP for local dev (OrbStack)
 // Examples: unix:///var/run/docker.sock, tcp://127.0.0.1:2375
@@ -115,172 +111,178 @@ async function findAvailablePortBlock(count: number): Promise<number> {
   throw new Error(`No available port block of size ${count} in range 10000-11000`);
 }
 
-export interface LocalDockerConfig {
-  imageName: string;
+// ============================================================================
+// Local Provider - references already-running daemon on host
+// ============================================================================
+
+export interface LocalProviderConfig {
+  metadata: {
+    host?: string;
+    port?: number;
+    ports?: Record<string, number>;
+  };
+  buildProxyUrl: (port: number) => string;
 }
 
-/**
- * Provider for local machines that reference an already-running daemon.
- * All operations are no-ops since the daemon is externally managed.
- * Returns ready status immediately since the daemon is assumed to be running.
- */
-export function createLocalProvider(): MachineProvider {
+export function createLocalProvider(config: LocalProviderConfig): MachineProvider {
+  const { metadata, buildProxyUrl } = config;
+  const host = metadata.host ?? "localhost";
+  const ports = metadata.ports;
+
+  const getUrl = (port: number): string => {
+    if (ports) {
+      const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
+      if (daemon && ports[daemon.id]) {
+        return `http://${host}:${ports[daemon.id]}`;
+      }
+      if (port === TERMINAL_PORT && ports["terminal"]) {
+        return `http://${host}:${ports["terminal"]}`;
+      }
+      if (ports["iterate-daemon"]) {
+        return `http://${host}:${ports["iterate-daemon"]}`;
+      }
+    }
+    const legacyPort = metadata.port ?? DEFAULT_DAEMON_PORT;
+    return `http://${host}:${legacyPort}`;
+  };
+
+  const displayPort = ports?.["iterate-daemon"] ?? metadata.port ?? DEFAULT_DAEMON_PORT;
+
   return {
     type: "local",
+
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       return {
         externalId: machineConfig.machineId,
-        // Mark as ready immediately - local machines reference already-running daemons
         metadata: {
           daemonStatus: "ready",
           daemonReadyAt: new Date().toISOString(),
         },
       };
     },
-    async start(_externalId: string): Promise<void> {
-      return;
-    },
-    async stop(_externalId: string): Promise<void> {
-      return;
-    },
-    async restart(_externalId: string): Promise<void> {
-      return;
-    },
-    async archive(_externalId: string): Promise<void> {
-      return;
-    },
-    async delete(_externalId: string): Promise<void> {
-      return;
-    },
-    getPreviewUrl(_externalId: string, metadata?: Record<string, unknown>, port?: number): string {
-      const host = (metadata?.host as string) ?? "localhost";
-      const ports = metadata?.ports as Record<string, number> | undefined;
 
-      // Find the host port for the requested internal port
-      if (ports) {
-        // Find which daemon this internal port corresponds to
-        const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
-        if (daemon && ports[daemon.id]) {
-          return `http://${host}:${ports[daemon.id]}`;
-        }
-        // Terminal port
-        if (port === 22222 && ports["terminal"]) {
-          return `http://${host}:${ports["terminal"]}`;
-        }
-        // Default to iterate-daemon
-        if (ports["iterate-daemon"]) {
-          return `http://${host}:${ports["iterate-daemon"]}`;
-        }
-      }
+    async start(_extId: string): Promise<void> {},
+    async stop(_extId: string): Promise<void> {},
+    async restart(_extId: string): Promise<void> {},
+    async archive(_extId: string): Promise<void> {},
+    async delete(_extId: string): Promise<void> {},
 
-      // Legacy fallback
-      const legacyPort = (metadata?.port as number) ?? 3000;
-      return `http://${host}:${legacyPort}`;
+    getPreviewUrl: getUrl,
+    previewUrl: getUrl(DEFAULT_DAEMON_PORT),
+
+    displayInfo: {
+      label: `Local ${host}:${displayPort}`,
+      isDevOnly: true,
     },
 
-    getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo {
-      const host = (metadata?.host as string) ?? "localhost";
-      const ports = metadata?.ports as Record<string, number> | undefined;
-      const port = ports?.["iterate-daemon"] ?? (metadata?.port as number) ?? 3000;
-      return {
-        label: `Local ${host}:${port}`,
-        isDevOnly: true,
-      };
+    commands: {
+      daemonLogs: `tail -f ${DAEMON_LOG}`,
+      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
     },
 
-    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
-      // Local machines: user runs daemon directly, no docker
-      return {
-        daemonLogs: `tail -f ${DAEMON_LOG}`,
-        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-      };
-    },
-
-    getTerminalOptions(): TerminalOption[] {
-      return [{ type: "proxy", label: "Proxy" }];
-    },
+    terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
 }
 
-/**
- * Provider for local-vanilla machines (legacy, similar to local).
- * All operations are no-ops since the daemon is externally managed.
- */
-export function createLocalVanillaProvider(): MachineProvider {
+// ============================================================================
+// Local Vanilla Provider - legacy, similar to local
+// ============================================================================
+
+export interface LocalVanillaProviderConfig {
+  buildProxyUrl: (port: number) => string;
+}
+
+export function createLocalVanillaProvider(config: LocalVanillaProviderConfig): MachineProvider {
+  const { buildProxyUrl } = config;
+
   return {
     type: "local-vanilla",
+
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       return {
         externalId: machineConfig.machineId,
-        // Mark as ready immediately - local-vanilla machines reference already-running daemons
         metadata: {
           daemonStatus: "ready",
           daemonReadyAt: new Date().toISOString(),
         },
       };
     },
-    async start(_externalId: string): Promise<void> {
-      return;
-    },
-    async stop(_externalId: string): Promise<void> {
-      return;
-    },
-    async restart(_externalId: string): Promise<void> {
-      return;
-    },
-    async archive(_externalId: string): Promise<void> {
-      return;
-    },
-    async delete(_externalId: string): Promise<void> {
-      return;
-    },
-    getPreviewUrl(
-      _externalId: string,
-      _metadata?: Record<string, unknown>,
-      _port?: number,
-    ): string {
-      return "http://localhost:3000";
+
+    async start(_extId: string): Promise<void> {},
+    async stop(_extId: string): Promise<void> {},
+    async restart(_extId: string): Promise<void> {},
+    async archive(_extId: string): Promise<void> {},
+    async delete(_extId: string): Promise<void> {},
+
+    getPreviewUrl: () => `http://localhost:${DEFAULT_DAEMON_PORT}`,
+    previewUrl: `http://localhost:${DEFAULT_DAEMON_PORT}`,
+
+    displayInfo: {
+      label: "Local Vanilla",
+      isDevOnly: true,
     },
 
-    getDisplayInfo(_metadata?: Record<string, unknown>): MachineDisplayInfo {
-      return {
-        label: "Local Vanilla",
-        isDevOnly: true,
-      };
+    commands: {
+      daemonLogs: `tail -f ${DAEMON_LOG}`,
+      opencodeLogs: `tail -f ${OPENCODE_LOG}`,
     },
 
-    getCommands(_metadata?: Record<string, unknown>): MachineCommands {
-      // Local vanilla: same as local, user runs daemon directly
-      return {
-        daemonLogs: `tail -f ${DAEMON_LOG}`,
-        opencodeLogs: `tail -f ${OPENCODE_LOG}`,
-      };
-    },
-
-    getTerminalOptions(): TerminalOption[] {
-      return [{ type: "proxy", label: "Proxy" }];
-    },
+    terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
 }
 
-export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
-  const { imageName } = config;
+// ============================================================================
+// Local Docker Provider - manages Docker containers
+// ============================================================================
+
+export interface LocalDockerProviderConfig {
+  imageName: string;
+  externalId: string;
+  metadata: {
+    containerId?: string;
+    port?: number;
+    ports?: Record<string, number>;
+  };
+  buildProxyUrl: (port: number) => string;
+}
+
+export function createLocalDockerProvider(config: LocalDockerProviderConfig): MachineProvider {
+  const { imageName, externalId, metadata, buildProxyUrl } = config;
+  const containerId = metadata.containerId;
+
+  const getUrl = (port: number): string => {
+    if (metadata.ports) {
+      const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
+      if (daemon && metadata.ports[daemon.id]) {
+        return `http://localhost:${metadata.ports[daemon.id]}`;
+      }
+      if (port === TERMINAL_PORT && metadata.ports["terminal"]) {
+        return `http://localhost:${metadata.ports["terminal"]}`;
+      }
+      if (metadata.ports["iterate-daemon"]) {
+        return `http://localhost:${metadata.ports["iterate-daemon"]}`;
+      }
+    }
+    // Legacy fallback
+    const baseHostPort = metadata.port ?? DEFAULT_DAEMON_PORT;
+    const hostPort = port === TERMINAL_PORT ? baseHostPort + 1 : baseHostPort;
+    return `http://localhost:${hostPort}`;
+  };
+
+  const displayPort = metadata.ports?.["iterate-daemon"] ?? metadata.port;
 
   return {
     type: "local-docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      // Allocate a block of consecutive ports: one per daemon + one for terminal (22222)
-      const terminalInternalPort = 22222;
-      const numPorts = DAEMON_DEFINITIONS.length + 1; // +1 for terminal
+      const terminalInternalPort = TERMINAL_PORT;
+      const numPorts = DAEMON_DEFINITIONS.length + 1;
       const basePort = await findAvailablePortBlock(numPorts);
 
-      // Build port mappings: { daemonId: hostPort } for metadata
       const ports: Record<string, number> = {};
       const portBindings: Record<string, Array<{ HostPort: string }>> = {};
       const exposedPorts: Record<string, object> = {};
 
-      // Map each daemon to a host port
       DAEMON_DEFINITIONS.forEach((daemon, index) => {
         const hostPort = basePort + index;
         const internalPortKey = `${daemon.internalPort}/tcp`;
@@ -289,14 +291,11 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         exposedPorts[internalPortKey] = {};
       });
 
-      // Map terminal to the last port in the block
       const terminalHostPort = basePort + DAEMON_DEFINITIONS.length;
       ports["terminal"] = terminalHostPort;
       portBindings[`${terminalInternalPort}/tcp`] = [{ HostPort: String(terminalHostPort) }];
       exposedPorts[`${terminalInternalPort}/tcp`] = {};
 
-      // For local-docker, rewrite localhost URLs to host.docker.internal
-      // so the container can reach services on the host machine
       const rewrittenEnvVars = Object.fromEntries(
         Object.entries(machineConfig.envVars).map(([key, value]) => [
           key,
@@ -304,25 +303,20 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         ]),
       );
 
-      // Add ITERATE_DEV=true for local-docker so entry.sh uses the right code path
       const envVarsWithDev = {
         ...rewrittenEnvVars,
         ITERATE_DEV: "true",
       };
 
-      // Sanitize env vars to prevent injection attacks
       const envArray = Object.entries(envVarsWithDev).map(([key, value]) => {
-        // Validate key contains only safe characters
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
           throw new Error(`Invalid environment variable name: ${key}`);
         }
-        // Remove control characters (ASCII 0-31) from values to prevent injection
         // eslint-disable-next-line no-control-regex -- intentionally matching control chars to sanitize
         const sanitizedValue = String(value).replace(/[\u0000-\u001f]/g, "");
         return `${key}=${sanitizedValue}`;
       });
 
-      // Mount local repo for development (allows code changes without rebuilding image)
       const binds = [`${REPO_ROOT}:/local-iterate-repo`];
 
       const hostConfig: Record<string, unknown> = {
@@ -330,8 +324,6 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         Binds: binds,
       };
 
-      // Use machine name (slug) for container name for easier identification
-      // Docker container names: alphanumeric, underscore, hyphen, period (must start with alphanumeric)
       const containerName = machineConfig.name
         .toLowerCase()
         .replace(/[^a-z0-9_.-]/g, "-")
@@ -349,92 +341,58 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         },
       );
 
-      const containerId = createResponse.Id;
+      const newContainerId = createResponse.Id;
 
-      await dockerApi("POST", `/containers/${containerId}/start`, {});
+      await dockerApi("POST", `/containers/${newContainerId}/start`, {});
 
       return {
-        externalId: containerId,
-        metadata: { ports, containerId },
+        externalId: newContainerId,
+        metadata: { ports, containerId: newContainerId },
       };
     },
 
-    async start(externalId: string): Promise<void> {
-      await dockerApi("POST", `/containers/${externalId}/start`, {});
+    async start(extId: string): Promise<void> {
+      await dockerApi("POST", `/containers/${extId}/start`, {});
     },
 
-    async stop(externalId: string): Promise<void> {
+    async stop(extId: string): Promise<void> {
       try {
-        await dockerApi("POST", `/containers/${externalId}/stop`, {});
+        await dockerApi("POST", `/containers/${extId}/stop`, {});
       } catch {
         // Container might already be stopped
       }
     },
 
-    async restart(externalId: string): Promise<void> {
-      await dockerApi("POST", `/containers/${externalId}/restart`, {});
+    async restart(extId: string): Promise<void> {
+      await dockerApi("POST", `/containers/${extId}/restart`, {});
     },
 
-    async archive(externalId: string): Promise<void> {
-      await this.stop(externalId);
+    async archive(extId: string): Promise<void> {
+      await this.stop(extId);
     },
 
-    async delete(externalId: string): Promise<void> {
-      await dockerApi("DELETE", `/containers/${externalId}?force=true`, undefined);
+    async delete(extId: string): Promise<void> {
+      await dockerApi("DELETE", `/containers/${extId}?force=true`, undefined);
     },
 
-    getPreviewUrl(_externalId: string, metadata?: Record<string, unknown>, port?: number): string {
-      const meta = metadata as { ports?: Record<string, number>; port?: number };
+    getPreviewUrl: getUrl,
+    previewUrl: getUrl(DEFAULT_DAEMON_PORT),
 
-      // New format: ports is a map of daemonId/terminal -> hostPort
-      if (meta?.ports) {
-        // Find which daemon this internal port corresponds to
-        const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
-        if (daemon && meta.ports[daemon.id]) {
-          return `http://localhost:${meta.ports[daemon.id]}`;
+    displayInfo: {
+      label: `Local Docker :${displayPort ?? "?"}`,
+      isDevOnly: true,
+    },
+
+    commands: containerId
+      ? {
+          terminalShell: `docker exec -it ${containerId} /bin/bash`,
+          daemonLogs: `docker exec ${containerId} tail -f ${DAEMON_LOG}`,
+          opencodeLogs: `docker exec ${containerId} tail -f ${OPENCODE_LOG}`,
+          entryLogs: `docker logs -f ${containerId}`,
+          serviceStatus: `docker exec ${containerId} sh -c '${S6_STATUS_CMD}'`,
         }
-        // Terminal port
-        if (port === 22222 && meta.ports["terminal"]) {
-          return `http://localhost:${meta.ports["terminal"]}`;
-        }
-        // Default to iterate-daemon
-        if (meta.ports["iterate-daemon"]) {
-          return `http://localhost:${meta.ports["iterate-daemon"]}`;
-        }
-      }
+      : {},
 
-      // Legacy fallback: single port field
-      const baseHostPort = meta?.port ?? 3000;
-      const hostPort = port === 22222 ? baseHostPort + 1 : baseHostPort;
-      return `http://localhost:${hostPort}`;
-    },
-
-    getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo {
-      const meta = metadata as { ports?: Record<string, number>; port?: number };
-      const port = meta?.ports?.["iterate-daemon"] ?? meta?.port;
-      return {
-        label: `Local Docker :${port ?? "?"}`,
-        isDevOnly: true,
-      };
-    },
-
-    getCommands(metadata?: Record<string, unknown>): MachineCommands {
-      const meta = metadata as { containerId?: string };
-      const id = meta?.containerId;
-      if (!id) {
-        return {}; // No commands available without container ID
-      }
-      return {
-        terminalShell: `docker exec -it ${id} /bin/bash`,
-        daemonLogs: `docker exec ${id} tail -f ${DAEMON_LOG}`,
-        opencodeLogs: `docker exec ${id} tail -f ${OPENCODE_LOG}`,
-        entryLogs: `docker logs -f ${id}`,
-        serviceStatus: `docker exec ${id} sh -c '${S6_STATUS_CMD}'`,
-      };
-    },
-
-    getTerminalOptions(): TerminalOption[] {
-      return [{ type: "proxy", label: "Proxy" }];
-    },
+    terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };
 }

@@ -10,29 +10,56 @@ export type {
   MachineProviderResult,
   MachineDisplayInfo,
   MachineCommands,
+  TerminalOption,
 } from "./types.ts";
 
+export interface CreateMachineProviderOptions {
+  type: MachineType;
+  env: CloudflareEnv;
+  externalId: string;
+  metadata: Record<string, unknown>;
+  buildProxyUrl: (port: number) => string;
+}
+
 export async function createMachineProvider(
-  type: MachineType,
-  env: CloudflareEnv,
+  options: CreateMachineProviderOptions,
 ): Promise<MachineProvider> {
+  const { type, env, externalId, metadata, buildProxyUrl } = options;
+
   switch (type) {
     case "daytona":
-      return createDaytonaProvider(env.DAYTONA_API_KEY, env.DAYTONA_SNAPSHOT_PREFIX);
+      return createDaytonaProvider({
+        apiKey: env.DAYTONA_API_KEY,
+        snapshotPrefix: env.DAYTONA_SNAPSHOT_PREFIX,
+        externalId,
+        buildProxyUrl,
+      });
 
     case "local-docker": {
       if (!import.meta.env.DEV) {
         throw new Error("local-docker provider only available in development");
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
-      return createLocalDockerProvider({ imageName: "iterate-sandbox:local" });
+      return createLocalDockerProvider({
+        imageName: "iterate-sandbox:local",
+        externalId,
+        metadata: metadata as {
+          containerId?: string;
+          port?: number;
+          ports?: Record<string, number>;
+        },
+        buildProxyUrl,
+      });
     }
 
     case "local":
-      return createLocalProvider();
+      return createLocalProvider({
+        metadata: metadata as { host?: string; port?: number; ports?: Record<string, number> },
+        buildProxyUrl,
+      });
 
     case "local-vanilla":
-      return createLocalVanillaProvider();
+      return createLocalVanillaProvider({ buildProxyUrl });
 
     default: {
       const _exhaustiveCheck: never = type;

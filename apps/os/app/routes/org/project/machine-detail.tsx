@@ -357,17 +357,35 @@ function MachineDetailPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {terminalOptions.map((option) => (
+                  {terminalOptions.length > 1 ? (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openServiceUrl(service.id, true)}
+                      >
+                        <ExternalLink className="h-4 w-4 mr-1" />
+                        Direct
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openServiceUrl(service.id, false)}
+                      >
+                        <ExternalLink className="h-4 w-4 mr-1" />
+                        Proxy
+                      </Button>
+                    </>
+                  ) : terminalOptions.length === 1 ? (
                     <Button
-                      key={option.type}
                       variant="ghost"
                       size="sm"
-                      onClick={() => openServiceUrl(service.id, option.type === "native")}
+                      onClick={() => openServiceUrl(service.id, false)}
                     >
                       <ExternalLink className="h-4 w-4 mr-1" />
-                      {terminalOptions.length === 1 ? "Open" : option.label}
+                      Open
                     </Button>
-                  ))}
+                  ) : null}
                   {logsCommand && (
                     <Button variant="ghost" size="sm" onClick={() => copyCommand(logsCommand)}>
                       <FileText className="h-4 w-4 mr-1" />
@@ -389,12 +407,12 @@ function MachineDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              {terminalOptions.map((option) => (
+              {terminalOptions.map((option, index) => (
                 <Button
-                  key={option.type}
+                  key={index}
                   variant="ghost"
                   size="sm"
-                  onClick={() => openTerminal({ useNative: option.type === "native" })}
+                  onClick={() => window.open(option.url, "_blank")}
                 >
                   <ExternalLink className="h-4 w-4 mr-1" />
                   {option.label}
@@ -456,24 +474,56 @@ function MachineDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {terminalOptions.map((option) => (
+                    {terminalOptions.length > 1 ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            openAgentTerminal({
+                              agentSlug: agent.slug,
+                              useNative: true,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
+                            })
+                          }
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Direct
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            openAgentTerminal({
+                              agentSlug: agent.slug,
+                              useNative: false,
+                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
+                              autorun: true,
+                            })
+                          }
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Proxy
+                        </Button>
+                      </>
+                    ) : terminalOptions.length === 1 ? (
                       <Button
-                        key={option.type}
                         variant="ghost"
                         size="sm"
                         onClick={() =>
                           openAgentTerminal({
                             agentSlug: agent.slug,
-                            useNative: option.type === "native",
+                            useNative: false,
                             command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
                             autorun: true,
                           })
                         }
                       >
                         <ExternalLink className="h-4 w-4 mr-1" />
-                        {terminalOptions.length === 1 ? "Open" : option.label}
+                        Open
                       </Button>
-                    ))}
+                    ) : null}
                   </div>
                 </div>
               ))}

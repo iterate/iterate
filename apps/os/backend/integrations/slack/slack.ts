@@ -24,12 +24,16 @@ async function buildMachineForwardUrl(
   env: CloudflareEnv,
 ): Promise<string | null> {
   const metadata = machine.metadata as Record<string, unknown> | null;
-  const daemonPort = getDaemonById("iterate-daemon")?.internalPort ?? 3000;
 
   try {
-    const provider = await createMachineProvider(machine.type, env);
-    const baseUrl = provider.getPreviewUrl(machine.externalId, metadata ?? {}, daemonPort);
-    return `${baseUrl}${path}`;
+    const provider = await createMachineProvider({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata: metadata ?? {},
+      buildProxyUrl: () => "", // Not used here
+    });
+    return `${provider.previewUrl}${path}`;
   } catch (err) {
     logger.warn("[Slack Webhook] Failed to build forward URL", {
       machineId: machine.id,

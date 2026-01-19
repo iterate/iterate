@@ -26,11 +26,16 @@ async function buildDaemonBaseUrl(
   env: CloudflareEnv,
 ): Promise<string | null> {
   const metadata = machine.metadata as Record<string, unknown>;
-  const daemonPort = getDaemonById("iterate-daemon")?.internalPort ?? 3000;
 
   try {
-    const provider = await createMachineProvider(machine.type, env);
-    return provider.getPreviewUrl(machine.externalId, metadata, daemonPort);
+    const provider = await createMachineProvider({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata,
+      buildProxyUrl: () => "", // Not used here
+    });
+    return provider.previewUrl;
   } catch (err) {
     logger.warn("[poke-machines] Failed to build daemon URL", {
       machineId: machine.id,

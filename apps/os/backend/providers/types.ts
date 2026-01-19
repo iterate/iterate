@@ -33,28 +33,38 @@ export interface MachineCommands {
   serviceStatus?: string;
 }
 
-/** Terminal access type */
-export type TerminalType = "native" | "proxy";
-
 /** Terminal option for accessing the machine */
 export interface TerminalOption {
-  type: TerminalType;
   label: string;
+  url: string;
 }
 
+/**
+ * Machine provider interface.
+ * Providers are instantiated with all context needed (externalId, metadata, etc.)
+ * so getters are simple properties computed at construction time.
+ *
+ * Lifecycle methods still take externalId for cases like:
+ * - create() returns a new externalId
+ * - delete() after create() fails needs to use the new externalId
+ */
 export interface MachineProvider {
   readonly type: MachineType;
+
+  // Lifecycle methods - take externalId for flexibility during create/cleanup
   create(config: CreateMachineConfig): Promise<MachineProviderResult>;
   start(externalId: string): Promise<void>;
   stop(externalId: string): Promise<void>;
   restart(externalId: string): Promise<void>;
   archive(externalId: string): Promise<void>;
   delete(externalId: string): Promise<void>;
-  getPreviewUrl(externalId: string, metadata?: Record<string, unknown>, port?: number): string;
-  /** Get display info for the machine, including dynamic label based on metadata */
-  getDisplayInfo(metadata?: Record<string, unknown>): MachineDisplayInfo;
-  /** Get shell commands for interacting with the machine */
-  getCommands(metadata?: Record<string, unknown>): MachineCommands;
-  /** Get available terminal options for this machine type */
-  getTerminalOptions(): TerminalOption[];
+
+  // Simple getters - computed at construction time with full context
+  readonly previewUrl: string;
+  readonly displayInfo: MachineDisplayInfo;
+  readonly commands: MachineCommands;
+  readonly terminalOptions: TerminalOption[];
+
+  /** Get preview URL for a specific port (for services on different ports) */
+  getPreviewUrl(port: number): string;
 }

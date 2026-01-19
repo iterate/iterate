@@ -109,8 +109,14 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  const provider = await createMachineProvider(machineRecord.type, c.env);
-  const baseUrl = provider.getPreviewUrl(externalId, metadata, portNum);
+  const provider = await createMachineProvider({
+    type: machineRecord.type,
+    env: c.env,
+    externalId,
+    metadata,
+    buildProxyUrl: () => "", // Not used here
+  });
+  const baseUrl = provider.getPreviewUrl(portNum);
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
