@@ -39,9 +39,12 @@ export function getDockerHostConfig(): DockerHostConfig {
   return parseDockerHost();
 }
 
-// Repo root is ../../../../ from apps/os/backend/providers/
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+// Lazily compute repo root to avoid calling fileURLToPath at module load time
+// (import.meta.url is undefined in Cloudflare Workers)
+function getRepoRoot(): string {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  return join(__dirname, "..", "..", "..", "..");
+}
 
 // Lazy-loaded undici dispatcher for Unix socket support
 let undiciDispatcher: unknown | undefined;
@@ -381,7 +384,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
         return `${key}=${sanitizedValue}`;
       });
 
-      const binds = [`${REPO_ROOT}:/local-iterate-repo`];
+      const binds = [`${getRepoRoot()}:/local-iterate-repo`];
 
       const hostConfig: Record<string, unknown> = {
         PortBindings: portBindings,
