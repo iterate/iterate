@@ -13,7 +13,13 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
-import type { AppMentionEvent, GenericMessageEvent, BotMessageEvent } from "@slack/types";
+import type {
+  AppMentionEvent,
+  GenericMessageEvent,
+  BotMessageEvent,
+  ReactionAddedEvent,
+  ReactionRemovedEvent,
+} from "@slack/types";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -33,7 +39,12 @@ interface SlackWebhookPayload {
   event_id?: string;
   event_time?: number;
   type: "event_callback" | "url_verification";
-  event: AppMentionEvent | GenericMessageEvent | BotMessageEvent;
+  event:
+    | AppMentionEvent
+    | GenericMessageEvent
+    | BotMessageEvent
+    | ReactionAddedEvent
+    | ReactionRemovedEvent;
   authorizations?: Array<{
     enterprise_id: string | null;
     team_id: string;
@@ -43,12 +54,26 @@ interface SlackWebhookPayload {
   }>;
 }
 
-type MessageCase = "new_thread_mention" | "mid_thread_mention" | "fyi_message" | "ignored";
+type MessageCase =
+  | "new_thread_mention"
+  | "mid_thread_mention"
+  | "fyi_message"
+  | "reaction_added"
+  | "reaction_removed"
+  | "ignored";
 
 interface ParsedMessage {
-  case: Exclude<MessageCase, "ignored">;
+  case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
   event: AppMentionEvent | GenericMessageEvent;
   threadTs: string;
+}
+
+interface ParsedReaction {
+  case: "reaction_added" | "reaction_removed";
+  event: ReactionAddedEvent | ReactionRemovedEvent;
+  /** The ts of the message that was reacted to (need to look up thread_ts) */
+  itemTs: string;
+  channel: string;
 }
 
 slackRouter.post("/webhook", async (c) => {
@@ -67,7 +92,41 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId });
   }
 
-  const { event, threadTs } = parsed;
+  // Handle reaction events - need to look up the thread_ts from the original message
+  if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
+    try {
+      const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
+      if (!threadTs) {
+        return c.json({
+          success: true,
+          message: "Ignored: could not find thread for reacted message",
+          eventId,
+        });
+      }
+
+      const threadId = sanitizeThreadId(threadTs);
+      const agentSlug = `slack-${threadId}`;
+      const existingAgent = await getAgent(agentSlug);
+
+      if (!existingAgent) {
+        return c.json({
+          success: true,
+          message: "Ignored: no agent for this thread",
+          eventId,
+        });
+      }
+
+      const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+      await appendToAgent(existingAgent, message);
+      return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
+    } catch (error) {
+      logger.error("[Slack Webhook] Failed to handle reaction event", error);
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  }
+
+  // From here on, parsed is a ParsedMessage (not a reaction)
+  const { event, threadTs } = parsed as ParsedMessage;
   const threadId = sanitizeThreadId(threadTs);
   const agentSlug = `slack-${threadId}`;
 
@@ -159,9 +218,23 @@ slackRouter.post("/webhook", async (c) => {
  */
 function parseWebhookPayload(
   payload: SlackWebhookPayload,
-): ParsedMessage | { case: "ignored"; reason: string } {
+): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
+
+  // Handle reaction events
+  if (event.type === "reaction_added" || event.type === "reaction_removed") {
+    // Only handle reactions on messages
+    if (event.item.type !== "message") {
+      return { case: "ignored", reason: "Ignored: reaction not on message" };
+    }
+    return {
+      case: event.type,
+      event,
+      itemTs: event.item.ts,
+      channel: event.item.channel,
+    };
+  }
 
   // Ignore bot messages (our own responses echoed back)
   if ("bot_profile" in event && event.bot_profile) {
@@ -191,7 +264,7 @@ function parseWebhookPayload(
   const isMention = event.type === "app_mention";
 
   // Determine case
-  let messageCase: MessageCase;
+  let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
   } else if (isMention && !isNewThread) {
@@ -310,4 +383,66 @@ function formatFyiMessage(
     "",
     `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
+}
+
+/**
+ * Format message for reaction events.
+ */
+function formatReactionMessage(
+  event: ReactionAddedEvent | ReactionRemovedEvent,
+  reactionCase: "reaction_added" | "reaction_removed",
+  threadTs: string,
+  eventId: string,
+): string {
+  const user = event.user ? `<@${event.user}>` : "unknown";
+  const action = reactionCase === "reaction_added" ? "added" : "removed";
+  const channel = event.item.type === "message" ? event.item.channel : "unknown";
+
+  return [
+    `Reaction ${action}: :${event.reaction}:`,
+    "",
+    `From: ${user}`,
+    `On message: ${event.item.type === "message" ? event.item.ts : "unknown"}`,
+    "",
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
+  ].join("\n");
+}
+
+/**
+ * Look up the thread_ts for a message by querying stored events.
+ * Reactions only give us the message ts, but we need the thread_ts to find the agent.
+ */
+async function lookupThreadTsForMessage(
+  channel: string,
+  messageTs: string,
+): Promise<string | null> {
+  // Search for a stored event that matches this channel and message ts
+  // The message could be the thread root (ts === thread_ts) or a reply (has thread_ts)
+  const events = await db
+    .select()
+    .from(schema.events)
+    .where(eq(schema.events.type, "slack:webhook"));
+
+  for (const evt of events) {
+    const payload = evt.payload as SlackWebhookPayload | null;
+    if (!payload?.event) continue;
+
+    const event = payload.event;
+
+    // Skip reaction events
+    if (event.type === "reaction_added" || event.type === "reaction_removed") continue;
+
+    // Check if this event matches our channel and ts
+    if (
+      "channel" in event &&
+      event.channel === channel &&
+      "ts" in event &&
+      event.ts === messageTs
+    ) {
+      // Found the message - return its thread_ts (or ts if it's the root)
+      return "thread_ts" in event && event.thread_ts ? event.thread_ts : messageTs;
+    }
+  }
+
+  return null;
 }
