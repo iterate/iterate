@@ -186,9 +186,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         const output = await execInContainer(container.id, [
           "opencode",
           "run",
-          "what is the secret",
+          "what messaging app are you built to help with?",
         ]);
-        expect(output.toLowerCase()).toContain("bananas");
+        expect(output.toLowerCase()).toContain("slack");
       },
       30000,
     );
@@ -196,8 +196,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "claude answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["claude", "-p", "what is the secret"]);
-        expect(output.toLowerCase()).toContain("bananas");
+        const output = await execInContainer(container.id, [
+          "claude",
+          "-p",
+          "what messaging app are you built to help with?",
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
       },
       30000,
     );
@@ -205,8 +209,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "pi answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["pi", "-p", "what is the secret"]);
-        expect(output.toLowerCase()).toContain("bananas");
+        const output = await execInContainer(container.id, [
+          "pi",
+          "-p",
+          "what messaging app are you built to help with?",
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
       },
       30000,
     );

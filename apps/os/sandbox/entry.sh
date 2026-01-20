@@ -30,6 +30,9 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
     --filter=':- .gitignore' \
     "$ITERATE_REPO_LOCAL_DOCKER_MOUNT/" "$ITERATE_REPO/"
 
+  echo "Git status:"
+  (cd "$ITERATE_REPO" && git status --verbose)
+
   # NOTE: Do NOT delete $ITERATE_REPO_LOCAL_DOCKER_MOUNT - it's a mount point and rm would fail or
   # worse, delete host files if mounted read-write. The mount is isolated anyway.
 
