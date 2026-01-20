@@ -244,6 +244,15 @@ function parseWebhookPayload(
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
+  // Ignore regular message events when the bot is mentioned - app_mention handles those
+  // Slack sends both app_mention and message events for the same @mention
+  if (event.type === "message" && "text" in event && event.text && botUserId) {
+    const mentionPattern = new RegExp(`<@${botUserId}>`);
+    if (mentionPattern.test(event.text)) {
+      return { case: "ignored", reason: "Ignored: duplicate of app_mention event" };
+    }
+  }
+
   // Ignore messages without bot authorization
   if (!botUserId) {
     return { case: "ignored", reason: "Ignored: no bot user recipient" };
