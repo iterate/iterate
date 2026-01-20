@@ -4,11 +4,16 @@
  * Handles incoming Slack webhooks forwarded from the OS backend.
  * Creates/reuses agents per Slack thread and sends formatted messages.
  * Uses the harness system for SDK-based session management.
+ *
+ * Message cases:
+ * 1. New thread @mention - Bot mentioned at the start of a new thread
+ * 2. Mid-thread @mention - Bot mentioned in an existing thread (joining conversation)
+ * 3. FYI message - No mention, but agent already exists for this thread
  */
-import path from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import type { AppMentionEvent, GenericMessageEvent, BotMessageEvent } from "@slack/types";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -18,48 +23,91 @@ const logger = console;
 // Working directory for agents - uses ITERATE_REPO env var with fallback to sandbox path
 const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
 
-// SQLite database path - daemon runs from apps/daemon, so db.sqlite is relative to that
-const DAEMON_SQLITE_PATH = path.resolve(
-  process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate",
-  "apps/daemon",
-  process.env.DATABASE_URL || "db.sqlite",
-);
-
 export const slackRouter = new Hono();
 
+// Slack webhook envelope structure
+interface SlackWebhookPayload {
+  token?: string;
+  team_id?: string;
+  api_app_id?: string;
+  event_id?: string;
+  event_time?: number;
+  type: "event_callback" | "url_verification";
+  event: AppMentionEvent | GenericMessageEvent | BotMessageEvent;
+  authorizations?: Array<{
+    enterprise_id: string | null;
+    team_id: string;
+    user_id: string;
+    is_bot: boolean;
+    is_enterprise_install: boolean;
+  }>;
+}
+
+type MessageCase = "new_thread_mention" | "mid_thread_mention" | "fyi_message" | "ignored";
+
+interface ParsedMessage {
+  case: Exclude<MessageCase, "ignored">;
+  event: AppMentionEvent | GenericMessageEvent;
+  threadTs: string;
+}
+
 slackRouter.post("/webhook", async (c) => {
-  const payload = await c.req.json();
+  const payload = (await c.req.json()) as SlackWebhookPayload;
 
-  // Extract thread ID from payload
-  const threadTs = extractThreadTs(payload);
-  const threadId = threadTs && sanitizeThreadId(threadTs);
-  if (!threadId) {
-    return c.json({ error: "Could not extract thread_id from payload" }, 400);
-  }
-
-  const agentSlug = `slack-${threadId}`;
-  const messageInfo = parseSlackPayload(payload);
-
-  // Ignore bot messages
-  if (messageInfo.isBotMessage) {
-    return c.json({ success: true, message: "Ignored: bot message" });
-  }
-
-  // Ignore messages without bot authorization
-  if (!messageInfo.botUserId) {
-    return c.json({ success: true, message: "Ignored: no bot user recipient" });
-  }
+  console.log(`[daemon/slack] Received payload`, payload);
 
   // Store the raw event for later inspection
-  const slackEventId = extractSlackEventId(payload);
+  const slackEventId = payload.event_id;
   const eventId = await storeEvent(payload, slackEventId);
+
+  const parsed = parseWebhookPayload(payload);
+
+  // Handle ignored cases
+  if (parsed.case === "ignored") {
+    return c.json({ success: true, message: parsed.reason, eventId });
+  }
+
+  const { event, threadTs } = parsed;
+  const threadId = sanitizeThreadId(threadTs);
+  const agentSlug = `slack-${threadId}`;
 
   try {
     const existingAgent = await getAgent(agentSlug);
-    const isMention = messageInfo.isBotMentioned;
 
-    // Case 1: @mention - create agent if needed and send with CLI instructions
-    if (isMention) {
+    // Case 1: New thread @mention - create agent and start fresh conversation
+    if (parsed.case === "new_thread_mention") {
+      if (existingAgent) {
+        // Rare: agent already exists for what we think is a new thread
+        const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+        await appendToAgent(existingAgent, message);
+        return c.json({
+          success: true,
+          agentSlug,
+          created: false,
+          case: "mid_thread_mention",
+          eventId,
+        });
+      }
+
+      const agent = await createAgent({
+        slug: agentSlug,
+        harnessType: "opencode",
+        workingDirectory: ITERATE_REPO,
+      });
+
+      const message = formatNewThreadMentionMessage(event, threadTs, eventId);
+      await appendToAgent(agent, message);
+      return c.json({
+        success: true,
+        agentSlug,
+        created: true,
+        case: "new_thread_mention",
+        eventId,
+      });
+    }
+
+    // Case 2: Mid-thread @mention - create agent if needed, join existing conversation
+    if (parsed.case === "mid_thread_mention") {
       let agent = existingAgent;
       let wasCreated = false;
 
@@ -72,31 +120,34 @@ slackRouter.post("/webhook", async (c) => {
         wasCreated = true;
       }
 
-      let message = formatMentionMessage(messageInfo, threadTs!, eventId);
-
-      if (wasCreated) {
-        message += [
-          "",
-          "",
-          `Start by adding the eyes emoji (\`slack.reactions.add({ channel: "${messageInfo.channel}", timestamp: "${threadTs}", name: "eyes" })\`).`,
-          `And remove it again while you reply (e.g. \`await Promise.all([slack.reactions.remove(...), slack.chat.postMessage(...)])\`)`,
-        ].join("\n");
-      }
+      const message = formatMidThreadMentionMessage(event, threadTs, eventId);
       await appendToAgent(agent, message);
-
-      return c.json({ success: true, agentSlug, created: wasCreated, eventId });
+      return c.json({
+        success: true,
+        agentSlug,
+        created: wasCreated,
+        case: "mid_thread_mention",
+        eventId,
+      });
     }
 
-    // Case 2: No @mention but agent exists - send FYI message
-    if (existingAgent) {
-      const message = formatFyiMessage(messageInfo, threadTs!, eventId);
+    // Case 3: FYI message - only forward if agent already exists
+    if (parsed.case === "fyi_message") {
+      if (!existingAgent) {
+        return c.json({
+          success: true,
+          message: "Ignored: no mention and no existing agent",
+          eventId,
+        });
+      }
+
+      const message = formatFyiMessage(event, threadTs, eventId);
       await appendToAgent(existingAgent, message);
-
-      return c.json({ success: true, agentSlug, created: false, fyi: true, eventId });
+      return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }
 
-    // Case 3: No @mention and no agent - ignore
-    return c.json({ success: true, message: "Ignored: no mention and no existing agent", eventId });
+    // Should never reach here
+    return c.json({ error: "Unknown message case" }, 500);
   } catch (error) {
     logger.error("[Slack Webhook] Failed to handle webhook", error);
     return c.json({ error: "Internal server error" }, 500);
@@ -104,39 +155,56 @@ slackRouter.post("/webhook", async (c) => {
 });
 
 /**
- * Extract thread_id from Slack webhook payload.
- *
- * Priority:
- * 1. event.thread_ts - If this is a reply in a thread
- * 2. event.ts - The message timestamp (becomes thread_ts for replies)
- *
- * Thread IDs look like: "1234567890.123456"
- * We sanitize them to "1234567890-123456" for valid slug format.
+ * Parse webhook payload and determine the message case.
  */
-function extractThreadTs(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
+function parseWebhookPayload(
+  payload: SlackWebhookPayload,
+): ParsedMessage | { case: "ignored"; reason: string } {
+  const event = payload.event;
+  const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
+
+  // Ignore bot messages (our own responses echoed back)
+  if ("bot_profile" in event && event.bot_profile) {
+    return { case: "ignored", reason: "Ignored: bot message" };
+  }
+  if ("subtype" in event && event.subtype === "bot_message") {
+    return { case: "ignored", reason: "Ignored: bot message" };
   }
 
-  const p = payload as Record<string, unknown>;
-  const event = p.event as Record<string, unknown> | undefined;
-
-  if (!event) {
-    return null;
+  // Ignore messages without bot authorization
+  if (!botUserId) {
+    return { case: "ignored", reason: "Ignored: no bot user recipient" };
   }
 
-  // If it's a reply, use the thread_ts (parent message timestamp)
-  if (event.thread_ts && typeof event.thread_ts === "string") {
-    return event.thread_ts;
+  // Determine thread timestamp
+  // If it's a reply, use thread_ts (parent message timestamp)
+  // Otherwise use ts (this message becomes the thread root)
+  const threadTs = event.thread_ts || event.ts;
+  if (!threadTs) {
+    return { case: "ignored", reason: "Ignored: no thread timestamp" };
   }
 
-  // Otherwise use the message's own timestamp
-  // This becomes the thread_ts for future replies
-  if (event.ts && typeof event.ts === "string") {
-    return event.ts;
+  // Is this a new thread or a reply to an existing thread?
+  const isNewThread = !event.thread_ts;
+
+  // Is the bot mentioned?
+  const isMention = event.type === "app_mention";
+
+  // Determine case
+  let messageCase: MessageCase;
+  if (isMention && isNewThread) {
+    messageCase = "new_thread_mention";
+  } else if (isMention && !isNewThread) {
+    messageCase = "mid_thread_mention";
+  } else {
+    messageCase = "fyi_message";
   }
 
-  return null;
+  return {
+    case: messageCase,
+    event: event as AppMentionEvent | GenericMessageEvent,
+    threadTs,
+  };
 }
 
 /**
@@ -148,22 +216,10 @@ function sanitizeThreadId(ts: string): string {
 }
 
 /**
- * Extract Slack's event_id from the webhook payload.
- */
-function extractSlackEventId(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const p = payload as Record<string, unknown>;
-  return typeof p.event_id === "string" ? p.event_id : undefined;
-}
-
-/**
  * Store the raw webhook event in SQLite for later inspection.
  * Uses Slack's event_id for deduplication - if already stored, returns existing ID.
  */
-async function storeEvent(
-  payload: Record<string, unknown>,
-  slackEventId?: string,
-): Promise<string> {
+async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): Promise<string> {
   // Check for existing event with same Slack event_id (dedup)
   if (slackEventId) {
     const existing = await db
@@ -181,178 +237,77 @@ async function storeEvent(
     id: eventId,
     type: "slack:webhook",
     externalId: slackEventId,
-    payload,
+    payload: payload as unknown as Record<string, unknown>,
   });
 
   return eventId;
 }
 
-interface SlackMessageInfo {
-  user: string | undefined;
-  channel: string | undefined;
-  text: string | undefined;
-  botUserId: string | undefined;
-  isBotMessage: boolean;
-  isBotMentioned: boolean;
-}
-
-function parseSlackPayload(payload: unknown): SlackMessageInfo {
-  const p = payload as Record<string, unknown>;
-  const event = p.event as Record<string, unknown> | undefined;
-
-  const botUserId = (
-    p as Pick<typeof _examplePayload_newMessage, "authorizations">
-  )?.authorizations?.find((a) => a.is_bot)?.user_id;
-
-  const isBotMessage = !!(payload as typeof _examplePayload_botResponseEcho).event?.bot_profile;
-
-  const user = event?.user as string | undefined;
-  const channel = event?.channel as string | undefined;
-  const text = event?.text as string | undefined;
-
-  const isBotMentioned = botUserId ? JSON.stringify(event).includes(botUserId) : false;
-
-  return { user, channel, text, botUserId, isBotMessage, isBotMentioned };
-}
-
-function formatMentionMessage(info: SlackMessageInfo, threadTs: string, eventId: string): string {
-  const userPart = info.user ? `<@${info.user}>` : "unknown";
-  const channelPart = info.channel || "unknown channel";
-  const textPart = info.text || "(no text)";
+/**
+ * Format message for a new thread @mention.
+ * This is a fresh conversation - provide full context.
+ */
+function formatNewThreadMentionMessage(
+  event: AppMentionEvent | GenericMessageEvent,
+  threadTs: string,
+  eventId: string,
+): string {
+  const user = event.user ? `<@${event.user}>` : "unknown";
+  const channel = event.channel || "unknown";
+  const text = event.text || "(no text)";
 
   return [
-    `New Slack message from ${userPart} in ${channelPart}: ${textPart}`,
+    `You've been mentioned to start a new conversation.`,
     "",
-    `Raw event (for files/attachments/reactions): sqlite3 ${DAEMON_SQLITE_PATH} "SELECT payload FROM events WHERE id='${eventId}'"`,
+    `From: ${user}`,
+    `Message: ${text}`,
     "",
-    `To reply:`,
-    `\`iterate tool slack 'await slack.chat.postMessage({`,
-    `    channel: "${channelPart}",`,
-    `    thread_ts: "${threadTs}",`,
-    `    text: "<your response here>",`,
-    `  })'\``,
-    `You can also use any method from the Slack API like \`slack.reactions.add(...)\`. If needed for plain \`fetch\` requests, you can get the token from \`slack.token\`. If downloading files, make sure you follow redirects. Also, \`require\` is not available, use \`import\` if you need to import a module.`,
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
 }
 
-function formatFyiMessage(info: SlackMessageInfo, threadTs: string, eventId: string): string {
-  const userPart = info.user ? `<@${info.user}>` : "unknown";
-  const channelPart = info.channel || "unknown channel";
-  const textPart = info.text || "(no text)";
+/**
+ * Format message for a mid-thread @mention.
+ * Bot is being called into an existing conversation.
+ */
+function formatMidThreadMentionMessage(
+  event: AppMentionEvent | GenericMessageEvent,
+  threadTs: string,
+  eventId: string,
+): string {
+  const user = event.user ? `<@${event.user}>` : "unknown";
+  const channel = event.channel || "unknown";
+  const text = event.text || "(no text)";
 
   return [
-    `FYI, there was another message in this Slack thread from ${userPart} in ${channelPart}: ${textPart}`,
+    `You've been mentioned in an existing thread.`,
     "",
-    `Raw event: sqlite3 ${DAEMON_SQLITE_PATH} "SELECT payload FROM events WHERE id='${eventId}'"`,
+    `From: ${user}`,
+    `Message: ${text}`,
     "",
-    `If you are SURE this is a direct question to you, you can reply:`,
-    `\`iterate tool slack 'await slack.chat.postMessage({`,
-    `    channel: "${channelPart}",`,
-    `    thread_ts: "${threadTs}",`,
-    `    text: "<your response here>",`,
-    `  })'\``,
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
 }
 
-const _examplePayload_newMessage = {
-  token: "OEdw6XpFLUAfJcE5HsGiIUT9",
-  team_id: "T0675PSN873",
-  api_app_id: "A09A308RAT0",
-  event: {
-    type: "app_mention",
-    user: "U099JH9TAF2",
-    ts: "1768573695.379969",
-    client_msg_id: "b6512af0-40d6-4315-84ea-a5a88295ef50",
-    text: "<@U09A56SNV9A> what is 2+2",
-    team: "T0675PSN873",
-    blocks: [
-      {
-        type: "rich_text",
-        block_id: "wA8vk",
-        elements: [
-          {
-            type: "rich_text_section",
-            elements: [
-              { type: "user", user_id: "U09A56SNV9A" },
-              { type: "text", text: " what is 2+2" },
-            ],
-          },
-        ],
-      },
-    ],
-    channel: "C09B4EGQT7E",
-    event_ts: "1768573695.379969",
-  },
-  type: "event_callback",
-  event_id: "Ev0A94C111L6",
-  event_time: 1768573695,
-  authorizations: [
-    {
-      enterprise_id: null,
-      team_id: "T0675PSN873",
-      user_id: "U09A56SNV9A",
-      is_bot: true,
-      is_enterprise_install: false,
-    },
-  ],
-  is_ext_shared_channel: false,
-  event_context:
-    "4-eyJldCI6ImFwcF9tZW50aW9uIiwidGlkIjoiVDA2NzVQU044NzMiLCJhaWQiOiJBMDlBMzA4UkFUMCIsImNpZCI6IkMwOUI0RUdRVDdFIn0",
-};
-const _examplePayload_botResponseEcho = {
-  token: "OEdw6XpFLUAfJcE5HsGiIUT9",
-  team_id: "T0675PSN873",
-  context_team_id: "T0675PSN873",
-  context_enterprise_id: null,
-  api_app_id: "A09A308RAT0",
-  event: {
-    type: "message",
-    user: "U09A56SNV9A",
-    ts: "1768573701.097949",
-    bot_id: "B09A56SNH1A",
-    app_id: "A09A308RAT0",
-    text: "4",
-    team: "T0675PSN873",
-    bot_profile: {
-      id: "B09A56SNH1A",
-      deleted: false,
-      name: "(mmkal local) Iterate",
-      updated: 1755012483,
-      app_id: "A09A308RAT0",
-      user_id: "U09A56SNV9A",
-      icons: {
-        image_36: "https://a.slack-edge.com/80588/img/plugins/app/bot_36.png",
-        image_48: "https://a.slack-edge.com/80588/img/plugins/app/bot_48.png",
-        image_72: "https://a.slack-edge.com/80588/img/plugins/app/service_72.png",
-      },
-      team_id: "T0675PSN873",
-    },
-    thread_ts: "1768573695.379969",
-    parent_user_id: "U099JH9TAF2",
-    blocks: [
-      {
-        type: "rich_text",
-        block_id: "KLXqF",
-        elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "4" }] }],
-      },
-    ],
-    channel: "C09B4EGQT7E",
-    event_ts: "1768573701.097949",
-    channel_type: "channel",
-  },
-  type: "event_callback",
-  event_id: "Ev0A94C0QY78",
-  event_time: 1768573701,
-  authorizations: [
-    {
-      enterprise_id: null,
-      team_id: "T0675PSN873",
-      user_id: "U09A56SNV9A",
-      is_bot: true,
-      is_enterprise_install: false,
-    },
-  ],
-  is_ext_shared_channel: false,
-  event_context:
-    "4-eyJldCI6Im1lc3NhZ2UiLCJ0aWQiOiJUMDY3NVBTTjg3MyIsImFpZCI6IkEwOUEzMDhSQVQwIiwiY2lkIjoiQzA5QjRFR1FUN0UifQ",
-};
+/**
+ * Format message for FYI (no mention but agent exists).
+ * Another message in a thread the agent is participating in.
+ */
+function formatFyiMessage(
+  event: AppMentionEvent | GenericMessageEvent,
+  threadTs: string,
+  eventId: string,
+): string {
+  const user = event.user ? `<@${event.user}>` : "unknown";
+  const channel = event.channel || "unknown";
+  const text = event.text || "(no text)";
+
+  return [
+    `FYI: Another message in this thread (you were not @mentioned).`,
+    "",
+    `From: ${user}`,
+    `Message: ${text}`,
+    "",
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
+  ].join("\n");
+}
