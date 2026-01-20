@@ -89,7 +89,7 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 }
 
 /**
- * Clear any existing GitHub URL rewrites from git config.
+ * Clear any existing GitHub URL rewrites from git config and logout from gh CLI.
  * Called when GitHub is disconnected or before setting a new token.
  */
 export async function clearGitHubCredentials(): Promise<void> {
@@ -115,11 +115,20 @@ export async function clearGitHubCredentials(): Promise<void> {
   } catch {
     // Ignore errors reading config
   }
+
+  // Logout from gh CLI (best-effort - don't fail credential setup if logout fails)
+  try {
+    await x("gh", ["auth", "logout", "-h", "github.com", "--yes"], { throwOnError: true });
+    console.log("[platform] Logged out of gh CLI");
+  } catch (err) {
+    console.warn("[platform] gh auth logout failed (may not be logged in):", err);
+  }
 }
 
 /**
  * Configure git to use a GitHub access token for authentication.
  * Uses URL rewrite so all https://github.com/ URLs automatically use the token.
+ * Also authenticates the `gh` CLI with the same token.
  * Clears any previous tokens to avoid accumulating stale entries.
  */
 export async function configureGitHubCredential(token: string): Promise<void> {
@@ -136,6 +145,16 @@ export async function configureGitHubCredential(token: string): Promise<void> {
     "global",
   );
   console.log("[platform] Configured git credential helper for GitHub");
+
+  // Authenticate gh CLI with the same token
+  const proc = x("gh", ["auth", "login", "--with-token"], { throwOnError: true });
+  if (!proc.process?.stdin) {
+    throw new Error("Failed to get stdin for gh auth login process");
+  }
+  proc.process.stdin.write(token);
+  proc.process.stdin.end();
+  await proc;
+  console.log("[platform] Authenticated gh CLI with GitHub token");
 }
 
 export type RepoInfo = {
