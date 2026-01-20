@@ -119,24 +119,24 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
     expect(result).toContain("mitmproxy");
   });
 
-  test("passthrough mode intercepts HTTP/HTTPS", async () => {
+  test("passthrough mode intercepts HTTP/HTTPS via env vars", async () => {
     // Start mitmproxy in passthrough mode (no addon, no worker)
     await execInContainer(containerId, ["sh", "-c", "mitmdump -p 8888 --ssl-insecure -q &"]);
     await new Promise((r) => setTimeout(r, 2000));
 
-    // HTTP request
+    // HTTP request using HTTP_PROXY env var (no -x flag!)
     const httpResult = await execInContainer(containerId, [
       "sh",
       "-c",
-      "curl -s --max-time 5 -x http://127.0.0.1:8888 http://httpbin.org/get 2>&1",
+      "HTTP_PROXY=http://127.0.0.1:8888 curl -s --max-time 5 http://httpbin.org/get 2>&1",
     ]);
     expect(httpResult).toContain("origin");
 
-    // HTTPS request (with -k for self-signed cert)
+    // HTTPS request using HTTPS_PROXY env var (with -k for self-signed cert)
     const httpsResult = await execInContainer(containerId, [
       "sh",
       "-c",
-      "curl -sk --max-time 5 -x http://127.0.0.1:8888 https://httpbin.org/get 2>&1",
+      "HTTPS_PROXY=http://127.0.0.1:8888 curl -sk --max-time 5 https://httpbin.org/get 2>&1",
     ]);
     expect(httpsResult).toContain("origin");
 
@@ -144,7 +144,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
     await execInContainer(containerId, ["sh", "-c", "pkill mitmdump || true"]);
   }, 30000);
 
-  test("forwards to worker endpoint and injects OpenAI token", async () => {
+  test("forwards to worker endpoint and injects OpenAI token via HTTPS_PROXY", async () => {
     // Use host.docker.internal to reach host's localhost
     const baseUrl = (process.env.VITE_PUBLIC_URL || "http://localhost:5173").replace(
       "localhost",
@@ -171,19 +171,21 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
       );
     }
 
-    // Start mitmproxy with addon (addon derives /api/egress-proxy from base URL)
+    // Start mitmproxy with addon pointing to egress proxy endpoint
+    const egressProxyUrl = `${baseUrl}/api/egress-proxy`;
     await execInContainer(containerId, [
       "sh",
       "-c",
-      `ITERATE_OS_BASE_URL="${baseUrl}" ITERATE_OS_API_KEY="test-key" mitmdump -p 8889 -s ${addonPath} --ssl-insecure -q &`,
+      `ITERATE_EGRESS_PROXY_URL="${egressProxyUrl}" ITERATE_OS_API_KEY="test-key" mitmdump -p 8889 -s ${addonPath} --ssl-insecure -q &`,
     ]);
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Request OpenAI API through proxy - worker should inject token
+    // Request OpenAI API using HTTPS_PROXY env var (no -x flag!)
+    // This is how real code in the sandbox will work
     const result = await execInContainer(containerId, [
       "sh",
       "-c",
-      "curl -sk --max-time 5 -x http://127.0.0.1:8889 https://api.openai.com/v1/models 2>&1",
+      "HTTPS_PROXY=http://127.0.0.1:8889 curl -sk --max-time 10 https://api.openai.com/v1/models 2>&1",
     ]);
 
     // If token was injected correctly, we get a models list (contains "object")

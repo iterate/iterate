@@ -1,4 +1,4 @@
-import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, timestamp, text, uniqueIndex, unique, jsonb, index } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
@@ -17,6 +17,18 @@ export type MachineState = (typeof MachineState)[number];
 // Machine types
 export const MachineType = ["daytona", "local-docker", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
+
+// Secret metadata for OAuth tokens
+export type SecretMetadata = {
+  // For OAuth tokens - encrypted refresh token for automatic renewal
+  encryptedRefreshToken?: string;
+  // OAuth token expiry (ISO string)
+  expiresAt?: string;
+  // OAuth scopes granted
+  scopes?: string[];
+  // Connection ID this secret is associated with
+  connectionId?: string;
+};
 
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
@@ -222,7 +234,7 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   connections: many(projectConnection),
 }));
 
-// Encrypted environment variables for a project
+// Environment variables for a project (non-secret, plain text values)
 export const projectEnvVar = pgTable(
   "project_env_var",
   (t) => ({
@@ -233,7 +245,7 @@ export const projectEnvVar = pgTable(
       .references(() => project.id, { onDelete: "cascade" }),
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
-    encryptedValue: t.text().notNull(),
+    value: t.text().notNull(), // Plain text - secrets go in the secret table
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
@@ -252,6 +264,50 @@ export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   machine: one(machine, {
     fields: [projectEnvVar.machineId],
     references: [machine.id],
+  }),
+}));
+
+// Secrets table - encrypted values with hierarchy (global > org > project > user)
+// All scope fields nullable: null = global scope
+export const secret = pgTable(
+  "secret",
+  (t) => ({
+    id: iterateId("sec"),
+    organizationId: t.text().references(() => organization.id, { onDelete: "cascade" }),
+    projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+    key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
+    encryptedValue: t.text().notNull(),
+    egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
+    metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
+    lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use
+    lastFailedAt: t.timestamp({ withTimezone: true }), // Last failed use (401, etc.)
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Unique within each scope level (NULLS NOT DISTINCT so global secrets with NULL scope are unique)
+    unique("secret_scope_key_idx")
+      .on(t.organizationId, t.projectId, t.userId, t.key)
+      .nullsNotDistinct(),
+    index().on(t.organizationId),
+    index().on(t.projectId),
+    index().on(t.userId),
+    index().on(t.key),
+  ],
+);
+
+export const secretRelations = relations(secret, ({ one }) => ({
+  organization: one(organization, {
+    fields: [secret.organizationId],
+    references: [organization.id],
+  }),
+  project: one(project, {
+    fields: [secret.projectId],
+    references: [project.id],
+  }),
+  user: one(user, {
+    fields: [secret.userId],
+    references: [user.id],
   }),
 }));
 

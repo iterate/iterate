@@ -41,7 +41,7 @@ if [ "$MODE" = "worker" ]; then
     log "Testing with worker forwarding..."
     warn "Make sure the OS app is running (pnpm dev in apps/os)"
     
-    export ITERATE_OS_BASE_URL="http://localhost:5173"
+    export ITERATE_EGRESS_PROXY_URL="http://localhost:5173/api/egress-proxy"
     export ITERATE_OS_API_KEY="test-dev-key"
 else
     log "Testing passthrough mode (no worker)..."

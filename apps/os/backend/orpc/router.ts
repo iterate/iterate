@@ -271,20 +271,13 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   };
 
   const [decryptedEnvVars, slackToken, repoResults] = await Promise.all([
-    // Decrypt all env vars (project-level and machine-specific)
-    Promise.all(
-      projectEnvVars.map(async (envVar) => {
-        try {
-          return {
-            key: envVar.key,
-            value: await decrypt(envVar.encryptedValue),
-            machineId: envVar.machineId,
-          };
-        } catch (err) {
-          logger.error("Failed to decrypt env var", { key: envVar.key, err });
-          return null;
-        }
-      }),
+    // Env vars are now stored plain text (secrets go in the secret table)
+    Promise.resolve(
+      projectEnvVars.map((envVar) => ({
+        key: envVar.key,
+        value: envVar.value,
+        machineId: envVar.machineId,
+      })),
     ),
     // Decrypt Slack token if available
     (async () => {
@@ -308,7 +301,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
               return null;
             }
             return {
-              url: `https://x-access-token:${installationToken}@github.com/${repoInfo.owner}/${repoInfo.name}.git`,
+              // Plain URL - auth is handled by GIT_CONFIG_* env vars which rewrite to include magic string
+              url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
               branch: repoInfo.defaultBranch,
               path: `~/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
               owner: repoInfo.owner,
@@ -339,9 +333,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   }
 
   // Add tokens from connections
-  if (installationToken) {
-    envVars["ITERATE_GITHUB_ACCESS_TOKEN"] = installationToken;
-  }
+  // Note: GitHub token is NOT injected here - it's handled via magic string in GIT_CONFIG_* env vars
+  // which the egress proxy resolves. This avoids token rotation issues.
   if (slackToken) {
     envVars["ITERATE_SLACK_ACCESS_TOKEN"] = slackToken;
   }

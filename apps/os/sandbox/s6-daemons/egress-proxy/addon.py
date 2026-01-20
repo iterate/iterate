@@ -1,15 +1,19 @@
 """
 mitmproxy addon for egress proxy.
 
-Routes ALL HTTP/HTTPS requests through the iterate OS worker endpoint.
+Routes ALL HTTP/HTTPS requests through the iterate egress proxy worker.
 WebSocket connections pass through transparently to their intended destination.
 
-The worker handles:
+The egress proxy worker handles:
 - Token injection for specific hosts (OpenAI, Anthropic, etc.)
+- Secret management via getIterateSecret() magic strings
+- OAuth token refresh on 401 responses
 - Security controls and observability
 
 Configuration:
-- ITERATE_OS_BASE_URL: The iterate OS base URL (required, e.g. https://iterate.com)
+- ITERATE_EGRESS_PROXY_URL: Full URL to the egress proxy endpoint (required)
+  - In production: https://egress.iterate.com/api/egress-proxy
+  - In dev: http://localhost:5173/api/egress-proxy
 - ITERATE_OS_API_KEY: API key for authenticating with the worker (required)
 """
 
@@ -18,22 +22,19 @@ from urllib.parse import urlparse
 from mitmproxy import http, ctx
 
 # Configuration from environment
-BASE_URL = os.environ.get("ITERATE_OS_BASE_URL", "")
+EGRESS_PROXY_URL = os.environ.get("ITERATE_EGRESS_PROXY_URL", "")
 API_KEY = os.environ.get("ITERATE_OS_API_KEY", "")
-
-# Derive worker endpoint from base URL
-WORKER_ENDPOINT = f"{BASE_URL.rstrip('/')}/api/egress-proxy" if BASE_URL else ""
 
 
 class EgressProxyAddon:
     """
-    Addon that forwards all HTTP/HTTPS requests through the worker endpoint.
+    Addon that forwards all HTTP/HTTPS requests through the egress proxy worker.
     WebSocket connections pass through directly to their destination.
     
     Flow for HTTP/HTTPS:
     1. Client makes request to original URL
     2. mitmproxy intercepts
-    3. We rewrite request to go to worker endpoint
+    3. We rewrite request to go to egress proxy worker
     4. Worker handles token injection, forwards to actual destination
     5. Response flows back through mitmproxy to client
     
@@ -43,8 +44,8 @@ class EgressProxyAddon:
     """
     
     def __init__(self):
-        if not BASE_URL:
-            ctx.log.warn("[egress] ITERATE_OS_BASE_URL not set - requests will pass through directly")
+        if not EGRESS_PROXY_URL:
+            ctx.log.warn("[egress] ITERATE_EGRESS_PROXY_URL not set - requests will pass through directly")
         if not API_KEY:
             ctx.log.warn("[egress] ITERATE_OS_API_KEY not set - worker auth will fail")
     
@@ -69,12 +70,12 @@ class EgressProxyAddon:
         
         ctx.log.info(f"[egress] {flow.request.method} {original_url}")
         
-        # If no worker endpoint configured, let request pass through directly
-        if not WORKER_ENDPOINT:
+        # If no egress proxy URL configured, let request pass through directly
+        if not EGRESS_PROXY_URL:
             return
         
-        # Rewrite request to go through worker
-        parsed = urlparse(WORKER_ENDPOINT)
+        # Rewrite request to go through egress proxy worker
+        parsed = urlparse(EGRESS_PROXY_URL)
         
         # Store original request info in custom headers for the worker
         flow.request.headers["X-Iterate-Original-URL"] = original_url

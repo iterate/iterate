@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
-import type { Variables } from "../../worker.ts";
+import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";

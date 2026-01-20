@@ -3,7 +3,6 @@ import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectEnvVar } from "../../db/schema.ts";
-import { encrypt } from "../../utils/encryption.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
@@ -26,12 +25,13 @@ export const envVarRouter = router({
         orderBy: (vars, { asc }) => [asc(vars.key)],
       });
 
+      // Note: env vars are stored plain-text now. Secrets go in the secret table.
       return envVars.map((v) => ({
         id: v.id,
         key: v.key,
         machineId: v.machineId,
         type: v.type,
-        maskedValue: maskValue(v.encryptedValue),
+        value: v.value,
         createdAt: v.createdAt,
         updatedAt: v.updatedAt,
       }));
@@ -53,8 +53,6 @@ export const envVarRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const encryptedValue = await encrypt(input.value);
-
       const existing = await ctx.db.query.projectEnvVar.findFirst({
         where: and(
           eq(projectEnvVar.projectId, ctx.project.id),
@@ -66,7 +64,7 @@ export const envVarRouter = router({
       if (existing) {
         const [updated] = await ctx.db
           .update(projectEnvVar)
-          .set({ encryptedValue })
+          .set({ value: input.value })
           .where(eq(projectEnvVar.id, existing.id))
           .returning();
 
@@ -82,7 +80,7 @@ export const envVarRouter = router({
           id: updated.id,
           key: updated.key,
           machineId: updated.machineId,
-          maskedValue: maskValue(updated.encryptedValue),
+          value: updated.value,
           createdAt: updated.createdAt,
           updatedAt: updated.updatedAt,
         };
@@ -94,7 +92,7 @@ export const envVarRouter = router({
           projectId: ctx.project.id,
           machineId: input.machineId,
           key: input.key,
-          encryptedValue,
+          value: input.value,
         })
         .returning();
 
@@ -117,7 +115,7 @@ export const envVarRouter = router({
         id: created.id,
         key: created.key,
         machineId: created.machineId,
-        maskedValue: maskValue(created.encryptedValue),
+        value: created.value,
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
       };
@@ -173,10 +171,3 @@ export const envVarRouter = router({
       return { success: true };
     }),
 });
-
-function maskValue(encryptedValue: string): string {
-  if (encryptedValue.length <= 8) {
-    return "***";
-  }
-  return `${encryptedValue.substring(0, 4)}...${encryptedValue.substring(encryptedValue.length - 4)}`;
-}

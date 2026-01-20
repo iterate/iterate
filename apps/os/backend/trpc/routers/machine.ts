@@ -10,7 +10,7 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { env, type CloudflareEnv } from "../../../env.ts";
+import type { CloudflareEnv } from "../../cloudflare-env.ts";
 import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
@@ -303,6 +303,8 @@ export const machineRouter = router({
         buildProxyUrl: () => "", // Not used during creation
       });
 
+      // Get project-level env vars (plain text, not secrets)
+      // Secrets (OpenAI, Anthropic keys) are injected by the egress proxy, not here
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
         where: and(
           eq(schema.projectEnvVar.projectId, ctx.project.id),
@@ -310,22 +312,7 @@ export const machineRouter = router({
         ),
       });
 
-      const envVars = Object.fromEntries(
-        await Promise.all(
-          globalEnvVars.map(
-            async (envVar) => [envVar.key, await decrypt(envVar.encryptedValue)] as const,
-          ),
-        ),
-      );
-
-      // If there is no defined key, use the default one for now (only if defined)
-      // TODO: very dangerous, remove this as soon as we have things setup
-      if (!envVars["OPENAI_API_KEY"] && env.OPENAI_API_KEY) {
-        envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
-      }
-      if (!envVars["ANTHROPIC_API_KEY"] && env.ANTHROPIC_API_KEY) {
-        envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
-      }
+      const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
       // Note: We no longer archive existing machines here - the new machine starts in 'starting' state
       // and only becomes 'active' (archiving the old one) when the daemon reports ready
@@ -342,6 +329,12 @@ export const machineRouter = router({
             ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
             ITERATE_OS_API_KEY: apiKey,
             ITERATE_MACHINE_ID: machineId,
+            // Egress proxy URL for sandbox mitmproxy (mounted on main worker)
+            ITERATE_EGRESS_PROXY_URL: `${ctx.env.VITE_PUBLIC_URL}/api/egress-proxy`,
+            // GitHub auth via egress proxy magic string - gh CLI sends this in Authorization header
+            GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
+            GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
+            // Note: git URL rewriting is configured in entry.sh via git config commands
             // In dev, use the current git branch for Daytona sandboxes
             ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
               ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }

@@ -26,7 +26,9 @@ warn() { echo -e "${YELLOW}[test]${NC} $1"; }
 error() { echo -e "${RED}[test]${NC} $1"; }
 
 # Configuration - use your Cloudflare tunnel
-ITERATE_OS_BASE_URL="${ITERATE_OS_BASE_URL:-https://dev-nick-os.dev.iterate.com}"
+# For production: https://egress.iterate.com/api/egress-proxy
+# For dev tunnel: https://dev-nick-os.dev.iterate.com/api/egress-proxy
+ITERATE_EGRESS_PROXY_URL="${ITERATE_EGRESS_PROXY_URL:-https://dev-nick-os.dev.iterate.com/api/egress-proxy}"
 ITERATE_OS_API_KEY="${ITERATE_OS_API_KEY:-test-dev-key}"
 
 log "Building Docker image..."
@@ -34,12 +36,12 @@ docker build -t iterate-sandbox-test -f "$SCRIPT_DIR/Dockerfile" "$REPO_ROOT"
 
 log ""
 log "Running egress proxy test in container..."
-log "Worker base URL: $ITERATE_OS_BASE_URL"
+log "Egress proxy URL: $ITERATE_EGRESS_PROXY_URL"
 log ""
 
 # Run test commands inside container
 docker run --rm \
-  -e ITERATE_OS_BASE_URL="$ITERATE_OS_BASE_URL" \
+  -e ITERATE_EGRESS_PROXY_URL="$ITERATE_EGRESS_PROXY_URL" \
   -e ITERATE_OS_API_KEY="$ITERATE_OS_API_KEY" \
   -v "$REPO_ROOT:/local-iterate-repo:ro" \
   iterate-sandbox-test \
@@ -64,7 +66,7 @@ cp /local-iterate-repo/apps/os/sandbox/s6-daemons/egress-proxy/addon.py /app/egr
 
 # Start mitmproxy in background
 log "Starting mitmproxy on port 8888..."
-ITERATE_OS_BASE_URL="$ITERATE_OS_BASE_URL" \
+ITERATE_EGRESS_PROXY_URL="$ITERATE_EGRESS_PROXY_URL" \
 ITERATE_OS_API_KEY="$ITERATE_OS_API_KEY" \
 mitmdump -p 8888 -s /app/egress-proxy/addon.py --ssl-insecure &
 PROXY_PID=$!

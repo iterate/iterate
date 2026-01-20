@@ -1,7 +1,12 @@
-import type { CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
+
+/** Minimal env type for PostHog functions */
+type PostHogEnv = {
+  POSTHOG_PUBLIC_KEY?: string;
+  VITE_APP_STAGE: string;
+};
 
 /**
  * Capture a server-side event via PostHog HTTP API.
@@ -9,7 +14,7 @@ const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
  * Use with waitUntil() in Cloudflare Workers to ensure delivery.
  */
 export async function captureServerEvent(
-  env: CloudflareEnv,
+  env: PostHogEnv,
   params: {
     distinctId: string;
     event: string;
@@ -91,7 +96,7 @@ function parseStackTrace(stack: string | undefined): Array<{
  * Use with waitUntil() in Cloudflare Workers to ensure delivery.
  */
 export async function captureServerException(
-  env: CloudflareEnv,
+  env: PostHogEnv,
   params: {
     distinctId: string;
     error: Error;
