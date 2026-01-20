@@ -107,14 +107,10 @@ function MachineDetailPage() {
     },
   });
 
-  // Copy helpers
+  // Copy helper
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
     toast.success(`Copied: ${text}`);
-  };
-
-  const copyCommand = (cmd: string) => {
-    copyToClipboard(cmd);
   };
 
   // Query agents from the daemon
@@ -304,8 +300,8 @@ function MachineDetailPage() {
             </div>
           )}
 
-          {/* Commands - copyable shell commands */}
-          {commands.length > 0 && (
+          {/* Commands - open in terminal */}
+          {commands.length > 0 && iterateDaemonService && (
             <>
               <div className="pt-4 border-t">
                 <h3 className="text-sm font-medium text-muted-foreground mb-2">Commands</h3>
@@ -321,10 +317,20 @@ function MachineDetailPage() {
                       <div className="text-sm font-medium truncate">{cmd.label}</div>
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => copyCommand(cmd.command)}>
-                    <Copy className="h-4 w-4 mr-1" />
-                    Copy
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {iterateDaemonService.options.map((option, optIndex) => (
+                      <a
+                        key={optIndex}
+                        href={buildAgentTerminalUrl(option.url, cmd.command)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {option.label}
+                      </a>
+                    ))}
+                  </div>
                 </div>
               ))}
             </>
