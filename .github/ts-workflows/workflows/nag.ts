@@ -18,6 +18,7 @@ export default {
   },
   jobs: {
     run: {
+      if: "false",
       concurrency: {
         group: "global-nag-concurrency-group",
         "cancel-in-progress": false,
