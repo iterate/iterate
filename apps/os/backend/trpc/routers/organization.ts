@@ -461,4 +461,18 @@ export const organizationRouter = router({
 
       return { success: true };
     }),
+
+  // Leave an organization (self-removal)
+  leave: orgProtectedProcedure.mutation(async ({ ctx }) => {
+    await ctx.db
+      .delete(organizationUserMembership)
+      .where(
+        and(
+          eq(organizationUserMembership.organizationId, ctx.organization.id),
+          eq(organizationUserMembership.userId, ctx.user.id),
+        ),
+      );
+
+    return { success: true };
+  }),
 });
