@@ -464,24 +464,6 @@ export const organizationRouter = router({
 
   // Leave an organization (self-removal)
   leave: orgProtectedProcedure.mutation(async ({ ctx }) => {
-    // Check if user is the only owner
-    if (ctx.membership?.role === "owner") {
-      const owners = await ctx.db.query.organizationUserMembership.findMany({
-        where: and(
-          eq(organizationUserMembership.organizationId, ctx.organization.id),
-          eq(organizationUserMembership.role, "owner"),
-        ),
-      });
-
-      if (owners.length === 1) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Cannot leave organization as the only owner. Transfer ownership first or delete the organization.",
-        });
-      }
-    }
-
     await ctx.db
       .delete(organizationUserMembership)
       .where(

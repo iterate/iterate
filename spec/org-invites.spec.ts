@@ -207,27 +207,4 @@ test.describe("organization invites", () => {
     // Should be back on welcome page
     await page.getByText("Welcome to Iterate").waitFor();
   });
-
-  test("sole owner cannot leave organization", async ({ page }) => {
-    const timestamp = Date.now();
-    const ownerEmail = `sole-owner-${timestamp}+test@nustom.com`;
-    const orgName = `Sole Owner Org ${timestamp}`;
-
-    await login(page, ownerEmail);
-    await createOrganization(page, orgName);
-
-    // Try to leave from user settings
-    await page.goto("/user/settings");
-    await page.getByText("Organizations").waitFor();
-
-    // Click leave button on the org card (LogOut icon button)
-    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
-    await orgCard.locator("button").click();
-
-    // Confirm in dialog
-    await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
-
-    // Should get error
-    await toast.error(page, "Cannot leave organization as the only owner").waitFor();
-  });
 });
