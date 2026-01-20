@@ -228,6 +228,10 @@ function parseWebhookPayload(
     if (event.item.type !== "message") {
       return { case: "ignored", reason: "Ignored: reaction not on message" };
     }
+    // Ignore the bot's own reactions
+    if (event.user === botUserId) {
+      return { case: "ignored", reason: "Ignored: bot's own reaction" };
+    }
     return {
       case: event.type,
       event,
