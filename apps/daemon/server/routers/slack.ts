@@ -79,16 +79,17 @@ interface ParsedReaction {
 slackRouter.post("/webhook", async (c) => {
   const payload = (await c.req.json()) as SlackWebhookPayload;
 
-  console.log(`[daemon/slack] Received payload`, payload);
-
   // Store the raw event for later inspection
   const slackEventId = payload.event_id;
   const eventId = await storeEvent(payload, slackEventId);
+
+  console.log(`[daemon/slack] ${eventId} Received payload`, JSON.stringify(payload));
 
   const parsed = parseWebhookPayload(payload);
 
   // Handle ignored cases
   if (parsed.case === "ignored") {
+    console.log(`[daemon/slack] ${eventId} Ignored: ${parsed.reason}`);
     return c.json({ success: true, message: parsed.reason, eventId });
   }
 
@@ -97,11 +98,9 @@ slackRouter.post("/webhook", async (c) => {
     try {
       const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
       if (!threadTs) {
-        return c.json({
-          success: true,
-          message: "Ignored: could not find thread for reacted message",
-          eventId,
-        });
+        const message = "Ignored: could not find thread for reacted message";
+        console.log(`[daemon/slack] ${eventId} Ignored: ${message}`);
+        return c.json({ success: true, message, eventId });
       }
 
       const threadId = sanitizeThreadId(threadTs);
@@ -109,11 +108,9 @@ slackRouter.post("/webhook", async (c) => {
       const existingAgent = await getAgent(agentSlug);
 
       if (!existingAgent) {
-        return c.json({
-          success: true,
-          message: "Ignored: no agent for this thread",
-          eventId,
-        });
+        const message = "Ignored: no agent for this thread";
+        console.log(`[daemon/slack] ${eventId} Ignored: ${message}`);
+        return c.json({ success: true, message, eventId });
       }
 
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
