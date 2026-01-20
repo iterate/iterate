@@ -809,6 +809,9 @@ importers:
       remeda:
         specifier: ^2.32.0
         version: 2.32.0
+      safe-stringify:
+        specifier: ^1.2.0
+        version: 1.2.0
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.3(react@19.2.3))(react@19.2.3)

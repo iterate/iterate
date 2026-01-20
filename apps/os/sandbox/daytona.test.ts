@@ -540,7 +540,11 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         const gitStatusOutput = gitStatusResult.result ?? "";
         console.log(gitStatusOutput);
 
-        expect(gitStatusOutput).toContain("On branch");
+        // In CI, the repo is checked out at a specific SHA (detached HEAD), not a branch
+        // So we check for either "On branch" or "HEAD detached at" to verify git status works
+        expect(
+          gitStatusOutput.includes("On branch") || gitStatusOutput.includes("HEAD detached at"),
+        ).toBe(true);
         console.log("");
         console.log("✓ SUCCESS: git status works correctly");
       } finally {
