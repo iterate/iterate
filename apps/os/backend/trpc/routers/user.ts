@@ -28,6 +28,26 @@ export const userRouter = router({
     }));
   }),
 
+  // Get user's memberships with org details (for settings page)
+  memberships: protectedProcedure.query(async ({ ctx }) => {
+    const memberships = await ctx.db.query.organizationUserMembership.findMany({
+      where: eq(organizationUserMembership.userId, ctx.user.id),
+      with: {
+        organization: true,
+      },
+    });
+
+    return memberships.map((m) => ({
+      id: m.id,
+      role: m.role,
+      organization: {
+        id: m.organization.id,
+        name: m.organization.name,
+        slug: m.organization.slug,
+      },
+    }));
+  }),
+
   // Update user settings
   updateSettings: protectedProcedure
     .input(

@@ -118,4 +118,116 @@ test.describe("organization invites", () => {
     await page.getByText(orgName).waitFor({ state: "hidden" });
     await page.getByLabel("Organization name").waitFor();
   });
+
+  test("user in org sees pending invites in user settings and can accept", async ({ page }) => {
+    const timestamp = Date.now();
+    const userEmail = `settings-user-${timestamp}+test@nustom.com`;
+    const inviterEmail = `settings-inviter-${timestamp}+test@nustom.com`;
+    const userOrgName = `User Org ${timestamp}`;
+    const inviterOrgName = `Inviter Org ${timestamp}`;
+
+    // User creates their own org first
+    await login(page, userEmail);
+    await createOrganization(page, userOrgName);
+    await logout(page);
+
+    // Inviter creates org and invites the user
+    await login(page, inviterEmail);
+    await createOrganization(page, inviterOrgName);
+
+    await sidebarButton(page, "Team").click();
+    await page.getByLabel("Invite by email").fill(userEmail);
+    await page.getByRole("button", { name: "Invite", exact: true }).click();
+    await toast.success(page, "Invite sent").waitFor();
+
+    await logout(page);
+
+    // User logs back in - go directly to user settings
+    await page.goto("/login");
+    await page.getByTestId("email-input").fill(userEmail);
+    await page.getByTestId("email-submit-button").click();
+    await page.getByText("Enter verification code").waitFor();
+    await page.locator('input[inputmode="numeric"]').first().focus();
+    await page.keyboard.type("424242");
+
+    // Wait for redirect to org, then navigate to settings
+    await page.locator("[data-component='OrgSwitcher']").waitFor();
+    await page.goto("/user/settings");
+
+    await page.getByText("Pending invites").waitFor();
+    await page.getByText(inviterOrgName).waitFor();
+
+    // Accept the invite - find the card in the Pending invites section
+    const pendingSection = page.locator("div").filter({ hasText: "Pending invites" }).first();
+    const inviteCard = pendingSection
+      .locator("div.border.rounded-lg")
+      .filter({ hasText: inviterOrgName });
+    await inviteCard.locator("button").first().click(); // Check icon button (accept)
+    await toast.success(page, `Joined ${inviterOrgName}`).waitFor();
+
+    // Should be redirected to the new org
+    await page.locator("[data-component='OrgSwitcher']", { hasText: inviterOrgName }).waitFor();
+  });
+
+  test("user can leave an organization from user settings", async ({ page }) => {
+    const timestamp = Date.now();
+    const userEmail = `leave-user-${timestamp}+test@nustom.com`;
+    const ownerEmail = `leave-owner-${timestamp}+test@nustom.com`;
+    const orgName = `Leave Test Org ${timestamp}`;
+
+    // Owner creates org and adds the user
+    await login(page, ownerEmail);
+    await createOrganization(page, orgName);
+
+    await sidebarButton(page, "Team").click();
+    await page.getByLabel("Invite by email").fill(userEmail);
+    await page.getByRole("button", { name: "Invite", exact: true }).click();
+    await toast.success(page, "Invite sent").waitFor();
+
+    await logout(page);
+
+    // User accepts invite from welcome page
+    await login(page, userEmail);
+    await page.getByText(orgName).waitFor();
+    await page.getByRole("button", { name: "Accept" }).click();
+    await toast.success(page, `Joined ${orgName}`).waitFor();
+
+    // Now leave the org from user settings
+    await page.goto("/user/settings");
+    await page.getByText("Organizations").waitFor();
+
+    // Click leave button on the org card (LogOut icon button)
+    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
+    await orgCard.locator("button").click();
+
+    // Confirm in dialog
+    await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
+    await toast.success(page, `Left ${orgName}`).waitFor();
+
+    // Should be back on welcome page
+    await page.getByText("Welcome to Iterate").waitFor();
+  });
+
+  test("sole owner cannot leave organization", async ({ page }) => {
+    const timestamp = Date.now();
+    const ownerEmail = `sole-owner-${timestamp}+test@nustom.com`;
+    const orgName = `Sole Owner Org ${timestamp}`;
+
+    await login(page, ownerEmail);
+    await createOrganization(page, orgName);
+
+    // Try to leave from user settings
+    await page.goto("/user/settings");
+    await page.getByText("Organizations").waitFor();
+
+    // Click leave button on the org card (LogOut icon button)
+    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
+    await orgCard.locator("button").click();
+
+    // Confirm in dialog
+    await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
+
+    // Should get error
+    await toast.error(page, "Cannot leave organization as the only owner").waitFor();
+  });
 });
