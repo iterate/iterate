@@ -8,9 +8,9 @@
  * 4. Create Daytona sandbox from snapshot with injected env vars
  * 5. Wait for bootstrap request, return API keys in response
  * 6. Verify daemon/opencode logs look sensible
- * 7. Run `opencode run "what is the secret"` → assert "bananas"
- * 8. Run `claude -p "what is the secret"` → assert "bananas"
- * 9. Run `pi -p "what is the secret"` → assert "bananas"
+ * 7. Run `opencode run "what messaging platform is this agent for"` → assert "slack"
+ * 8. Run `claude -p "what messaging platform is this agent for"` → assert "slack"
+ * 9. Run `pi -p "what messaging platform is this agent for"` → assert "slack"
  * 10. Verify `git status` works in iterate repo
  * 11. Always delete sandbox in finally block
  *
@@ -427,12 +427,12 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log(opencodeLogs.result);
 
         // 10. Run opencode smoketest
-        printSection("OPENCODE SMOKETEST: 'what is the secret?'");
-        console.log('Running: opencode run "what is the secret"');
+        printSection("OPENCODE SMOKETEST: 'what messaging platform is this agent for?'");
+        console.log('Running: opencode run "what messaging platform is this agent for"');
         console.log("");
 
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what is the secret\\""',
+          'bash -c "source ~/.iterate/.env && opencode run \\"what messaging platform is this agent for\\""',
         );
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),
@@ -458,17 +458,17 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(opencodeOutput.toLowerCase()).toContain("bananas");
+        expect(opencodeOutput.toLowerCase()).toContain("slack");
         console.log("");
-        console.log("✓ SUCCESS: opencode correctly answered the secret");
+        console.log("✓ SUCCESS: opencode correctly identified the messaging platform");
 
         // 11. Run claude smoketest
-        printSection("CLAUDE SMOKETEST: 'what is the secret?'");
-        console.log('Running: claude -p "what is the secret"');
+        printSection("CLAUDE SMOKETEST: 'what messaging platform is this agent for?'");
+        console.log('Running: claude -p "what messaging platform is this agent for"');
         console.log("");
 
         const claudePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && claude -p \\"what is the secret\\""',
+          'bash -c "source ~/.iterate/.env && claude -p \\"what messaging platform is this agent for\\""',
         );
         const claudeTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
@@ -493,17 +493,17 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(claudeOutput.toLowerCase()).toContain("bananas");
+        expect(claudeOutput.toLowerCase()).toContain("slack");
         console.log("");
-        console.log("✓ SUCCESS: claude correctly answered the secret");
+        console.log("✓ SUCCESS: claude correctly identified the messaging platform");
 
         // 12. Run pi smoketest
-        printSection("PI SMOKETEST: 'what is the secret?'");
-        console.log('Running: pi -p "what is the secret"');
+        printSection("PI SMOKETEST: 'what messaging platform is this agent for?'");
+        console.log('Running: pi -p "what messaging platform is this agent for"');
         console.log("");
 
         const piPromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && pi -p \\"what is the secret\\""',
+          'bash -c "source ~/.iterate/.env && pi -p \\"what messaging platform is this agent for\\""',
         );
         const piTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),
@@ -528,9 +528,9 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
           "└─────────────────────────────────────────────────────────────────────────────┘",
         );
 
-        expect(piOutput.toLowerCase()).toContain("bananas");
+        expect(piOutput.toLowerCase()).toContain("slack");
         console.log("");
-        console.log("✓ SUCCESS: pi correctly answered the secret");
+        console.log("✓ SUCCESS: pi correctly identified the messaging platform");
 
         // 13. Verify git status works in iterate repo
         printSection("GIT STATUS CHECK");
