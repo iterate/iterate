@@ -1,14 +1,14 @@
 FROM node:24
 
-# Build cache buster: 2026-01-16T23:10
+# Build cache buster: 2026-01-20T13:16
 # (change this comment to force Daytona to rebuild when cache is stale)
 
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
-ENV SANDBOX_OPENCODE_VERSION=1.1.23
-ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.9
-ENV SANDBOX_PI_CODING_AGENT_VERSION=0.47.0
+ENV SANDBOX_OPENCODE_VERSION=1.1.27
+ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
+ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
 
 # === Build Args ===
