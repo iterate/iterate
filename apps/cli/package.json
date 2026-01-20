@@ -11,14 +11,14 @@
   "dependencies": {
     "@iterate-com/daemon": "workspace:*",
     "@slack/web-api": "^7.13.0",
-    "@trpc/server": "^11.4.3",
-    "dedent": "^1.7.0",
+    "@trpc/server": "^11.8.1",
+    "dedent": "^1.7.1",
     "trpc-cli": "^0.12.2",
-    "zod": "^4.1.11"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "tsx": "^4.20.6",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

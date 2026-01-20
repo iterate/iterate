@@ -7,6 +7,6 @@
     "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts"
   },
   "devDependencies": {
-    "vite": "7.2.4"
+    "vite": "7.3.1"
   }
 }
