@@ -212,7 +212,8 @@ async function lookupSecret(
     );
   }
 
-  // Project scope (if provided)
+  // Project scope (if provided) - only finds secrets WITHOUT userId
+  // User-scoped secrets require explicit userId in the magic string
   if (context.projectId) {
     conditions.push(
       and(
@@ -223,14 +224,14 @@ async function lookupSecret(
     );
   }
 
-  // User scope (if provided)
-  // User-scoped secrets must also be within the same organization to prevent cross-org access
-  if (context.userId && context.organizationId) {
+  // User scope with context userId (for user-specific lookups)
+  // User-scoped secrets must match BOTH userId AND projectId to prevent cross-project access
+  if (context.userId && context.projectId) {
     conditions.push(
       and(
         eq(schema.secret.key, secretKey),
         eq(schema.secret.userId, context.userId),
-        eq(schema.secret.organizationId, context.organizationId),
+        eq(schema.secret.projectId, context.projectId),
       ),
     );
   }
@@ -283,10 +284,23 @@ async function resolveSecret(
   const urlContext = { orgSlug: context.orgSlug, projectSlug: context.projectSlug };
 
   // Look up the secret
+  logger.info("Looking up secret", {
+    secretKey,
+    organizationId: context.organizationId,
+    projectId: context.projectId,
+    userId: context.userId,
+  });
+
   const secret = await lookupSecret(db, secretKey, {
     organizationId: context.organizationId,
     projectId: context.projectId,
     userId: context.userId,
+  });
+
+  logger.info("Secret lookup result", {
+    secretKey,
+    found: !!secret,
+    secretId: secret?.secretId,
   });
 
   if (!secret) {
@@ -431,17 +445,42 @@ async function processHeaderValue(
       return replaceMagicStrings(db, headerValue, context);
     }
 
+    // URL-decode the credentials (git URL-encodes the password from git config)
+    // This handles magic strings like getIterateSecret%28%7BsecretKey%3A...%7D%29
+    const beforeUrlDecode = decoded;
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      // Not URL-encoded, continue with raw decoded value
+    }
+
+    const hasMagic = MAGIC_STRING_PATTERN.test(decoded);
+    // Reset regex lastIndex since we used .test()
+    MAGIC_STRING_PATTERN.lastIndex = 0;
+
+    logger.info("Basic auth decoded", {
+      beforeUrlDecode: beforeUrlDecode.substring(0, 80),
+      afterUrlDecode: decoded.substring(0, 80),
+      containsMagicPattern: hasMagic,
+    });
+
     // Check if decoded value contains magic strings
-    if (!MAGIC_STRING_PATTERN.test(decoded)) {
+    if (!hasMagic) {
       // No magic strings in decoded value
       return { ok: true, result: headerValue, usedSecrets: [] };
     }
 
-    // Reset regex lastIndex since we used .test()
-    MAGIC_STRING_PATTERN.lastIndex = 0;
+    logger.info("Calling replaceMagicStrings for Basic auth");
 
     // Replace magic strings in decoded credentials
     const result = await replaceMagicStrings(db, decoded, context);
+
+    logger.info("replaceMagicStrings result", {
+      ok: result.ok,
+      error: !result.ok ? result.error : undefined,
+      usedSecretsCount: result.ok ? result.usedSecrets.length : 0,
+    });
+
     if (!result.ok) {
       return result;
     }
@@ -457,6 +496,8 @@ async function processHeaderValue(
 
 /**
  * Return a JSON error response for secret errors.
+ * Uses 502 Bad Gateway for NOT_FOUND (connector not configured)
+ * Uses 401 Unauthorized for auth failures that need re-auth
  */
 function secretErrorResponse(
   c: { json: (data: unknown, status: number) => Response },
@@ -470,7 +511,7 @@ function secretErrorResponse(
       connectUrl: error.connectUrl,
       reauthUrl: error.reauthUrl,
     },
-    error.code === "NOT_FOUND" ? 404 : 401,
+    error.code === "NOT_FOUND" ? 502 : 401,
   );
 }
 
@@ -550,11 +591,24 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
 
     // Process magic strings in headers (handles Basic auth base64 encoding)
     for (const [key, value] of originalHeaderEntries) {
+      // Debug: log Authorization header processing
+      if (key.toLowerCase() === "authorization") {
+        logger.info("Processing Authorization header", {
+          headerKey: key,
+          headerValuePrefix: value.substring(0, 50),
+        });
+      }
+
       const headerResult = await processHeaderValue(db, key, value, context);
       if (!headerResult.ok) {
         return secretErrorResponse(c, headerResult.error);
       }
       if (headerResult.result !== value) {
+        logger.info("Header transformed", {
+          headerKey: key,
+          hadMagicString: true,
+          usedSecretsCount: headerResult.usedSecrets.length,
+        });
         forwardHeaders.set(key, headerResult.result);
         usedSecrets.push(...headerResult.usedSecrets);
       }

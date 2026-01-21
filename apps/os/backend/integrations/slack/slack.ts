@@ -298,6 +298,41 @@ slackApp.get(
           });
         }
 
+        // Upsert secret for egress proxy to use
+        // This allows the magic string `getIterateSecret({secretKey: "slack.access_token"})` to resolve
+        const projectInfo = await tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+        });
+
+        if (projectInfo) {
+          const existingSecret = await tx.query.secret.findFirst({
+            where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+              whereAnd(
+                whereEq(s.key, "slack.access_token"),
+                whereEq(s.projectId, projectId),
+                whereIsNull(s.userId), // Only match project-scoped secrets
+              ),
+          });
+
+          if (existingSecret) {
+            await tx
+              .update(schema.secret)
+              .set({
+                encryptedValue: encryptedAccessToken,
+                lastSuccessAt: new Date(),
+              })
+              .where(eq(schema.secret.id, existingSecret.id));
+          } else {
+            await tx.insert(schema.secret).values({
+              key: "slack.access_token",
+              encryptedValue: encryptedAccessToken,
+              organizationId: projectInfo.organizationId,
+              projectId,
+              egressProxyRule: `$contains(url.hostname, 'slack.com')`,
+            });
+          }
+        }
+
         return tx.query.project.findFirst({
           where: eq(schema.project.id, projectId),
           with: {

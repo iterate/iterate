@@ -87,9 +87,11 @@ export GIT_SSL_CAINFO="$CA_CERT_PATH"
 
 # Configure git to use magic string for GitHub auth (egress proxy resolves it)
 # This rewrites https://github.com/ URLs to include the magic string token
-GITHUB_MAGIC_TOKEN='getIterateSecret({secretKey: "github.access_token"})'
+# The magic string is URL-encoded to be valid in a URL context
+# Egress proxy URL-decodes before matching
+GITHUB_MAGIC_TOKEN='getIterateSecret%28%7BsecretKey%3A%20%22github.access_token%22%7D%29'
 git config --global "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "https://github.com/"
-git config --global "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "git@github.com:"
+git config --global --add "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "git@github.com:"
 echo "Configured git for GitHub auth via egress proxy"
 
 # Signal readiness via file (more reliable than stdout for docker log detection)

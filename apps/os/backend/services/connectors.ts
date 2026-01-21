@@ -53,7 +53,7 @@ export const CONNECTORS: Record<string, Connector> = {
   github: {
     name: "GitHub",
     urlPatterns: ["api.github.com/*", "github.com/*"],
-    scope: "user",
+    scope: "project", // Project-scoped for sandbox git operations
     refreshable: false, // GitHub tokens don't refresh - re-auth needed
     secretKey: "github.access_token",
   },
@@ -102,12 +102,16 @@ function matchesPattern(hostAndPath: string, pattern: string): boolean {
  * This is where users go to set up the connection.
  */
 export function getConnectUrl(
-  _connector: Connector,
+  connector: Connector,
   context: { orgSlug?: string; projectSlug?: string },
 ): string {
   if (!context.orgSlug || !context.projectSlug) {
     // Fallback if we don't have context
     return "/settings/connectors";
+  }
+  // GitHub connection is on /repo page, others on /connectors
+  if (connector.name === "GitHub") {
+    return `/orgs/${context.orgSlug}/projects/${context.projectSlug}/repo`;
   }
   return `/orgs/${context.orgSlug}/projects/${context.projectSlug}/connectors`;
 }

@@ -196,6 +196,41 @@ githubApp.get(
         }
       }
 
+      // Upsert secret for egress proxy to use (project-scoped for sandbox git operations)
+      // This allows the magic string `getIterateSecret({secretKey: "github.access_token"})` to resolve
+      const projectInfo = await tx.query.project.findFirst({
+        where: eq(schema.project.id, projectId),
+      });
+
+      if (projectInfo) {
+        const existingSecret = await tx.query.secret.findFirst({
+          where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+            whereAnd(
+              whereEq(s.key, "github.access_token"),
+              whereEq(s.projectId, projectId),
+              whereIsNull(s.userId), // Only match project-scoped secrets, not user-scoped
+            ),
+        });
+
+        if (existingSecret) {
+          await tx
+            .update(schema.secret)
+            .set({
+              encryptedValue: encryptedAccessToken,
+              lastSuccessAt: new Date(),
+            })
+            .where(eq(schema.secret.id, existingSecret.id));
+        } else {
+          await tx.insert(schema.secret).values({
+            key: "github.access_token",
+            encryptedValue: encryptedAccessToken,
+            organizationId: projectInfo.organizationId,
+            projectId,
+            egressProxyRule: `$contains(url.hostname, 'github.com')`,
+          });
+        }
+      }
+
       return tx.query.project.findFirst({
         where: eq(schema.project.id, projectId),
         with: {

@@ -295,7 +295,7 @@ describe("Egress Proxy - Connector Detection", () => {
   test("detects GitHub connector", () => {
     const connector = getConnectorForUrl("https://api.github.com/repos/owner/repo");
     expect(connector?.name).toBe("GitHub");
-    expect(connector?.scope).toBe("user");
+    expect(connector?.scope).toBe("project"); // Project-scoped for sandbox git operations
     expect(connector?.refreshable).toBe(false); // GitHub tokens don't refresh
   });
 
@@ -335,8 +335,9 @@ describe("Egress Proxy - Connect/Reauth URLs", () => {
   });
 
   test("uses default base URL when not provided", () => {
+    // GitHub goes to /repo, others go to /connectors
     const url = getFullReauthUrl(CONNECTORS.github, { orgSlug: "acme", projectSlug: "api" });
-    expect(url).toBe("https://iterate.com/orgs/acme/projects/api/connectors");
+    expect(url).toBe("https://iterate.com/orgs/acme/projects/api/repo");
   });
 });
 
