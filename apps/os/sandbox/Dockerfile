@@ -123,17 +123,16 @@ RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
       mkdir -p $ITERATE_REPO/apps/os/sandbox; \
     fi
 
-# Ensure PM2 ecosystem config exists even when repo isn't cloned yet
-COPY --chown=iterate:iterate apps/os/sandbox/ecosystem.config.cjs $ITERATE_REPO/apps/os/sandbox/ecosystem.config.cjs
-COPY --chown=iterate:iterate apps/os/sandbox/daemon-bootstrap.sh /home/iterate/.local/bin/iterate-daemon-bootstrap.sh
-COPY --chown=iterate:iterate apps/os/sandbox/local-docker-sync.sh /home/iterate/.local/bin/local-docker-sync.sh
-COPY --chown=iterate:iterate apps/os/sandbox/env-refresh-cron.sh /home/iterate/.local/bin/env-refresh-cron.sh
-RUN chmod +x /home/iterate/.local/bin/iterate-daemon-bootstrap.sh /home/iterate/.local/bin/local-docker-sync.sh /home/iterate/.local/bin/env-refresh-cron.sh
-
-# Make scripts executable (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
-    fi
+# Ensure PM2 configs and scripts exist even when repo isn't cloned yet
+COPY --chown=iterate:iterate apps/os/sandbox/ /tmp/sandbox/
+RUN mkdir -p /home/iterate/.local/bin && \
+    cp /tmp/sandbox/ecosystem.config.cjs $ITERATE_REPO/apps/os/sandbox/ecosystem.config.cjs && \
+    cp /tmp/sandbox/daemon-bootstrap.sh /home/iterate/.local/bin/iterate-daemon-bootstrap.sh && \
+    cp /tmp/sandbox/local-docker-sync.sh /home/iterate/.local/bin/local-docker-sync.sh && \
+    cp /tmp/sandbox/env-refresh-cron.sh /home/iterate/.local/bin/env-refresh-cron.sh && \
+    chmod +x /home/iterate/.local/bin/iterate-daemon-bootstrap.sh /home/iterate/.local/bin/local-docker-sync.sh /home/iterate/.local/bin/env-refresh-cron.sh && \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh || true && \
+    rm -rf /tmp/sandbox
 
 # Install deps and build daemon (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \

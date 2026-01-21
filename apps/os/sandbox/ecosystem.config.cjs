@@ -97,6 +97,7 @@ const services = [
     cwd: "/home/iterate",
     script: ENV_REFRESH_SCRIPT,
     exec_interpreter: "/bin/bash",
+    cron_restart: "*/1 * * * *",
     env: {
       ...envConfig,
       ITERATE_REPO,

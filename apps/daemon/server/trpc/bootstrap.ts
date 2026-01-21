@@ -80,6 +80,10 @@ async function localDockerSyncRepo(): Promise<BootstrapResult["localSyncResult"]
 export async function bootstrapSandbox({
   mode = "manual",
 }: { mode?: BootstrapMode } = {}): Promise<BootstrapResult> {
+  if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) {
+    console.log("[bootstrap] No control plane configured, running standalone");
+  }
+
   // Local-docker images bake ITERATE_MACHINE_PROVIDER=local-docker; fall back to mount detection.
   const shouldSyncLocal = mode !== "refresh" && isLocalDockerProvider();
   const localSyncResult = shouldSyncLocal ? await localDockerSyncRepo() : undefined;
@@ -93,7 +97,8 @@ export async function bootstrapSandbox({
   startBootstrapRefreshScheduler();
 
   const envChanged = Boolean(envResult?.envChanged);
-  const shouldRestart = localSync || envChanged;
+  const pm2Available = Boolean(process.env.PM2_HOME);
+  const shouldRestart = pm2Available && (localSync || envChanged);
   const restartSkipped = mode === "auto" && shouldSkipAutoRestart();
 
   if (shouldRestart && !restartSkipped) {

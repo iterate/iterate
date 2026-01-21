@@ -56,6 +56,7 @@ app.post("/api/internal/refresh-env", async (c) => {
   }
 });
 
+// Convenience endpoint for manual curl-based bootstraps (no tRPC client needed).
 app.post("/api/internal/bootstrap", async (c) => {
   try {
     const result = await bootstrapSandbox({ mode: "manual" });
