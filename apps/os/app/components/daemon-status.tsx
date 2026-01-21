@@ -3,7 +3,7 @@ import { Circle, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 type DaemonStatusValue = "ready" | "error" | "restarting" | "stopping" | undefined;
 
 interface DaemonStatusProps {
-  state: "started" | "archived";
+  state: "starting" | "active" | "archived";
   daemonStatus?: DaemonStatusValue;
   daemonReadyAt?: string;
   daemonStatusMessage?: string;

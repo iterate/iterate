@@ -43,6 +43,13 @@
       "when": 1768597513012,
       "tag": "0005_good_ricochet",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1768988430731,
+      "tag": "0006_machine-states-starting-active",
+      "breakpoints": true
     }
   ]
 }

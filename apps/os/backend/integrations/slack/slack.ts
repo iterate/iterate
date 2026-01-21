@@ -421,7 +421,7 @@ slackApp.post("/webhook", async (c) => {
             project: {
               with: {
                 machines: {
-                  where: (m, { eq }) => eq(m.state, "started"),
+                  where: (m, { eq }) => eq(m.state, "active"),
                   limit: 1,
                 },
               },

@@ -27,7 +27,7 @@ interface Machine {
   id: string;
   name: string;
   type: string;
-  state: "started" | "archived";
+  state: "starting" | "active" | "archived";
   createdAt: Date;
   metadata: {
     snapshotName?: string;
@@ -129,13 +129,13 @@ export function MachineTable({
       <DropdownMenuSeparator />
 
       {/* Machine actions */}
-      {machine.state === "started" && (
+      {machine.state !== "archived" && (
         <DropdownMenuItem onClick={() => onRestart(machine.id)}>
           <RefreshCw className="h-4 w-4 mr-2" />
           Restart
         </DropdownMenuItem>
       )}
-      {machine.state === "started" && (
+      {machine.state !== "archived" && (
         <DropdownMenuItem onClick={() => onArchive(machine.id)}>
           <Archive className="h-4 w-4 mr-2" />
           Archive
@@ -170,9 +170,11 @@ export function MachineTable({
               <div className="flex items-center gap-2">
                 <Circle
                   className={`h-2 w-2 shrink-0 ${
-                    machine.state === "started"
+                    machine.state === "active"
                       ? "fill-green-500 text-green-500"
-                      : "fill-muted text-muted"
+                      : machine.state === "starting"
+                        ? "fill-yellow-500 text-yellow-500"
+                        : "fill-muted text-muted"
                   }`}
                 />
                 <span className="font-medium truncate">{machine.name}</span>

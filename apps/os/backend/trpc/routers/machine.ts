@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
@@ -152,19 +152,22 @@ async function getOrCreateProjectMachineToken(
   return { tokenId, apiKey };
 }
 
-// Archive all started machines in a project (both DB and provider)
-async function archiveExistingMachines(
+// Archive all active machines in a project (both DB and provider)
+// Note: This is no longer called during machine creation - activation now happens
+// when the daemon reports ready (see orpc/router.ts reportStatus).
+// Kept for potential manual cleanup use cases.
+export async function archiveActiveMachines(
   db: DB,
   projectId: string,
   cloudflareEnv: CloudflareEnv,
 ): Promise<void> {
-  // Find all started machines
-  const startedMachines = await db.query.machine.findMany({
-    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "started")),
+  // Find all active machines
+  const activeMachines = await db.query.machine.findMany({
+    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")),
   });
 
   // Archive each one via provider then DB
-  for (const machine of startedMachines) {
+  for (const machine of activeMachines) {
     // todo: flip and outboxify this
     const provider = await createMachineProvider({
       type: machine.type,
@@ -224,7 +227,10 @@ export const machineRouter = router({
       const machines = await ctx.db.query.machine.findMany({
         where: includeArchived
           ? eq(schema.machine.projectId, ctx.project.id)
-          : and(eq(schema.machine.projectId, ctx.project.id), eq(schema.machine.state, "started")),
+          : and(
+              eq(schema.machine.projectId, ctx.project.id),
+              sql`${schema.machine.state} != 'archived'`,
+            ),
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
@@ -310,8 +316,8 @@ export const machineRouter = router({
         envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
       }
 
-      // Archive any existing started machines before creating a new one
-      await archiveExistingMachines(ctx.db, ctx.project.id, ctx.env);
+      // Note: We no longer archive existing machines here - the new machine starts in 'starting' state
+      // and only becomes 'active' (archiving the old one) when the daemon reports ready
 
       // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
       // This allows the daemon to receive fresh GitHub tokens when it reports ready
@@ -338,7 +344,8 @@ export const machineRouter = router({
           });
         });
 
-      // Create machine in DB
+      // Create machine in DB with 'starting' state
+      // It will be promoted to 'active' when the daemon reports ready
       const [newMachine] = await ctx.db
         .insert(schema.machine)
         .values({
@@ -346,7 +353,7 @@ export const machineRouter = router({
           name: input.name,
           type: input.type,
           projectId: ctx.project.id,
-          state: "started",
+          state: "starting",
           metadata: { ...(input.metadata ?? {}), ...(providerResult.metadata ?? {}) },
           externalId: providerResult.externalId,
         })
