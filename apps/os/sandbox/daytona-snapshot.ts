@@ -104,6 +104,13 @@ const snapshot = await (async () => {
       },
       { onLogs: console.log },
     );
+  } catch (error) {
+    // Handle "already exists" as success (409 conflict) - snapshots are idempotent by commit SHA
+    if (error instanceof Error && "statusCode" in error && error.statusCode === 409) {
+      console.log(`Snapshot ${snapshotName} already exists, skipping creation`);
+      return { name: snapshotName, alreadyExisted: true };
+    }
+    throw error;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
