@@ -29,8 +29,10 @@ function ProjectHomePage() {
 
   const { data: _project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 

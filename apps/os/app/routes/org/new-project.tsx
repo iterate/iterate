@@ -11,7 +11,9 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project"
   component: NewProjectPage,
   loader: async ({ context, params }) => {
     const org = await context.queryClient.ensureQueryData(
-      trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
+      trpc.organization.withProjects.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
     return { defaultName: org?.projects?.length ? "" : "main" };
   },
@@ -28,15 +30,15 @@ function NewProjectPage() {
 
   const createProject = useMutation({
     mutationFn: async (projectName: string) => {
-      return trpcClient.project.create.mutate({
+      return trpcClient.project.create({
         organizationSlug: params.organizationSlug,
         name: projectName,
       });
     },
     onSuccess: async (project) => {
       await queryClient.invalidateQueries({
-        queryKey: trpc.organization.withProjects.queryKey({
-          organizationSlug: params.organizationSlug,
+        queryKey: trpc.organization.withProjects.key({
+          input: { organizationSlug: params.organizationSlug },
         }),
       });
       toast.success("Project created");

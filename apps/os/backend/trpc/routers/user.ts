@@ -1,18 +1,18 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { router, protectedProcedure } from "../trpc.ts";
+import { protectedProcedure, protectedMutation } from "../trpc.ts";
 import { user, organizationUserMembership } from "../../db/schema.ts";
 
-export const userRouter = router({
+export const userRouter = {
   // Get current user
-  me: protectedProcedure.query(async ({ ctx }) => {
-    return ctx.user;
+  me: protectedProcedure.handler(async ({ context }) => {
+    return context.user;
   }),
 
   // Get user's organizations
-  myOrganizations: protectedProcedure.query(async ({ ctx }) => {
-    const memberships = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, ctx.user.id),
+  myOrganizations: protectedProcedure.handler(async ({ context }) => {
+    const memberships = await context.db.query.organizationUserMembership.findMany({
+      where: eq(organizationUserMembership.userId, context.user.id),
       with: {
         organization: {
           with: {
@@ -29,9 +29,9 @@ export const userRouter = router({
   }),
 
   // Get user's memberships with org details (for settings page)
-  memberships: protectedProcedure.query(async ({ ctx }) => {
-    const memberships = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, ctx.user.id),
+  memberships: protectedProcedure.handler(async ({ context }) => {
+    const memberships = await context.db.query.organizationUserMembership.findMany({
+      where: eq(organizationUserMembership.userId, context.user.id),
       with: {
         organization: true,
       },
@@ -49,23 +49,23 @@ export const userRouter = router({
   }),
 
   // Update user settings
-  updateSettings: protectedProcedure
+  updateSettings: protectedMutation
     .input(
       z.object({
         name: z.string().min(1).optional(),
         image: z.string().url().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const [updated] = await ctx.db
+    .handler(async ({ context, input }) => {
+      const [updated] = await context.db
         .update(user)
         .set({
           ...(input.name && { name: input.name }),
           ...(input.image && { image: input.image }),
         })
-        .where(eq(user.id, ctx.user.id))
+        .where(eq(user.id, context.user.id))
         .returning();
 
       return updated;
     }),
-});
+};

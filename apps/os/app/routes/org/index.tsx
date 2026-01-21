@@ -27,25 +27,25 @@ function OrgHomePage() {
 
   const { data: org } = useSuspenseQuery(
     trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const { data: pendingInvites } = useSuspenseQuery(
     trpc.organization.listInvites.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const { data: members } = useSuspenseQuery(
     trpc.organization.members.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const createInvite = useMutation({
     mutationFn: async (email: string) => {
-      return trpcClient.organization.createInvite.mutate({
+      return trpcClient.organization.createInvite({
         organizationSlug: params.organizationSlug,
         email,
       });
@@ -60,7 +60,7 @@ function OrgHomePage() {
 
   const cancelInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.cancelInvite.mutate({
+      return trpcClient.organization.cancelInvite({
         organizationSlug: params.organizationSlug,
         inviteId,
       });

@@ -1,124 +1,121 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { router, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
+import {
+  ORPCError,
+  orgProtectedProcedure,
+  orgAdminMutation,
+  withOrgAdminMutationInput,
+} from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { BILLING_METERS } from "../../billing/meters.generated.ts";
 import { env } from "../../../env.ts";
 
-export const billingRouter = router({
-  getBillingAccount: orgProtectedProcedure.query(async ({ ctx }) => {
-    const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+export const billingRouter = {
+  getBillingAccount: orgProtectedProcedure.handler(async ({ context }) => {
+    const account = await context.db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.organizationId, context.organization.id),
     });
 
     return account ?? null;
   }),
 
-  createCheckoutSession: orgAdminMutation
-    .input(
-      z.object({
-        successUrl: z.string().url().optional(),
-        cancelUrl: z.string().url().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const stripe = getStripe();
+  createCheckoutSession: withOrgAdminMutationInput({
+    successUrl: z.string().url().optional(),
+    cancelUrl: z.string().url().optional(),
+  }).handler(async ({ context, input }) => {
+    const stripe = getStripe();
 
-      const account = await ctx.db.transaction(async (tx) => {
-        let existing = await tx.query.billingAccount.findFirst({
-          where: eq(schema.billingAccount.organizationId, ctx.organization.id),
-        });
-
-        if (!existing) {
-          const [newAccount] = await tx
-            .insert(schema.billingAccount)
-            .values({
-              organizationId: ctx.organization.id,
-            })
-            .returning();
-          existing = newAccount;
-        }
-
-        if (!existing) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Failed to create billing account",
-          });
-        }
-
-        if (!existing.stripeCustomerId) {
-          const customer = await stripe.customers.create({
-            name: ctx.organization.name,
-            email: ctx.user.email ?? undefined, // For Stripe→PostHog data warehouse linking
-            metadata: {
-              organizationId: ctx.organization.id,
-              organizationSlug: ctx.organization.slug,
-              createdByUserId: ctx.user.id, // For PostHog tracking in webhooks
-            },
-          });
-
-          await tx
-            .update(schema.billingAccount)
-            .set({ stripeCustomerId: customer.id })
-            .where(eq(schema.billingAccount.id, existing.id));
-
-          existing = { ...existing, stripeCustomerId: customer.id };
-        }
-
-        return existing;
+    const account = await context.db.transaction(async (tx) => {
+      let existing = await tx.query.billingAccount.findFirst({
+        where: eq(schema.billingAccount.organizationId, context.organization.id),
       });
 
-      const baseUrl = env.VITE_PUBLIC_URL;
-      const defaultSuccessUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?success=true`;
-      const defaultCancelUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?canceled=true`;
+      if (!existing) {
+        const [newAccount] = await tx
+          .insert(schema.billingAccount)
+          .values({
+            organizationId: context.organization.id,
+          })
+          .returning();
+        existing = newAccount;
+      }
 
-      const session = await stripe.checkout.sessions.create({
-        mode: "subscription",
-        customer: account.stripeCustomerId!,
-        line_items: [
-          {
-            price: env.STRIPE_METERED_PRICE_ID,
-          },
-        ],
-        success_url: input.successUrl ?? defaultSuccessUrl,
-        cancel_url: input.cancelUrl ?? defaultCancelUrl,
-        client_reference_id: ctx.organization.id,
-        subscription_data: {
-          metadata: {
-            organizationId: ctx.organization.id,
-            organizationSlug: ctx.organization.slug,
-          },
-        },
-      });
-
-      if (!session.url) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create checkout session",
+      if (!existing) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Failed to create billing account",
         });
       }
 
-      return { url: session.url };
-    }),
+      if (!existing.stripeCustomerId) {
+        const customer = await stripe.customers.create({
+          name: context.organization.name,
+          email: context.user.email ?? undefined, // For Stripe→PostHog data warehouse linking
+          metadata: {
+            organizationId: context.organization.id,
+            organizationSlug: context.organization.slug,
+            createdByUserId: context.user.id, // For PostHog tracking in webhooks
+          },
+        });
 
-  createPortalSession: orgAdminMutation.mutation(async ({ ctx }) => {
+        await tx
+          .update(schema.billingAccount)
+          .set({ stripeCustomerId: customer.id })
+          .where(eq(schema.billingAccount.id, existing.id));
+
+        existing = { ...existing, stripeCustomerId: customer.id };
+      }
+
+      return existing;
+    });
+
+    const baseUrl = env.VITE_PUBLIC_URL;
+    const defaultSuccessUrl = `${baseUrl}/orgs/${context.organization.slug}/billing?success=true`;
+    const defaultCancelUrl = `${baseUrl}/orgs/${context.organization.slug}/billing?canceled=true`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: account.stripeCustomerId!,
+      line_items: [
+        {
+          price: env.STRIPE_METERED_PRICE_ID,
+        },
+      ],
+      success_url: input.successUrl ?? defaultSuccessUrl,
+      cancel_url: input.cancelUrl ?? defaultCancelUrl,
+      client_reference_id: context.organization.id,
+      subscription_data: {
+        metadata: {
+          organizationId: context.organization.id,
+          organizationSlug: context.organization.slug,
+        },
+      },
+    });
+
+    if (!session.url) {
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: "Failed to create checkout session",
+      });
+    }
+
+    return { url: session.url };
+  }),
+
+  createPortalSession: orgAdminMutation.handler(async ({ context }) => {
     const stripe = getStripe();
 
-    const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+    const account = await context.db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.organizationId, context.organization.id),
     });
 
     if (!account?.stripeCustomerId) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
+      throw new ORPCError("NOT_FOUND", {
         message: "No billing account found. Please subscribe first.",
       });
     }
 
     const baseUrl = env.VITE_PUBLIC_URL;
-    const returnUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing`;
+    const returnUrl = `${baseUrl}/orgs/${context.organization.slug}/billing`;
 
     const session = await stripe.billingPortal.sessions.create({
       customer: account.stripeCustomerId,
@@ -128,9 +125,9 @@ export const billingRouter = router({
     return { url: session.url };
   }),
 
-  getUsageSummary: orgProtectedProcedure.query(async ({ ctx }) => {
-    const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+  getUsageSummary: orgProtectedProcedure.handler(async ({ context }) => {
+    const account = await context.db.query.billingAccount.findFirst({
+      where: eq(schema.billingAccount.organizationId, context.organization.id),
     });
 
     if (!account?.stripeSubscriptionId) {
@@ -145,7 +142,7 @@ export const billingRouter = router({
     };
   }),
 
-  getAvailableMeters: orgProtectedProcedure.query(() => {
+  getAvailableMeters: orgProtectedProcedure.handler(() => {
     const meters = Object.values(BILLING_METERS);
 
     type MeterSummary = {
@@ -182,4 +179,4 @@ export const billingRouter = router({
       byCategory,
     };
   }),
-});
+};

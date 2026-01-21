@@ -1,12 +1,11 @@
 import { Hono, type Context } from "hono";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
-import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
+import { createRouterClient, type RouterClient, onError, ORPCError } from "@orpc/server";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
@@ -27,7 +26,7 @@ export type Variables = {
   auth: Auth;
   session: AuthSession;
   db: DB;
-  trpcCaller: ReturnType<typeof appRouter.createCaller>;
+  trpcCaller: RouterClient<typeof appRouter>;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -55,7 +54,9 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const trpcCaller = appRouter.createCaller(createContext(c));
+  const trpcCaller = createRouterClient(appRouter, {
+    context: () => createContext(c),
+  });
   c.set("trpcCaller", trpcCaller);
   return next();
 });
@@ -83,38 +84,45 @@ app.onError((err, c) => {
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
-// tRPC endpoint
-app.all("/api/trpc/*", (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    allowMethodOverride: true,
-    createContext: () => createContext(c),
-    onError: ({ error, path }) => {
-      const procedurePath = path ?? "unknown";
-      const status = getHTTPStatusCodeFromError(error);
+// oRPC endpoint (tRPC replacement)
+const trpcHandler = new RPCHandler(appRouter, {
+  interceptors: [
+    onError((error) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      const status = error instanceof ORPCError ? error.status : 500;
       if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
-
-        // Capture 5xx errors to PostHog
-        const distinctId = c.var.session?.user?.id ?? "anonymous";
-        c.executionCtx?.waitUntil(
-          captureServerException(c.env, {
-            distinctId,
-            error,
-            properties: {
-              path: procedurePath,
-              trpcProcedure: procedurePath,
-              userId: c.var.session?.user?.id,
-            },
-          }),
-        );
+        logger.error(`oRPC Error ${status}: ${err.message}`, err);
       } else {
-        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
+        logger.warn(`oRPC Error ${status}:\n${err.stack}`);
       }
-    },
+    }),
+  ],
+});
+app.all("/api/trpc/*", async (c) => {
+  const { matched, response } = await trpcHandler.handle(c.req.raw, {
+    prefix: "/api/trpc",
+    context: createContext(c),
   });
+
+  if (matched && response) {
+    // Capture 5xx errors to PostHog
+    if (response.status >= 500) {
+      const distinctId = c.var.session?.user?.id ?? "anonymous";
+      c.executionCtx?.waitUntil(
+        captureServerException(c.env, {
+          distinctId,
+          error: new Error(`oRPC Error ${response.status}`),
+          properties: {
+            path: c.req.path,
+            userId: c.var.session?.user?.id,
+          },
+        }),
+      );
+    }
+    return c.newResponse(response.body, response);
+  }
+
+  return c.json({ error: "Not found" }, 404);
 });
 
 // Mount integration apps

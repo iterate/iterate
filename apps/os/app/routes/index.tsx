@@ -85,7 +85,7 @@ function IndexPage() {
 
   const acceptInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.acceptInvite.mutate({ inviteId });
+      return trpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
       toast.success(`Joined ${org.name}!`);
@@ -98,7 +98,7 @@ function IndexPage() {
 
   const declineInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.declineInvite.mutate({ inviteId });
+      return trpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
       toast.success("Invite declined");
@@ -110,7 +110,7 @@ function IndexPage() {
 
   const createOrg = useMutation({
     mutationFn: async (orgName: string) => {
-      return trpcClient.organization.create.mutate({ name: orgName });
+      return trpcClient.organization.create({ name: orgName });
     },
     onSuccess: (org) => {
       queryClient.setQueryData<Organization[]>(trpc.user.myOrganizations.queryKey(), (old) => [

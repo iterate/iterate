@@ -31,23 +31,29 @@ function MachineDetailPage() {
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
-  const machineQueryKey = trpc.machine.byId.queryKey({
-    organizationSlug: params.organizationSlug,
-    projectSlug: params.projectSlug,
-    machineId: params.machineId,
+  const machineQueryKey = trpc.machine.byId.key({
+    input: {
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+      machineId: params.machineId,
+    },
   });
 
-  const machineListQueryKey = trpc.machine.list.queryKey({
-    organizationSlug: params.organizationSlug,
-    projectSlug: params.projectSlug,
-    includeArchived: false,
+  const machineListQueryKey = trpc.machine.list.key({
+    input: {
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
   });
 
   const { data: machine } = useSuspenseQuery(
     trpc.machine.byId.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      machineId: params.machineId,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
     }),
   );
 
@@ -68,7 +74,7 @@ function MachineDetailPage() {
   // Mutations
   const restartMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.restart.mutate({
+      return trpcClient.machine.restart({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
@@ -85,7 +91,7 @@ function MachineDetailPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.delete.mutate({
+      return trpcClient.machine.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
@@ -115,17 +121,16 @@ function MachineDetailPage() {
 
   // Query agents from the daemon
   const { data: agentsData } = useQuery(
-    trpc.machine.listAgents.queryOptions(
-      {
+    trpc.machine.listAgents.queryOptions({
+      input: {
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
-      {
-        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
-        refetchInterval: 10000, // Poll every 10s
-      },
-    ),
+
+      enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+      refetchInterval: 10000, // Poll every 10s
+    }),
   );
 
   // Sort agents by updatedAt descending (most recent first)

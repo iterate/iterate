@@ -1,12 +1,11 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
 import {
-  router,
+  ORPCError,
   publicProcedure,
   publicMutation,
   protectedProcedure,
-  projectProtectedProcedure,
+  withProjectMutationInput,
 } from "../trpc.ts";
 import {
   user,
@@ -34,17 +33,16 @@ function generateDefaultAvatar(email: string): string {
  * Testing router - provides helpers for test setup
  * These endpoints are only available in non-production environments
  */
-export const testingRouter = router({
+export const testingRouter = {
   // Health check
-  health: publicProcedure.query(() => {
+  health: publicProcedure.handler(() => {
     return { status: "ok", timestamp: new Date().toISOString() };
   }),
 
   // Trigger query invalidation broadcast (for e2e tests)
-  triggerInvalidation: publicMutation.mutation(async () => {
+  triggerInvalidation: publicMutation.handler(async () => {
     if (!isNonProd) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
+      throw new ORPCError("FORBIDDEN", {
         message: "Testing endpoints are not available in production",
       });
     }
@@ -60,14 +58,13 @@ export const testingRouter = router({
         role: z.enum(["user", "admin"]).default("user"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
-      const [newUser] = await ctx.db
+      const [newUser] = await context.db
         .insert(user)
         .values({
           email: input.email,
@@ -96,16 +93,15 @@ export const testingRouter = router({
         projectName: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
       const orgSlug = slugifyWithSuffix(input.name);
 
-      const [newOrg] = await ctx.db
+      const [newOrg] = await context.db
         .insert(organization)
         .values({
           name: input.name,
@@ -117,14 +113,14 @@ export const testingRouter = router({
         throw new Error("Failed to create organization");
       }
 
-      await ctx.db.insert(organizationUserMembership).values({
+      await context.db.insert(organizationUserMembership).values({
         organizationId: newOrg.id,
-        userId: ctx.user.id,
+        userId: context.user.id,
         role: "owner",
       });
 
       const projSlug = slugifyWithSuffix(input.projectName || "default");
-      const [newProject] = await ctx.db
+      const [newProject] = await context.db
         .insert(project)
         .values({
           name: input.projectName || "Default Project",
@@ -147,22 +143,24 @@ export const testingRouter = router({
         organizationSlug: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
       const results: string[] = [];
 
       if (input.email) {
-        const deleted = await ctx.db.delete(user).where(eq(user.email, input.email)).returning();
+        const deleted = await context.db
+          .delete(user)
+          .where(eq(user.email, input.email))
+          .returning();
         results.push(`Deleted ${deleted.length} users`);
       }
 
       if (input.organizationSlug) {
-        const deleted = await ctx.db
+        const deleted = await context.db
           .delete(organization)
           .where(eq(organization.slug, input.organizationSlug))
           .returning();
@@ -173,79 +171,70 @@ export const testingRouter = router({
     }),
 
   // Seed Slack project connection for tests
-  seedSlackConnection: projectProtectedProcedure
-    .input(
-      z.object({
-        teamId: z.string().min(1),
-        teamName: z.string().optional(),
-        teamDomain: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Testing endpoints are not available in production",
-        });
-      }
-
-      const existingConnection = await ctx.db.query.projectConnection.findFirst({
-        where: (pc, { eq, and }) => and(eq(pc.projectId, ctx.project.id), eq(pc.provider, "slack")),
+  seedSlackConnection: withProjectMutationInput({
+    teamId: z.string().min(1),
+    teamName: z.string().optional(),
+    teamDomain: z.string().optional(),
+  }).handler(async ({ context, input }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
       });
+    }
 
-      const providerData = {
-        teamId: input.teamId,
-        teamName: input.teamName ?? input.teamId,
-        teamDomain: input.teamDomain ?? input.teamId,
-      };
+    const existingConnection = await context.db.query.projectConnection.findFirst({
+      where: (pc, { eq, and }) =>
+        and(eq(pc.projectId, context.project.id), eq(pc.provider, "slack")),
+    });
 
-      if (existingConnection) {
-        await ctx.db
-          .update(projectConnection)
-          .set({
-            externalId: input.teamId,
-            providerData,
-          })
-          .where(eq(projectConnection.id, existingConnection.id));
-      } else {
-        await ctx.db.insert(projectConnection).values({
-          projectId: ctx.project.id,
-          provider: "slack",
+    const providerData = {
+      teamId: input.teamId,
+      teamName: input.teamName ?? input.teamId,
+      teamDomain: input.teamDomain ?? input.teamId,
+    };
+
+    if (existingConnection) {
+      await context.db
+        .update(projectConnection)
+        .set({
           externalId: input.teamId,
-          scope: "project",
-          userId: ctx.user.id,
           providerData,
-        });
-      }
+        })
+        .where(eq(projectConnection.id, existingConnection.id));
+    } else {
+      await context.db.insert(projectConnection).values({
+        projectId: context.project.id,
+        provider: "slack",
+        externalId: input.teamId,
+        scope: "project",
+        userId: context.user.id,
+        providerData,
+      });
+    }
 
-      return { success: true };
-    }),
+    return { success: true };
+  }),
 
   // Insert a test event
-  insertEvent: projectProtectedProcedure
-    .input(
-      z.object({
-        type: z.string().min(1),
-        payload: z.record(z.string(), z.unknown()).default({}),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Testing endpoints are not available in production",
-        });
-      }
+  insertEvent: withProjectMutationInput({
+    type: z.string().min(1),
+    payload: z.record(z.string(), z.unknown()).default({}),
+  }).handler(async ({ context, input }) => {
+    if (!isNonProd) {
+      throw new ORPCError("FORBIDDEN", {
+        message: "Testing endpoints are not available in production",
+      });
+    }
 
-      const [newEvent] = await ctx.db
-        .insert(event)
-        .values({
-          type: input.type,
-          payload: input.payload,
-          projectId: ctx.project.id,
-        })
-        .returning();
+    const [newEvent] = await context.db
+      .insert(event)
+      .values({
+        type: input.type,
+        payload: input.payload,
+        projectId: context.project.id,
+      })
+      .returning();
 
-      return newEvent;
-    }),
-});
+    return newEvent;
+  }),
+};

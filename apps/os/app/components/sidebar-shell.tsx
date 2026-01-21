@@ -73,12 +73,10 @@ function ImpersonationDialog({
   const debouncedValue = useDebounce(value, 500);
 
   const emailUsersQuery = useQuery(
-    trpc.admin.searchUsersByEmail.queryOptions(
-      { searchEmail: debouncedValue },
-      {
-        enabled: debouncedValue.length > 0 && type === "email",
-      },
-    ),
+    trpc.admin.searchUsersByEmail.queryOptions({
+      input: { searchEmail: debouncedValue },
+      enabled: debouncedValue.length > 0 && type === "email",
+    }),
   );
 
   const isValid = useMemo(() => {
@@ -205,7 +203,7 @@ function ImpersonationDialog({
 
 async function resolveImpersonation(type: ImpersonationType, value: string): Promise<string> {
   if (type === "email") {
-    const user = await trpcClient.admin.findUserByEmail.query({ email: value });
+    const user = await trpcClient.admin.findUserByEmail({ email: value });
     if (!user) {
       throw new Error("User not found");
     }
@@ -215,7 +213,7 @@ async function resolveImpersonation(type: ImpersonationType, value: string): Pro
     return value;
   }
   if (type === "project_id") {
-    const projectOwner = await trpcClient.admin.getProjectOwner.query({ projectId: value });
+    const projectOwner = await trpcClient.admin.getProjectOwner({ projectId: value });
     if (!projectOwner) {
       throw new Error("Project not found");
     }

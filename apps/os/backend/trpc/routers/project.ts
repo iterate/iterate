@@ -1,14 +1,14 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
 import * as arctic from "arctic";
 import {
-  router,
+  ORPCError,
   protectedProcedure,
   orgProtectedProcedure,
   projectProtectedProcedure,
-  orgAdminMutation,
   projectProtectedMutation,
+  withProjectMutationInput,
+  withOrgAdminMutationInput,
 } from "../trpc.ts";
 import { project, verification, projectRepo, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
@@ -20,20 +20,19 @@ import {
 import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
-export const projectRouter = router({
+export const projectRouter = {
   // Get minimal project info by ID (for conflict resolution, no org access required)
   // Returns just enough info to display the project/org names and slugs
   getProjectInfoById: protectedProcedure
     .input(z.object({ projectId: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const proj = await ctx.db.query.project.findFirst({
+    .handler(async ({ context, input }) => {
+      const proj = await context.db.query.project.findFirst({
         where: eq(project.id, input.projectId),
         with: { organization: true },
       });
 
       if (!proj) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
+        throw new ORPCError("NOT_FOUND", {
           message: "Project not found",
         });
       }
@@ -48,9 +47,9 @@ export const projectRouter = router({
     }),
 
   // List projects in organization
-  list: orgProtectedProcedure.query(async ({ ctx }) => {
-    const projects = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
+  list: orgProtectedProcedure.handler(async ({ context }) => {
+    const projects = await context.db.query.project.findMany({
+      where: eq(project.organizationId, context.organization.id),
       orderBy: (proj, { desc }) => [desc(proj.createdAt)],
     });
 
@@ -58,110 +57,96 @@ export const projectRouter = router({
   }),
 
   // Get project by slug
-  bySlug: projectProtectedProcedure.query(async ({ ctx }) => {
-    return ctx.project;
+  bySlug: projectProtectedProcedure.handler(async ({ context }) => {
+    return context.project;
   }),
 
-  create: orgAdminMutation
-    .input(
-      z.object({
-        name: z.string().min(1).max(100),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const baseSlug = slugify(input.name);
-      const existing = await ctx.db.query.project.findFirst({
-        where: and(eq(project.organizationId, ctx.organization.id), eq(project.slug, baseSlug)),
+  create: withOrgAdminMutationInput({
+    name: z.string().min(1).max(100),
+  }).handler(async ({ context, input }) => {
+    const baseSlug = slugify(input.name);
+    const existing = await context.db.query.project.findFirst({
+      where: and(eq(project.organizationId, context.organization.id), eq(project.slug, baseSlug)),
+    });
+
+    const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
+
+    const [newProject] = await context.db
+      .insert(project)
+      .values({ name: input.name, slug, organizationId: context.organization.id })
+      .returning();
+
+    if (!newProject) {
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: "Failed to create project",
       });
+    }
 
-      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
-
-      const [newProject] = await ctx.db
-        .insert(project)
-        .values({ name: input.name, slug, organizationId: ctx.organization.id })
-        .returning();
-
-      if (!newProject) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create project",
-        });
-      }
-
-      return newProject;
-    }),
+    return newProject;
+  }),
 
   // Update project settings
-  update: projectProtectedMutation
-    .input(
-      z.object({
-        name: z.string().min(1).max(100).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const [updated] = await ctx.db
-        .update(project)
-        .set({
-          ...(input.name && { name: input.name }),
-        })
-        .where(eq(project.id, ctx.project.id))
-        .returning();
+  update: withProjectMutationInput({
+    name: z.string().min(1).max(100).optional(),
+  }).handler(async ({ context, input }) => {
+    const [updated] = await context.db
+      .update(project)
+      .set({
+        ...(input.name && { name: input.name }),
+      })
+      .where(eq(project.id, context.project.id))
+      .returning();
 
-      return updated;
-    }),
+    return updated;
+  }),
 
   // Delete project
-  delete: projectProtectedMutation.mutation(async ({ ctx }) => {
+  delete: projectProtectedMutation.handler(async ({ context }) => {
     // Check if this is the last project in the organization
-    const projectCount = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
+    const projectCount = await context.db.query.project.findMany({
+      where: eq(project.organizationId, context.organization.id),
     });
 
     if (projectCount.length <= 1) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
+      throw new ORPCError("FORBIDDEN", {
         message: "Cannot delete the last project in an organization",
       });
     }
 
-    await ctx.db.delete(project).where(eq(project.id, ctx.project.id));
+    await context.db.delete(project).where(eq(project.id, context.project.id));
 
     return { success: true };
   }),
 
   // Start GitHub App installation flow
-  startGithubInstallFlow: projectProtectedMutation
-    .input(
-      z.object({
-        callbackURL: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const state = arctic.generateState();
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  startGithubInstallFlow: withProjectMutationInput({
+    callbackURL: z.string().optional(),
+  }).handler(async ({ context, input }) => {
+    const state = arctic.generateState();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
-      const data = JSON.stringify({
-        userId: ctx.user.id,
-        projectId: ctx.project.id,
-        redirectUri,
-        callbackURL: input.callbackURL,
-      });
+    const redirectUri = `${context.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
+    const data = JSON.stringify({
+      userId: context.user.id,
+      projectId: context.project.id,
+      redirectUri,
+      callbackURL: input.callbackURL,
+    });
 
-      await ctx.db.insert(verification).values({
-        identifier: state,
-        value: data,
-        expiresAt,
-      });
+    await context.db.insert(verification).values({
+      identifier: state,
+      value: data,
+      expiresAt,
+    });
 
-      const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}`;
+    const installationUrl = `https://github.com/apps/${context.env.GITHUB_APP_SLUG}/installations/new?state=${state}`;
 
-      return { installationUrl };
-    }),
+    return { installationUrl };
+  }),
 
   // List available GitHub repos from connected installation
-  listAvailableGithubRepos: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+  listAvailableGithubRepos: projectProtectedProcedure.handler(async ({ context }) => {
+    const connection = context.project.connections.find((c) => c.provider === "github-app");
 
     if (!connection) {
       return { connected: false as const, repositories: [] };
@@ -181,75 +166,66 @@ export const projectRouter = router({
 
       return { connected: true as const, repositories };
     } catch (error) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
         message: "Failed to fetch repositories from GitHub",
         cause: error,
       });
     }
   }),
 
-  listProjectRepos: projectProtectedProcedure.query(async ({ ctx }) => {
-    return ctx.project.projectRepos;
+  listProjectRepos: projectProtectedProcedure.handler(async ({ context }) => {
+    return context.project.projectRepos;
   }),
 
-  addProjectRepo: projectProtectedMutation
-    .input(
-      z.object({
-        repoId: z.number(),
-        owner: z.string(),
-        name: z.string(),
-        defaultBranch: z.string().default("main"),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const existingRepo = await ctx.db.query.projectRepo.findFirst({
-        where: and(
-          eq(projectRepo.projectId, ctx.project.id),
-          eq(projectRepo.owner, input.owner),
-          eq(projectRepo.name, input.name),
-        ),
-      });
+  addProjectRepo: withProjectMutationInput({
+    repoId: z.number(),
+    owner: z.string(),
+    name: z.string(),
+    defaultBranch: z.string().default("main"),
+  }).handler(async ({ context, input }) => {
+    const existingRepo = await context.db.query.projectRepo.findFirst({
+      where: and(
+        eq(projectRepo.projectId, context.project.id),
+        eq(projectRepo.owner, input.owner),
+        eq(projectRepo.name, input.name),
+      ),
+    });
 
-      if (existingRepo) {
-        await ctx.db
-          .update(projectRepo)
-          .set({
-            externalId: input.repoId.toString(),
-            defaultBranch: input.defaultBranch,
-          })
-          .where(eq(projectRepo.id, existingRepo.id));
-      } else {
-        await ctx.db.insert(projectRepo).values({
-          projectId: ctx.project.id,
-          provider: "github",
+    if (existingRepo) {
+      await context.db
+        .update(projectRepo)
+        .set({
           externalId: input.repoId.toString(),
-          owner: input.owner,
-          name: input.name,
           defaultBranch: input.defaultBranch,
-        });
-      }
+        })
+        .where(eq(projectRepo.id, existingRepo.id));
+    } else {
+      await context.db.insert(projectRepo).values({
+        projectId: context.project.id,
+        provider: "github",
+        externalId: input.repoId.toString(),
+        owner: input.owner,
+        name: input.name,
+        defaultBranch: input.defaultBranch,
+      });
+    }
 
-      return { success: true };
-    }),
+    return { success: true };
+  }),
 
-  removeProjectRepo: projectProtectedMutation
-    .input(
-      z.object({
-        repoId: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db
-        .delete(projectRepo)
-        .where(and(eq(projectRepo.projectId, ctx.project.id), eq(projectRepo.id, input.repoId)));
+  removeProjectRepo: withProjectMutationInput({
+    repoId: z.string(),
+  }).handler(async ({ context, input }) => {
+    await context.db
+      .delete(projectRepo)
+      .where(and(eq(projectRepo.projectId, context.project.id), eq(projectRepo.id, input.repoId)));
 
-      return { success: true };
-    }),
+    return { success: true };
+  }),
 
   // Get GitHub connection status
-  getGithubConnection: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+  getGithubConnection: projectProtectedProcedure.handler(async ({ context }) => {
+    const connection = context.project.connections.find((c) => c.provider === "github-app");
     return {
       connected: !!connection,
       installationId: connection
@@ -259,78 +235,73 @@ export const projectRouter = router({
   }),
 
   // Disconnect GitHub (removes connection and repo, revokes installation)
-  disconnectGithub: projectProtectedMutation.mutation(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+  disconnectGithub: projectProtectedMutation.handler(async ({ context }) => {
+    const connection = context.project.connections.find((c) => c.provider === "github-app");
     const installationId = connection
       ? (connection.providerData as { installationId?: number }).installationId
       : null;
 
     if (installationId) {
-      const githubUninstalled = await deleteGitHubInstallation(ctx.env, installationId);
+      const githubUninstalled = await deleteGitHubInstallation(context.env, installationId);
       if (!githubUninstalled) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message:
             "Failed to revoke GitHub App installation. Please try again or remove it manually from GitHub Settings.",
         });
       }
     }
 
-    await ctx.db.transaction(async (tx) => {
+    await context.db.transaction(async (tx) => {
       await tx
         .delete(schema.projectConnection)
         .where(
           and(
-            eq(projectConnection.projectId, ctx.project.id),
+            eq(projectConnection.projectId, context.project.id),
             eq(projectConnection.provider, "github-app"),
           ),
         );
 
-      await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
+      await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, context.project.id));
     });
 
     return { success: true };
   }),
 
   // Start Slack OAuth flow
-  startSlackOAuthFlow: projectProtectedMutation
-    .input(
-      z.object({
-        callbackURL: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const state = arctic.generateState();
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  startSlackOAuthFlow: withProjectMutationInput({
+    callbackURL: z.string().optional(),
+  }).handler(async ({ context, input }) => {
+    const state = arctic.generateState();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-      const data = JSON.stringify({
-        userId: ctx.user.id,
-        projectId: ctx.project.id,
-        callbackURL: input.callbackURL,
-      });
+    const data = JSON.stringify({
+      userId: context.user.id,
+      projectId: context.project.id,
+      callbackURL: input.callbackURL,
+    });
 
-      await ctx.db.insert(verification).values({
-        identifier: state,
-        value: data,
-        expiresAt,
-      });
+    await context.db.insert(verification).values({
+      identifier: state,
+      value: data,
+      expiresAt,
+    });
 
-      // Build Slack OAuth v2 URL manually
-      // arctic.Slack uses OpenID Connect endpoint which only supports user auth scopes
-      // For bot scopes, we need /oauth/v2/authorize
-      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
-      const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
-      authorizationUrl.searchParams.set("client_id", ctx.env.SLACK_CLIENT_ID);
-      authorizationUrl.searchParams.set("redirect_uri", redirectUri);
-      authorizationUrl.searchParams.set("state", state);
-      authorizationUrl.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
+    // Build Slack OAuth v2 URL manually
+    // arctic.Slack uses OpenID Connect endpoint which only supports user auth scopes
+    // For bot scopes, we need /oauth/v2/authorize
+    const redirectUri = `${context.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
+    const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
+    authorizationUrl.searchParams.set("client_id", context.env.SLACK_CLIENT_ID);
+    authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizationUrl.searchParams.set("state", state);
+    authorizationUrl.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
 
-      return { authorizationUrl: authorizationUrl.toString() };
-    }),
+    return { authorizationUrl: authorizationUrl.toString() };
+  }),
 
   // Get Slack connection status
-  getSlackConnection: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+  getSlackConnection: projectProtectedProcedure.handler(async ({ context }) => {
+    const connection = context.project.connections.find((c) => c.provider === "slack");
     const providerData = connection?.providerData as {
       teamId?: string;
       teamName?: string;
@@ -346,12 +317,11 @@ export const projectRouter = router({
   }),
 
   // Disconnect Slack
-  disconnectSlack: projectProtectedMutation.mutation(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+  disconnectSlack: projectProtectedMutation.handler(async ({ context }) => {
+    const connection = context.project.connections.find((c) => c.provider === "slack");
 
     if (!connection) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
+      throw new ORPCError("NOT_FOUND", {
         message: "No Slack connection found for this project",
       });
     }
@@ -367,11 +337,11 @@ export const projectRouter = router({
       }
     }
 
-    await ctx.db
+    await context.db
       .delete(schema.projectConnection)
       .where(
         and(
-          eq(projectConnection.projectId, ctx.project.id),
+          eq(projectConnection.projectId, context.project.id),
           eq(projectConnection.provider, "slack"),
         ),
       );
@@ -381,54 +351,48 @@ export const projectRouter = router({
 
   // Transfer Slack connection from one project to another
   // Used when a Slack workspace is already connected elsewhere and user wants to switch
-  transferSlackConnection: projectProtectedMutation
-    .input(
-      z.object({
-        slackTeamId: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      // Find existing connection by Slack team ID
-      const existingConnection = await ctx.db.query.projectConnection.findFirst({
-        where: and(
-          eq(projectConnection.provider, "slack"),
-          eq(projectConnection.externalId, input.slackTeamId),
-        ),
-        with: { project: { with: { organization: true } } },
+  transferSlackConnection: withProjectMutationInput({
+    slackTeamId: z.string(),
+  }).handler(async ({ context, input }) => {
+    // Find existing connection by Slack team ID
+    const existingConnection = await context.db.query.projectConnection.findFirst({
+      where: and(
+        eq(projectConnection.provider, "slack"),
+        eq(projectConnection.externalId, input.slackTeamId),
+      ),
+      with: { project: { with: { organization: true } } },
+    });
+
+    if (!existingConnection) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "Slack workspace connection not found",
       });
+    }
 
-      if (!existingConnection) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Slack workspace connection not found",
-        });
-      }
+    // TODO: In the future, we may want to verify user has access to both projects.
+    // For now, if the user has a valid Slack authorization (they authorized the bot
+    // for this workspace), we trust that's sufficient permission to move the connection.
 
-      // TODO: In the future, we may want to verify user has access to both projects.
-      // For now, if the user has a valid Slack authorization (they authorized the bot
-      // for this workspace), we trust that's sufficient permission to move the connection.
+    // Check if target project already has a Slack connection
+    const targetProjectConnection = context.project.connections.find((c) => c.provider === "slack");
+    if (targetProjectConnection) {
+      throw new ORPCError("CONFLICT", {
+        message: "Target project already has a Slack connection. Disconnect it first.",
+      });
+    }
 
-      // Check if target project already has a Slack connection
-      const targetProjectConnection = ctx.project.connections.find((c) => c.provider === "slack");
-      if (targetProjectConnection) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "Target project already has a Slack connection. Disconnect it first.",
-        });
-      }
+    // Transfer the connection to the new project
+    await context.db
+      .update(projectConnection)
+      .set({
+        projectId: context.project.id,
+      })
+      .where(eq(projectConnection.id, existingConnection.id));
 
-      // Transfer the connection to the new project
-      await ctx.db
-        .update(projectConnection)
-        .set({
-          projectId: ctx.project.id,
-        })
-        .where(eq(projectConnection.id, existingConnection.id));
-
-      return {
-        success: true,
-        previousProjectSlug: existingConnection.project?.slug,
-        previousOrgSlug: existingConnection.project?.organization?.slug,
-      };
-    }),
-});
+    return {
+      success: true,
+      previousProjectSlug: existingConnection.project?.slug,
+      previousOrgSlug: existingConnection.project?.organization?.slug,
+    };
+  }),
+};

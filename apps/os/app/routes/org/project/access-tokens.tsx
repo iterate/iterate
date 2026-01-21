@@ -56,14 +56,16 @@ function ProjectAccessTokensPage() {
 
   const { data: tokens } = useSuspenseQuery(
     trpc.accessToken.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const createToken = useMutation({
     mutationFn: async (tokenName: string) => {
-      return trpcClient.accessToken.create.mutate({
+      return trpcClient.accessToken.create({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name: tokenName,
@@ -81,7 +83,7 @@ function ProjectAccessTokensPage() {
 
   const revokeToken = useMutation({
     mutationFn: async (tokenId: string) => {
-      return trpcClient.accessToken.revoke.mutate({
+      return trpcClient.accessToken.revoke({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         id: tokenId,

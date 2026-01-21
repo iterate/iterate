@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider, type QueryClientConfig } from "@tanstack/react-query";
-import { createTRPCClient, httpBatchLink, unstable_localLink as localLink } from "@trpc/client";
-import { createTRPCOptionsProxy } from "@trpc/tanstack-react-query";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import { createTanstackQueryUtils } from "@orpc/tanstack-query";
+import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getContext } from "hono/context-storage";
 import type { PropsWithChildren } from "react";
-import superjson from "superjson";
-import { appRouter, type AppRouter } from "../../backend/trpc/root.ts";
+import { appRouter } from "../../backend/trpc/root.ts";
 import { createContext } from "../../backend/trpc/context.ts";
 import type { Variables } from "../../backend/worker.ts";
 import type { CloudflareEnv } from "../../env.ts";
@@ -32,38 +33,26 @@ export function makeQueryClient() {
   return new QueryClient(defaultQueryClientConfig);
 }
 
+// Server-side: use createRouterClient for direct calls (no HTTP)
+// Client-side: use createORPCClient with RPCLink (HTTP)
 export const makeTrpcClient = createIsomorphicFn()
   .server(() =>
-    createTRPCClient<AppRouter>({
-      links: [
-        localLink({
-          router: appRouter,
-          transformer: superjson,
-          createContext: async () => {
-            const c = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
-            return createContext(c);
-          },
-        }),
-      ],
+    createRouterClient(appRouter, {
+      context: async () => {
+        const c = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+        return createContext(c);
+      },
     }),
   )
-  .client(() =>
-    createTRPCClient<AppRouter>({
-      links: [
-        httpBatchLink({
-          url: `${window.location.origin}/api/trpc`,
-          transformer: superjson,
-          maxURLLength: 2083,
-        }),
-      ],
-    }),
-  );
-
-export function makeTrpc(queryClient: QueryClient, trpcClient: ReturnType<typeof makeTrpcClient>) {
-  return createTRPCOptionsProxy<AppRouter>({
-    client: trpcClient,
-    queryClient,
+  .client((): RouterClient<typeof appRouter> => {
+    const link = new RPCLink({
+      url: `${window.location.origin}/api/trpc`,
+    });
+    return createORPCClient(link);
   });
+
+export function makeTrpc(_queryClient: QueryClient, trpcClient: ReturnType<typeof makeTrpcClient>) {
+  return createTanstackQueryUtils(trpcClient);
 }
 
 export function TRPCProvider({
@@ -74,7 +63,4 @@ export function TRPCProvider({
 }
 
 export const trpcClient = makeTrpcClient();
-export const trpc = createTRPCOptionsProxy<AppRouter>({
-  client: trpcClient,
-  queryClient: makeQueryClient(),
-});
+export const trpc = createTanstackQueryUtils(trpcClient);

@@ -1,12 +1,11 @@
 import { z } from "zod/v4";
 import { and, eq, ilike } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
+import { ORPCError, adminProcedure, protectedProcedure, protectedMutation } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { user, billingAccount } from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 
-export const adminRouter = router({
+export const adminRouter = {
   // Impersonate a user (creates a session as that user)
   impersonate: adminProcedure
     .input(
@@ -14,10 +13,10 @@ export const adminRouter = router({
         userId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       // This would typically integrate with better-auth's admin plugin
       // For now, return the user info that would be impersonated
-      const targetUser = await ctx.db.query.user.findFirst({
+      const targetUser = await context.db.query.user.findFirst({
         where: eq(user.id, input.userId),
       });
 
@@ -36,7 +35,7 @@ export const adminRouter = router({
     }),
 
   // Stop impersonating
-  stopImpersonating: protectedProcedure.mutation(async ({ ctx: _ctx }) => {
+  stopImpersonating: protectedMutation.handler(async () => {
     // This would integrate with better-auth's admin plugin
     return {
       message: "Stop impersonation would be handled via Better Auth admin plugin",
@@ -53,11 +52,11 @@ export const adminRouter = router({
         })
         .optional(),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const users = await ctx.db.query.user.findMany({
+      const users = await context.db.query.user.findMany({
         limit,
         offset,
         orderBy: (u, { desc }) => [desc(u.createdAt)],
@@ -83,11 +82,11 @@ export const adminRouter = router({
         })
         .optional(),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const orgs = await ctx.db.query.organization.findMany({
+      const orgs = await context.db.query.organization.findMany({
         limit,
         offset,
         orderBy: (o, { desc }) => [desc(o.createdAt)],
@@ -112,20 +111,20 @@ export const adminRouter = router({
     }),
 
   // Get session info for debugging
-  sessionInfo: protectedProcedure.query(async ({ ctx }) => {
+  sessionInfo: protectedProcedure.handler(async ({ context }) => {
     return {
       user: {
-        id: ctx.user.id,
-        email: ctx.user.email,
-        name: ctx.user.name,
-        role: ctx.user.role,
+        id: context.user.id,
+        email: context.user.email,
+        name: context.user.name,
+        role: context.user.role,
       },
-      session: ctx.session
+      session: context.session
         ? {
-            expiresAt: ctx.session.session.expiresAt,
-            ipAddress: ctx.session.session.ipAddress,
-            userAgent: ctx.session.session.userAgent,
-            impersonatedBy: ctx.session.session.impersonatedBy,
+            expiresAt: context.session.session.expiresAt,
+            ipAddress: context.session.session.ipAddress,
+            userAgent: context.session.session.userAgent,
+            impersonatedBy: context.session.session.impersonatedBy,
           }
         : null,
     };
@@ -138,14 +137,13 @@ export const adminRouter = router({
         units: z.number().int().positive(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const account = await ctx.db.query.billingAccount.findFirst({
+    .handler(async ({ context, input }) => {
+      const account = await context.db.query.billingAccount.findFirst({
         where: eq(billingAccount.organizationId, input.organizationId),
       });
 
       if (!account?.stripeCustomerId) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
+        throw new ORPCError("NOT_FOUND", {
           message: "Organization has no billing account or Stripe customer",
         });
       }
@@ -169,16 +167,16 @@ export const adminRouter = router({
       };
     }),
 
-  impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
-    const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
-    const isAdmin = ctx?.user?.role === "admin" || undefined;
+  impersonationInfo: protectedProcedure.handler(async ({ context }) => {
+    const impersonatedBy = context?.session?.session.impersonatedBy || undefined;
+    const isAdmin = context?.user?.role === "admin" || undefined;
     return { impersonatedBy, isAdmin };
   }),
 
   searchUsersByEmail: adminProcedure
     .input(z.object({ searchEmail: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const users = await ctx.db.query.user.findMany({
+    .handler(async ({ context, input }) => {
+      const users = await context.db.query.user.findMany({
         where: ilike(schema.user.email, `%${input.searchEmail}%`),
         columns: { id: true, email: true, name: true },
         limit: 10,
@@ -188,8 +186,8 @@ export const adminRouter = router({
 
   findUserByEmail: adminProcedure
     .input(z.object({ email: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const foundUser = await ctx.db.query.user.findFirst({
+    .handler(async ({ context, input }) => {
+      const foundUser = await context.db.query.user.findFirst({
         where: eq(user.email, input.email.toLowerCase()),
       });
       return foundUser;
@@ -197,8 +195,8 @@ export const adminRouter = router({
 
   getProjectOwner: adminProcedure
     .input(z.object({ projectId: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const project = await ctx.db.query.project.findFirst({
+    .handler(async ({ context, input }) => {
+      const project = await context.db.query.project.findFirst({
         where: eq(schema.project.id, input.projectId),
       });
 
@@ -206,7 +204,7 @@ export const adminRouter = router({
         throw new Error("Project not found");
       }
 
-      const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
+      const ownerMembership = await context.db.query.organizationUserMembership.findFirst({
         where: and(
           eq(schema.organizationUserMembership.organizationId, project.organizationId),
           eq(schema.organizationUserMembership.role, "owner"),
@@ -232,12 +230,12 @@ export const adminRouter = router({
         role: z.enum(["user", "admin"]),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      if (input.userId === ctx.user.id && input.role !== "admin") {
+    .handler(async ({ context, input }) => {
+      if (input.userId === context.user.id && input.role !== "admin") {
         throw new Error("You cannot remove your own admin role");
       }
 
-      const targetUser = await ctx.db.query.user.findFirst({
+      const targetUser = await context.db.query.user.findFirst({
         where: eq(user.id, input.userId),
       });
 
@@ -245,7 +243,7 @@ export const adminRouter = router({
         throw new Error("User not found");
       }
 
-      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
+      await context.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
 
       return {
         userId: input.userId,
@@ -254,4 +252,4 @@ export const adminRouter = router({
         role: input.role,
       };
     }),
-});
+};

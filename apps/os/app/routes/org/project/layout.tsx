@@ -34,7 +34,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
     // Ensure org exists
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
+        input: { organizationSlug: params.organizationSlug },
       }),
     );
 
@@ -70,23 +70,27 @@ function ProjectLayout() {
 
   const { data: currentOrg } = useSuspenseQuery(
     trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const { data: currentProject } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   // Fetch machines list for breadcrumb dropdown
   const { data: machinesList } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
     }),
   );
 

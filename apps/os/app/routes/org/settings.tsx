@@ -18,13 +18,13 @@ function OrgSettingsPage() {
 
   const { data: org } = useSuspenseQuery(
     trpc.organization.bySlug.queryOptions({
-      organizationSlug: routeParams.organizationSlug,
+      input: { organizationSlug: routeParams.organizationSlug },
     }),
   );
 
   const updateOrg = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.organization.update.mutate({
+      return trpcClient.organization.update({
         organizationSlug: routeParams.organizationSlug,
         name,
       });

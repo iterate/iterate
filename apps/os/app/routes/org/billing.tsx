@@ -54,7 +54,7 @@ function BillingContent() {
 
   const { data: billingAccount } = useSuspenseQuery(
     trpc.billing.getBillingAccount.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
@@ -62,7 +62,7 @@ function BillingContent() {
     mutationFn: () => {
       const baseUrl = window.location.origin;
       const billingPath = `/orgs/${params.organizationSlug}/billing`;
-      return trpcClient.billing.createCheckoutSession.mutate({
+      return trpcClient.billing.createCheckoutSession({
         organizationSlug: params.organizationSlug,
         successUrl: `${baseUrl}${billingPath}?success=true`,
         cancelUrl: `${baseUrl}${billingPath}?canceled=true`,
@@ -78,7 +78,7 @@ function BillingContent() {
 
   const createPortal = useMutation({
     mutationFn: () =>
-      trpcClient.billing.createPortalSession.mutate({
+      trpcClient.billing.createPortalSession({
         organizationSlug: params.organizationSlug,
       }),
     onSuccess: (data) => {

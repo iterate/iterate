@@ -61,14 +61,16 @@ function ProjectConnectorsContent() {
 
   const { data: slackConnection } = useSuspenseQuery(
     trpc.project.getSlackConnection.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const startSlackOAuth = useMutation({
     mutationFn: () =>
-      trpcClient.project.startSlackOAuthFlow.mutate({
+      trpcClient.project.startSlackOAuthFlow({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),
@@ -82,16 +84,18 @@ function ProjectConnectorsContent() {
 
   const disconnectSlack = useMutation({
     mutationFn: () =>
-      trpcClient.project.disconnectSlack.mutate({
+      trpcClient.project.disconnectSlack({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),
     onSuccess: () => {
       toast.success("Slack disconnected");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackConnection.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.getSlackConnection.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
     },

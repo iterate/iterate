@@ -35,19 +35,19 @@ function OrgTeamPage() {
 
   const { data: members } = useSuspenseQuery(
     trpc.organization.members.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const { data: org } = useSuspenseQuery(
     trpc.organization.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
   const { data: pendingInvites } = useSuspenseQuery(
     trpc.organization.listInvites.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 
@@ -59,7 +59,7 @@ function OrgTeamPage() {
       userId: string;
       role: "member" | "admin" | "owner";
     }) => {
-      return trpcClient.organization.updateMemberRole.mutate({
+      return trpcClient.organization.updateMemberRole({
         organizationSlug: params.organizationSlug,
         userId,
         role,
@@ -75,7 +75,7 @@ function OrgTeamPage() {
 
   const createInvite = useMutation({
     mutationFn: async (emailAddress: string) => {
-      return trpcClient.organization.createInvite.mutate({
+      return trpcClient.organization.createInvite({
         organizationSlug: params.organizationSlug,
         email: emailAddress,
       });
@@ -91,7 +91,7 @@ function OrgTeamPage() {
 
   const cancelInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.cancelInvite.mutate({
+      return trpcClient.organization.cancelInvite({
         organizationSlug: params.organizationSlug,
         inviteId,
       });
@@ -106,7 +106,7 @@ function OrgTeamPage() {
 
   const removeMember = useMutation({
     mutationFn: async (userId: string) => {
-      return trpcClient.organization.removeMember.mutate({
+      return trpcClient.organization.removeMember({
         organizationSlug: params.organizationSlug,
         userId,
       });

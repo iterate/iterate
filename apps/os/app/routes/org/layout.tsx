@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
+        input: { organizationSlug: params.organizationSlug },
       }),
     );
 
@@ -42,7 +42,7 @@ function OrgLayout() {
 
   const { data: currentOrg } = useSuspenseQuery(
     trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+      input: { organizationSlug: params.organizationSlug },
     }),
   );
 

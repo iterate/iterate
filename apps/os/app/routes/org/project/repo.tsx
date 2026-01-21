@@ -21,28 +21,34 @@ function useDisconnectGithub(params: { organizationSlug: string; projectSlug: st
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      trpcClient.project.disconnectGithub.mutate({
+      trpcClient.project.disconnectGithub({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),
     onSuccess: () => {
       toast.success("GitHub disconnected");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.bySlug.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getGithubConnection.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.getGithubConnection.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.listProjectRepos.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
     },
@@ -56,7 +62,7 @@ function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (repoId: string) =>
-      trpcClient.project.removeProjectRepo.mutate({
+      trpcClient.project.removeProjectRepo({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         repoId,
@@ -64,15 +70,19 @@ function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }
     onSuccess: () => {
       toast.success("Repository removed");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.bySlug.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.listProjectRepos.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
     },
@@ -113,15 +123,19 @@ function ProjectRepoPage() {
 
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const { data: githubConnection } = useSuspenseQuery(
     trpc.project.getGithubConnection.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
@@ -129,7 +143,7 @@ function ProjectRepoPage() {
 
   const startGithubInstall = useMutation({
     mutationFn: () =>
-      trpcClient.project.startGithubInstallFlow.mutate({
+      trpcClient.project.startGithubInstallFlow({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),
@@ -301,14 +315,16 @@ function RepoPicker({
 
   const { data: reposData } = useSuspenseQuery(
     trpc.project.listAvailableGithubRepos.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const addProjectRepo = useMutation({
     mutationFn: (repo: { id: number; owner: string; name: string; defaultBranch: string }) =>
-      trpcClient.project.addProjectRepo.mutate({
+      trpcClient.project.addProjectRepo({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         repoId: repo.id,
@@ -319,15 +335,19 @@ function RepoPicker({
     onSuccess: () => {
       toast.success("Repository added successfully");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.bySlug.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
+        queryKey: trpc.project.listProjectRepos.key({
+          input: {
+            organizationSlug: params.organizationSlug,
+            projectSlug: params.projectSlug,
+          },
         }),
       });
       onCancel?.();
@@ -339,7 +359,7 @@ function RepoPicker({
 
   const updateGithubPermissions = useMutation({
     mutationFn: () =>
-      trpcClient.project.startGithubInstallFlow.mutate({
+      trpcClient.project.startGithubInstallFlow({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),

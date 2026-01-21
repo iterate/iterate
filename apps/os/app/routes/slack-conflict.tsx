@@ -48,13 +48,13 @@ function SlackConflictContent() {
   // Get the new project's info (slug, org slug) for navigation
   const { data: newProject } = useSuspenseQuery(
     trpc.project.getProjectInfoById.queryOptions({
-      projectId: search.newProjectId,
+      input: { projectId: search.newProjectId },
     }),
   );
 
   const transferConnection = useMutation({
     mutationFn: () =>
-      trpcClient.project.transferSlackConnection.mutate({
+      trpcClient.project.transferSlackConnection({
         organizationSlug: newProject.organizationSlug,
         projectSlug: newProject.slug,
         slackTeamId: search.teamId,
@@ -64,14 +64,18 @@ function SlackConflictContent() {
       // Invalidate both projects' Slack connection queries
       queryClient.invalidateQueries({
         queryKey: trpc.project.getSlackConnection.queryKey({
-          organizationSlug: newProject.organizationSlug,
-          projectSlug: newProject.slug,
+          input: {
+            organizationSlug: newProject.organizationSlug,
+            projectSlug: newProject.slug,
+          },
         }),
       });
       queryClient.invalidateQueries({
         queryKey: trpc.project.getSlackConnection.queryKey({
-          organizationSlug: search.existingOrgSlug,
-          projectSlug: search.existingProjectSlug,
+          input: {
+            organizationSlug: search.existingOrgSlug,
+            projectSlug: search.existingProjectSlug,
+          },
         }),
       });
       navigate({

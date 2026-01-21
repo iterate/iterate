@@ -55,7 +55,7 @@ function UserSettingsPage() {
 
   const updateUser = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.user.updateSettings.mutate({ name });
+      return trpcClient.user.updateSettings({ name });
     },
     onSuccess: () => {
       toast.success("Settings updated");
@@ -67,7 +67,7 @@ function UserSettingsPage() {
 
   const acceptInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.acceptInvite.mutate({ inviteId });
+      return trpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
       toast.success(`Joined ${org.name}!`);
@@ -80,7 +80,7 @@ function UserSettingsPage() {
 
   const declineInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.declineInvite.mutate({ inviteId });
+      return trpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
       toast.success("Invite declined");
@@ -246,7 +246,7 @@ function OrgMembershipCard({ membership }: { membership: Membership }) {
 
   const leaveOrg = useMutation({
     mutationFn: async () => {
-      return trpcClient.organization.leave.mutate({
+      return trpcClient.organization.leave({
         organizationSlug: membership.organization.slug,
       });
     },

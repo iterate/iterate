@@ -63,16 +63,20 @@ function ProjectEnvVarsPage() {
 
   const { data: envVars } = useSuspenseQuery(
     trpc.envVar.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const { data: machines } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
     }),
   );
 
@@ -93,7 +97,7 @@ function ProjectEnvVarsPage() {
 
   const setEnvVar = useMutation({
     mutationFn: async (input: { key: string; value: string; machineId?: string }) => {
-      return trpcClient.envVar.set.mutate({
+      return trpcClient.envVar.set({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,
@@ -113,7 +117,7 @@ function ProjectEnvVarsPage() {
 
   const deleteEnvVar = useMutation({
     mutationFn: async (input: { key: string; machineId?: string | null }) => {
-      return trpcClient.envVar.delete.mutate({
+      return trpcClient.envVar.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,

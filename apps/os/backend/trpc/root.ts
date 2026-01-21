@@ -1,4 +1,3 @@
-import { router } from "./trpc.ts";
 import { userRouter } from "./routers/user.ts";
 import { organizationRouter } from "./routers/organization.ts";
 import { projectRouter } from "./routers/project.ts";
@@ -10,7 +9,8 @@ import { accessTokenRouter } from "./routers/access-token.ts";
 import { billingRouter } from "./routers/billing.ts";
 import { eventRouter } from "./routers/event.ts";
 
-export const appRouter = router({
+// In oRPC, routers are just plain objects
+export const appRouter = {
   user: userRouter,
   organization: organizationRouter,
   project: projectRouter,
@@ -21,6 +21,6 @@ export const appRouter = router({
   accessToken: accessTokenRouter,
   billing: billingRouter,
   event: eventRouter,
-});
+};
 
 export type AppRouter = typeof appRouter;

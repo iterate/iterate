@@ -21,8 +21,10 @@ function ProjectSettingsPage() {
 
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
@@ -30,7 +32,7 @@ function ProjectSettingsPage() {
 
   const updateProject = useMutation({
     mutationFn: async (nextName: string) => {
-      return trpcClient.project.update.mutate({
+      return trpcClient.project.update({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name: nextName,
@@ -46,7 +48,7 @@ function ProjectSettingsPage() {
 
   const deleteProject = useMutation({
     mutationFn: async () => {
-      return trpcClient.project.delete.mutate({
+      return trpcClient.project.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       });

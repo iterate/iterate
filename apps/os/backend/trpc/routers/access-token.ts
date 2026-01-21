@@ -1,16 +1,15 @@
 import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
-import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
+import { ORPCError, projectProtectedProcedure, withProjectMutationInput } from "../trpc.ts";
 import { projectAccessToken } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { generateProjectAccessKey } from "./machine.ts";
 
-export const accessTokenRouter = router({
-  list: projectProtectedProcedure.query(async ({ ctx }) => {
-    const tokens = await ctx.db.query.projectAccessToken.findMany({
-      where: eq(projectAccessToken.projectId, ctx.project.id),
+export const accessTokenRouter = {
+  list: projectProtectedProcedure.handler(async ({ context }) => {
+    const tokens = await context.db.query.projectAccessToken.findMany({
+      where: eq(projectAccessToken.projectId, context.project.id),
       orderBy: (token, { desc }) => [desc(token.createdAt)],
     });
 
@@ -23,74 +22,64 @@ export const accessTokenRouter = router({
     }));
   }),
 
-  create: projectProtectedMutation
-    .input(
-      z.object({
-        name: z.string().min(1).max(100),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const tokenId = typeid("pat").toString();
-      const rawToken = generateProjectAccessKey(tokenId);
-      const encryptedToken = await encrypt(rawToken);
+  create: withProjectMutationInput({
+    name: z.string().min(1).max(100),
+  }).handler(async ({ context, input }) => {
+    const tokenId = typeid("pat").toString();
+    const rawToken = generateProjectAccessKey(tokenId);
+    const encryptedToken = await encrypt(rawToken);
 
-      const [created] = await ctx.db
-        .insert(projectAccessToken)
-        .values({
-          id: tokenId,
-          projectId: ctx.project.id,
-          name: input.name,
-          encryptedToken,
-        })
-        .returning();
+    const [created] = await context.db
+      .insert(projectAccessToken)
+      .values({
+        id: tokenId,
+        projectId: context.project.id,
+        name: input.name,
+        encryptedToken,
+      })
+      .returning();
 
-      if (!created) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create access token",
-        });
-      }
-
-      return {
-        id: created.id,
-        name: created.name,
-        token: rawToken,
-        createdAt: created.createdAt,
-      };
-    }),
-
-  revoke: projectProtectedMutation
-    .input(
-      z.object({
-        id: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.db.query.projectAccessToken.findFirst({
-        where: and(
-          eq(projectAccessToken.id, input.id),
-          eq(projectAccessToken.projectId, ctx.project.id),
-          isNull(projectAccessToken.revokedAt),
-        ),
+    if (!created) {
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: "Failed to create access token",
       });
+    }
 
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Access token not found or already revoked",
-        });
-      }
+    return {
+      id: created.id,
+      name: created.name,
+      token: rawToken,
+      createdAt: created.createdAt,
+    };
+  }),
 
-      const [revoked] = await ctx.db
-        .update(projectAccessToken)
-        .set({ revokedAt: new Date() })
-        .where(eq(projectAccessToken.id, input.id))
-        .returning();
+  revoke: withProjectMutationInput({
+    id: z.string(),
+  }).handler(async ({ context, input }) => {
+    const existing = await context.db.query.projectAccessToken.findFirst({
+      where: and(
+        eq(projectAccessToken.id, input.id),
+        eq(projectAccessToken.projectId, context.project.id),
+        isNull(projectAccessToken.revokedAt),
+      ),
+    });
 
-      return {
-        id: revoked.id,
-        name: revoked.name,
-        revokedAt: revoked.revokedAt,
-      };
-    }),
-});
+    if (!existing) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "Access token not found or already revoked",
+      });
+    }
+
+    const [revoked] = await context.db
+      .update(projectAccessToken)
+      .set({ revokedAt: new Date() })
+      .where(eq(projectAccessToken.id, input.id))
+      .returning();
+
+    return {
+      id: revoked.id,
+      name: revoked.name,
+      revokedAt: revoked.revokedAt,
+    };
+  }),
+};

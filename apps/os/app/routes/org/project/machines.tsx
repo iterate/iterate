@@ -100,9 +100,11 @@ function ProjectMachinesPage() {
   const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
-    organizationSlug: params.organizationSlug,
-    projectSlug: params.projectSlug,
-    includeArchived: false,
+    input: {
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
   });
 
   const { data: machines } = useSuspenseQuery(machineListQueryOptions);
@@ -117,7 +119,7 @@ function ProjectMachinesPage() {
       type: MachineType;
       metadata?: Record<string, unknown>;
     }) => {
-      return trpcClient.machine.create.mutate({
+      return trpcClient.machine.create({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name,
@@ -141,7 +143,7 @@ function ProjectMachinesPage() {
 
   const archiveMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.archive.mutate({
+      return trpcClient.machine.archive({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
@@ -158,7 +160,7 @@ function ProjectMachinesPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.delete.mutate({
+      return trpcClient.machine.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
@@ -175,7 +177,7 @@ function ProjectMachinesPage() {
 
   const restartMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.restart.mutate({
+      return trpcClient.machine.restart({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
