@@ -7,7 +7,7 @@ import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { parseTokenIdFromApiKey } from "../trpc/routers/machine.ts";
+import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
@@ -324,13 +324,11 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     if (item && item.machineId) envVars[item.key] = item.value;
   }
 
-  // Fallback API keys if not set by user (only if defined in env)
-  if (!envVars["OPENAI_API_KEY"] && env.OPENAI_API_KEY) {
-    envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
-  }
-  if (!envVars["ANTHROPIC_API_KEY"] && env.ANTHROPIC_API_KEY) {
-    envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
-  }
+  // Always use magic strings for API keys - egress proxy resolves them at request time
+  // Secret lookup priority: user > project > org > global
+  // Use single quotes inside the magic string so it's valid when embedded in JSON configs
+  envVars["OPENAI_API_KEY"] = "getIterateSecret({secretKey: 'openai_api_key'})";
+  envVars["ANTHROPIC_API_KEY"] = "getIterateSecret({secretKey: 'anthropic_api_key'})";
 
   // Add tokens from connections
   // Note: GitHub token is NOT injected here - it's handled via magic string in GIT_CONFIG_* env vars

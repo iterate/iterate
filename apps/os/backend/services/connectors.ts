@@ -129,10 +129,3 @@ export function getFullReauthUrl(
   const base = baseUrl || "https://iterate.com";
   return `${base}${path}`;
 }
-
-/**
- * Check if a connector is user-scoped (requires userId for secret lookup).
- */
-export function isUserScopedConnector(connector: Connector): boolean {
-  return connector.scope === "user";
-}

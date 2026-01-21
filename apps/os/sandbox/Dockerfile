@@ -96,26 +96,26 @@ ARG SANDBOX_ITERATE_REPO_REF
 
 # If ref provided, clone from git; otherwise create placeholder for local mount
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
-      cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
+    git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
+    cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
     else \
-      mkdir -p $ITERATE_REPO/apps/os/sandbox; \
+    mkdir -p $ITERATE_REPO/apps/os/sandbox; \
     fi
 
 # Make scripts executable (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh && \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/run 2>/dev/null || true && \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/log/run 2>/dev/null || true; \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh && \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/run 2>/dev/null || true && \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/log/run 2>/dev/null || true; \
     fi
 
 # Install deps and build daemon (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      cd $ITERATE_REPO && pnpm install; \
+    cd $ITERATE_REPO && pnpm install; \
     fi
 
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      cd $ITERATE_REPO/apps/daemon && npx vite build; \
+    cd $ITERATE_REPO/apps/daemon && npx vite build; \
     fi
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
@@ -124,7 +124,7 @@ RUN mkdir -p ~/.iterate && \
 
 # Setup home directory (only if repo was cloned; entry.sh handles local mode)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
+    $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
     fi
 
 ENTRYPOINT [ "/app/entry.sh" ]

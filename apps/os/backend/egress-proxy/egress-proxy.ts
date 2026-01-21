@@ -591,11 +591,13 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
 
     // Process magic strings in headers (handles Basic auth base64 encoding)
     for (const [key, value] of originalHeaderEntries) {
-      // Debug: log Authorization header processing
-      if (key.toLowerCase() === "authorization") {
-        logger.info("Processing Authorization header", {
+      // Debug: log auth-related header processing
+      const keyLower = key.toLowerCase();
+      if (keyLower === "authorization" || keyLower === "x-api-key") {
+        logger.info("Processing auth header", {
           headerKey: key,
-          headerValuePrefix: value.substring(0, 50),
+          headerValuePrefix: value.substring(0, 80),
+          containsMagic: value.includes("getIterateSecret"),
         });
       }
 

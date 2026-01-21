@@ -6,9 +6,13 @@ Sandboxes use a magic string pattern to access secrets without exposing them dir
 
 ```
 getIterateSecret({secretKey: "github.access_token"})
+getIterateSecret({secretKey: 'anthropic_api_key'})   # single quotes also work
+getIterateSecret%28%7BsecretKey%3A%20%27openai_api_key%27%7D%29 # urlencoding also works
 ```
 
-Place this in HTTP headers or the path. The egress proxy intercepts outbound requests and replaces the magic string with the actual secret value.
+Place this in HTTP headers or the path. The egress proxy intercepts outbound requests and replaces the magic string with the actual secret value. If in the path, it should be urlencoded.
+
+**Quote style**: Use single quotes (`'`) or urlencoding when the magic string will be embedded in JSON (e.g., env vars used in JSON config files). Double quotes break JSON parsing.
 
 ## How It Works
 

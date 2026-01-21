@@ -218,6 +218,8 @@ githubApp.get(
             .set({
               encryptedValue: encryptedAccessToken,
               lastSuccessAt: new Date(),
+              // Update rule in case it changed (e.g., added githubcopilot.com support)
+              egressProxyRule: `$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')`,
             })
             .where(eq(schema.secret.id, existingSecret.id));
         } else {
@@ -226,7 +228,7 @@ githubApp.get(
             encryptedValue: encryptedAccessToken,
             organizationId: projectInfo.organizationId,
             projectId,
-            egressProxyRule: `$contains(url.hostname, 'github.com')`,
+            egressProxyRule: `$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')`,
           });
         }
       }

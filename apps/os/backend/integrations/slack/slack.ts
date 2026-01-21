@@ -314,12 +314,14 @@ slackApp.get(
               ),
           });
 
+          const slackEgressRule = `$contains(url.hostname, 'slack.com')`;
           if (existingSecret) {
             await tx
               .update(schema.secret)
               .set({
                 encryptedValue: encryptedAccessToken,
                 lastSuccessAt: new Date(),
+                egressProxyRule: slackEgressRule,
               })
               .where(eq(schema.secret.id, existingSecret.id));
           } else {
@@ -328,7 +330,7 @@ slackApp.get(
               encryptedValue: encryptedAccessToken,
               organizationId: projectInfo.organizationId,
               projectId,
-              egressProxyRule: `$contains(url.hostname, 'slack.com')`,
+              egressProxyRule: slackEgressRule,
             });
           }
         }

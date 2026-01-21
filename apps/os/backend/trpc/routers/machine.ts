@@ -101,12 +101,6 @@ export async function hashApiKey(apiKey: string): Promise<string> {
     .join("");
 }
 
-// Parse token ID from API key
-export function parseTokenIdFromApiKey(apiKey: string): string | null {
-  const match = apiKey.match(/^pak_(pat_[a-z0-9]+)_[a-f0-9]+$/);
-  return match ? match[1] : null;
-}
-
 // Verify an API key against its hash (kept for backward compatibility during migration)
 export async function verifyApiKey(apiKey: string, hash: string): Promise<boolean> {
   const computedHash = await hashApiKey(apiKey);
