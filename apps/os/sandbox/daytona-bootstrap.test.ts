@@ -5,7 +5,7 @@
  * 1. Start mock OS worker on random port
  * 2. Start cloudflared quick tunnel → get *.trycloudflare.com URL
  * 3. Create Daytona sandbox from snapshot with injected env vars
- * 4. Tail entrypoint logs until /tmp/.iterate-sandbox-ready exists
+ * 4. Tail entrypoint logs until /api/health responds
  * 5. Wait for bootstrap request, return API keys in response
  * 6. Verify daemon/opencode logs look sensible
  * 7. Run `opencode run "what is 50 - 8"` → assert "42"
@@ -303,15 +303,15 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         );
         console.log("");
 
-        // 6. Wait for sandbox ready file (tail logs while waiting)
-        console.log("[test] Waiting for sandbox to be ready (/tmp/.iterate-sandbox-ready)...");
+        // 6. Wait for daemon health endpoint
+        console.log("[test] Waiting for sandbox to be ready (health endpoint)...");
 
         // Poll for ready file (also print daemon logs periodically)
         await waitForCondition(
           async () => {
             try {
               const result = await sandbox!.process.executeCommand(
-                "test -f /tmp/.iterate-sandbox-ready && echo ready",
+                "curl -fsS http://localhost:3000/api/health >/dev/null && echo ready",
               );
               return result.result?.includes("ready") ?? false;
             } catch {
@@ -321,7 +321,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
           SANDBOX_READY_TIMEOUT_MS,
           2000,
         );
-        console.log("[test] Sandbox ready file detected");
+        console.log("[test] Sandbox health endpoint detected");
 
         // 7. Comprehensive diagnostics - show everything useful for debugging
         const printSection = (title: string) => {
@@ -335,23 +335,23 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         const allProcs = await sandbox.process.executeCommand("ps aux");
         console.log(allProcs.result);
 
-        printSection("ENTRY.SH STDOUT (sandbox boot log)");
-        // entry.sh output goes to the main container log, which we can see via journal or docker logs
-        // For Daytona, we check dmesg or the s6-svscan output
+        printSection("CONTAINER STDOUT (sandbox boot log)");
+        // Boot output goes to the main container log, which we can see via journal or docker logs
+        // For Daytona, we check dmesg or the PM2 output
         const entryLogs = await sandbox.process.executeCommand(
           "dmesg 2>/dev/null | tail -50 || echo '(dmesg not available)'",
         );
         console.log(entryLogs.result);
 
-        printSection("DAEMON LOGS (/var/log/iterate-daemon/current)");
+        printSection("DAEMON LOGS (~/.pm2/logs/iterate-daemon-out.log)");
         const daemonLogsEarly = await sandbox.process.executeCommand(
-          "cat /var/log/iterate-daemon/current 2>/dev/null || echo '(no daemon logs yet)'",
+          "cat /home/iterate/.pm2/logs/iterate-daemon-out.log 2>/dev/null || echo '(no daemon logs yet)'",
         );
         console.log(daemonLogsEarly.result);
 
-        printSection("OPENCODE LOGS (/var/log/opencode/current)");
+        printSection("OPENCODE LOGS (~/.pm2/logs/opencode-out.log)");
         const opencodeLogsEarly = await sandbox.process.executeCommand(
-          "cat /var/log/opencode/current 2>/dev/null || echo '(no opencode logs yet)'",
+          "cat /home/iterate/.pm2/logs/opencode-out.log 2>/dev/null || echo '(no opencode logs yet)'",
         );
         console.log(opencodeLogsEarly.result);
 
@@ -379,7 +379,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         // 9. Show full logs after bootstrap
         printSection("DAEMON LOGS (FULL - after bootstrap)");
         const daemonLogs = await sandbox.process.executeCommand(
-          "cat /var/log/iterate-daemon/current 2>/dev/null || echo '(no logs)'",
+          "cat /home/iterate/.pm2/logs/iterate-daemon-out.log 2>/dev/null || echo '(no logs)'",
         );
         const daemonLogText = daemonLogs.result ?? "";
         console.log(daemonLogText);
@@ -392,7 +392,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
 
         printSection("OPENCODE LOGS (FULL - after bootstrap)");
         const opencodeLogs = await sandbox.process.executeCommand(
-          "cat /var/log/opencode/current 2>/dev/null || echo '(no logs)'",
+          "cat /home/iterate/.pm2/logs/opencode-out.log 2>/dev/null || echo '(no logs)'",
         );
         console.log(opencodeLogs.result);
 
@@ -402,7 +402,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         console.log("");
 
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what is 50 - 8? respond with just the number\\""',
+          'bash -c "set -a; source ~/.iterate/.env; set +a; opencode run \\"what is 50 - 8? respond with just the number\\""',
         );
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),

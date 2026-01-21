@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Starts the sandbox container with entrypoint, waits for setup to complete, then opens a shell.
+# Starts the sandbox container, waits for bootstrap to complete, then opens a shell.
 #
 # Usage: doppler run --config dev -- ./apps/os/sandbox/shell-with-entrypoint.sh
 #
@@ -21,7 +21,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting container with entrypoint..."
+echo "Starting container..."
 echo "  Mounting local repo: $REPO_ROOT"
 docker run -d \
   --name "$CONTAINER_NAME" \
@@ -38,12 +38,12 @@ docker run -d \
 docker logs -f "$CONTAINER_NAME" 2>&1 &
 LOGS_PID=$!
 
-READY_FILE="/tmp/.iterate-sandbox-ready"
+READY_ENDPOINT="http://localhost:3000/api/health"
 
 start_time=$(date +%s)
 while true; do
-  # Check for ready file inside container
-  if docker exec "$CONTAINER_NAME" test -f "$READY_FILE" 2>/dev/null; then
+  # Check for health endpoint inside container
+  if docker exec "$CONTAINER_NAME" curl -fsS "$READY_ENDPOINT" >/dev/null 2>&1; then
     kill $LOGS_PID 2>/dev/null || true
     wait $LOGS_PID 2>/dev/null || true
     echo ""

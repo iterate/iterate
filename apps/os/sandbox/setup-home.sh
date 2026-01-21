@@ -6,8 +6,7 @@ set -euo pipefail
 # This script copies files from the iterate repo into the user's home directory.
 # It's used in TWO places:
 #   1. Dockerfile - at image build time to bake in home directory configs
-#   2. entry.sh   - at container start in local-docker mode, after rsync,
-#                   so local changes to home-skeleton are picked up on restart
+#   2. Daemon bootstrap - in local-docker mode after rsync so home-skeleton changes apply
 #
 # Files copied:
 #   - home-skeleton/ → $HOME (agent configs for Claude Code, OpenCode, Pi, etc.)

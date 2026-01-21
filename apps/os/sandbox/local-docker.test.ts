@@ -1,7 +1,7 @@
 /**
- * Local Docker + s6 Integration Tests
+ * Local Docker + PM2 Integration Tests
  *
- * Verifies sandbox container setup with s6 process supervision.
+ * Verifies sandbox container setup with PM2 process supervision.
  * Image rebuilt once, each test group gets its own container.
  *
  * RUN WITH:
@@ -39,18 +39,28 @@ function getRandomPort(): number {
   return 13000 + Math.floor(Math.random() * 2000);
 }
 
-async function createContainer(options?: { exposePort?: boolean }): Promise<ContainerInfo> {
+async function createContainer(options?: {
+  exposePort?: boolean;
+  forwardApiKeys?: boolean;
+  extraEnv?: string[];
+}): Promise<ContainerInfo> {
   const containerName = createContainerName("sandbox-test");
   const port = options?.exposePort ? getRandomPort() : undefined;
 
   const envVars = [
     "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "ITERATE_MACHINE_PROVIDER=local-docker",
   ];
 
-  if (process.env.ANTHROPIC_API_KEY) {
+  if (options?.extraEnv?.length) {
+    envVars.push(...options.extraEnv);
+  }
+
+  const forwardApiKeys = options?.forwardApiKeys ?? true;
+  if (forwardApiKeys && process.env.ANTHROPIC_API_KEY) {
     envVars.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
   }
-  if (process.env.OPENAI_API_KEY) {
+  if (forwardApiKeys && process.env.OPENAI_API_KEY) {
     envVars.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
   }
 
@@ -61,7 +71,7 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
     Tty: false,
     HostConfig: {
       AutoRemove: false,
-      // Mount local repo so entry.sh can rsync it into the container
+      // Mount local repo so daemon bootstrap can rsync it into the container
       Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
     },
   };
@@ -105,18 +115,17 @@ async function waitForContainerReady(containerId: string, timeoutMs = 180000): P
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // Then wait for entry.sh to complete setup (creates ready file after setup-home.sh)
+  // Then wait for daemon to be ready inside the container
   while (Date.now() - start < timeoutMs) {
     try {
-      // Use sh -c with && echo to get output only on success
       const result = await execInContainer(containerId, [
         "sh",
         "-c",
-        "test -f /tmp/.iterate-sandbox-ready && echo ready",
+        "curl -fsS http://localhost:3000/api/health >/dev/null && echo ready",
       ]);
       if (result.trim() === "ready") return;
     } catch {
-      // File doesn't exist yet or container not ready
+      // Daemon not ready yet
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -141,6 +150,22 @@ function createDaemonTrpcClient(port: number) {
   return createTRPCClient<TRPCRouter>({
     links: [httpLink({ url: `http://localhost:${port}/api/trpc` })],
   });
+}
+
+async function fetchDaemonEnv(port: number): Promise<{
+  env: Record<string, string>;
+  pid: number;
+  startedAt: string;
+  uptimeMs: number;
+}> {
+  const response = await fetch(`http://localhost:${port}/api/debug/env`);
+  expect(response.ok).toBe(true);
+  return (await response.json()) as {
+    env: Record<string, string>;
+    pid: number;
+    startedAt: string;
+    uptimeMs: number;
+  };
 }
 
 // ============ Tests ============
@@ -228,7 +253,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
-      // s6-daemons moved into apps/os/sandbox/
+      // sandbox scripts present
 
       // has bind mount for local repo (entry.sh syncs from this)
       const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
@@ -279,11 +304,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   });
 
   // ============ Daemon ============
-  describe.concurrent("Daemon", () => {
+  describe("Daemon", () => {
     let container: ContainerInfo;
+    let injectedOpenAiKey: string | undefined;
 
     beforeAll(async () => {
-      container = await createContainer({ exposePort: true });
+      container = await createContainer({ exposePort: true, forwardApiKeys: false });
       await waitForContainerReady(container.id);
     }, 300000);
 
@@ -292,7 +318,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 30000);
 
     test("daemon accessible", async () => {
-      // Wait for daemon to be ready (entry.sh does pnpm install + vite build)
+      // Wait for daemon to be ready (bootstrap does pnpm install + vite build in local mode)
       await waitForDaemonReady(container.port!);
 
       // Verify health endpoint from host
@@ -309,6 +335,54 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       ]);
       expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
     }, 210000);
+
+    test("env update restarts daemon and loads vars", async () => {
+      await waitForDaemonReady(container.port!);
+
+      const before = await fetchDaemonEnv(container.port!);
+      const testToken = `local-docker-${Date.now()}`;
+      const envLines = [`ITERATE_TEST_TOKEN=${testToken}`];
+      if (process.env.OPENAI_API_KEY) {
+        injectedOpenAiKey = process.env.OPENAI_API_KEY;
+        envLines.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
+      }
+
+      await execInContainer(container.id, [
+        "bash",
+        "-lc",
+        `cat <<'EOF' > /home/iterate/.iterate/.env\n${envLines.join("\n")}\nEOF`,
+      ]);
+
+      await execInContainer(container.id, [
+        "pm2",
+        "restart",
+        "/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/ecosystem.config.cjs",
+      ]);
+
+      await waitForDaemonReady(container.port!);
+      const after = await fetchDaemonEnv(container.port!);
+
+      expect(after.startedAt).not.toBe(before.startedAt);
+      expect(after.env.ITERATE_TEST_TOKEN).toBe(testToken);
+      if (process.env.OPENAI_API_KEY) {
+        expect(after.env.OPENAI_API_KEY).toBe(process.env.OPENAI_API_KEY);
+      }
+    }, 240000);
+
+    test.runIf(process.env.OPENAI_API_KEY)(
+      "opencode answers secret question with injected API key",
+      async () => {
+        await waitForDaemonReady(container.port!);
+        expect(injectedOpenAiKey).toBe(process.env.OPENAI_API_KEY);
+        const output = await execInContainer(container.id, [
+          "bash",
+          "-lc",
+          'set -a; source /home/iterate/.iterate/.env; set +a; opencode run "what messaging app are you built to help with?"',
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
+      },
+      60000,
+    );
 
     test("tmux and PTY work", async () => {
       await waitForDaemonReady(container.port!);
@@ -373,5 +447,15 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
     }, 210000);
+
+    test("docker restart keeps daemon healthy", async () => {
+      await waitForDaemonReady(container.port!);
+
+      await dockerApi("POST", `/containers/${container.id}/restart?t=5`, {});
+
+      await waitForDaemonReady(container.port!);
+      const envInfo = await fetchDaemonEnv(container.port!);
+      expect(envInfo.env.ITERATE_TEST_TOKEN).toBeDefined();
+    }, 240000);
   });
 });

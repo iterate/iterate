@@ -9,6 +9,9 @@ import { trpcRouter } from "./trpc/router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
+import { bootstrapSandbox } from "./trpc/bootstrap.ts";
+
+const processStartedAt = new Date().toISOString();
 
 const app = baseApp.use(
   logger(),
@@ -28,6 +31,39 @@ const app = baseApp.use(
 
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/debug/env", (c) => {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => value !== undefined),
+  ) as Record<string, string>;
+
+  return c.json({
+    env,
+    pid: process.pid,
+    startedAt: processStartedAt,
+    uptimeMs: Math.round(process.uptime() * 1000),
+  });
+});
+
+app.post("/api/internal/refresh-env", async (c) => {
+  try {
+    const result = await bootstrapSandbox({ mode: "refresh" });
+    return c.json({ success: true, ...result });
+  } catch (err) {
+    console.error("[refresh-env] Failed to refresh env:", err);
+    return c.json({ success: false }, 500);
+  }
+});
+
+app.post("/api/internal/bootstrap", async (c) => {
+  try {
+    const result = await bootstrapSandbox({ mode: "manual" });
+    return c.json({ success: true, ...result });
+  } catch (err) {
+    console.error("[bootstrap] Failed to run bootstrap:", err);
+    return c.json({ success: false }, 500);
+  }
 });
 
 app.all("/api/trpc/*", (c) => {

@@ -12,6 +12,7 @@ import {
   type TmuxSession,
 } from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
+import { bootstrapRouter } from "./bootstrap.ts";
 import { platformRouter } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
@@ -45,6 +46,7 @@ function serializeTmuxSession(session: TmuxSession): SerializedTmuxSession {
 }
 
 export const trpcRouter = createTRPCRouter({
+  bootstrap: bootstrapRouter,
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
@@ -260,21 +262,21 @@ export const trpcRouter = createTRPCRouter({
   // ============ Daemon Lifecycle ============
 
   /**
-   * Restart the daemon process. The s6 supervisor will automatically restart it.
-   * This is much faster than restarting the entire Daytona sandbox.
+   * Restart the daemon process. The process supervisor will restart it.
+   * This is much faster than restarting the entire sandbox.
    */
   restartDaemon: publicProcedure.mutation(async (): Promise<{ success: boolean }> => {
     // Import lazily to avoid circular dependency issues at startup
-    const { reportStatusToPlatform } = await import("../start.ts");
+    const { reportStatusToPlatform } = await import("../report-status.ts");
 
     // Report stopping status to platform before exiting
     await reportStatusToPlatform({ status: "stopping" }).catch((err) => {
       console.error("[restartDaemon] Failed to report stopping status:", err);
     });
 
-    // Schedule exit after responding - s6 will restart us
+    // Schedule exit after responding - supervisor will restart us
     setTimeout(() => {
-      console.log("[restartDaemon] Exiting for s6 restart...");
+      console.log("[restartDaemon] Exiting for supervisor restart...");
       process.exit(0);
     }, 100);
 

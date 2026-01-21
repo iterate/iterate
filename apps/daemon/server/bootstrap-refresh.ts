@@ -39,7 +39,8 @@ export function startBootstrapRefreshScheduler(): void {
 
     setTimeout(async () => {
       try {
-        await fetchBootstrapData();
+        const { bootstrapSandbox } = await import("./trpc/bootstrap.ts");
+        await bootstrapSandbox({ mode: "refresh" });
       } catch (err) {
         // Don't crash on periodic refresh failures - just log and continue
         console.error("[bootstrap-refresh] Failed to fetch bootstrap data:", err);
@@ -61,16 +62,25 @@ export function startBootstrapRefreshScheduler(): void {
  * 2. Periodically by the scheduler (catches errors to continue)
  * 3. When poked by the control plane via refreshEnv (catches errors)
  */
-export async function fetchBootstrapData(): Promise<void> {
+export type BootstrapEnvResult = {
+  injectedCount: number;
+  removedCount: number;
+  changedCount: number;
+  envChanged: boolean;
+  envFilePath: string;
+  reposCount: number;
+};
+
+export async function fetchBootstrapData(): Promise<BootstrapEnvResult | null> {
   // Skip if not connected to the control plane
   if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) {
     console.log("[bootstrap-refresh] Not connected to control plane, skipping fetch");
-    return;
+    return null;
   }
   const machineId = process.env.ITERATE_MACHINE_ID;
   if (!machineId) {
     console.error("[bootstrap-refresh] ITERATE_MACHINE_ID not set, cannot fetch env");
-    return;
+    return null;
   }
 
   console.log("[bootstrap-refresh] Fetching env data...");
@@ -78,7 +88,10 @@ export async function fetchBootstrapData(): Promise<void> {
   const result = await client.machines.getEnv({ machineId });
 
   // Apply environment variables (always call to replace/clear stale vars)
-  const { injectedCount, removedCount } = await applyEnvVars(result.envVars);
+  const { injectedCount, removedCount, changedCount, envFilePath } = await applyEnvVars(
+    result.envVars,
+  );
+  const envChanged = changedCount > 0 || removedCount > 0;
   console.log(
     `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale`,
   );
@@ -96,4 +109,13 @@ export async function fetchBootstrapData(): Promise<void> {
     cloneRepos(result.repos);
     console.log(`[bootstrap-refresh] Triggered clone for ${result.repos.length} repos`);
   }
+
+  return {
+    injectedCount,
+    removedCount,
+    changedCount,
+    envChanged,
+    envFilePath,
+    reposCount: result.repos.length,
+  };
 }

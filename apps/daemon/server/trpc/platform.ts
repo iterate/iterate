@@ -29,12 +29,15 @@ const clonedReposStatus: Map<
 export async function applyEnvVars(vars: Record<string, string>): Promise<{
   injectedCount: number;
   removedCount: number;
+  changedCount: number;
   envFilePath: string;
 }> {
   const envFilePath = join(homedir(), ".iterate/.env");
+  const previousEnv = { ...platformEnvVars };
 
   // Find keys to remove (were in platformEnvVars but not in new vars)
-  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in vars));
+  const keysToRemove = Object.keys(previousEnv).filter((key) => !(key in vars));
+  const changedKeys = Object.keys(vars).filter((key) => previousEnv[key] !== vars[key]);
 
   // Remove stale keys from process.env and platformEnvVars
   for (const key of keysToRemove) {
@@ -50,12 +53,12 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
   Object.assign(process.env, vars);
 
   console.log(
-    `[platform] Applied ${Object.keys(vars).length} env vars, removed ${keysToRemove.length} stale`,
+    `[platform] Applied ${Object.keys(vars).length} env vars, removed ${keysToRemove.length} stale, changed ${changedKeys.length}`,
   );
 
   // Write env vars to a file that tmux sessions can source
   const envFileContent = Object.entries(platformEnvVars)
-    .map(([key, value]) => `export ${key}=${quote([value])}`)
+    .map(([key, value]) => `${key}=${quote([value])}`)
     .join("\n");
   mkdirSync(dirname(envFilePath), { recursive: true });
   writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
@@ -71,10 +74,16 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
       sessions.map((session) =>
         x(
           "tmux",
-          ["-S", tmuxSocket, "send-keys", "-t", session, `source ${envFilePath}`, "Enter"],
-          {
-            throwOnError: true,
-          },
+          [
+            "-S",
+            tmuxSocket,
+            "send-keys",
+            "-t",
+            session,
+            `set -a; source ${envFilePath}; set +a`,
+            "Enter",
+          ],
+          { throwOnError: true },
         ),
       ),
     );
@@ -84,6 +93,7 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
   return {
     injectedCount: Object.keys(vars).length,
     removedCount: keysToRemove.length,
+    changedCount: changedKeys.length,
     envFilePath,
   };
 }
@@ -258,10 +268,10 @@ export const platformRouter = createTRPCRouter({
    */
   refreshEnv: publicProcedure.mutation(async () => {
     // Import dynamically to avoid circular dependencies
-    const { fetchBootstrapData } = await import("../bootstrap-refresh.ts");
+    const { bootstrapSandbox } = await import("./bootstrap.ts");
     try {
-      await fetchBootstrapData();
-      return { success: true };
+      const result = await bootstrapSandbox({ mode: "refresh" });
+      return { success: true, ...result };
     } catch (err) {
       console.error("[platform] Failed to refresh env:", err);
       return { success: false };

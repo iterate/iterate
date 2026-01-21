@@ -14,7 +14,7 @@ import type {
   StartCommandOptions,
 } from "./types.ts";
 
-// OpenCode server runs on port 4096 (started by s6)
+// OpenCode server runs on port 4096 (started by PM2)
 const OPENCODE_BASE_URL = "http://localhost:4096";
 
 // Root of the iterate repo - used as working directory for all agents

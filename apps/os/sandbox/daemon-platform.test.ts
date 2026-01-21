@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, execInContainer, waitForFileLogPattern } from "./test-helpers.ts";
+import { dockerApi, execInContainer } from "./test-helpers.ts";
 
 function createDaemonTrpcClient(port: number) {
   return createTRPCClient<TRPCRouter>({
@@ -30,6 +30,20 @@ function createDaemonTrpcClient(port: number) {
       }),
     ],
   });
+}
+
+async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`http://localhost:${port}/api/health`);
+      if (response.ok) return;
+    } catch {
+      // not ready
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timeout waiting for daemon to be ready");
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +140,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
       stdio: "inherit",
     });
 
-    // Mount local repo at /local-iterate-repo - entry.sh will detect and copy from there
+    // Mount local repo at /local-iterate-repo - daemon bootstrap will sync from there
     // Pass control plane URL pointing to host machine
     console.log("Creating container with local repo mounted and mock control plane...");
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
@@ -137,6 +151,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
         // host.docker.internal resolves to the host machine from inside Docker
         `ITERATE_OS_BASE_URL=http://host.docker.internal:${MOCK_CONTROL_PLANE_PORT}`,
         `ITERATE_OS_API_KEY=test-api-key`,
+        "ITERATE_MACHINE_PROVIDER=local-docker",
       ],
       HostConfig: {
         PortBindings: {
@@ -150,13 +165,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     console.log(`Starting container ${containerId.slice(0, 12)} with port ${DAEMON_PORT}...`);
     await dockerApi("POST", `/containers/${containerId}/start`, {});
 
-    // Wait for daemon to be ready - logs to /var/log/iterate-daemon/current via s6
-    await waitForFileLogPattern(
-      containerId,
-      "/var/log/iterate-daemon/current",
-      /Server running at/i,
-      120000,
-    );
+    await waitForDaemonReady(DAEMON_PORT, 180000);
     console.log("Daemon is ready");
   }, 300000);
 
@@ -181,16 +190,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
 
     // Call refreshEnv - this should fetch from our mock control plane
     const result = await client.platform.refreshEnv.mutate();
-    expect(result).toEqual({ success: true });
+    expect(result.success).toBe(true);
 
     // Verify the env file was written with our test vars
-    // Format is: export VAR=value (shell-quote escapes values as needed)
+    // Format is: VAR=value (shell-quote escapes values as needed)
     const envFileContent = await execInContainer(containerId, [
       "cat",
       "/home/iterate/.iterate/.env",
     ]);
-    expect(envFileContent).toContain(`export TEST_API_KEY=${testEnvVars.TEST_API_KEY}`);
-    expect(envFileContent).toContain(`export CUSTOM_VAR=${testEnvVars.CUSTOM_VAR}`);
+    expect(envFileContent).toContain(`TEST_API_KEY=${testEnvVars.TEST_API_KEY}`);
+    expect(envFileContent).toContain(`CUSTOM_VAR=${testEnvVars.CUSTOM_VAR}`);
   });
 
   test("env vars are available in new shell sessions", async () => {
@@ -203,7 +212,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     const output = await execInContainer(containerId, [
       "bash",
       "-c",
-      `source /home/iterate/.iterate/.env && echo $TEST_API_KEY`,
+      `set -a; source /home/iterate/.iterate/.env; set +a; echo $TEST_API_KEY`,
     ]);
     expect(output.trim()).toBe(testEnvVars.TEST_API_KEY);
   });

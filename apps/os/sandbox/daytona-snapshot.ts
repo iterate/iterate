@@ -93,6 +93,11 @@ dockerfileContent = dockerfileContent.replace(
   /^ARG SANDBOX_ITERATE_REPO_REF(=.*)?$/gm,
   `ARG SANDBOX_ITERATE_REPO_REF="${repoRef}"`,
 );
+// Bake provider for Daytona images
+dockerfileContent = dockerfileContent.replace(
+  /^ARG ITERATE_MACHINE_PROVIDER(=.*)?$/gm,
+  `ARG ITERATE_MACHINE_PROVIDER="daytona"`,
+);
 
 writeFileSync(dockerfileTargetPath, dockerfileContent);
 
