@@ -21,9 +21,16 @@ jobs:
       - uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
         run: doppler setup --project os --config dev
+      - name: Build and push Daytona snapshot
+        env:
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
+        run: pnpm os snapshot:daytona:dev
       - name: Install Playwright browsers
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
+        env:
+          DAYTONA_SNAPSHOT_NAME: iterate-sandbox-${{ github.sha }}
         run: |-
           set -o pipefail
           mkdir -p test-results
