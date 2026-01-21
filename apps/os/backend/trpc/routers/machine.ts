@@ -461,7 +461,7 @@ export const machineRouter = router({
       return updated;
     }),
 
-  // Restart a machine's daemon process (not the whole sandbox)
+  // Restart a machine (stops and starts the sandbox)
   restart: projectProtectedMutation
     .input(
       z.object({
@@ -494,23 +494,58 @@ export const machineRouter = router({
         logger.error("Failed to broadcast invalidation", err);
       });
 
-      // For Daytona machines, restart just the daemon process via tRPC (much faster)
-      // For other providers, fall back to provider.restart() which may restart the whole machine
-      if (machine.type === "daytona") {
-        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
-        await daemonClient.restartDaemon.mutate().catch((err) => {
-          // If daemon is unreachable, fall back to provider restart
-          logger.warn("Daemon unreachable, falling back to provider restart", { err });
-          return provider.restart();
+      await provider.restart().catch((err) => {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
         });
-      } else {
-        await provider.restart().catch((err) => {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
-          });
+      });
+
+      return { success: true };
+    }),
+
+  // Restart just the daemon process (faster than full machine restart)
+  // Uses s6 supervisor to restart the daemon without touching the sandbox
+  restartDaemon: projectProtectedMutation
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
+      const updatedMetadata = {
+        ...((machine.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "restarting",
+        daemonReadyAt: null,
+      };
+
+      await ctx.db
+        .update(schema.machine)
+        .set({ metadata: updatedMetadata })
+        .where(eq(schema.machine.id, input.machineId));
+
+      // Broadcast invalidation immediately so UI updates to show "Restarting..."
+      const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
+      await broadcastInvalidation(ctx.env).catch((err) => {
+        logger.error("Failed to broadcast invalidation", err);
+      });
+
+      // Call daemon's restartDaemon endpoint
+      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      await daemonClient.restartDaemon.mutate().catch((err) => {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to restart daemon: ${err instanceof Error ? err.message : String(err)}`,
         });
-      }
+      });
 
       return { success: true };
     }),

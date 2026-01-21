@@ -33,19 +33,11 @@ export const slackRouter = new Hono();
 
 // Middleware to log request and response bodies
 slackRouter.use("*", async (c, next) => {
-  const reqBody = await c.req.text();
-  // Re-parse for downstream handlers since we consumed the body
-  c.req.raw = new Request(c.req.url, {
-    method: c.req.method,
-    headers: c.req.raw.headers,
-    body: reqBody,
-  });
-
+  const reqBody = await c.req.raw.clone().text();
   console.log(`[daemon/slack] REQ ${c.req.method} ${c.req.path}`, reqBody);
 
   await next();
 
-  // Clone response to read body without consuming it
   const resBody = await c.res.clone().text();
   console.log(`[daemon/slack] RES ${c.res.status}`, resBody);
 });
