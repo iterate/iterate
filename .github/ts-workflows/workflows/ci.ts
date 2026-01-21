@@ -56,13 +56,24 @@ export default {
         release_name: "${{ steps.get_env.outputs.release_name }}",
       },
     },
+    "build-snapshot": {
+      needs: ["variables"],
+      if: "needs.variables.outputs.stage == 'prd'",
+      uses: "./.github/workflows/build-snapshot.yml",
+      // @ts-expect-error - secrets inherit
+      secrets: "inherit",
+      with: {
+        doppler_config: "prd",
+      },
+    },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: ["variables"],
+      needs: ["variables", "build-snapshot"],
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
+        daytona_snapshot_name: "${{ needs.build-snapshot.outputs.snapshot_name }}",
       },
     },
     "daytona-test": {
@@ -174,7 +185,7 @@ export default {
       ],
     },
     slack_failure: {
-      needs: ["variables", "deploy", "daytona-test", "release"],
+      needs: ["variables", "build-snapshot", "deploy", "daytona-test", "release"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       env: { NEEDS: "${{ toJson(needs) }}" },

@@ -7,7 +7,14 @@ env:
   SLACK_CLIENT_ID: fake123
   DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 jobs:
+  build-snapshot:
+    uses: ./.github/workflows/build-snapshot.yml
+    secrets: inherit
+    with:
+      doppler_config: dev
   run:
+    needs:
+      - build-snapshot
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
@@ -21,16 +28,11 @@ jobs:
       - uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
         run: doppler setup --project os --config dev
-      - name: Build and push Daytona snapshot
-        env:
-          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
-          SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
-        run: pnpm os snapshot:daytona:dev
       - name: Install Playwright browsers
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
         env:
-          DAYTONA_SNAPSHOT_NAME: iterate-sandbox-${{ github.sha }}
+          DAYTONA_SNAPSHOT_NAME: ${{ needs.build-snapshot.outputs.snapshot_name }}
         run: |-
           set -o pipefail
           mkdir -p test-results

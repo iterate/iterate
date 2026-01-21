@@ -12,7 +12,16 @@ export default workflow({
     DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
   },
   jobs: {
+    "build-snapshot": {
+      uses: "./.github/workflows/build-snapshot.yml",
+      // @ts-expect-error - secrets inherit
+      secrets: "inherit",
+      with: {
+        doppler_config: "dev",
+      },
+    },
     run: {
+      needs: ["build-snapshot"],
       ...utils.runsOn,
       steps: [
         { uses: "actions/checkout@v4" },
@@ -32,21 +41,13 @@ export default workflow({
           run: "doppler setup --project os --config dev",
         },
         {
-          name: "Build and push Daytona snapshot",
-          env: {
-            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
-            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
-          },
-          run: "pnpm os snapshot:daytona:dev",
-        },
-        {
           name: "Install Playwright browsers",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
         },
         {
           name: "Run specs",
           env: {
-            DAYTONA_SNAPSHOT_NAME: "iterate-sandbox-${{ github.sha }}",
+            DAYTONA_SNAPSHOT_NAME: "${{ needs.build-snapshot.outputs.snapshot_name }}",
           },
           run: dedent`
             set -o pipefail
