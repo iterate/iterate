@@ -122,7 +122,7 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "started" && metadata.daemonStatus === "ready",
+        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
         refetchInterval: 10000, // Poll every 10s
       },
     ),
@@ -170,7 +170,7 @@ function MachineDetailPage() {
           variant="outline"
           size="sm"
           onClick={() => restartMachine.mutate()}
-          disabled={restartMachine.isPending || machine.state !== "started"}
+          disabled={restartMachine.isPending || machine.state === "archived"}
         >
           <RefreshCw className="h-4 w-4 mr-1" />
           Restart
@@ -238,7 +238,7 @@ function MachineDetailPage() {
       </div>
 
       {/* Services List */}
-      {machine.state === "started" && (
+      {machine.state !== "archived" && (
         <div className="space-y-2">
           {/* Services */}
           {services.map((service) => {

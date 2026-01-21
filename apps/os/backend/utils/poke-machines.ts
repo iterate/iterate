@@ -82,7 +82,7 @@ export async function pokeRunningMachinesToRefresh(
   env: CloudflareEnv,
 ): Promise<void> {
   const runningMachines = await db.query.machine.findMany({
-    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "started")),
+    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")),
   });
 
   if (runningMachines.length === 0) {

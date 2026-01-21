@@ -7,8 +7,11 @@ import type { SlackEvent } from "@slack/web-api";
 export const UserRole = ["member", "admin", "owner"] as const;
 export type UserRole = (typeof UserRole)[number];
 
-// Machine states
-export const MachineState = ["started", "archived"] as const;
+// Machine states:
+// - starting: machine is being provisioned, not yet ready for use
+// - active: machine is ready and is the current active machine for the project
+// - archived: machine has been replaced or manually archived
+export const MachineState = ["starting", "active", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
@@ -326,7 +329,7 @@ export const machine = pgTable(
     state: t
       .text({ enum: [...MachineState] })
       .notNull()
-      .default("started"),
+      .default("starting"),
     externalId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
@@ -334,10 +337,10 @@ export const machine = pgTable(
   (t) => [
     index().on(t.projectId),
     index().on(t.state),
-    // Only one active (non-archived) machine per project
+    // Only one active machine per project (starting machines don't count)
     uniqueIndex("machine_project_one_active")
       .on(t.projectId)
-      .where(sql`state != 'archived'`),
+      .where(sql`state = 'active'`),
   ],
 );
 

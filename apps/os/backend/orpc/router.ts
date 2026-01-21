@@ -2,6 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -144,12 +145,69 @@ export const reportStatus = os.machines.reportStatus
       daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
     };
 
-    await db
-      .update(schema.machine)
-      .set({ metadata: updatedMetadata })
-      .where(eq(schema.machine.id, machine.id));
+    // If machine is in 'starting' state and daemon reports ready, activate it
+    // This archives any existing active machine and promotes this one to active
+    if (status === "ready" && machineWithOrg.state === "starting") {
+      // Use transaction to ensure atomic activation - prevents race conditions
+      // if two machines report ready simultaneously
+      const archivedMachines = await db.transaction(async (tx) => {
+        // Archive all currently active machines for this project
+        const activeMachines = await tx.query.machine.findMany({
+          where: and(
+            eq(schema.machine.projectId, machineWithOrg.projectId),
+            eq(schema.machine.state, "active"),
+          ),
+        });
 
-    logger.info("Machine daemon status updated", { machineId: machine.id, status });
+        for (const activeMachine of activeMachines) {
+          // Archive in DB (within transaction)
+          await tx
+            .update(schema.machine)
+            .set({ state: "archived" })
+            .where(eq(schema.machine.id, activeMachine.id));
+
+          logger.info("Archived existing active machine", { machineId: activeMachine.id });
+        }
+
+        // Promote this machine to active
+        await tx
+          .update(schema.machine)
+          .set({ state: "active", metadata: updatedMetadata })
+          .where(eq(schema.machine.id, machine.id));
+
+        logger.info("Machine activated", { machineId: machine.id });
+
+        return activeMachines;
+      });
+
+      // Archive via provider AFTER transaction commits
+      // This is intentional - we want DB state to be consistent first,
+      // then clean up provider resources. Provider failures are logged but don't rollback.
+      // TODO: Replace with outbox consumer once outbox system is added
+      for (const activeMachine of archivedMachines) {
+        const provider = await createMachineProvider({
+          type: activeMachine.type,
+          env,
+          externalId: activeMachine.externalId,
+          metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
+          buildProxyUrl: () => "",
+        });
+        await provider.archive().catch((err) => {
+          logger.error("Failed to archive machine via provider", {
+            machineId: activeMachine.id,
+            err,
+          });
+        });
+      }
+    } else {
+      // Just update metadata
+      await db
+        .update(schema.machine)
+        .set({ metadata: updatedMetadata })
+        .where(eq(schema.machine.id, machine.id));
+
+      logger.info("Machine daemon status updated", { machineId: machine.id, status });
+    }
 
     // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(
