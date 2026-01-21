@@ -15,7 +15,7 @@ export const MachineState = ["starting", "active", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona", "local-docker", "local", "local-vanilla"] as const;
+export const MachineType = ["daytona", "local-docker", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 export const withTimestamps = {
