@@ -137,6 +137,16 @@ function setup(page: Page) {
         }
 
         if (race.outcome === "spinner-hidden") {
+          // Debounce: wait briefly and re-check if a new spinner appeared (route transitions)
+          const debounceMs = 250;
+          await new Promise((r) => setTimeout(r, debounceMs));
+
+          // If a spinner reappeared during debounce, recurse to wait for it
+          if (await spinnerLocator.isVisible()) {
+            settings.log(`spinner reappeared during debounce, continuing to wait`);
+            return await this[method](...args);
+          }
+
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, [
               `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
