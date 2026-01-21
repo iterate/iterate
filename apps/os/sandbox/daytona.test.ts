@@ -23,7 +23,7 @@
  *
  * Optional:
  *   DAYTONA_SNAPSHOT_NAME       - Use existing snapshot (skips build)
- *   SANDBOX_ITERATE_REPO_REF    - Git ref for snapshot build (default: current branch)
+ *   SANDBOX_ITERATE_REPO_REF    - Git ref for snapshot build (default: current commit SHA)
  *
  * Test flag:
  *   RUN_DAYTONA_TESTS=true  - Enable test (skipped otherwise)
@@ -206,10 +206,10 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
       return;
     }
 
-    // Get git ref for snapshot - use env var or current branch
+    // Get git ref for snapshot - use env var or current commit SHA
     const repoRef =
       process.env.SANDBOX_ITERATE_REPO_REF ??
-      execSync("git rev-parse --abbrev-ref HEAD", { cwd: REPO_ROOT, encoding: "utf-8" }).trim();
+      execSync("git rev-parse HEAD", { cwd: REPO_ROOT, encoding: "utf-8" }).trim();
 
     console.log(`Building Daytona snapshot from ref: ${repoRef}`);
     console.log("This may take several minutes...");
