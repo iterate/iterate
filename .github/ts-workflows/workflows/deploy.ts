@@ -13,6 +13,11 @@ export default {
           required: true,
           type: "string",
         },
+        daytona_snapshot_name: {
+          description: "The Daytona snapshot name to deploy with (iterate-sandbox-{commitSha})",
+          required: true,
+          type: "string",
+        },
       },
       outputs: {
         worker_url: {
@@ -35,17 +40,10 @@ export default {
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
-          name: "Build and push Daytona snapshot",
-          env: {
-            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
-            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
-          },
-          run: "pnpm os snapshot:daytona:prd",
-        },
-        {
           name: "Deploy apps/os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            DAYTONA_SNAPSHOT_NAME: "${{ inputs.daytona_snapshot_name }}",
           },
           run: "pnpm run deploy:prd",
           "working-directory": "apps/os",

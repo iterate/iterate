@@ -27,13 +27,19 @@ export async function createMachineProvider(
   const { type, env, externalId, metadata, buildProxyUrl } = options;
 
   switch (type) {
-    case "daytona":
+    case "daytona": {
+      if (!env.DAYTONA_SNAPSHOT_NAME) {
+        throw new Error("DAYTONA_SNAPSHOT_NAME is required for Daytona machines");
+      }
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
-        snapshotPrefix: env.DAYTONA_SNAPSHOT_PREFIX,
+        snapshotName: env.DAYTONA_SNAPSHOT_NAME,
+        autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
+        autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
         buildProxyUrl,
       });
+    }
 
     case "local-docker": {
       if (!import.meta.env.DEV) {

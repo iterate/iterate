@@ -12,7 +12,16 @@ export default workflow({
     DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
   },
   jobs: {
+    "build-snapshot": {
+      uses: "./.github/workflows/build-snapshot.yml",
+      // @ts-expect-error - secrets inherit
+      secrets: "inherit",
+      with: {
+        doppler_config: "dev",
+      },
+    },
     run: {
+      needs: ["build-snapshot"],
       ...utils.runsOn,
       steps: [
         { uses: "actions/checkout@v4" },
@@ -37,6 +46,9 @@ export default workflow({
         },
         {
           name: "Run specs",
+          env: {
+            DAYTONA_SNAPSHOT_NAME: "${{ needs.build-snapshot.outputs.snapshot_name }}",
+          },
           run: dedent`
             set -o pipefail
             mkdir -p test-results

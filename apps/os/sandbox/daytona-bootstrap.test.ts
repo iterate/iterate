@@ -22,10 +22,7 @@
  *   DAYTONA_ORGANIZATION_ID  - Daytona org ID
  *   DAYTONA_API_URL          - Daytona API URL
  *   DAYTONA_TARGET           - Daytona target region
- *
- * Snapshot resolution (one of):
- *   DAYTONA_SNAPSHOT_NAME    - Exact snapshot name (skips resolution)
- *   DAYTONA_SNAPSHOT_PREFIX  - Prefix for latest snapshot lookup
+ *   DAYTONA_SNAPSHOT_NAME    - Snapshot name (iterate-sandbox-{commitSha})
  *
  * Test flag:
  *   RUN_DAYTONA_BOOTSTRAP_TESTS=true  - Enable test (skipped otherwise)
@@ -39,7 +36,6 @@ import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { Daytona, type Sandbox } from "@daytonaio/sdk";
 import { describe, expect, test } from "vitest";
-import { resolveLatestSnapshot } from "../backend/integrations/daytona/snapshot-resolver.ts";
 
 // ============ Config ============
 
@@ -48,8 +44,7 @@ const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
 const DAYTONA_ORGANIZATION_ID = process.env.DAYTONA_ORGANIZATION_ID;
 const DAYTONA_API_URL = process.env.DAYTONA_API_URL;
 const DAYTONA_TARGET = process.env.DAYTONA_TARGET;
-const DAYTONA_SNAPSHOT_NAME = process.env.DAYTONA_SNAPSHOT_NAME;
-const DAYTONA_SNAPSHOT_PREFIX = process.env.DAYTONA_SNAPSHOT_PREFIX;
+const DAYTONA_SNAPSHOT_NAME = process.env.DAYTONA_SNAPSHOT_NAME; // Required: iterate-sandbox-{commitSha}
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
@@ -201,9 +196,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
     async () => {
       // Validate required env vars
       if (!DAYTONA_API_KEY) throw new Error("DAYTONA_API_KEY required");
-      if (!DAYTONA_SNAPSHOT_NAME && !DAYTONA_SNAPSHOT_PREFIX) {
-        throw new Error("Either DAYTONA_SNAPSHOT_NAME or DAYTONA_SNAPSHOT_PREFIX required");
-      }
+      if (!DAYTONA_SNAPSHOT_NAME) throw new Error("DAYTONA_SNAPSHOT_NAME required");
       if (!OPENAI_API_KEY && !ANTHROPIC_API_KEY) {
         throw new Error("At least one of OPENAI_API_KEY or ANTHROPIC_API_KEY required");
       }
@@ -236,14 +229,8 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         cloudflared = await startCloudflaredTunnel(serverPort);
         console.log(`[test] Tunnel URL: ${cloudflared.url}`);
 
-        // 3. Resolve snapshot name
-        const snapshotName =
-          DAYTONA_SNAPSHOT_NAME ??
-          (await resolveLatestSnapshot(DAYTONA_SNAPSHOT_PREFIX!, {
-            apiKey: DAYTONA_API_KEY,
-            baseUrl: DAYTONA_API_URL,
-            organizationId: DAYTONA_ORGANIZATION_ID,
-          }));
+        // 3. Use snapshot name directly (iterate-sandbox-{commitSha})
+        const snapshotName = DAYTONA_SNAPSHOT_NAME;
         console.log(`[test] Using snapshot: ${snapshotName}`);
 
         // 4. Create Daytona sandbox

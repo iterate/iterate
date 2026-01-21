@@ -1,5 +1,4 @@
 import { Daytona } from "@daytonaio/sdk";
-import { resolveLatestSnapshot } from "../integrations/daytona/snapshot-resolver.ts";
 import type {
   MachineProvider,
   CreateMachineConfig,
@@ -18,13 +17,16 @@ const DEFAULT_DAEMON_PORT = 3000;
 
 export interface DaytonaProviderConfig {
   apiKey: string;
-  snapshotPrefix: string;
+  snapshotName: string; // iterate-sandbox-{commitSha}
+  autoStopInterval: number; // minutes, 0 = disabled
+  autoDeleteInterval: number; // minutes, -1 = disabled, 0 = delete on stop
   externalId: string;
   buildProxyUrl: (port: number) => string;
 }
 
 export function createDaytonaProvider(config: DaytonaProviderConfig): MachineProvider {
-  const { apiKey, snapshotPrefix, externalId, buildProxyUrl } = config;
+  const { apiKey, snapshotName, autoStopInterval, autoDeleteInterval, externalId, buildProxyUrl } =
+    config;
   const daytona = new Daytona({ apiKey });
 
   const getNativeUrl = (port: number) => `https://${port}-${externalId}.proxy.daytona.works`;
@@ -33,18 +35,12 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
     type: "daytona",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      const snapshotName = await resolveLatestSnapshot(snapshotPrefix, { apiKey });
-
       const sandbox = await daytona.create({
         name: machineConfig.machineId,
         snapshot: snapshotName,
         envVars: machineConfig.envVars,
-        autoStopInterval: snapshotPrefix.includes("dev")
-          ? 12 * 60 // 12 hours
-          : 0, // 0 = disabled
-        autoDeleteInterval: snapshotPrefix.includes("dev")
-          ? 12 * 60 // 12 hours
-          : -1, // -1 = disabled (0 means "delete immediately on stop"!)
+        autoStopInterval,
+        autoDeleteInterval,
         public: true,
       });
       return { externalId: sandbox.id, metadata: { snapshotName } };

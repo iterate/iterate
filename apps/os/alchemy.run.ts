@@ -260,7 +260,9 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required.default(`${app.stage}--`),
+  DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
+  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
