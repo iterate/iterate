@@ -12,7 +12,15 @@ fi
 mkdir -p "$ITERATE_REPO"
 
 echo "[local-docker-sync] Syncing repo..."
-rsync -a --delete --filter=':- .gitignore' "$LOCAL_REPO_MOUNT/" "$ITERATE_REPO/"
+rsync -a --delete --filter=':- .gitignore' --exclude=".git" "$LOCAL_REPO_MOUNT/" "$ITERATE_REPO/"
+
+if [ -f "$ITERATE_REPO/.git" ]; then
+  rm -f "$ITERATE_REPO/.git"
+fi
+
+if [ ! -d "$ITERATE_REPO/.git" ]; then
+  git init -b main "$ITERATE_REPO" >/dev/null
+fi
 
 if [ -d "$ITERATE_REPO/apps/os/sandbox" ]; then
   chmod +x "$ITERATE_REPO/apps/os/sandbox/"*.sh 2>/dev/null || true

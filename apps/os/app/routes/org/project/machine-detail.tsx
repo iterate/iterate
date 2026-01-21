@@ -2,7 +2,19 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
+import {
+  ExternalLink,
+  Trash2,
+  RefreshCw,
+  Server,
+  Code2,
+  Terminal,
+  Copy,
+  Bot,
+  Circle,
+  FileText,
+  Clock,
+} from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -10,6 +22,7 @@ import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../../components/daemon-status.tsx";
 import { HeaderActions } from "../../../components/header-actions.tsx";
 import { TypeId } from "../../../components/type-id.tsx";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../../components/ui/sheet.tsx";
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
@@ -23,6 +36,45 @@ const SERVICE_ICONS: Record<string, typeof Server> = {
   opencode: Code2,
 };
 
+// PM2 status to color mapping
+function getStatusColor(status: string): string {
+  switch (status) {
+    case "online":
+      return "text-green-500 fill-green-500";
+    case "launching":
+      return "text-yellow-500 fill-yellow-500";
+    case "stopping":
+    case "stopped":
+      return "text-gray-400 fill-gray-400";
+    case "errored":
+      return "text-red-500 fill-red-500";
+    default:
+      return "text-gray-400 fill-gray-400";
+  }
+}
+
+// Format bytes to human readable
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
+}
+
+// Format uptime to human readable
+function formatUptime(ms: number | null): string {
+  if (ms === null || ms <= 0) return "-";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
 function MachineDetailPage() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
@@ -30,6 +82,10 @@ function MachineDetailPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [logsSheet, setLogsSheet] = useState<{ open: boolean; processName: string | null }>({
+    open: false,
+    processName: null,
+  });
 
   const machineQueryKey = trpc.machine.byId.queryKey({
     organizationSlug: params.organizationSlug,
@@ -41,6 +97,12 @@ function MachineDetailPage() {
     organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
     includeArchived: false,
+  });
+
+  const processesQueryKey = trpc.machine.listProcesses.queryKey({
+    organizationSlug: params.organizationSlug,
+    projectSlug: params.projectSlug,
+    machineId: params.machineId,
   });
 
   const { data: machine } = useSuspenseQuery(
@@ -64,6 +126,41 @@ function MachineDetailPage() {
 
   // Use commands, terminal info, and services from backend
   const { commands, services } = machine;
+
+  // Query PM2 processes with auto-refresh every 5 seconds
+  const { data: processesData } = useQuery(
+    trpc.machine.listProcesses.queryOptions(
+      {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
+      {
+        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+        refetchInterval: 5000, // Refresh every 5 seconds
+      },
+    ),
+  );
+
+  const processes = processesData?.processes ?? [];
+
+  // Query logs when sheet is open
+  const { data: logsData, refetch: refetchLogs } = useQuery(
+    trpc.machine.getProcessLogs.queryOptions(
+      {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+        processName: logsSheet.processName ?? "",
+        lines: 200,
+        type: "both",
+      },
+      {
+        enabled: logsSheet.open && !!logsSheet.processName,
+        refetchInterval: 3000, // Refresh logs every 3 seconds when open
+      },
+    ),
+  );
 
   // Mutations
   const restartMachine = useMutation({
@@ -104,6 +201,24 @@ function MachineDetailPage() {
     },
     onError: (error) => {
       toast.error("Failed to delete: " + error.message);
+    },
+  });
+
+  const restartProcess = useMutation({
+    mutationFn: async (processName: string) => {
+      return trpcClient.machine.restartProcess.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+        processName,
+      });
+    },
+    onSuccess: (_, processName) => {
+      toast.success(`Restarting ${processName}`);
+      queryClient.invalidateQueries({ queryKey: processesQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to restart process: " + error.message);
     },
   });
 
@@ -161,6 +276,11 @@ function MachineDetailPage() {
   // Get attach command for an agent using its harness session ID
   const getAgentAttachCommand = (harnessSessionId: string) =>
     `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
+
+  // Get service info for a PM2 process (for web UI links)
+  const getServiceForProcess = (processName: string) => {
+    return services.find((s) => s.id === processName);
+  };
 
   return (
     <div className="p-4 space-y-6">
@@ -237,37 +357,97 @@ function MachineDetailPage() {
         )}
       </div>
 
-      {/* Services List */}
+      {/* Daemons (PM2 Processes) */}
       {machine.state !== "archived" && (
         <div className="space-y-2">
-          {/* Services */}
-          {services.map((service) => {
-            const Icon = SERVICE_ICONS[service.id] ?? Server;
+          <h3 className="text-sm font-medium text-muted-foreground">Daemons</h3>
+
+          {processes.length === 0 && metadata.daemonStatus === "ready" && (
+            <p className="text-sm text-muted-foreground">Loading processes...</p>
+          )}
+
+          {processes.map((proc) => {
+            const Icon = SERVICE_ICONS[proc.name] ?? Server;
+            const service = getServiceForProcess(proc.name);
+            const hasWebUI = !!service;
+
             return (
               <div
-                key={service.id}
+                key={proc.name}
                 className="flex items-center justify-between p-3 border rounded-lg bg-card"
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{service.name}</div>
-                    <div className="text-xs text-muted-foreground font-mono">:{service.port}</div>
+                    <div className="flex items-center gap-2">
+                      <Circle className={`h-2 w-2 ${getStatusColor(proc.status)}`} />
+                      <span className="text-sm font-medium truncate">
+                        {proc.meta?.displayName || proc.name}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground flex items-center gap-2">
+                      <span>{proc.status}</span>
+                      {proc.uptime !== null && proc.uptime > 0 && (
+                        <>
+                          <span>·</span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {formatUptime(proc.uptime)}
+                          </span>
+                        </>
+                      )}
+                      {proc.memory > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>{formatBytes(proc.memory)}</span>
+                        </>
+                      )}
+                      {proc.restarts > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>{proc.restarts} restarts</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {service.options.map((option, index) => (
-                    <a
-                      key={index}
-                      href={option.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      {option.label}
-                    </a>
-                  ))}
+                  {/* Web UI buttons */}
+                  {hasWebUI &&
+                    service.options.map((option, index) => (
+                      <a
+                        key={index}
+                        href={option.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-2 rounded-md hover:bg-accent hover:text-accent-foreground"
+                        title={`Open ${option.label}`}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        <span className="sr-only md:not-sr-only">{option.label}</span>
+                      </a>
+                    ))}
+                  {/* Logs button */}
+                  <button
+                    onClick={() => setLogsSheet({ open: true, processName: proc.name })}
+                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-2 rounded-md hover:bg-accent hover:text-accent-foreground"
+                    title="View logs"
+                  >
+                    <FileText className="h-4 w-4" />
+                    <span className="sr-only md:not-sr-only">Logs</span>
+                  </button>
+                  {/* Restart button */}
+                  <button
+                    onClick={() => restartProcess.mutate(proc.name)}
+                    disabled={restartProcess.isPending}
+                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-2 rounded-md hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                    title="Restart process"
+                  >
+                    <RefreshCw
+                      className={`h-4 w-4 ${restartProcess.isPending ? "animate-spin" : ""}`}
+                    />
+                    <span className="sr-only md:not-sr-only">Restart</span>
+                  </button>
                 </div>
               </div>
             );
@@ -381,6 +561,7 @@ function MachineDetailPage() {
         </div>
       )}
 
+      {/* Delete Confirmation */}
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
@@ -390,6 +571,41 @@ function MachineDetailPage() {
         onConfirm={() => deleteMachine.mutate()}
         destructive
       />
+
+      {/* Logs Sheet */}
+      <Sheet open={logsSheet.open} onOpenChange={(open) => setLogsSheet({ ...logsSheet, open })}>
+        <SheetContent side="right" className="w-full sm:max-w-2xl overflow-hidden flex flex-col">
+          <SheetHeader className="flex-shrink-0">
+            <SheetTitle className="flex items-center justify-between">
+              <span>Logs: {logsSheet.processName}</span>
+              <Button variant="ghost" size="sm" onClick={() => refetchLogs()}>
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-auto mt-4">
+            {logsData?.out && (
+              <div className="mb-4">
+                <h4 className="text-xs font-medium text-muted-foreground mb-2">stdout</h4>
+                <pre className="text-xs font-mono bg-muted p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-all">
+                  {logsData.out || "(empty)"}
+                </pre>
+              </div>
+            )}
+            {logsData?.error && (
+              <div>
+                <h4 className="text-xs font-medium text-muted-foreground mb-2">stderr</h4>
+                <pre className="text-xs font-mono bg-muted p-3 rounded-lg overflow-x-auto whitespace-pre-wrap break-all text-red-400">
+                  {logsData.error || "(empty)"}
+                </pre>
+              </div>
+            )}
+            {!logsData?.out && !logsData?.error && (
+              <p className="text-sm text-muted-foreground">No logs available</p>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

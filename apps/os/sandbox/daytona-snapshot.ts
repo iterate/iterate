@@ -102,6 +102,11 @@ dockerfileContent = dockerfileContent.replace(
 writeFileSync(dockerfileTargetPath, dockerfileContent);
 
 const image = Image.fromDockerfile(dockerfileTargetPath);
+const entrypoint = [
+  "pm2-runtime",
+  "start",
+  "/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/ecosystem.config.cjs",
+];
 
 const snapshot = await (async () => {
   try {
@@ -109,6 +114,7 @@ const snapshot = await (async () => {
       {
         name: snapshotName,
         image,
+        entrypoint,
         resources: { cpu: 1, memory: 1, disk: 10 },
       },
       { onLogs: console.log },

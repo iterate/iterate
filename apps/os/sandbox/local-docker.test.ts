@@ -306,7 +306,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   // ============ Daemon ============
   describe("Daemon", () => {
     let container: ContainerInfo;
-    let injectedOpenAiKey: string | undefined;
+    let injectedAnthropicKey: string | undefined;
 
     beforeAll(async () => {
       container = await createContainer({ exposePort: true, forwardApiKeys: false });
@@ -342,8 +342,11 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const before = await fetchDaemonEnv(container.port!);
       const testToken = `local-docker-${Date.now()}`;
       const envLines = [`ITERATE_TEST_TOKEN=${testToken}`];
+      if (process.env.ANTHROPIC_API_KEY) {
+        injectedAnthropicKey = process.env.ANTHROPIC_API_KEY;
+        envLines.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
+      }
       if (process.env.OPENAI_API_KEY) {
-        injectedOpenAiKey = process.env.OPENAI_API_KEY;
         envLines.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
       }
 
@@ -369,15 +372,15 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       }
     }, 240000);
 
-    test.runIf(process.env.OPENAI_API_KEY)(
+    test.runIf(process.env.ANTHROPIC_API_KEY)(
       "opencode answers secret question with injected API key",
       async () => {
         await waitForDaemonReady(container.port!);
-        expect(injectedOpenAiKey).toBe(process.env.OPENAI_API_KEY);
+        expect(injectedAnthropicKey).toBe(process.env.ANTHROPIC_API_KEY);
         const output = await execInContainer(container.id, [
           "bash",
           "-lc",
-          'set -a; source /home/iterate/.iterate/.env; set +a; opencode run "what messaging app are you built to help with?"',
+          'export PATH="/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:$PATH"; set -a; source /home/iterate/.iterate/.env; set +a; opencode run "what messaging app are you built to help with?"',
         ]);
         expect(output.toLowerCase()).toContain("slack");
       },

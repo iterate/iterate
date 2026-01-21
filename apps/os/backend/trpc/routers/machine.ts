@@ -16,7 +16,10 @@ import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
-import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+import type {
+  TRPCRouter as DaemonTRPCRouter,
+  Pm2Process,
+} from "../../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<DaemonTRPCRouter>({
@@ -686,6 +689,146 @@ export const machineRouter = router({
         logger.error("Failed to fetch agents from daemon", err);
         // Return empty list on error (daemon might not be ready)
         return { agents: [] };
+      }
+    }),
+
+  // List PM2 processes running on a machine (proxies to daemon)
+  listProcesses: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }): Promise<{ processes: Pm2Process[] }> => {
+      const machineRecord = await ctx.db.query.machine.findFirst({
+        where: and(
+          eq(schema.machine.id, input.machineId),
+          eq(schema.machine.projectId, ctx.project.id),
+        ),
+      });
+      if (!machineRecord) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Machine not found",
+        });
+      }
+
+      try {
+        const provider = await createMachineProvider({
+          type: machineRecord.type,
+          env: ctx.env,
+          externalId: machineRecord.externalId,
+          metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
+          buildProxyUrl: () => "",
+        });
+        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+        const processes = await daemonClient.listProcesses.query();
+        return { processes };
+      } catch (err) {
+        logger.error("Failed to fetch processes from daemon", err);
+        return { processes: [] };
+      }
+    }),
+
+  // Restart a specific PM2 process on a machine (proxies to daemon)
+  restartProcess: projectProtectedMutation
+    .input(
+      z.object({
+        machineId: z.string(),
+        processName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { provider } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      const result = await daemonClient.restartProcess.mutate({ name: input.processName });
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: result.error || "Failed to restart process",
+        });
+      }
+
+      return { success: true };
+    }),
+
+  // Stop a specific PM2 process on a machine (proxies to daemon)
+  stopProcess: projectProtectedMutation
+    .input(
+      z.object({
+        machineId: z.string(),
+        processName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { provider } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      const result = await daemonClient.stopProcess.mutate({ name: input.processName });
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: result.error || "Failed to stop process",
+        });
+      }
+
+      return { success: true };
+    }),
+
+  // Get logs for a specific PM2 process on a machine (proxies to daemon)
+  getProcessLogs: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string(),
+        processName: z.string(),
+        lines: z.number().min(1).max(1000).default(100),
+        type: z.enum(["out", "error", "both"]).default("both"),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const machineRecord = await ctx.db.query.machine.findFirst({
+        where: and(
+          eq(schema.machine.id, input.machineId),
+          eq(schema.machine.projectId, ctx.project.id),
+        ),
+      });
+      if (!machineRecord) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Machine not found",
+        });
+      }
+
+      try {
+        const provider = await createMachineProvider({
+          type: machineRecord.type,
+          env: ctx.env,
+          externalId: machineRecord.externalId,
+          metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
+          buildProxyUrl: () => "",
+        });
+        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+        return daemonClient.getProcessLogs.query({
+          name: input.processName,
+          lines: input.lines,
+          type: input.type,
+        });
+      } catch (err) {
+        logger.error("Failed to fetch process logs from daemon", err);
+        return { out: "", error: "" };
       }
     }),
 });

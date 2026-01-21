@@ -11,6 +11,13 @@ import {
   listTmuxSessions,
   type TmuxSession,
 } from "../tmux-control.ts";
+import {
+  listPm2Processes,
+  restartPm2Process,
+  stopPm2Process,
+  getPm2Logs,
+  type Pm2Process,
+} from "../pm2.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 import { bootstrapRouter } from "./bootstrap.ts";
 import { platformRouter } from "./platform.ts";
@@ -282,8 +289,50 @@ export const trpcRouter = createTRPCRouter({
 
     return { success: true };
   }),
+
+  // ============ PM2 Process Management ============
+
+  /**
+   * List all PM2 processes with their status, memory, CPU, etc.
+   */
+  listProcesses: publicProcedure.query(async (): Promise<Pm2Process[]> => {
+    return listPm2Processes();
+  }),
+
+  /**
+   * Restart a specific PM2 process by name.
+   */
+  restartProcess: publicProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
+      return restartPm2Process(input.name);
+    }),
+
+  /**
+   * Stop a specific PM2 process by name.
+   */
+  stopProcess: publicProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
+      return stopPm2Process(input.name);
+    }),
+
+  /**
+   * Get logs for a specific PM2 process.
+   */
+  getProcessLogs: publicProcedure
+    .input(
+      z.object({
+        name: z.string(),
+        lines: z.number().min(1).max(1000).default(100),
+        type: z.enum(["out", "error", "both"]).default("both"),
+      }),
+    )
+    .query(({ input }): { out: string; error: string } => {
+      return getPm2Logs(input.name, { lines: input.lines, type: input.type });
+    }),
 });
 
 export type TRPCRouter = typeof trpcRouter;
 
-export type { SerializedAgent, SerializedTmuxSession };
+export type { SerializedAgent, SerializedTmuxSession, Pm2Process };
