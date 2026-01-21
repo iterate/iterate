@@ -260,7 +260,7 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required.default(`${app.stage}--`),
+  DAYTONA_SNAPSHOT_NAME: Required, // iterate-sandbox-{commitSha}
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,

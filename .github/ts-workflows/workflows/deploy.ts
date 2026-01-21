@@ -46,6 +46,7 @@ export default {
           name: "Deploy apps/os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            DAYTONA_SNAPSHOT_NAME: "${{ github.sha }}",
           },
           run: "pnpm run deploy:prd",
           "working-directory": "apps/os",

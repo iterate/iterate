@@ -30,7 +30,7 @@ export async function createMachineProvider(
     case "daytona":
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
-        snapshotPrefix: env.DAYTONA_SNAPSHOT_PREFIX,
+        snapshotName: env.DAYTONA_SNAPSHOT_NAME,
         externalId,
         buildProxyUrl,
       });
