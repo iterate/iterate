@@ -183,6 +183,7 @@ export const reportStatus = os.machines.reportStatus
       // Archive via provider AFTER transaction commits
       // This is intentional - we want DB state to be consistent first,
       // then clean up provider resources. Provider failures are logged but don't rollback.
+      // TODO: Replace with outbox consumer once outbox system is added
       for (const activeMachine of archivedMachines) {
         const provider = await createMachineProvider({
           type: activeMachine.type,
