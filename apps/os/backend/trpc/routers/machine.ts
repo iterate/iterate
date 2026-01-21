@@ -261,6 +261,43 @@ export const machineRouter = router({
       return enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug);
     }),
 
+  // Get provider-level state (e.g., Daytona sandbox state)
+  // This queries the provider directly to get fresh state info
+  getProviderState: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      if (!provider.getProviderState) {
+        // Provider doesn't support state querying (e.g., local-docker)
+        return {
+          machineId: input.machineId,
+          machineType: machine.type,
+          providerState: null,
+        };
+      }
+
+      const providerState = await provider.getProviderState().catch((err) => {
+        logger.error("Failed to get provider state", { machineId: input.machineId, err });
+        return { state: "error", errorReason: String(err) };
+      });
+
+      return {
+        machineId: input.machineId,
+        machineType: machine.type,
+        providerState,
+      };
+    }),
+
   // Create a new machine
   // Returns apiKey for local machines (user needs to configure daemon manually)
   create: projectProtectedMutation
@@ -424,7 +461,7 @@ export const machineRouter = router({
       return updated;
     }),
 
-  // Restart a machine
+  // Restart a machine's daemon process (not the whole sandbox)
   restart: projectProtectedMutation
     .input(
       z.object({
@@ -457,12 +494,23 @@ export const machineRouter = router({
         logger.error("Failed to broadcast invalidation", err);
       });
 
-      await provider.restart().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
+      // For Daytona machines, restart just the daemon process via tRPC (much faster)
+      // For other providers, fall back to provider.restart() which may restart the whole machine
+      if (machine.type === "daytona") {
+        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+        await daemonClient.restartDaemon.mutate().catch((err) => {
+          // If daemon is unreachable, fall back to provider restart
+          logger.warn("Daemon unreachable, falling back to provider restart", { err });
+          return provider.restart();
         });
-      });
+      } else {
+        await provider.restart().catch((err) => {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        });
+      }
 
       return { success: true };
     }),
