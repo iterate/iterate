@@ -260,7 +260,8 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required,
+  DAYTONA_SNAPSHOT_PREFIX: Required.default(`${app.stage}--`),
+  FOO_BAR: Required.default(`${app.stage}--`),
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
