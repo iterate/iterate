@@ -152,38 +152,6 @@ async function getOrCreateProjectMachineToken(
   return { tokenId, apiKey };
 }
 
-// Archive all active machines in a project (both DB and provider)
-// Note: This is no longer called during machine creation - activation now happens
-// when the daemon reports ready (see orpc/router.ts reportStatus).
-// Kept for potential manual cleanup use cases.
-export async function archiveActiveMachines(
-  db: DB,
-  projectId: string,
-  cloudflareEnv: CloudflareEnv,
-): Promise<void> {
-  // Find all active machines
-  const activeMachines = await db.query.machine.findMany({
-    where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")),
-  });
-
-  // Archive each one via provider then DB
-  for (const machine of activeMachines) {
-    // todo: flip and outboxify this
-    const provider = await createMachineProvider({
-      type: machine.type,
-      env: cloudflareEnv,
-      externalId: machine.externalId,
-      metadata: (machine.metadata as Record<string, unknown>) ?? {},
-      buildProxyUrl: () => "", // Not used for lifecycle operations
-    });
-    await provider.archive();
-    await db
-      .update(schema.machine)
-      .set({ state: "archived" })
-      .where(eq(schema.machine.id, machine.id));
-  }
-}
-
 // Helper to get provider for a machine by looking up its type from the database
 async function getProviderForMachine(
   db: DB,

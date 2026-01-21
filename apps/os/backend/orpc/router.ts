@@ -148,16 +148,42 @@ export const reportStatus = os.machines.reportStatus
     // If machine is in 'starting' state and daemon reports ready, activate it
     // This archives any existing active machine and promotes this one to active
     if (status === "ready" && machineWithOrg.state === "starting") {
-      // Archive all currently active machines for this project
-      const activeMachines = await db.query.machine.findMany({
-        where: and(
-          eq(schema.machine.projectId, machineWithOrg.projectId),
-          eq(schema.machine.state, "active"),
-        ),
+      // Use transaction to ensure atomic activation - prevents race conditions
+      // if two machines report ready simultaneously
+      const archivedMachines = await db.transaction(async (tx) => {
+        // Archive all currently active machines for this project
+        const activeMachines = await tx.query.machine.findMany({
+          where: and(
+            eq(schema.machine.projectId, machineWithOrg.projectId),
+            eq(schema.machine.state, "active"),
+          ),
+        });
+
+        for (const activeMachine of activeMachines) {
+          // Archive in DB (within transaction)
+          await tx
+            .update(schema.machine)
+            .set({ state: "archived" })
+            .where(eq(schema.machine.id, activeMachine.id));
+
+          logger.info("Archived existing active machine", { machineId: activeMachine.id });
+        }
+
+        // Promote this machine to active
+        await tx
+          .update(schema.machine)
+          .set({ state: "active", metadata: updatedMetadata })
+          .where(eq(schema.machine.id, machine.id));
+
+        logger.info("Machine activated", { machineId: machine.id });
+
+        return activeMachines;
       });
 
-      for (const activeMachine of activeMachines) {
-        // Archive via provider
+      // Archive via provider AFTER transaction commits
+      // This is intentional - we want DB state to be consistent first,
+      // then clean up provider resources. Provider failures are logged but don't rollback.
+      for (const activeMachine of archivedMachines) {
         const provider = await createMachineProvider({
           type: activeMachine.type,
           env,
@@ -171,23 +197,7 @@ export const reportStatus = os.machines.reportStatus
             err,
           });
         });
-
-        // Archive in DB
-        await db
-          .update(schema.machine)
-          .set({ state: "archived" })
-          .where(eq(schema.machine.id, activeMachine.id));
-
-        logger.info("Archived existing active machine", { machineId: activeMachine.id });
       }
-
-      // Promote this machine to active
-      await db
-        .update(schema.machine)
-        .set({ state: "active", metadata: updatedMetadata })
-        .where(eq(schema.machine.id, machine.id));
-
-      logger.info("Machine activated", { machineId: machine.id });
     } else {
       // Just update metadata
       await db
