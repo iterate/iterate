@@ -1,6 +1,11 @@
 import { Daytona } from "@daytonaio/sdk";
 import { resolveLatestSnapshot } from "../integrations/daytona/snapshot-resolver.ts";
-import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
+import type {
+  MachineProvider,
+  CreateMachineConfig,
+  MachineProviderResult,
+  ProviderState,
+} from "./types.ts";
 
 // Common log paths in sandbox
 const DAEMON_LOG = "/var/log/iterate-daemon/current";
@@ -36,10 +41,10 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
         envVars: machineConfig.envVars,
         autoStopInterval: snapshotPrefix.includes("dev")
           ? 12 * 60 // 12 hours
-          : 0,
+          : 0, // 0 = disabled
         autoDeleteInterval: snapshotPrefix.includes("dev")
           ? 12 * 60 // 12 hours
-          : 0,
+          : -1, // -1 = disabled (0 means "delete immediately on stop"!)
         public: true,
       });
       return { externalId: sandbox.id, metadata: { snapshotName } };
@@ -102,5 +107,13 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
       { label: "Direct", url: getNativeUrl(TERMINAL_PORT) },
       { label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) },
     ],
+
+    async getProviderState(): Promise<ProviderState> {
+      const sandbox = await daytona.get(externalId);
+      return {
+        state: sandbox.state ?? "unknown",
+        errorReason: sandbox.errorReason,
+      };
+    },
   };
 }

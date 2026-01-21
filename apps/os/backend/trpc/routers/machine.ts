@@ -261,6 +261,43 @@ export const machineRouter = router({
       return enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug);
     }),
 
+  // Get provider-level state (e.g., Daytona sandbox state)
+  // This queries the provider directly to get fresh state info
+  getProviderState: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      if (!provider.getProviderState) {
+        // Provider doesn't support state querying (e.g., local-docker)
+        return {
+          machineId: input.machineId,
+          machineType: machine.type,
+          providerState: null,
+        };
+      }
+
+      const providerState = await provider.getProviderState().catch((err) => {
+        logger.error("Failed to get provider state", { machineId: input.machineId, err });
+        return { state: "error", errorReason: String(err) };
+      });
+
+      return {
+        machineId: input.machineId,
+        machineType: machine.type,
+        providerState,
+      };
+    }),
+
   // Create a new machine
   // Returns apiKey for local machines (user needs to configure daemon manually)
   create: projectProtectedMutation
@@ -424,7 +461,7 @@ export const machineRouter = router({
       return updated;
     }),
 
-  // Restart a machine
+  // Restart a machine (stops and starts the sandbox)
   restart: projectProtectedMutation
     .input(
       z.object({
@@ -461,6 +498,52 @@ export const machineRouter = router({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+
+      return { success: true };
+    }),
+
+  // Restart just the daemon process (faster than full machine restart)
+  // Uses s6 supervisor to restart the daemon without touching the sandbox
+  restartDaemon: projectProtectedMutation
+    .input(
+      z.object({
+        machineId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
+      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
+      const updatedMetadata = {
+        ...((machine.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "restarting",
+        daemonReadyAt: null,
+      };
+
+      await ctx.db
+        .update(schema.machine)
+        .set({ metadata: updatedMetadata })
+        .where(eq(schema.machine.id, input.machineId));
+
+      // Broadcast invalidation immediately so UI updates to show "Restarting..."
+      const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
+      await broadcastInvalidation(ctx.env).catch((err) => {
+        logger.error("Failed to broadcast invalidation", err);
+      });
+
+      // Call daemon's restartDaemon endpoint
+      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      await daemonClient.restartDaemon.mutate().catch((err) => {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to restart daemon: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
 

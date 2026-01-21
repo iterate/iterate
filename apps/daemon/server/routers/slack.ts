@@ -31,6 +31,17 @@ const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/i
 
 export const slackRouter = new Hono();
 
+// Middleware to log request and response bodies
+slackRouter.use("*", async (c, next) => {
+  const reqBody = await c.req.raw.clone().text();
+  console.log(`[daemon/slack] REQ ${c.req.method} ${c.req.path}`, reqBody);
+
+  await next();
+
+  const resBody = await c.res.clone().text();
+  console.log(`[daemon/slack] RES ${c.res.status}`, resBody);
+});
+
 // Slack webhook envelope structure
 interface SlackWebhookPayload {
   token?: string;

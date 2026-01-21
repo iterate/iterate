@@ -31,6 +31,14 @@ export interface TerminalOption {
   url: string;
 }
 
+/** Provider-level state info (e.g., from Daytona API) */
+export interface ProviderState {
+  /** Provider-specific state (e.g., "started", "stopped", "destroyed", "error") */
+  state: string;
+  /** Error reason if state is error */
+  errorReason?: string;
+}
+
 /**
  * Machine provider interface.
  * Providers are instantiated with all context needed (externalId, metadata, etc.)
@@ -59,4 +67,7 @@ export interface MachineProvider {
 
   /** Get preview URL for a specific port (for services on different ports) */
   getPreviewUrl(port: number): string;
+
+  /** Get current state from the provider (optional - not all providers support this) */
+  getProviderState?(): Promise<ProviderState>;
 }
