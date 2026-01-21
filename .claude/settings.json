@@ -1,0 +1,13 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/async-coding-agent-setup.sh"
+        }
+      ]
+    }
+  ]
+}
