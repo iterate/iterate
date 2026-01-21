@@ -5,6 +5,7 @@ set -eo pipefail
 
 NODE_VERSION="${NODE_VERSION:-24.4.1}"
 PNPM_VERSION="${PNPM_VERSION:-10.17.1}"
+DOPPLER_CONFIG="${DOPPLER_CONFIG:-dev}"
 
 echo "Installing Doppler CLI"
 # Download directly from GitHub (cli.doppler.com/install.sh fails in Claude Code web proxy)
@@ -55,7 +56,7 @@ corepack enable
 corepack prepare pnpm@"$PNPM_VERSION" --activate
 
 echo "Setting up doppler (using DOPPLER_TOKEN env var)"
-doppler setup --project os --config dev_codex
+doppler setup --project os --config "$DOPPLER_CONFIG"
 
 echo "Installing workspace dependencies"
 pnpm install
