@@ -395,7 +395,7 @@ export const machineRouter = router({
       }
 
       // Return apiKey for local machines - user needs this to configure their daemon
-      if (input.type === "local" || input.type === "local-vanilla") {
+      if (input.type === "local") {
         return { ...newMachine, apiKey };
       }
 

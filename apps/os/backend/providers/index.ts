@@ -2,7 +2,7 @@ import type { MachineType } from "../db/schema.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
-import { createLocalProvider, createLocalVanillaProvider } from "./local-docker.ts";
+import { createLocalProvider } from "./local-docker.ts";
 
 export type {
   MachineProvider,
@@ -58,14 +58,14 @@ export async function createMachineProvider(
       });
     }
 
-    case "local":
+    case "local": {
+      const typedMeta = metadata as { host?: string; ports?: Record<string, number> };
       return createLocalProvider({
-        metadata: metadata as { host?: string; port?: number; ports?: Record<string, number> },
+        host: typedMeta.host ?? "localhost",
+        ports: typedMeta.ports ?? {},
         buildProxyUrl,
       });
-
-    case "local-vanilla":
-      return createLocalVanillaProvider({ buildProxyUrl });
+    }
 
     default: {
       const _exhaustiveCheck: never = type;

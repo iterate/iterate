@@ -179,41 +179,32 @@ async function findAvailablePortBlock(count: number): Promise<number> {
 }
 
 // ============================================================================
-// Local Provider - references already-running daemon on host
+// Local Provider - reference to an already-running daemon on the host
 // ============================================================================
 
 export interface LocalProviderConfig {
-  metadata: {
-    host?: string;
-    port?: number;
-    ports?: Record<string, number>;
-  };
+  host: string;
+  ports: Record<string, number>;
   buildProxyUrl: (port: number) => string;
 }
 
 export function createLocalProvider(config: LocalProviderConfig): MachineProvider {
-  const { metadata, buildProxyUrl } = config;
-  const host = metadata.host || "localhost"; // Use || to handle empty string
-  const ports = metadata.ports;
+  const { host, ports, buildProxyUrl } = config;
 
-  const getUrl = (port: number): string => {
-    if (ports) {
-      const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === port);
-      if (daemon && ports[daemon.id]) {
-        return `http://${host}:${ports[daemon.id]}`;
-      }
-      if (port === TERMINAL_PORT && ports["terminal"]) {
-        return `http://${host}:${ports["terminal"]}`;
-      }
-      if (ports["iterate-daemon"]) {
-        return `http://${host}:${ports["iterate-daemon"]}`;
-      }
+  const getUrl = (internalPort: number): string => {
+    const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === internalPort);
+    if (daemon && ports[daemon.id]) {
+      return `http://${host}:${ports[daemon.id]}`;
     }
-    const legacyPort = metadata.port ?? DEFAULT_DAEMON_PORT;
-    return `http://${host}:${legacyPort}`;
+    if (internalPort === TERMINAL_PORT && ports["terminal"]) {
+      return `http://${host}:${ports["terminal"]}`;
+    }
+    // Fallback to iterate-daemon port
+    const daemonPort = ports["iterate-daemon"] ?? DEFAULT_DAEMON_PORT;
+    return `http://${host}:${daemonPort}`;
   };
 
-  const displayPort = ports?.["iterate-daemon"] ?? metadata.port ?? DEFAULT_DAEMON_PORT;
+  const displayPort = ports["iterate-daemon"] ?? DEFAULT_DAEMON_PORT;
 
   return {
     type: "local",
@@ -222,6 +213,8 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
       return {
         externalId: machineConfig.machineId,
         metadata: {
+          host,
+          ports,
           daemonStatus: "ready",
           daemonReadyAt: new Date().toISOString(),
         },
@@ -239,53 +232,6 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
 
     displayInfo: {
       label: `Local ${host}:${displayPort}`,
-      isDevOnly: true,
-    },
-
-    commands: [
-      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
-      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
-    ],
-
-    terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
-  };
-}
-
-// ============================================================================
-// Local Vanilla Provider - legacy, similar to local
-// ============================================================================
-
-export interface LocalVanillaProviderConfig {
-  buildProxyUrl: (port: number) => string;
-}
-
-export function createLocalVanillaProvider(config: LocalVanillaProviderConfig): MachineProvider {
-  const { buildProxyUrl } = config;
-
-  return {
-    type: "local-vanilla",
-
-    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      return {
-        externalId: machineConfig.machineId,
-        metadata: {
-          daemonStatus: "ready",
-          daemonReadyAt: new Date().toISOString(),
-        },
-      };
-    },
-
-    async start(): Promise<void> {},
-    async stop(): Promise<void> {},
-    async restart(): Promise<void> {},
-    async archive(): Promise<void> {},
-    async delete(): Promise<void> {},
-
-    getPreviewUrl: () => `http://localhost:${DEFAULT_DAEMON_PORT}`,
-    previewUrl: `http://localhost:${DEFAULT_DAEMON_PORT}`,
-
-    displayInfo: {
-      label: "Local Vanilla",
       isDevOnly: true,
     },
 
