@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and, isNull, sql } from "drizzle-orm";
+import { eq, and, isNull, or, gt, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
@@ -192,12 +192,18 @@ export const machineRouter = router({
     .query(async ({ ctx, input }) => {
       const includeArchived = input.includeArchived ?? false;
 
+      // Show non-archived machines, plus recently archived ones (last 60s) for smooth UI transition
+      const recentlyArchivedCutoff = new Date(Date.now() - 60 * 1000);
+
       const machines = await ctx.db.query.machine.findMany({
         where: includeArchived
           ? eq(schema.machine.projectId, ctx.project.id)
           : and(
               eq(schema.machine.projectId, ctx.project.id),
-              sql`${schema.machine.state} != 'archived'`,
+              or(
+                ne(schema.machine.state, "archived"),
+                gt(schema.machine.updatedAt, recentlyArchivedCutoff),
+              ),
             ),
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
