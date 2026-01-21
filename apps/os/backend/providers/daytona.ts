@@ -18,12 +18,15 @@ const DEFAULT_DAEMON_PORT = 3000;
 export interface DaytonaProviderConfig {
   apiKey: string;
   snapshotName: string; // iterate-sandbox-{commitSha}
+  autoStopInterval: number; // minutes, 0 = disabled
+  autoDeleteInterval: number; // minutes, -1 = disabled, 0 = delete on stop
   externalId: string;
   buildProxyUrl: (port: number) => string;
 }
 
 export function createDaytonaProvider(config: DaytonaProviderConfig): MachineProvider {
-  const { apiKey, snapshotName, externalId, buildProxyUrl } = config;
+  const { apiKey, snapshotName, autoStopInterval, autoDeleteInterval, externalId, buildProxyUrl } =
+    config;
   const daytona = new Daytona({ apiKey });
 
   const getNativeUrl = (port: number) => `https://${port}-${externalId}.proxy.daytona.works`;
@@ -36,8 +39,8 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
         name: machineConfig.machineId,
         snapshot: snapshotName,
         envVars: machineConfig.envVars,
-        autoStopInterval: 0, // disabled
-        autoDeleteInterval: -1, // disabled (0 means "delete immediately on stop"!)
+        autoStopInterval,
+        autoDeleteInterval,
         public: true,
       });
       return { externalId: sandbox.id, metadata: { snapshotName } };

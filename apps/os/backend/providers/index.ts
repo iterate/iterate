@@ -34,6 +34,8 @@ export async function createMachineProvider(
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
         snapshotName: env.DAYTONA_SNAPSHOT_NAME,
+        autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
+        autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
         buildProxyUrl,
       });
