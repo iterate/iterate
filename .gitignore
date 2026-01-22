@@ -37,8 +37,13 @@ playwright-report/
 .last-run.json
 
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 .output
+
+# Benchmark reports - keep benchmark-report.html excluded (legacy)
+benchmark-report.html
 
 # opensrc - source code for packages
 opensrc/

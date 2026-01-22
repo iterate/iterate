@@ -1,0 +1,4 @@
+# Benchmark SQLite databases (can be regenerated)
+*.db
+*.db-shm
+*.db-wal

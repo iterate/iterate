@@ -4,6 +4,7 @@ packages:
   - apps/iterate-com
   - apps/os
   - packages/*
+  - scripts/sandbox-benchmark
   - .github/ts-workflows
 
 minimumReleaseAge: 1440

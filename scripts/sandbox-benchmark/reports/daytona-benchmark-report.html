@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox Benchmark Report - 5d513842</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.6;
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 20px;
+        background: #f5f5f5;
+        color: #333;
+      }
+      h1,
+      h2,
+      h3 {
+        color: #1a1a1a;
+      }
+      h1 {
+        border-bottom: 3px solid #007acc;
+        padding-bottom: 10px;
+      }
+      .header {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .meta {
+        color: #666;
+        font-size: 14px;
+      }
+      .meta span {
+        margin-right: 20px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+      }
+      .card {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .card h3 {
+        margin-top: 0;
+        color: #007acc;
+      }
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .stat {
+        text-align: center;
+        padding: 10px;
+        background: #f8f9fa;
+        border-radius: 4px;
+      }
+      .stat-value {
+        font-size: 24px;
+        font-weight: bold;
+        color: #007acc;
+      }
+      .stat-label {
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+      }
+      .chart-container {
+        position: relative;
+        height: 300px;
+        margin-top: 20px;
+      }
+      .chart-container-large {
+        position: relative;
+        height: 400px;
+        margin-top: 20px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        font-size: 14px;
+      }
+      th,
+      td {
+        padding: 8px 12px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+      }
+      th {
+        background: #f8f9fa;
+        font-weight: 600;
+      }
+      tr:hover {
+        background: #f8f9fa;
+      }
+      .success {
+        color: #28a745;
+      }
+      .error {
+        color: #dc3545;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .badge-eu {
+        background: #e3f2fd;
+        color: #1565c0;
+      }
+      .badge-us {
+        background: #fff3e0;
+        color: #ef6c00;
+      }
+      .full-width {
+        grid-column: 1 / -1;
+      }
+      .config-json {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        padding: 16px;
+        border-radius: 6px;
+        overflow-x: auto;
+        font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre;
+        max-height: 500px;
+        overflow-y: auto;
+      }
+      .config-table td {
+        font-family: "SF Mono", Monaco, monospace;
+        font-size: 13px;
+      }
+      .config-table td:first-child {
+        font-weight: 600;
+        color: #007acc;
+      }
+      details {
+        margin-bottom: 10px;
+      }
+      details summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 8px 0;
+      }
+      details summary:hover {
+        color: #007acc;
+      }
+
+      /* Enhanced table row tooltips */
+      .tooltip-row {
+        cursor: pointer;
+        position: relative;
+      }
+      .tooltip-row:hover {
+        background: #e8f4fd !important;
+      }
+      .tooltip-row .config-tooltip {
+        display: none;
+        position: absolute;
+        left: 100%;
+        top: 0;
+        margin-left: 10px;
+        background: #1e1e1e;
+        color: #e0e0e0;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        z-index: 1000;
+        min-width: 280px;
+        white-space: nowrap;
+        font-size: 13px;
+        line-height: 1.6;
+        border: 1px solid #007acc;
+      }
+      .tooltip-row:hover .config-tooltip {
+        display: block;
+      }
+      .config-tooltip h4 {
+        margin: 0 0 8px 0;
+        color: #007acc;
+        font-size: 14px;
+        border-bottom: 1px solid #444;
+        padding-bottom: 6px;
+      }
+      .config-tooltip .tooltip-section {
+        margin-bottom: 8px;
+      }
+      .config-tooltip .tooltip-section:last-child {
+        margin-bottom: 0;
+      }
+      .config-tooltip .tooltip-label {
+        color: #888;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .config-tooltip .tooltip-value {
+        color: #fff;
+        font-weight: 500;
+      }
+      .config-tooltip .tooltip-stats {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 4px 16px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #444;
+      }
+      .config-tooltip .tooltip-stat {
+        display: flex;
+        justify-content: space-between;
+      }
+
+      /* Info icon for tooltip hint */
+      .info-icon {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        background: #007acc;
+        color: white;
+        border-radius: 50%;
+        font-size: 10px;
+        text-align: center;
+        line-height: 14px;
+        margin-left: 4px;
+        cursor: help;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🚀 Sandbox Benchmark Report</h1>
+      <div class="meta">
+        <span><strong>Run ID:</strong> 5d513842-315a-416c-90e2-4353af458458</span>
+        <span><strong>Started:</strong> 1/21/2026, 11:17:25 PM</span>
+        <span><strong>Finished:</strong> 1/21/2026, 11:18:44 PM</span>
+      </div>
+      <div class="meta" style="margin-top: 10px">
+        <span><strong>Sandboxes:</strong> 9</span>
+        <span><strong>Requests/Machine:</strong> 20</span>
+        <span><strong>Restart Cycles:</strong> 2</span>
+        <span><strong>Total Measurements:</strong> 207</span>
+      </div>
+    </div>
+
+    <h2>⚙️ Benchmark Configuration</h2>
+    <div class="card">
+      <h3>Run Parameters</h3>
+      <table class="config-table">
+        <tr>
+          <td>Machines per Config</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <td>Requests per Machine</td>
+          <td>20</td>
+        </tr>
+        <tr>
+          <td>Batch Size</td>
+          <td>5</td>
+        </tr>
+        <tr>
+          <td>Restart Cycles</td>
+          <td>2</td>
+        </tr>
+        <tr>
+          <td>Measurements</td>
+          <td>coldBoot, restart, requestLatency</td>
+        </tr>
+        <tr>
+          <td>Output File</td>
+          <td>daytona-quick.db</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Provider Configurations</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Snapshot/Image ID</th>
+            <th>Dockerfile</th>
+            <th>Region</th>
+            <th>CPU</th>
+            <th>Memory (MB)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>daytona-1cpu-1gb</td>
+            <td>daytona</td>
+            <td>benchmark-benchmark-server-1769033128151</td>
+            <td>../sandbox-server/Dockerfile</td>
+            <td>us-east</td>
+            <td>1</td>
+            <td>1024</td>
+          </tr>
+
+          <tr>
+            <td>daytona-2cpu-2gb</td>
+            <td>daytona</td>
+            <td>benchmark-benchmark-server-1769033128151</td>
+            <td>../sandbox-server/Dockerfile</td>
+            <td>us-east</td>
+            <td>2</td>
+            <td>2048</td>
+          </tr>
+
+          <tr>
+            <td>daytona-4cpu-4gb</td>
+            <td>daytona</td>
+            <td>benchmark-benchmark-server-1769033128151</td>
+            <td>../sandbox-server/Dockerfile</td>
+            <td>us-east</td>
+            <td>4</td>
+            <td>4096</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Full Configuration JSON</summary>
+        <div class="config-json">
+          { &quot;configs&quot;: [ { &quot;name&quot;: &quot;daytona-1cpu-1gb&quot;,
+          &quot;provider&quot;: &quot;daytona&quot;, &quot;image&quot;: { &quot;provider&quot;:
+          &quot;daytona&quot;, &quot;identifier&quot;:
+          &quot;benchmark-benchmark-server-1769033128151&quot;, &quot;dockerfile&quot;:
+          &quot;../sandbox-server/Dockerfile&quot;, &quot;builtAt&quot;:
+          &quot;2026-01-21T22:06:48.000Z&quot; }, &quot;cpu&quot;: 1, &quot;memoryMb&quot;: 1024,
+          &quot;region&quot;: &quot;us-east&quot; }, { &quot;name&quot;:
+          &quot;daytona-2cpu-2gb&quot;, &quot;provider&quot;: &quot;daytona&quot;,
+          &quot;image&quot;: { &quot;provider&quot;: &quot;daytona&quot;, &quot;identifier&quot;:
+          &quot;benchmark-benchmark-server-1769033128151&quot;, &quot;dockerfile&quot;:
+          &quot;../sandbox-server/Dockerfile&quot;, &quot;builtAt&quot;:
+          &quot;2026-01-21T22:06:48.000Z&quot; }, &quot;cpu&quot;: 2, &quot;memoryMb&quot;: 2048,
+          &quot;region&quot;: &quot;us-east&quot; }, { &quot;name&quot;:
+          &quot;daytona-4cpu-4gb&quot;, &quot;provider&quot;: &quot;daytona&quot;,
+          &quot;image&quot;: { &quot;provider&quot;: &quot;daytona&quot;, &quot;identifier&quot;:
+          &quot;benchmark-benchmark-server-1769033128151&quot;, &quot;dockerfile&quot;:
+          &quot;../sandbox-server/Dockerfile&quot;, &quot;builtAt&quot;:
+          &quot;2026-01-21T22:06:48.000Z&quot; }, &quot;cpu&quot;: 4, &quot;memoryMb&quot;: 4096,
+          &quot;region&quot;: &quot;us-east&quot; } ], &quot;machinesPerConfig&quot;: 3,
+          &quot;requestsPerMachine&quot;: 20, &quot;batchSize&quot;: 5,
+          &quot;restartCyclesPerMachine&quot;: 2, &quot;output&quot;: &quot;daytona-quick.db&quot;,
+          &quot;keepAlive&quot;: false, &quot;measurements&quot;: { &quot;coldBoot&quot;: true,
+          &quot;restart&quot;: true, &quot;requestLatency&quot;: true } }
+        </div>
+      </details>
+    </div>
+
+    <h2>📊 Summary Statistics</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Cold Boot Time</h3>
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="stat-value">3754</div>
+            <div class="stat-label">Mean (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">3773</div>
+            <div class="stat-label">Median (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">3911</div>
+            <div class="stat-label">P95 (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">9</div>
+            <div class="stat-label">Samples</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Restart Time</h3>
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="stat-value">1049</div>
+            <div class="stat-label">Mean (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">1014</div>
+            <div class="stat-label">Median (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">1310</div>
+            <div class="stat-label">P95 (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">18</div>
+            <div class="stat-label">Samples</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Request Latency</h3>
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="stat-value">278</div>
+            <div class="stat-label">Mean (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">207</div>
+            <div class="stat-label">Median (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">466</div>
+            <div class="stat-label">P95 (ms)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">180</div>
+            <div class="stat-label">Samples</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>📈 Charts</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Cold Boot Time by Configuration</h3>
+        <div class="chart-container">
+          <canvas id="coldBootChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Request Latency by Configuration</h3>
+        <div class="chart-container">
+          <canvas id="latencyConfigChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Restart Time by Configuration</h3>
+        <div class="chart-container">
+          <canvas id="restartChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card full-width">
+        <h3>Request Latency Distribution</h3>
+        <div class="chart-container-large">
+          <canvas id="latencyHistogram"></canvas>
+        </div>
+      </div>
+
+      <div class="card full-width">
+        <h3>Request Latency by Region</h3>
+        <div class="chart-container">
+          <canvas id="latencyRegionChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <h2>📋 Detailed Results</h2>
+    <div class="card" style="overflow: visible">
+      <h3>
+        Results by Configuration
+        <span class="info-icon" title="Hover over rows for detailed config info">i</span>
+      </h3>
+      <table style="overflow: visible">
+        <thead>
+          <tr>
+            <th>Configuration</th>
+            <th>Cold Boot (mean)</th>
+            <th>Cold Boot (p95)</th>
+            <th>Restart (mean)</th>
+            <th>Latency (mean)</th>
+            <th>Latency (p95)</th>
+            <th>Latency (p99)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="tooltip-row">
+            <td><strong>daytona-1cpu-1gb</strong></td>
+            <td>3673 ms</td>
+            <td>3764 ms</td>
+            <td>1075 ms</td>
+            <td>287 ms</td>
+            <td>492 ms</td>
+            <td>630 ms</td>
+            <div class="config-tooltip">
+              <h4>daytona-1cpu-1gb</h4>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Provider</div>
+                <div class="tooltip-value">DAYTONA</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Resources</div>
+                <div class="tooltip-value">1 CPU • 1024 MB RAM</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Region</div>
+                <div class="tooltip-value">us-east</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Dockerfile</div>
+                <div class="tooltip-value">Dockerfile</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Sandboxes Tested</div>
+                <div class="tooltip-value">3</div>
+              </div>
+              <div class="tooltip-stats">
+                <div class="tooltip-stat"><span>Min Cold Boot:</span> <span>3581 ms</span></div>
+                <div class="tooltip-stat"><span>Max Cold Boot:</span> <span>3764 ms</span></div>
+                <div class="tooltip-stat"><span>Min Latency:</span> <span>186 ms</span></div>
+                <div class="tooltip-stat"><span>Max Latency:</span> <span>630 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Boot):</span> <span>74.7 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Lat):</span> <span>121.5 ms</span></div>
+              </div>
+            </div>
+          </tr>
+
+          <tr class="tooltip-row">
+            <td><strong>daytona-2cpu-2gb</strong></td>
+            <td>3850 ms</td>
+            <td>3911 ms</td>
+            <td>943 ms</td>
+            <td>269 ms</td>
+            <td>458 ms</td>
+            <td>516 ms</td>
+            <div class="config-tooltip">
+              <h4>daytona-2cpu-2gb</h4>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Provider</div>
+                <div class="tooltip-value">DAYTONA</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Resources</div>
+                <div class="tooltip-value">2 CPU • 2048 MB RAM</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Region</div>
+                <div class="tooltip-value">us-east</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Dockerfile</div>
+                <div class="tooltip-value">Dockerfile</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Sandboxes Tested</div>
+                <div class="tooltip-value">3</div>
+              </div>
+              <div class="tooltip-stats">
+                <div class="tooltip-stat"><span>Min Cold Boot:</span> <span>3773 ms</span></div>
+                <div class="tooltip-stat"><span>Max Cold Boot:</span> <span>3911 ms</span></div>
+                <div class="tooltip-stat"><span>Min Latency:</span> <span>186 ms</span></div>
+                <div class="tooltip-stat"><span>Max Latency:</span> <span>516 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Boot):</span> <span>57.6 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Lat):</span> <span>102.9 ms</span></div>
+              </div>
+            </div>
+          </tr>
+
+          <tr class="tooltip-row">
+            <td><strong>daytona-4cpu-4gb</strong></td>
+            <td>3740 ms</td>
+            <td>3774 ms</td>
+            <td>1128 ms</td>
+            <td>278 ms</td>
+            <td>444 ms</td>
+            <td>547 ms</td>
+            <div class="config-tooltip">
+              <h4>daytona-4cpu-4gb</h4>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Provider</div>
+                <div class="tooltip-value">DAYTONA</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Resources</div>
+                <div class="tooltip-value">4 CPU • 4096 MB RAM</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Region</div>
+                <div class="tooltip-value">us-east</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Dockerfile</div>
+                <div class="tooltip-value">Dockerfile</div>
+              </div>
+              <div class="tooltip-section">
+                <div class="tooltip-label">Sandboxes Tested</div>
+                <div class="tooltip-value">3</div>
+              </div>
+              <div class="tooltip-stats">
+                <div class="tooltip-stat"><span>Min Cold Boot:</span> <span>3671 ms</span></div>
+                <div class="tooltip-stat"><span>Max Cold Boot:</span> <span>3774 ms</span></div>
+                <div class="tooltip-stat"><span>Min Latency:</span> <span>186 ms</span></div>
+                <div class="tooltip-stat"><span>Max Latency:</span> <span>547 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Boot):</span> <span>48.5 ms</span></div>
+                <div class="tooltip-stat"><span>Std Dev (Lat):</span> <span>103.9 ms</span></div>
+              </div>
+            </div>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Results by Region</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th>Cold Boot (mean)</th>
+            <th>Latency (mean)</th>
+            <th>Latency (p95)</th>
+            <th>Samples</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td>3754 ms</td>
+            <td>278 ms</td>
+            <td>466 ms</td>
+            <td>180</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Individual Sandbox Results</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Sandbox</th>
+            <th>Config</th>
+            <th>Region</th>
+            <th>Cold Boot</th>
+            <th>Restarts</th>
+            <th>Requests</th>
+            <th>Avg Latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>daytona-1cpu-1gb#0</td>
+            <td>daytona-1cpu-1gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3581 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>296 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-1cpu-1gb#1</td>
+            <td>daytona-1cpu-1gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3675 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>276 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-1cpu-1gb#2</td>
+            <td>daytona-1cpu-1gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3764 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>289 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-2cpu-2gb#0</td>
+            <td>daytona-2cpu-2gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3867 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>255 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-2cpu-2gb#1</td>
+            <td>daytona-2cpu-2gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3911 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>254 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-2cpu-2gb#2</td>
+            <td>daytona-2cpu-2gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3773 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>297 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-4cpu-4gb#0</td>
+            <td>daytona-4cpu-4gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3774 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>268 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-4cpu-4gb#1</td>
+            <td>daytona-4cpu-4gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3671 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>265 ms</td>
+          </tr>
+
+          <tr>
+            <td>daytona-4cpu-4gb#2</td>
+            <td>daytona-4cpu-4gb</td>
+            <td><span class="badge badge-us">us-east</span></td>
+            <td class="success">3774 ms</td>
+            <td>2/2</td>
+            <td>20/20</td>
+            <td>300 ms</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <script>
+      // Chart.js configuration
+      Chart.defaults.font.family =
+        "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
+      // Configuration metadata for tooltips
+      const configMetadata = {
+        "daytona-1cpu-1gb": {
+          name: "daytona-1cpu-1gb",
+          provider: "daytona",
+          cpu: 1,
+          memoryMb: 1024,
+          region: "us-east",
+          dockerfile: "../sandbox-server/Dockerfile",
+          sandboxCount: 3,
+          stats: {
+            coldBoot: {
+              count: 3,
+              min: 3581,
+              max: 3764,
+              mean: 3673.33,
+              median: 3675,
+              p95: 3764,
+              p99: 3764,
+              stdDev: 74.72,
+            },
+            restart: {
+              count: 6,
+              min: 913,
+              max: 1228,
+              mean: 1074.67,
+              median: 1047,
+              p95: 1228,
+              p99: 1228,
+              stdDev: 108.12,
+            },
+            requestLatency: {
+              count: 60,
+              min: 186,
+              max: 630,
+              mean: 286.88,
+              median: 207,
+              p95: 492,
+              p99: 630,
+              stdDev: 121.49,
+            },
+          },
+        },
+        "daytona-2cpu-2gb": {
+          name: "daytona-2cpu-2gb",
+          provider: "daytona",
+          cpu: 2,
+          memoryMb: 2048,
+          region: "us-east",
+          dockerfile: "../sandbox-server/Dockerfile",
+          sandboxCount: 3,
+          stats: {
+            coldBoot: {
+              count: 3,
+              min: 3773,
+              max: 3911,
+              mean: 3850.33,
+              median: 3867,
+              p95: 3911,
+              p99: 3911,
+              stdDev: 57.56,
+            },
+            restart: {
+              count: 6,
+              min: 826,
+              max: 1028,
+              mean: 943.17,
+              median: 967,
+              p95: 1028,
+              p99: 1028,
+              stdDev: 84.9,
+            },
+            requestLatency: {
+              count: 60,
+              min: 186,
+              max: 516,
+              mean: 268.62,
+              median: 205,
+              p95: 458,
+              p99: 516,
+              stdDev: 102.86,
+            },
+          },
+        },
+        "daytona-4cpu-4gb": {
+          name: "daytona-4cpu-4gb",
+          provider: "daytona",
+          cpu: 4,
+          memoryMb: 4096,
+          region: "us-east",
+          dockerfile: "../sandbox-server/Dockerfile",
+          sandboxCount: 3,
+          stats: {
+            coldBoot: {
+              count: 3,
+              min: 3671,
+              max: 3774,
+              mean: 3739.67,
+              median: 3774,
+              p95: 3774,
+              p99: 3774,
+              stdDev: 48.55,
+            },
+            restart: {
+              count: 6,
+              min: 955,
+              max: 1310,
+              mean: 1128.33,
+              median: 1079,
+              p95: 1310,
+              p99: 1310,
+              stdDev: 129.97,
+            },
+            requestLatency: {
+              count: 60,
+              min: 186,
+              max: 547,
+              mean: 277.68,
+              median: 208,
+              p95: 444,
+              p99: 547,
+              stdDev: 103.91,
+            },
+          },
+        },
+      };
+
+      // Custom tooltip configuration for config-based charts
+      function createConfigTooltip(metricType) {
+        return {
+          enabled: true,
+          backgroundColor: "rgba(30, 30, 30, 0.95)",
+          titleColor: "#fff",
+          bodyColor: "#e0e0e0",
+          borderColor: "#007acc",
+          borderWidth: 1,
+          padding: 12,
+          titleFont: { size: 14, weight: "bold" },
+          bodyFont: { size: 12 },
+          displayColors: true,
+          callbacks: {
+            title: function (tooltipItems) {
+              return tooltipItems[0].label;
+            },
+            afterTitle: function (tooltipItems) {
+              const configName = tooltipItems[0].label;
+              const config = configMetadata[configName];
+              if (!config) return "";
+              return "─────────────────────";
+            },
+            beforeBody: function (tooltipItems) {
+              const configName = tooltipItems[0].label;
+              const config = configMetadata[configName];
+              if (!config) return "";
+              const lines = [
+                "Provider: " + config.provider.toUpperCase(),
+                "CPU: " + (config.cpu || "N/A") + " cores",
+                "Memory: " + (config.memoryMb ? config.memoryMb + " MB" : "N/A"),
+                "Region: " + (config.region || "default"),
+                "Sandboxes: " + config.sandboxCount,
+              ];
+              if (config.dockerfile) {
+                const dockerShort = config.dockerfile.split("/").pop() || config.dockerfile;
+                lines.push("Dockerfile: " + dockerShort);
+              }
+              return lines.join("\n");
+            },
+            label: function (context) {
+              return context.dataset.label + ": " + context.parsed.y.toFixed(1) + " ms";
+            },
+            afterBody: function (tooltipItems) {
+              const configName = tooltipItems[0].label;
+              const config = configMetadata[configName];
+              if (!config || !config.stats) return "";
+
+              const stats = config.stats[metricType];
+              if (!stats || stats.count === 0) return "";
+
+              return [
+                "",
+                "── All " + metricType.replace(/([A-Z])/g, " $1").trim() + " Stats ──",
+                "Min: " + stats.min.toFixed(0) + " ms",
+                "Max: " + stats.max.toFixed(0) + " ms",
+                "Median: " + stats.median.toFixed(0) + " ms",
+                "Std Dev: " + stats.stdDev.toFixed(1) + " ms",
+                "Samples: " + stats.count,
+              ].join("\n");
+            },
+          },
+        };
+      }
+
+      // Cold Boot Chart with enhanced tooltips
+      new Chart(document.getElementById("coldBootChart"), {
+        type: "bar",
+        data: {
+          labels: ["daytona-1cpu-1gb", "daytona-2cpu-2gb", "daytona-4cpu-4gb"],
+          datasets: [
+            {
+              label: "Mean (ms)",
+              data: [3673.33, 3850.33, 3739.67],
+              backgroundColor: "rgba(0, 122, 204, 0.7)",
+            },
+            {
+              label: "P95 (ms)",
+              data: [3764, 3911, 3774],
+              backgroundColor: "rgba(0, 122, 204, 0.3)",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: createConfigTooltip("coldBoot"),
+          },
+          scales: { y: { beginAtZero: true, title: { display: true, text: "Time (ms)" } } },
+        },
+      });
+
+      // Latency by Config Chart with enhanced tooltips
+      new Chart(document.getElementById("latencyConfigChart"), {
+        type: "bar",
+        data: {
+          labels: ["daytona-1cpu-1gb", "daytona-2cpu-2gb", "daytona-4cpu-4gb"],
+          datasets: [
+            {
+              label: "Mean (ms)",
+              data: [286.88, 268.62, 277.68],
+              backgroundColor: "rgba(40, 167, 69, 0.7)",
+            },
+            {
+              label: "P95 (ms)",
+              data: [492, 458, 444],
+              backgroundColor: "rgba(40, 167, 69, 0.4)",
+            },
+            {
+              label: "P99 (ms)",
+              data: [630, 516, 547],
+              backgroundColor: "rgba(40, 167, 69, 0.2)",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: createConfigTooltip("requestLatency"),
+          },
+          scales: { y: { beginAtZero: true, title: { display: true, text: "Time (ms)" } } },
+        },
+      });
+
+      // Restart Chart with enhanced tooltips
+      new Chart(document.getElementById("restartChart"), {
+        type: "bar",
+        data: {
+          labels: ["daytona-1cpu-1gb", "daytona-2cpu-2gb", "daytona-4cpu-4gb"],
+          datasets: [
+            {
+              label: "Mean (ms)",
+              data: [1074.67, 943.17, 1128.33],
+              backgroundColor: "rgba(255, 159, 64, 0.7)",
+            },
+            {
+              label: "P95 (ms)",
+              data: [1228, 1028, 1310],
+              backgroundColor: "rgba(255, 159, 64, 0.3)",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: createConfigTooltip("restart"),
+          },
+          scales: { y: { beginAtZero: true, title: { display: true, text: "Time (ms)" } } },
+        },
+      });
+
+      // Latency Histogram with enhanced tooltips
+      new Chart(document.getElementById("latencyHistogram"), {
+        type: "bar",
+        data: {
+          labels: [
+            "186-209",
+            "209-232",
+            "232-255",
+            "255-278",
+            "278-301",
+            "301-324",
+            "324-347",
+            "347-370",
+            "370-393",
+            "393-416",
+            "416-439",
+            "439-462",
+            "462-485",
+            "485-508",
+            "508-531",
+            "531-554",
+            "554-577",
+            "577-600",
+            "600-623",
+            "623-646",
+          ],
+          datasets: [
+            {
+              label: "Request Count",
+              data: [100, 8, 7, 6, 3, 0, 0, 3, 4, 14, 17, 7, 4, 3, 1, 1, 0, 1, 0, 1],
+              backgroundColor: "rgba(108, 117, 125, 0.7)",
+              borderColor: "rgba(108, 117, 125, 1)",
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            title: { display: true, text: "Request Latency Distribution (ms)" },
+            tooltip: {
+              backgroundColor: "rgba(30, 30, 30, 0.95)",
+              borderColor: "#6c757d",
+              borderWidth: 1,
+              padding: 10,
+              callbacks: {
+                title: function (tooltipItems) {
+                  return "Latency Range: " + tooltipItems[0].label + " ms";
+                },
+                label: function (context) {
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const percentage = ((context.parsed.y / total) * 100).toFixed(1);
+                  return [
+                    "Count: " + context.parsed.y + " requests",
+                    "Percentage: " + percentage + "%",
+                  ];
+                },
+              },
+            },
+          },
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: "Count" } },
+            x: { title: { display: true, text: "Latency (ms)" } },
+          },
+        },
+      });
+
+      // Region metadata for tooltips
+      const regionMetadata = {
+        "us-east": {
+          region: "us-east",
+          stats: {
+            coldBoot: {
+              count: 9,
+              min: 3581,
+              max: 3911,
+              mean: 3754.44,
+              median: 3773,
+              p95: 3911,
+              p99: 3911,
+              stdDev: 95.3,
+            },
+            restart: {
+              count: 18,
+              min: 826,
+              max: 1310,
+              mean: 1048.72,
+              median: 1014,
+              p95: 1310,
+              p99: 1310,
+              stdDev: 134.09,
+            },
+            requestLatency: {
+              count: 180,
+              min: 186,
+              max: 630,
+              mean: 277.73,
+              median: 207,
+              p95: 466,
+              p99: 587,
+              stdDev: 110.01,
+            },
+          },
+          sandboxCount: 9,
+        },
+      };
+
+      // Latency by Region Chart with enhanced tooltips
+      new Chart(document.getElementById("latencyRegionChart"), {
+        type: "bar",
+        data: {
+          labels: ["us-east"],
+          datasets: [
+            {
+              label: "Mean (ms)",
+              data: [277.73],
+              backgroundColor: ["rgba(239, 108, 0, 0.7)"],
+            },
+            {
+              label: "P95 (ms)",
+              data: [466],
+              backgroundColor: ["rgba(239, 108, 0, 0.3)"],
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: {
+              backgroundColor: "rgba(30, 30, 30, 0.95)",
+              borderColor: "#1565c0",
+              borderWidth: 1,
+              padding: 12,
+              callbacks: {
+                title: function (tooltipItems) {
+                  return "Region: " + tooltipItems[0].label;
+                },
+                beforeBody: function (tooltipItems) {
+                  const region = tooltipItems[0].label;
+                  const meta = regionMetadata[region];
+                  if (!meta) return "";
+                  return "Sandboxes tested: " + meta.sandboxCount;
+                },
+                label: function (context) {
+                  return context.dataset.label + ": " + context.parsed.y.toFixed(1) + " ms";
+                },
+                afterBody: function (tooltipItems) {
+                  const region = tooltipItems[0].label;
+                  const meta = regionMetadata[region];
+                  if (!meta || !meta.stats) return "";
+                  const stats = meta.stats.requestLatency;
+                  return [
+                    "",
+                    "── Full Stats ──",
+                    "Min: " + stats.min.toFixed(0) + " ms",
+                    "Max: " + stats.max.toFixed(0) + " ms",
+                    "Median: " + stats.median.toFixed(0) + " ms",
+                    "P99: " + stats.p99.toFixed(0) + " ms",
+                    "Std Dev: " + stats.stdDev.toFixed(1) + " ms",
+                  ].join("\n");
+                },
+              },
+            },
+          },
+          scales: { y: { beginAtZero: true, title: { display: true, text: "Time (ms)" } } },
+        },
+      });
+    </script>
+
+    <footer
+      style="
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid #ddd;
+        color: #666;
+        font-size: 12px;
+      "
+    >
+      Generated by Sandbox Benchmark Suite • 2026-01-21T23:18:54.772Z
+    </footer>
+  </body>
+</html>

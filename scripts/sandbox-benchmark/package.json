@@ -1,0 +1,23 @@
+{
+  "name": "sandbox-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build-images": "tsx cli.ts build-images",
+    "benchmark": "tsx cli.ts run",
+    "cleanup": "tsx cli.ts cleanup"
+  },
+  "dependencies": {
+    "@daytonaio/sdk": "^0.128.1",
+    "better-sqlite3": "npm:libsql@0.5.22",
+    "e2b": "^1.0.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
