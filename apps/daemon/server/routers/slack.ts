@@ -287,7 +287,7 @@ function parseWebhookPayload(
   const isNewThread = !event.thread_ts;
 
   // Is the bot mentioned?
-  const isMention = event.type === "app_mention";
+  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
 
   // Determine case
   let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
