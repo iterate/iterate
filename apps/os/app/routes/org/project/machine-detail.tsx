@@ -83,6 +83,23 @@ function MachineDetailPage() {
     },
   });
 
+  const restartDaemon = useMutation({
+    mutationFn: async () => {
+      return trpcClient.machine.restartDaemon.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Daemon restarting");
+      queryClient.invalidateQueries({ queryKey: machineQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to restart daemon: " + error.message);
+    },
+  });
+
   const deleteMachine = useMutation({
     mutationFn: async () => {
       return trpcClient.machine.delete.mutate({
@@ -169,11 +186,20 @@ function MachineDetailPage() {
         <Button
           variant="outline"
           size="sm"
+          onClick={() => restartDaemon.mutate()}
+          disabled={restartDaemon.isPending || machine.state === "archived"}
+        >
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Restart Daemon
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => restartMachine.mutate()}
           disabled={restartMachine.isPending || machine.state === "archived"}
         >
           <RefreshCw className="h-4 w-4 mr-1" />
-          Restart
+          Restart Machine
         </Button>
         <Button
           variant="outline"
