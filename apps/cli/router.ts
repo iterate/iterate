@@ -4,8 +4,6 @@ import { z } from "zod/v4";
 import { os } from "@orpc/server";
 import { toolsRouter } from "./procedures/tools.ts";
 
-const pub = os.$context<object>();
-
 export const router = {
   /** Daemon oRPC router - all daemon procedures */
   daemon: daemonRouter,
@@ -14,7 +12,7 @@ export const router = {
   tool: toolsRouter,
 
   server: {
-    start: pub
+    start: os
       .input(
         z.object({
           port: z.number().default(3001),

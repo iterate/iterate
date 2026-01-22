@@ -4,8 +4,6 @@ import { WebClient } from "@slack/web-api";
 import { z } from "zod/v4";
 import { os } from "@orpc/server";
 
-const pub = os.$context<object>();
-
 function getSlackClient() {
   const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
   if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
@@ -13,7 +11,7 @@ function getSlackClient() {
 }
 
 export const toolsRouter = {
-  slack: pub
+  slack: os
     .input(
       z.object({
         code: z.string().describe(dedent`
@@ -39,7 +37,7 @@ export const toolsRouter = {
       const result = await _execute(getSlackClient(), require);
       return result;
     }),
-  sendSlackMessage: pub
+  sendSlackMessage: os
     .input(
       z.object({
         channel: z.string().describe("Slack channel (e.g. #general or C1234567890)"),
