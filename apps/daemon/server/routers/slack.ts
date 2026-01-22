@@ -264,7 +264,9 @@ function parseWebhookPayload(
   if (event.type === "message" && "text" in event && event.text && botUserId) {
     const mentionPattern = new RegExp(`<@${botUserId}>`);
     if (mentionPattern.test(event.text)) {
-      return { case: "ignored", reason: "Ignored: duplicate of app_mention event" };
+      // actually maybe it doesn't.
+      // todo: smart deduplication - check if this is actually a duplicate of an app_mention event
+      // return { case: "ignored", reason: "Ignored: duplicate of app_mention event" };
     }
   }
 
