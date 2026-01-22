@@ -1,7 +1,8 @@
-import { implement, ORPCError } from "@orpc/server";
+import { implement, ORPCError, type RouterClient } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and, or, isNull } from "drizzle-orm";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
@@ -11,7 +12,7 @@ import { parseTokenIdFromApiKey } from "../trpc/routers/machine.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
-import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
+import type { orpcRouter as DaemonRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
 /** Initial context provided by the handler */
@@ -21,14 +22,9 @@ export type ORPCContext = RequestHeadersPluginContext & {
   executionCtx: ExecutionContext;
 };
 
-export function createDaemonTrpcClient(baseUrl: string) {
-  return createTRPCClient<TRPCRouter>({
-    links: [
-      httpBatchLink({
-        url: `${baseUrl}/api/trpc`,
-      }),
-    ],
-  });
+export function createDaemonClient(baseUrl: string): RouterClient<typeof DaemonRouter> {
+  const link = new RPCLink({ url: `${baseUrl}/api/trpc` });
+  return createORPCClient(link);
 }
 
 const os = implement(workerContract).$context<ORPCContext>();

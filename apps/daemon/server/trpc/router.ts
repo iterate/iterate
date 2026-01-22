@@ -11,7 +11,7 @@ import {
   listTmuxSessions,
   type TmuxSession,
 } from "../tmux-control.ts";
-import { createTRPCRouter, publicProcedure } from "./init.ts";
+import { pub } from "./init.ts";
 import { platformRouter } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
@@ -44,28 +44,28 @@ function serializeTmuxSession(session: TmuxSession): SerializedTmuxSession {
   };
 }
 
-export const trpcRouter = createTRPCRouter({
+export const orpcRouter = {
   platform: platformRouter,
-  hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
+  hello: pub.handler(() => ({ message: "Hello from oRPC!" })),
 
-  getServerCwd: publicProcedure.query(() => {
+  getServerCwd: pub.handler(() => {
     return { cwd: process.cwd(), homeDir: homedir() };
   }),
 
   // ============ Utility tmux sessions (for btop, logs, etc - NOT agents) ============
 
-  listTmuxSessions: publicProcedure.query((): SerializedTmuxSession[] => {
+  listTmuxSessions: pub.handler((): SerializedTmuxSession[] => {
     return listTmuxSessions().map(serializeTmuxSession);
   }),
 
-  ensureTmuxSession: publicProcedure
+  ensureTmuxSession: pub
     .input(
       z.object({
         sessionName: z.string(),
         command: z.string(),
       }),
     )
-    .mutation(({ input }): { created: boolean } => {
+    .handler(({ input }): { created: boolean } => {
       if (hasTmuxSession(input.sessionName)) {
         return { created: false };
       }
@@ -75,7 +75,7 @@ export const trpcRouter = createTRPCRouter({
 
   // ============ Agent CRUD ============
 
-  listAgents: publicProcedure.query(async (): Promise<SerializedAgent[]> => {
+  listAgents: pub.handler(async (): Promise<SerializedAgent[]> => {
     const agents = await db
       .select()
       .from(schema.agents)
@@ -84,9 +84,9 @@ export const trpcRouter = createTRPCRouter({
     return agents.map(serializeAgent);
   }),
 
-  getAgent: publicProcedure
+  getAgent: pub
     .input(z.object({ slug: z.string() }))
-    .query(async ({ input }): Promise<SerializedAgent | null> => {
+    .handler(async ({ input }): Promise<SerializedAgent | null> => {
       const result = await db
         .select()
         .from(schema.agents)
@@ -103,7 +103,7 @@ export const trpcRouter = createTRPCRouter({
    * Create an agent using the harness system.
    * For opencode agents, this creates an SDK session - no tmux.
    */
-  createAgent: publicProcedure
+  createAgent: pub
     .input(
       z.object({
         slug: z
@@ -115,7 +115,7 @@ export const trpcRouter = createTRPCRouter({
         initialPrompt: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }): Promise<SerializedAgent> => {
+    .handler(async ({ input }): Promise<SerializedAgent> => {
       const result = await getOrCreateAgent({
         slug: input.slug,
         harnessType: input.harnessType,
@@ -126,9 +126,9 @@ export const trpcRouter = createTRPCRouter({
       return serializeAgent(result.agent);
     }),
 
-  deleteAgent: publicProcedure
+  deleteAgent: pub
     .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+    .handler(async ({ input }): Promise<{ success: boolean }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -145,9 +145,9 @@ export const trpcRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  archiveAgent: publicProcedure
+  archiveAgent: pub
     .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+    .handler(async ({ input }): Promise<{ success: boolean }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -168,7 +168,7 @@ export const trpcRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  clearAllAgents: publicProcedure.mutation(async (): Promise<{ archivedCount: number }> => {
+  clearAllAgents: pub.handler(async (): Promise<{ archivedCount: number }> => {
     const activeAgents = await db
       .select()
       .from(schema.agents)
@@ -190,9 +190,9 @@ export const trpcRouter = createTRPCRouter({
   // For opencode agents, sessions are always running via SDK
   // These procedures just update DB status
 
-  startAgent: publicProcedure
+  startAgent: pub
     .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
+    .handler(async ({ input }): Promise<{ success: boolean; error?: string }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -212,9 +212,9 @@ export const trpcRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  stopAgent: publicProcedure
+  stopAgent: pub
     .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+    .handler(async ({ input }): Promise<{ success: boolean }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -234,9 +234,9 @@ export const trpcRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  resetAgent: publicProcedure
+  resetAgent: pub
     .input(z.object({ slug: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean; error?: string }> => {
+    .handler(async ({ input }): Promise<{ success: boolean; error?: string }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -260,10 +260,10 @@ export const trpcRouter = createTRPCRouter({
   // ============ Daemon Lifecycle ============
 
   /**
-   * Restart the daemon process. The s6 supervisor will automatically restart it.
+   * Restart the daemon process. The pm2/s6 supervisor will automatically restart it.
    * This is much faster than restarting the entire Daytona sandbox.
    */
-  restartDaemon: publicProcedure.mutation(async (): Promise<{ success: boolean }> => {
+  restartDaemon: pub.handler(async (): Promise<{ success: boolean }> => {
     // Import lazily to avoid circular dependency issues at startup
     const { reportStatusToPlatform } = await import("../start.ts");
 
@@ -272,16 +272,16 @@ export const trpcRouter = createTRPCRouter({
       console.error("[restartDaemon] Failed to report stopping status:", err);
     });
 
-    // Schedule exit after responding - s6 will restart us
+    // Schedule exit after responding - supervisor will restart us
     setTimeout(() => {
-      console.log("[restartDaemon] Exiting for s6 restart...");
+      console.log("[restartDaemon] Exiting for supervisor restart...");
       process.exit(0);
     }, 100);
 
     return { success: true };
   }),
-});
+};
 
-export type TRPCRouter = typeof trpcRouter;
+export type ORPCRouter = typeof orpcRouter;
 
 export type { SerializedAgent, SerializedTmuxSession };

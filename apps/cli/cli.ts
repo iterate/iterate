@@ -1,10 +1,10 @@
 /**
  * Iterate CLI
  *
- * Built with trpc-cli - turn tRPC routers into CLIs
+ * Built with trpc-cli - turn oRPC routers into CLIs
  *
  * Commands:
- *   daemon <procedure>     - Daemon tRPC procedures (listAgents, startAgent, etc.)
+ *   daemon <procedure>     - Daemon oRPC procedures (listAgents, startAgent, etc.)
  *   agents <action>        - Agent management (list, get, start, stop)
  *   tool <action>          - Tool invocations (sendSlackMessage, sendEmail)
  */

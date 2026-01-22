@@ -1,28 +1,14 @@
-import type { TRPCClient } from "@trpc/client";
-import { createTRPCClient, httpBatchStreamLink } from "@trpc/client";
-import { createTRPCContext } from "@trpc/tanstack-react-query";
-import type { QueryClient } from "@tanstack/react-query";
-import type { TRPCRouter } from "@server/trpc/router.ts";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import { createTanstackQueryUtils } from "@orpc/tanstack-query";
+import type { RouterClient } from "@orpc/server";
+import type { orpcRouter } from "@server/trpc/router.ts";
 
-const context = createTRPCContext<TRPCRouter>();
-
-// Wrapper to avoid TS2742 "type cannot be named" issue with re-exported context provider
-export function TRPCProvider(props: {
-  children: React.ReactNode;
-  queryClient: QueryClient;
-  trpcClient: TRPCClient<TRPCRouter>;
-}) {
-  return <context.TRPCProvider {...props} />;
-}
-// eslint-disable-next-line react-refresh/only-export-components -- Context exports are intentionally grouped with trpcClient
-export const useTRPC = context.useTRPC;
-
-// eslint-disable-next-line react-refresh/only-export-components -- trpcClient is intentionally exported alongside components for centralized tRPC configuration
-export const trpcClient = createTRPCClient<TRPCRouter>({
-  links: [
-    httpBatchStreamLink({
-      url: "api/trpc",
-      methodOverride: "POST",
-    }),
-  ],
+const link = new RPCLink({
+  url: "api/trpc",
+  method: "POST",
 });
+
+export const orpcClient: RouterClient<typeof orpcRouter> = createORPCClient(link);
+
+export const orpc = createTanstackQueryUtils(orpcClient);

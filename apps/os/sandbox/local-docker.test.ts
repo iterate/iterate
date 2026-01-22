@@ -11,9 +11,11 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTRPCClient, httpLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
+import type { orpcRouter as DaemonRouter } from "../../daemon/server/trpc/router.ts";
 import { dockerApi, execInContainer } from "./test-helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -137,10 +139,9 @@ async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<voi
   throw new Error("Timeout waiting for daemon to be ready");
 }
 
-function createDaemonTrpcClient(port: number) {
-  return createTRPCClient<TRPCRouter>({
-    links: [httpLink({ url: `http://localhost:${port}/api/trpc` })],
-  });
+function createDaemonClient(port: number): RouterClient<typeof DaemonRouter> {
+  const link = new RPCLink({ url: `http://localhost:${port}/api/trpc` });
+  return createORPCClient(link);
 }
 
 // ============ Tests ============
@@ -319,23 +320,23 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       );
       expect(ptyResponse.status).not.toBe(404);
 
-      // tmux via tRPC
-      const trpc = createDaemonTrpcClient(container.port!);
+      // tmux via oRPC
+      const client = createDaemonClient(container.port!);
       const sessionName = `test-${Date.now()}`;
-      const createResult = await trpc.ensureTmuxSession.mutate({
+      const createResult = await client.ensureTmuxSession({
         sessionName,
         command: "bash",
       });
       expect(createResult.created).toBe(true);
 
-      const sessions = await trpc.listTmuxSessions.query();
+      const sessions = await client.listTmuxSessions();
       expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
       await waitForDaemonReady(container.port!);
       const baseUrl = `http://localhost:${container.port}`;
-      const trpc = createDaemonTrpcClient(container.port!);
+      const client = createDaemonClient(container.port!);
 
       // index.html
       const root = await fetch(`${baseUrl}/`);
@@ -348,8 +349,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const health = await fetch(`${baseUrl}/api/health`);
       expect(health.ok).toBe(true);
 
-      // tRPC
-      const cwd = await trpc.getServerCwd.query();
+      // oRPC
+      const cwd = await client.getServerCwd();
       expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
 
       // CSS/JS bundles

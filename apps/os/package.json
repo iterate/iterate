@@ -65,8 +65,6 @@
     "@tanstack/react-router-ssr-query": "^1.147.3",
     "@tanstack/react-start": "^1.149.1",
     "@tanstack/virtual-file-routes": "^1.145.4",
-    "@trpc/client": "^11.8.1",
-    "@trpc/server": "^11.8.1",
     "alchemy": "^0.79.0",
     "arctic": "^3.7.0",
     "better-auth": "1.4.3",

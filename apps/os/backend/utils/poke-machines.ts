@@ -1,25 +1,21 @@
 import { eq, and } from "drizzle-orm";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { createMachineProvider } from "../providers/index.ts";
+import type { orpcRouter as DaemonRouter } from "../../../daemon/server/trpc/router.ts";
 
-import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
-
-function createDaemonTrpcClient(baseUrl: string) {
-  return createTRPCClient<TRPCRouter>({
-    links: [
-      httpBatchLink({
-        url: `${baseUrl}/api/trpc`,
-      }),
-    ],
-  });
+function createDaemonClient(baseUrl: string): RouterClient<typeof DaemonRouter> {
+  const link = new RPCLink({ url: `${baseUrl}/api/trpc` });
+  return createORPCClient(link);
 }
 
 /**
- * Build the daemon tRPC base URL for a machine using the provider.
+ * Build the daemon oRPC base URL for a machine using the provider.
  */
 async function buildDaemonBaseUrl(
   machine: typeof schema.machine.$inferSelect,
@@ -62,10 +58,10 @@ async function pokeMachineToRefresh(
     return;
   }
 
-  const client = createDaemonTrpcClient(daemonBaseUrl);
+  const client = createDaemonClient(daemonBaseUrl);
 
   try {
-    await client.platform.refreshEnv.mutate();
+    await client.platform.refreshEnv();
     logger.info("[poke-machines] Poked machine to refresh env", { machineId: machine.id });
   } catch (err) {
     logger.error("[poke-machines] Failed to poke machine for refresh", err);

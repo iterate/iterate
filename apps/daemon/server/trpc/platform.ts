@@ -5,7 +5,7 @@ import { simpleGit } from "simple-git";
 import { quote } from "shell-quote";
 import { x } from "tinyexec";
 import { getTmuxSocketPath } from "../tmux-control.ts";
-import { createTRPCRouter, publicProcedure } from "./init.ts";
+import { pub } from "./init.ts";
 
 // Store for platform-injected env vars
 const platformEnvVars: Record<string, string> = {};
@@ -250,13 +250,13 @@ async function cloneRepo(url: string, targetPath: string, branch: string): Promi
   }
 }
 
-export const platformRouter = createTRPCRouter({
+export const platformRouter = {
   /**
    * Trigger an immediate refresh of bootstrap data from the control plane.
    * Called by the control plane after events like Slack OAuth to notify the daemon
    * that new env vars or tokens are available.
    */
-  refreshEnv: publicProcedure.mutation(async () => {
+  refreshEnv: pub.handler(async () => {
     // Import dynamically to avoid circular dependencies
     const { fetchBootstrapData } = await import("../bootstrap-refresh.ts");
     try {
@@ -267,6 +267,6 @@ export const platformRouter = createTRPCRouter({
       return { success: false };
     }
   }),
-});
+};
 
 export type PlatformRouter = typeof platformRouter;

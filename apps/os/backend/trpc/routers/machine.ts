@@ -1,7 +1,9 @@
 import { z } from "zod/v4";
 import { eq, and, isNull, or, gt, ne } from "drizzle-orm";
 import { typeid } from "typeid-js";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { ORPCError, publicProcedure, withProjectInput, withProjectMutationInput } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
@@ -10,16 +12,11 @@ import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
-import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+import type { orpcRouter as DaemonRouter } from "../../../../daemon/server/trpc/router.ts";
 
-function createDaemonTrpcClient(baseUrl: string) {
-  return createTRPCClient<DaemonTRPCRouter>({
-    links: [
-      httpBatchLink({
-        url: `${baseUrl}/api/trpc`,
-      }),
-    ],
-  });
+function createDaemonClient(baseUrl: string): RouterClient<typeof DaemonRouter> {
+  const link = new RPCLink({ url: `${baseUrl}/api/trpc` });
+  return createORPCClient(link);
 }
 
 /** Service URL options for a daemon */
@@ -492,8 +489,8 @@ export const machineRouter = {
     });
 
     // Call daemon's restartDaemon endpoint
-    const daemonClient = createDaemonTrpcClient(provider.previewUrl);
-    await daemonClient.restartDaemon.mutate().catch((err: unknown) => {
+    const daemonClient = createDaemonClient(provider.previewUrl);
+    await daemonClient.restartDaemon().catch((err: unknown) => {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
         message: `Failed to restart daemon: ${err instanceof Error ? err.message : String(err)}`,
       });
@@ -637,8 +634,8 @@ export const machineRouter = {
         metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
         buildProxyUrl: () => "", // Not used here
       });
-      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
-      const agents = await daemonClient.listAgents.query();
+      const daemonClient = createDaemonClient(provider.previewUrl);
+      const agents = await daemonClient.listAgents();
       return { agents };
     } catch (err) {
       logger.error("Failed to fetch agents from daemon", err);

@@ -3,7 +3,7 @@ import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { Suspense } from "react";
 import { PlusIcon, Loader2Icon, PlayIcon, SquareIcon, TrashIcon, BotIcon } from "lucide-react";
 import type { AgentStatus } from "@server/db/schema.ts";
-import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpc } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import {
@@ -39,33 +39,33 @@ function AgentsLoading() {
 
 function AgentsContent() {
   const navigate = useNavigate();
-  const trpc = useTRPC();
+
   const queryClient = useQueryClient();
   const { data: agents } = useSuspenseQuery({
-    ...trpc.listAgents.queryOptions(),
+    ...orpc.listAgents.queryOptions(),
     refetchInterval: false,
     refetchOnWindowFocus: false,
   });
   const startAgentMutation = useMutation(
-    trpc.startAgent.mutationOptions({
+    orpc.startAgent.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       },
     }),
   );
 
   const stopAgentMutation = useMutation(
-    trpc.stopAgent.mutationOptions({
+    orpc.stopAgent.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       },
     }),
   );
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    orpc.archiveAgent.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       },
     }),
   );

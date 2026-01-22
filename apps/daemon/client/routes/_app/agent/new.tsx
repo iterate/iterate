@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
-import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpc, orpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 
 export const Route = createFileRoute("/_app/agent/new")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -60,9 +60,8 @@ function slugify(text: string): string {
 function NewAgentForm() {
   const navigate = useNavigate();
   const { name: initialName } = Route.useSearch();
-  const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const { data: serverInfo } = useSuspenseQuery(trpc.getServerCwd.queryOptions());
+  const { data: serverInfo } = useSuspenseQuery(orpc.getServerCwd.queryOptions());
   const { cwd: defaultCwd, homeDir } = serverInfo;
 
   const [slug, setSlug] = useState(initialName ?? "");
@@ -76,13 +75,13 @@ function NewAgentForm() {
 
   const createAgent = useMutation({
     mutationFn: () =>
-      trpcClient.createAgent.mutate({
+      orpcClient.createAgent({
         slug: slugify(slug),
         harnessType,
         workingDirectory,
       }),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       navigate({ to: "/agents/$slug", params: { slug: result.slug } });
     },
   });

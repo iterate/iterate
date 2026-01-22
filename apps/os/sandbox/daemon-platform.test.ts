@@ -17,19 +17,16 @@ import { execSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTRPCClient, httpLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
+import type { orpcRouter as DaemonRouter } from "../../daemon/server/trpc/router.ts";
 import { dockerApi, execInContainer, waitForFileLogPattern } from "./test-helpers.ts";
 
-function createDaemonTrpcClient(port: number) {
-  return createTRPCClient<TRPCRouter>({
-    links: [
-      httpLink({
-        url: `http://localhost:${port}/api/trpc`,
-      }),
-    ],
-  });
+function createDaemonClient(port: number): RouterClient<typeof DaemonRouter> {
+  const link = new RPCLink({ url: `http://localhost:${port}/api/trpc` });
+  return createORPCClient(link);
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -177,10 +174,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
   });
 
   test("refreshEnv fetches env vars from control plane and applies them", async () => {
-    const client = createDaemonTrpcClient(DAEMON_PORT);
+    const client = createDaemonClient(DAEMON_PORT);
 
     // Call refreshEnv - this should fetch from our mock control plane
-    const result = await client.platform.refreshEnv.mutate();
+    const result = await client.platform.refreshEnv();
     expect(result).toEqual({ success: true });
 
     // Verify the env file was written with our test vars
@@ -195,8 +192,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
 
   test("env vars are available in new shell sessions", async () => {
     // First ensure env vars are loaded
-    const client = createDaemonTrpcClient(DAEMON_PORT);
-    await client.platform.refreshEnv.mutate();
+    const client = createDaemonClient(DAEMON_PORT);
+    await client.platform.refreshEnv();
 
     // Source the env file and check the var (simulates what a new shell would do)
     // Use bash since sh doesn't have `source`, or use `. ` syntax
@@ -209,10 +206,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
   });
 
   test("env vars update when refreshEnv is called again", async () => {
-    const client = createDaemonTrpcClient(DAEMON_PORT);
+    const client = createDaemonClient(DAEMON_PORT);
 
     // First refresh
-    await client.platform.refreshEnv.mutate();
+    await client.platform.refreshEnv();
 
     // Verify initial value
     const envFileContent = await execInContainer(containerId, [
@@ -233,7 +230,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     await new Promise((r) => setTimeout(r, 1100));
 
     // Refresh again
-    await client.platform.refreshEnv.mutate();
+    await client.platform.refreshEnv();
 
     const afterMtime = await execInContainer(containerId, [
       "stat",

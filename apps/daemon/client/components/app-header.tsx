@@ -32,7 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
-import { trpcClient, useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpcClient, orpc } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { HEADER_ACTIONS_ID } from "@/components/header-actions-constants.ts";
 
 interface AppHeaderProps {
@@ -42,7 +42,6 @@ interface AppHeaderProps {
 
 export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const location = useLocation();
-  const trpc = useTRPC();
   const queryClient = useQueryClient();
 
   const isAgentRoute = location.pathname.startsWith("/agents/");
@@ -51,7 +50,7 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const isBtopRoute = location.pathname === "/btop";
 
   const { data: tmuxSessions = [] } = useQuery({
-    ...trpc.listTmuxSessions.queryOptions(),
+    ...orpc.listTmuxSessions.queryOptions(),
     enabled: isTerminalRoute,
   });
 
@@ -60,9 +59,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   };
 
   const resetAgent = useMutation({
-    mutationFn: () => trpcClient.resetAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => orpcClient.resetAgent({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       toast.success("Agent reset");
     },
     onError: () => {
@@ -71,9 +70,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   });
 
   const stopAgent = useMutation({
-    mutationFn: () => trpcClient.stopAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => orpcClient.stopAgent({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       queryClient.removeQueries({ queryKey: ["ensureAgentStarted", agent!.slug] });
       toast.success("Agent stopped");
     },
@@ -83,9 +82,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   });
 
   const deleteAgent = useMutation({
-    mutationFn: () => trpcClient.deleteAgent.mutate({ slug: agent!.slug }),
+    mutationFn: () => orpcClient.deleteAgent({ slug: agent!.slug }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
       toast.success("Agent deleted");
     },
     onError: () => {

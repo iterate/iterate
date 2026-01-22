@@ -3,7 +3,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, LoaderIcon } from "lucide-react";
 import type { SerializedAgent } from "../../../../server/trpc/router.ts";
-import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpc, orpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
 
 const XtermTerminal = lazy(() =>
@@ -38,7 +38,7 @@ function getAgentCommand(agent: SerializedAgent): string | undefined {
 
 export const Route = createFileRoute("/_app/agents/$slug")({
   beforeLoad: async ({ params }) => {
-    const agent = await trpcClient.getAgent.query({ slug: params.slug });
+    const agent = await orpcClient.getAgent({ slug: params.slug });
     if (!agent) {
       throw redirect({
         to: "/agents/new",
@@ -51,9 +51,7 @@ export const Route = createFileRoute("/_app/agents/$slug")({
 
 function AgentPage() {
   const { slug } = Route.useParams();
-  const trpc = useTRPC();
-
-  const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ slug }));
+  const { data: agent } = useSuspenseQuery(orpc.getAgent.queryOptions({ input: { slug } }));
   useEnsureAgentStarted(slug);
 
   // Get the command to run for agents without tmux sessions

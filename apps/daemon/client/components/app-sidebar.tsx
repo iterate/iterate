@@ -4,7 +4,7 @@ import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, ActivityIcon } from "l
 
 import type { SerializedAgent } from "@server/trpc/router.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
-import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpc } from "@/integrations/tanstack-query/trpc-client.tsx";
 
 import {
   Sidebar,
@@ -29,13 +29,12 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
   const location = useLocation();
   const selectedSlug = "slug" in params ? (params.slug as string) : null;
   const currentPath = location.pathname;
-  const trpc = useTRPC();
   const queryClient = useQueryClient();
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    orpc.archiveAgent.mutationOptions({
       onSuccess: (_data, variables) => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: orpc.listAgents.queryKey() });
         if (variables.slug === selectedSlug) {
           navigate({ to: "/agents" });
         }
