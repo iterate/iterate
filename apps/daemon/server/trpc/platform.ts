@@ -80,6 +80,10 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 # replaces getIterateSecret() strings in both headers AND the URL path.
 # =====================================
 
+# Enable Node.js fetch to respect HTTPS_PROXY (required for egress proxy)
+# See: https://github.com/nodejs/node/issues/57165
+export NODE_USE_ENV_PROXY=1
+
 `;
 
   const envFileContent =
@@ -106,7 +110,8 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
       path: envFilePath,
       bytesWritten: envFileContent.length,
     });
-    // Services watch the env file via inotifywait and restart themselves
+
+    // Services watch the env file and restart themselves when it changes
   } else {
     console.log("[platform] Env vars unchanged, skipping write");
   }
@@ -226,10 +231,53 @@ export function cloneRepos(repos: RepoInfo[]): void {
 }
 
 /**
+ * Check if an error is a proxy connection failure (mitmproxy not ready yet)
+ */
+function isProxyConnectionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("127.0.0.1 port 8888") || msg.includes("Couldn't connect to server");
+}
+
+/**
+ * Sleep for a given number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Clone a repository to the specified path.
  * Uses simple-git to avoid shell injection vulnerabilities.
+ * Retries on proxy connection failures (mitmproxy may not be ready on startup).
  */
-async function cloneRepo(url: string, targetPath: string, branch: string): Promise<void> {
+async function cloneRepo(
+  url: string,
+  targetPath: string,
+  branch: string,
+  retryCount = 0,
+): Promise<void> {
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY_MS = 2000; // 2 seconds between retries
+
+  try {
+    await cloneRepoInternal(url, targetPath, branch);
+  } catch (err) {
+    // Retry on proxy connection failures (mitmproxy may not be ready yet)
+    if (isProxyConnectionError(err) && retryCount < MAX_RETRIES) {
+      console.log(
+        `[platform] Proxy not ready, retrying clone in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
+      );
+      await sleep(RETRY_DELAY_MS);
+      return cloneRepo(url, targetPath, branch, retryCount + 1);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Internal clone implementation (no retry logic)
+ */
+async function cloneRepoInternal(url: string, targetPath: string, branch: string): Promise<void> {
   // Create parent directory if needed
   const parentDir = dirname(targetPath);
   if (!existsSync(parentDir)) {

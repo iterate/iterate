@@ -231,7 +231,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const machineId = machine.id;
 
   // Run all DB queries in parallel
-  const [projectEnvVars, githubConnection, slackConnection, projectRepos] = await Promise.all([
+  const [projectEnvVars, githubConnection, slackSecret, projectRepos] = await Promise.all([
     db.query.projectEnvVar.findMany({
       where: and(
         eq(schema.projectEnvVar.projectId, project.id),
@@ -243,9 +243,15 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       where: (conn, { and: whereAnd, eq: whereEq }) =>
         whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
     }),
-    db.query.projectConnection.findFirst({
-      where: (conn, { and: whereAnd, eq: whereEq }) =>
-        whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "slack")),
+    // Check if Slack secret exists (to conditionally inject magic string)
+    db.query.secret.findFirst({
+      columns: { id: true },
+      where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+        whereAnd(
+          whereEq(s.projectId, project.id),
+          whereEq(s.key, "slack.access_token"),
+          whereIsNull(s.userId), // Only match project-scoped secrets
+        ),
     }),
     db.query.projectRepo.findMany({
       where: eq(schema.projectRepo.projectId, project.id),
@@ -261,7 +267,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     }
   }
 
-  // Decrypt env vars, Slack token, and fetch repo info in parallel
+  // Process env vars and fetch repo info in parallel
   type RepoInfo = {
     url: string;
     branch: string;
@@ -270,7 +276,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     name: string;
   };
 
-  const [decryptedEnvVars, slackToken, repoResults] = await Promise.all([
+  const [decryptedEnvVars, repoResults] = await Promise.all([
     // Env vars are now stored plain text (secrets go in the secret table)
     Promise.resolve(
       projectEnvVars.map((envVar) => ({
@@ -279,18 +285,6 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
         machineId: envVar.machineId,
       })),
     ),
-    // Decrypt Slack token if available
-    (async () => {
-      if (!slackConnection) return null;
-      const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
-      if (!providerData.encryptedAccessToken) return null;
-      try {
-        return await decrypt(providerData.encryptedAccessToken);
-      } catch (err) {
-        logger.error("Failed to decrypt Slack token", err);
-        return null;
-      }
-    })(),
     // Fetch repo info for all repos
     installationToken && projectRepos.length > 0
       ? Promise.all(
@@ -330,11 +324,13 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   envVars["OPENAI_API_KEY"] = "getIterateSecret({secretKey: 'openai_api_key'})";
   envVars["ANTHROPIC_API_KEY"] = "getIterateSecret({secretKey: 'anthropic_api_key'})";
 
-  // Add tokens from connections
-  // Note: GitHub token is NOT injected here - it's handled via magic string in GIT_CONFIG_* env vars
-  // which the egress proxy resolves. This avoids token rotation issues.
-  if (slackToken) {
-    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = slackToken;
+  // GitHub CLI needs GH_TOKEN/GITHUB_TOKEN env vars - use magic string for egress proxy resolution
+  envVars["GH_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
+  envVars["GITHUB_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
+
+  // Slack token via magic string (only if Slack is connected to this project)
+  if (slackSecret) {
+    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = "getIterateSecret({secretKey: 'slack.access_token'})";
   }
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);

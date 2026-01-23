@@ -9,24 +9,7 @@ ENV_FILE="$HOME/.iterate/.env"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT=$(node -p "require('$SCRIPT_DIR/metadata.json').port")
 
-# Background watcher that restarts this service when env file changes
-# inotifywait -e modify/create watches for file changes
-# On change: sleep to debounce, then trigger s6-svc restart
-watch_env() {
-  while inotifywait -qq -e modify -e create -e delete_self "$ENV_FILE" 2>/dev/null; do
-    sleep 0.5  # Debounce rapid writes
-    echo "Env file changed, restarting to pick up new values..."
-    s6-svc -r "$SCRIPT_DIR"
-    break  # Exit watcher after triggering restart
-  done
-}
-watch_env &
-WATCHER_PID=$!
-
-# Clean up watcher on exit
-trap "kill $WATCHER_PID 2>/dev/null" EXIT
-
 # Use tini to forward signals to entire process group and reap zombies
 # -s: subreaper mode (catches orphaned processes)
 # -g: kills entire process group on SIGTERM
-tini -sg -- opencode serve --port "$PORT" --hostname 0.0.0.0 --log-level DEBUG
+exec tini -sg -- opencode serve --port "$PORT" --hostname 0.0.0.0 --log-level DEBUG

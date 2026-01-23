@@ -39,7 +39,9 @@ export interface CloudflareEnv {
 
   // Daytona
   DAYTONA_API_KEY: string;
-  DAYTONA_SNAPSHOT_PREFIX: string;
+  DAYTONA_SNAPSHOT_NAME?: string;
+  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL?: string;
+  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL?: string;
 
   // OAuth providers
   GOOGLE_CLIENT_ID: string;

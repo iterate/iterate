@@ -216,10 +216,9 @@ githubApp.get(
         const tokenToStore = installationToken || accessToken;
         const encryptedToken = await encrypt(tokenToStore);
 
-        // Store installationId in metadata so we can regenerate tokens on 401
-        const secretMetadata = {
-          githubInstallationId: installation_id,
-        };
+        // Only store installationId in metadata if we have an installation token
+        // If we fell back to user token, don't store installationId (would cause refresh failures)
+        const secretMetadata = installationToken ? { githubInstallationId: installation_id } : {};
 
         const existingSecret = await tx.query.secret.findFirst({
           where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>

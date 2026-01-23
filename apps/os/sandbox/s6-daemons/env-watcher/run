@@ -1,0 +1,16 @@
+#!/bin/sh
+exec 2>&1
+
+ENV_FILE="$HOME/.iterate/.env"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OPENCODE_SERVICE="$(dirname "$SCRIPT_DIR")/opencode"
+
+echo "[env-watcher] Watching $ENV_FILE for changes..."
+
+# Use inotifywait in monitor mode (-m) to continuously watch
+# When file changes, restart opencode service
+exec inotifywait -m -q -e modify -e create "$ENV_FILE" | while read -r _; do
+  echo "[env-watcher] Env file changed, restarting opencode..."
+  sleep 0.5  # Debounce rapid writes
+  s6-svc -r "$OPENCODE_SERVICE" 2>/dev/null || true
+done

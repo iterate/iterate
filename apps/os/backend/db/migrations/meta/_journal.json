@@ -50,6 +50,13 @@
       "when": 1768988430731,
       "tag": "0006_machine-states-starting-active",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1769178447630,
+      "tag": "0007_wild_tombstone",
+      "breakpoints": true
     }
   ]
 }

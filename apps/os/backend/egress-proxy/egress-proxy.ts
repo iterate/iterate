@@ -38,11 +38,18 @@ import type { Variables } from "../types.ts";
 import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
 
 // Cache for compiled JSONata expressions (module-level, persists across requests in same isolate)
+// Limited to 100 entries to prevent unbounded memory growth
+const JSONATA_CACHE_MAX_SIZE = 100;
 const jsonataCache = new Map<string, Expression>();
 
 function getCompiledJsonata(expression: string): Expression {
   let compiled = jsonataCache.get(expression);
   if (!compiled) {
+    // Evict oldest entry if cache is full (simple FIFO eviction)
+    if (jsonataCache.size >= JSONATA_CACHE_MAX_SIZE) {
+      const firstKey = jsonataCache.keys().next().value;
+      if (firstKey) jsonataCache.delete(firstKey);
+    }
     compiled = jsonata(expression);
     jsonataCache.set(expression, compiled);
   }
