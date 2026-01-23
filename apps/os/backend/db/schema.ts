@@ -28,6 +28,8 @@ export type SecretMetadata = {
   scopes?: string[];
   // Connection ID this secret is associated with
   connectionId?: string;
+  // GitHub App installation ID for regenerating installation tokens
+  githubInstallationId?: number;
 };
 
 export const withTimestamps = {

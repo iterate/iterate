@@ -26,7 +26,7 @@
 import { Hono } from "hono";
 import { eq, and, isNull, or } from "drizzle-orm";
 import JSON5 from "json5";
-import jsonata from "jsonata";
+import jsonata, { type Expression } from "jsonata";
 import { logger } from "../tag-logger.ts";
 import * as schema from "../db/schema.ts";
 import { decrypt } from "../utils/encryption.ts";
@@ -36,6 +36,18 @@ import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-ref
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
+
+// Cache for compiled JSONata expressions (module-level, persists across requests in same isolate)
+const jsonataCache = new Map<string, Expression>();
+
+function getCompiledJsonata(expression: string): Expression {
+  let compiled = jsonataCache.get(expression);
+  if (!compiled) {
+    compiled = jsonata(expression);
+    jsonataCache.set(expression, compiled);
+  }
+  return compiled;
+}
 
 export const egressProxyApp = new Hono<{
   Bindings: CloudflareEnv;
@@ -87,6 +99,17 @@ export type EgressContext = {
   projectSlug?: string;
   originalUrl: string;
 };
+
+// Request-scoped cache for secrets (avoids duplicate DB lookups within a single request)
+type SecretCacheEntry = { value: string; secretId: string; egressProxyRule?: string };
+type RequestSecretCache = Map<string, SecretCacheEntry | null>;
+
+function makeSecretCacheKey(
+  secretKey: string,
+  context: { organizationId?: string; projectId?: string; userId?: string },
+): string {
+  return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}`;
+}
 
 /**
  * Parse the magic string arguments using JSON5.
@@ -158,7 +181,8 @@ export async function matchesEgressRule(
       },
       headers: headers ?? {},
     };
-    const expr = jsonata(expression);
+    // Use cached compiled expression
+    const expr = getCompiledJsonata(expression);
     const result = await expr.evaluate(context);
     return !!result;
   } catch (err) {
@@ -177,6 +201,8 @@ export async function matchesEgressRule(
  *
  * Note: This returns the egressProxyRule but does NOT enforce it.
  * Callers must use matchesEgressRule() to verify the rule allows the request.
+ *
+ * Uses request-scoped cache to avoid duplicate DB lookups for the same secret.
  */
 async function lookupSecret(
   db: DB,
@@ -186,7 +212,13 @@ async function lookupSecret(
     projectId?: string;
     userId?: string;
   },
+  cache?: RequestSecretCache,
 ): Promise<{ value: string; secretId: string; egressProxyRule?: string } | null> {
+  // Check cache first
+  const cacheKey = makeSecretCacheKey(secretKey, context);
+  if (cache?.has(cacheKey)) {
+    return cache.get(cacheKey) ?? null;
+  }
   // Build conditions for each scope level
   const conditions = [];
 
@@ -241,7 +273,10 @@ async function lookupSecret(
     where: or(...conditions),
   });
 
-  if (secrets.length === 0) return null;
+  if (secrets.length === 0) {
+    cache?.set(cacheKey, null);
+    return null;
+  }
 
   // Sort by specificity (more specific = higher priority)
   // User > Project > Org > Global
@@ -262,11 +297,16 @@ async function lookupSecret(
       .where(eq(schema.secret.id, bestMatch.id)),
   );
 
-  return {
+  const result = {
     value: decryptedValue,
     secretId: bestMatch.id,
     egressProxyRule: bestMatch.egressProxyRule ?? undefined,
   };
+
+  // Cache the result
+  cache?.set(cacheKey, result);
+
+  return result;
 }
 
 /**
@@ -278,12 +318,13 @@ async function resolveSecret(
   db: DB,
   secretKey: string,
   context: EgressContext,
+  cache?: RequestSecretCache,
 ): Promise<SecretResult> {
   // Determine if this is a connector request based on the URL
   const connector = getConnectorForUrl(context.originalUrl);
   const urlContext = { orgSlug: context.orgSlug, projectSlug: context.projectSlug };
 
-  // Look up the secret
+  // Look up the secret (uses request-scoped cache if provided)
   logger.info("Looking up secret", {
     secretKey,
     organizationId: context.organizationId,
@@ -291,11 +332,16 @@ async function resolveSecret(
     userId: context.userId,
   });
 
-  const secret = await lookupSecret(db, secretKey, {
-    organizationId: context.organizationId,
-    projectId: context.projectId,
-    userId: context.userId,
-  });
+  const secret = await lookupSecret(
+    db,
+    secretKey,
+    {
+      organizationId: context.organizationId,
+      projectId: context.projectId,
+      userId: context.userId,
+    },
+    cache,
+  );
 
   logger.info("Secret lookup result", {
     secretKey,
@@ -379,6 +425,7 @@ async function replaceMagicStrings(
   db: DB,
   input: string,
   context: EgressContext,
+  cache?: RequestSecretCache,
 ): Promise<ReplaceMagicStringsResult> {
   const matches = [...input.matchAll(MAGIC_STRING_PATTERN)];
   if (matches.length === 0) {
@@ -400,7 +447,7 @@ async function replaceMagicStrings(
     // Use resolveSecret with full context for connector-aware errors
     // Note: We intentionally ignore parsed.userId from magic strings to prevent cross-user access
     // User-scoped secrets are only accessible via the authenticated session context
-    const secretResult = await resolveSecret(db, parsed.secretKey, context);
+    const secretResult = await resolveSecret(db, parsed.secretKey, context, cache);
 
     if (!secretResult.ok) {
       // Return the error immediately - don't continue with partial replacement
@@ -432,6 +479,7 @@ async function processHeaderValue(
   headerName: string,
   headerValue: string,
   context: EgressContext,
+  cache?: RequestSecretCache,
 ): Promise<ReplaceMagicStringsResult> {
   // Check if this is a Basic auth header
   const basicAuthMatch = headerValue.match(/^Basic\s+([A-Za-z0-9+/=]+)$/i);
@@ -442,7 +490,7 @@ async function processHeaderValue(
       decoded = atob(basicAuthMatch[1]);
     } catch {
       // Invalid base64, treat as normal header
-      return replaceMagicStrings(db, headerValue, context);
+      return replaceMagicStrings(db, headerValue, context, cache);
     }
 
     // URL-decode the credentials (git URL-encodes the password from git config)
@@ -473,7 +521,7 @@ async function processHeaderValue(
     logger.info("Calling replaceMagicStrings for Basic auth");
 
     // Replace magic strings in decoded credentials
-    const result = await replaceMagicStrings(db, decoded, context);
+    const result = await replaceMagicStrings(db, decoded, context, cache);
 
     logger.info("replaceMagicStrings result", {
       ok: result.ok,
@@ -491,7 +539,7 @@ async function processHeaderValue(
   }
 
   // Normal header - just replace magic strings directly
-  return replaceMagicStrings(db, headerValue, context);
+  return replaceMagicStrings(db, headerValue, context, cache);
 }
 
 /**
@@ -559,6 +607,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   // Track secrets used for potential 401 retry
   const usedSecrets: Array<{ secretId: string; isConnector: boolean }> = [];
 
+  // Request-scoped cache to avoid duplicate DB lookups for the same secret
+  const secretCache: RequestSecretCache = new Map();
+
   // Buffer the request body upfront so it can be reused on 401 retry
   // (Request bodies are streams and can only be read once)
   let requestBody: ArrayBuffer | null = null;
@@ -571,8 +622,27 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   }
 
   try {
-    // Process magic strings in the URL
-    const urlResult = await replaceMagicStrings(db, originalURL, context);
+    // Collect headers to process
+    const originalHeaderEntries: Array<[string, string]> = [];
+    c.req.raw.headers.forEach((value, key) => {
+      if (!STRIP_REQUEST_HEADERS.includes(key.toLowerCase())) {
+        originalHeaderEntries.push([key, value]);
+      }
+    });
+
+    // Process URL and all headers in parallel for better performance
+    const [urlResult, ...headerResults] = await Promise.all([
+      replaceMagicStrings(db, originalURL, context, secretCache),
+      ...originalHeaderEntries.map(([key, value]) =>
+        processHeaderValue(db, key, value, context, secretCache).then((result) => ({
+          key,
+          value,
+          result,
+        })),
+      ),
+    ]);
+
+    // Check URL result
     if (!urlResult.ok) {
       return secretErrorResponse(c, urlResult.error);
     }
@@ -581,16 +651,11 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
 
     // Build headers for the forwarded request
     const forwardHeaders = new Headers();
-    const originalHeaderEntries: Array<[string, string]> = [];
-    c.req.raw.headers.forEach((value, key) => {
-      if (!STRIP_REQUEST_HEADERS.includes(key.toLowerCase())) {
-        forwardHeaders.set(key, value);
-        originalHeaderEntries.push([key, value]);
+    for (const { key, value, result } of headerResults) {
+      if (!result.ok) {
+        return secretErrorResponse(c, result.error);
       }
-    });
 
-    // Process magic strings in headers (handles Basic auth base64 encoding)
-    for (const [key, value] of originalHeaderEntries) {
       // Debug: log auth-related header processing
       const keyLower = key.toLowerCase();
       if (keyLower === "authorization" || keyLower === "x-api-key") {
@@ -601,18 +666,16 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
         });
       }
 
-      const headerResult = await processHeaderValue(db, key, value, context);
-      if (!headerResult.ok) {
-        return secretErrorResponse(c, headerResult.error);
-      }
-      if (headerResult.result !== value) {
+      if (result.result !== value) {
         logger.info("Header transformed", {
           headerKey: key,
           hadMagicString: true,
-          usedSecretsCount: headerResult.usedSecrets.length,
+          usedSecretsCount: result.usedSecrets.length,
         });
-        forwardHeaders.set(key, headerResult.result);
-        usedSecrets.push(...headerResult.usedSecrets);
+        forwardHeaders.set(key, result.result);
+        usedSecrets.push(...result.usedSecrets);
+      } else {
+        forwardHeaders.set(key, value);
       }
     }
 
@@ -649,6 +712,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
           slackClientSecret: env.SLACK_CLIENT_SECRET,
           googleClientId: env.GOOGLE_CLIENT_ID,
           googleClientSecret: env.GOOGLE_CLIENT_SECRET,
+          githubAppId: env.GITHUB_APP_ID,
+          githubAppPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
         };
         const refreshResult = await attemptSecretRefresh(
           db,
@@ -659,20 +724,31 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
 
         if (refreshResult.ok) {
           // Refresh succeeded - retry the request with the new token
-          // Re-process magic strings to get the updated value
-          const retryUrlResult = await replaceMagicStrings(db, originalURL, context);
+          // Clear cache since we have a new token value
+          secretCache.clear();
+
+          // Re-process URL and headers in parallel with fresh cache
+          const [retryUrlResult, ...retryHeaderResults] = await Promise.all([
+            replaceMagicStrings(db, originalURL, context, secretCache),
+            ...originalHeaderEntries.map(([key, value]) =>
+              processHeaderValue(db, key, value, context, secretCache).then((result) => ({
+                key,
+                result,
+              })),
+            ),
+          ]);
+
           if (!retryUrlResult.ok) {
             return secretErrorResponse(c, retryUrlResult.error);
           }
 
-          // Re-build headers with updated secrets (handles Basic auth base64 encoding)
+          // Re-build headers with updated secrets
           const retryHeaders = new Headers();
-          for (const [key, value] of originalHeaderEntries) {
-            const headerResult = await processHeaderValue(db, key, value, context);
-            if (!headerResult.ok) {
-              return secretErrorResponse(c, headerResult.error);
+          for (const { key, result } of retryHeaderResults) {
+            if (!result.ok) {
+              return secretErrorResponse(c, result.error);
             }
-            retryHeaders.set(key, headerResult.result);
+            retryHeaders.set(key, result.result);
           }
 
           if (originalHost) {

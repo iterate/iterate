@@ -34,6 +34,9 @@ export type RefreshContext = {
   slackClientSecret?: string;
   googleClientId?: string;
   googleClientSecret?: string;
+  // GitHub App credentials for regenerating installation tokens
+  githubAppId?: string;
+  githubAppPrivateKey?: string;
 };
 
 /**
@@ -80,8 +83,54 @@ export async function attemptSecretRefresh(
     return { ok: false, code: "NOT_REFRESHABLE", reauthUrl };
   }
 
-  // Check for refresh token in metadata
   const metadata = secret.metadata as SecretMetadata | null;
+
+  // GitHub uses installation tokens (regenerated via App), not refresh tokens
+  if (connector.name === "GitHub") {
+    if (!metadata?.githubInstallationId) {
+      logger.warn("attemptSecretRefresh: no GitHub installation ID", { secretId });
+      return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
+    }
+
+    try {
+      const newTokenData = await refreshGitHubInstallationToken(
+        metadata.githubInstallationId,
+        context,
+      );
+
+      if (!newTokenData) {
+        logger.warn("attemptSecretRefresh: GitHub refresh returned no data", { secretId });
+        await updateSecretFailure(db, secretId);
+        return { ok: false, code: "REFRESH_FAILED", reauthUrl };
+      }
+
+      // Encrypt and store new token
+      const encryptedNewToken = await encryptWithSecret(
+        newTokenData.accessToken,
+        context.encryptionSecret,
+      );
+
+      await db
+        .update(schema.secret)
+        .set({
+          encryptedValue: encryptedNewToken,
+          lastSuccessAt: new Date(),
+        })
+        .where(eq(schema.secret.id, secretId));
+
+      logger.info("attemptSecretRefresh: GitHub success", { secretId });
+      return { ok: true, newValue: newTokenData.accessToken };
+    } catch (error) {
+      logger.error("attemptSecretRefresh: GitHub error", {
+        secretId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await updateSecretFailure(db, secretId);
+      return { ok: false, code: "REFRESH_FAILED", reauthUrl };
+    }
+  }
+
+  // Standard OAuth refresh flow for other connectors
   if (!metadata?.encryptedRefreshToken) {
     logger.warn("attemptSecretRefresh: no refresh token", { secretId });
     return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
@@ -168,11 +217,83 @@ async function refreshOAuthToken(
     case "gmail":
       return refreshGoogleToken(refreshToken, context);
     case "github":
-      // GitHub doesn't support token refresh
+      // GitHub is handled separately via installation tokens
       return null;
     default:
       logger.warn("refreshOAuthToken: unknown connector", { connectorName });
       return null;
+  }
+}
+
+/**
+ * Refresh a GitHub App installation token.
+ * GitHub App installation tokens expire after 1 hour but can be regenerated anytime.
+ */
+async function refreshGitHubInstallationToken(
+  installationId: number,
+  context: RefreshContext,
+): Promise<{ accessToken: string; expiresAt?: string } | null> {
+  if (!context.githubAppId || !context.githubAppPrivateKey) {
+    logger.warn("GitHub App credentials not configured for refresh");
+    return null;
+  }
+
+  try {
+    // Generate JWT for GitHub App authentication
+    const { createPrivateKey } = await import("node:crypto");
+    const { SignJWT, importPKCS8 } = await import("jose");
+
+    const keyString = context.githubAppPrivateKey.replace(/\\n/g, "\n");
+    const privateKey = createPrivateKey({
+      key: keyString,
+      format: "pem",
+    }).export({
+      type: "pkcs8",
+      format: "pem",
+    }) as string;
+
+    const key = await importPKCS8(privateKey, "RS256");
+
+    const jwt = await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer(context.githubAppId)
+      .setIssuedAt()
+      .setExpirationTime("10m")
+      .sign(key);
+
+    // Get installation access token
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "Iterate-OS",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      logger.error("GitHub installation token request failed", {
+        status: response.status,
+        body: await response.text(),
+      });
+      return null;
+    }
+
+    const data = (await response.json()) as { token: string; expires_at: string };
+
+    return {
+      accessToken: data.token,
+      expiresAt: data.expires_at,
+    };
+  } catch (error) {
+    logger.error("Failed to refresh GitHub installation token", {
+      installationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }
 

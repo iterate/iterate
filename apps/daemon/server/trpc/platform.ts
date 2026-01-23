@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { simpleGit } from "simple-git";
@@ -102,65 +102,13 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 
   if (contentChanged) {
     writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
-
-    // Verify file was written before restarting services
-    const verifyContent = readFileSync(envFilePath, "utf-8");
     console.log("[platform] Wrote new env file", {
       path: envFilePath,
       bytesWritten: envFileContent.length,
-      verified: verifyContent.length === envFileContent.length,
     });
-
-    // Restart all s6 services (except iterate-daemon) so they pick up new env vars
-    const iterateRepo =
-      process.env.ITERATE_REPO ?? join(homedir(), "src/github.com/iterate/iterate");
-    const s6DaemonsPath = join(iterateRepo, "apps/os/sandbox/s6-daemons");
-    console.log("[platform] Looking for s6 services", {
-      iterateRepo,
-      s6DaemonsPath,
-      exists: existsSync(s6DaemonsPath),
-    });
-
-    if (existsSync(s6DaemonsPath)) {
-      const allEntries = readdirSync(s6DaemonsPath, { withFileTypes: true });
-      console.log("[platform] s6 directory entries", {
-        entries: allEntries.map((d) => ({ name: d.name, isDir: d.isDirectory() })),
-      });
-
-      const services = allEntries
-        .filter((d) => d.isDirectory() && d.name !== "iterate-daemon" && !d.name.startsWith("."))
-        .map((d) => d.name);
-
-      console.log("[platform] Services to restart", { services });
-
-      for (const service of services) {
-        const servicePath = join(s6DaemonsPath, service);
-        console.log(`[platform] Attempting to restart ${service}`, { servicePath });
-        try {
-          // Use s6-svc -d to bring service down, then -u to bring back up
-          // This ensures proper cleanup via s6 supervision
-          await x("s6-svc", ["-d", servicePath]); // Mark down and send TERM
-          await new Promise((r) => setTimeout(r, 500));
-          // If still alive, force kill
-          try {
-            await x("s6-svc", ["-k", servicePath]);
-          } catch {
-            // Ignore - process may already be dead
-          }
-          await new Promise((r) => setTimeout(r, 500));
-          await x("s6-svc", ["-u", servicePath]); // Bring back up
-          console.log(`[platform] Restarted ${service}`);
-        } catch (err) {
-          console.log(`[platform] Failed to restart ${service}`, {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    } else {
-      console.log("[platform] s6 daemons path does not exist, skipping restarts");
-    }
+    // Services watch the env file via inotifywait and restart themselves
   } else {
-    console.log("[platform] Env vars unchanged, skipping service restarts");
+    console.log("[platform] Env vars unchanged, skipping write");
   }
 
   // Refresh tmux sessions with new env vars (using the daemon's tmux socket)

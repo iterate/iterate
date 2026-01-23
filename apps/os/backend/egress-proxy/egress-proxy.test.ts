@@ -296,7 +296,7 @@ describe("Egress Proxy - Connector Detection", () => {
     const connector = getConnectorForUrl("https://api.github.com/repos/owner/repo");
     expect(connector?.name).toBe("GitHub");
     expect(connector?.scope).toBe("project"); // Project-scoped for sandbox git operations
-    expect(connector?.refreshable).toBe(false); // GitHub tokens don't refresh
+    expect(connector?.refreshable).toBe(true); // GitHub App installation tokens can be regenerated
   });
 
   test("returns null for non-connector URLs", () => {

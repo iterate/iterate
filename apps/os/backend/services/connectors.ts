@@ -54,7 +54,7 @@ export const CONNECTORS: Record<string, Connector> = {
     name: "GitHub",
     urlPatterns: ["api.github.com/*", "github.com/*"],
     scope: "project", // Project-scoped for sandbox git operations
-    refreshable: false, // GitHub tokens don't refresh - re-auth needed
+    refreshable: true, // GitHub App installation tokens can be regenerated
     secretKey: "github.access_token",
   },
 };
