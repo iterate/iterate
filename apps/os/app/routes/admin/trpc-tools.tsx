@@ -1,27 +1,46 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { TrpcToolsSection, type ProcedureInputs } from "../../components/trpc-procedure-form.tsx";
 
 export const Route = createFileRoute("/_auth/admin/trpc-tools")({
   component: TrpcToolsPage,
 });
 
 function TrpcToolsPage() {
+  const { data: procedures } = useSuspenseQuery(trpc.admin.allProcedureInputs.queryOptions());
+
+  // Execute a procedure via the trpcClient
+  const executeProcedure = useCallback(
+    async (path: string, type: "query" | "mutation", data: Record<string, unknown>) => {
+      // Traverse the nested path (e.g., "admin.createOrganization" -> trpcClient.admin.createOrganization)
+      const pathParts = path.split(".");
+
+      let procedure: any = trpcClient;
+      for (const part of pathParts) {
+        procedure = procedure[part];
+      }
+
+      if (type === "mutation") {
+        return procedure.mutate(data);
+      } else if (type === "query") {
+        return procedure.query(data);
+      } else {
+        throw new Error(`Unsupported procedure type: ${type}`);
+      }
+    },
+    [],
+  );
+
   return (
-    <div className="p-8 space-y-4">
-      <h1 className="text-2xl font-bold">tRPC Tools</h1>
-      <p className="text-muted-foreground">
-        tRPC tools interface coming soon. Use browser devtools to inspect API calls.
-      </p>
-      <div className="space-y-2">
-        <div className="text-sm font-medium">Routers</div>
-        <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-          <li>user - User operations</li>
-          <li>organization - Organization CRUD</li>
-          <li>project - Project management</li>
-          <li>machine - Machine CRUD</li>
-          <li>admin - Admin operations</li>
-          <li>testing - Test helpers</li>
-        </ul>
-      </div>
+    <div className="p-4">
+      <TrpcToolsSection
+        procedures={procedures as Array<[string, ProcedureInputs]>}
+        executeProcedure={executeProcedure}
+        initialSearch="admin."
+        title="All tRPC Procedures"
+      />
     </div>
   );
 }

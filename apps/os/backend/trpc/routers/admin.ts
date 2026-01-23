@@ -254,4 +254,25 @@ export const adminRouter = router({
         role: input.role,
       };
     }),
+
+  // Introspect all tRPC procedures for the admin tRPC tools UI
+  allProcedureInputs: adminProcedure.query(
+    async (): Promise<
+      Array<
+        [
+          string,
+          {
+            procedure: { _def: { type: string } };
+            parsedProcedure: { optionsJsonSchema: Record<string, unknown> };
+            meta?: { description?: string };
+          },
+        ]
+      >
+    > => {
+      // Lazy import to avoid circular dependency
+      const { appRouter } = await import("../root.ts");
+      const { introspectRouter } = await import("../introspect.ts");
+      return introspectRouter(appRouter);
+    },
+  ),
 });

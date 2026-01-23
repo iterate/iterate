@@ -17,6 +17,8 @@ import { createMachineProvider, type MachineProvider } from "../../providers/ind
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+import { introspectRouter, type ProcedureInfo } from "../introspect.ts";
+import { trpcRouter as daemonRouter } from "../../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<DaemonTRPCRouter>({
@@ -688,4 +690,9 @@ export const machineRouter = router({
         return { agents: [] };
       }
     }),
+
+  // Get introspected daemon procedures for the tRPC tools UI on machine detail page
+  getDaemonProcedures: publicProcedure.query((): Array<[string, ProcedureInfo]> => {
+    return introspectRouter(daemonRouter);
+  }),
 });

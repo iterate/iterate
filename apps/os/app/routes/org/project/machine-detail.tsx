@@ -1,8 +1,18 @@
-import { useState } from "react";
+import { useState, useCallback, Suspense } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
+import {
+  ExternalLink,
+  Trash2,
+  RefreshCw,
+  Server,
+  Code2,
+  Terminal,
+  Copy,
+  Bot,
+  Wrench,
+} from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -10,12 +20,73 @@ import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../../components/daemon-status.tsx";
 import { HeaderActions } from "../../../components/header-actions.tsx";
 import { TypeId } from "../../../components/type-id.tsx";
+import {
+  TrpcToolsSection,
+  type ProcedureInputs,
+} from "../../../components/trpc-procedure-form.tsx";
+import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
 )({
   component: MachineDetailPage,
 });
+
+// Type for tRPC batch response
+interface TrpcBatchResponse {
+  error?: { message?: string };
+  result?: { data: unknown };
+}
+
+/** Component that fetches daemon procedures and provides UI to invoke them */
+function DaemonTrpcToolsSection({ daemonBaseUrl }: { daemonBaseUrl: string }) {
+  const { data: procedures } = useSuspenseQuery(trpc.machine.getDaemonProcedures.queryOptions());
+
+  // Execute a procedure on the daemon via HTTP
+  const executeDaemonProcedure = useCallback(
+    async (path: string, type: "query" | "mutation", data: Record<string, unknown>) => {
+      // The daemon tRPC endpoint is at /api/trpc
+      const url = `${daemonBaseUrl}/api/trpc/${path}`;
+
+      if (type === "query") {
+        // For queries, pass input as query parameter
+        const queryUrl = new URL(url, window.location.origin);
+        if (Object.keys(data).length > 0) {
+          queryUrl.searchParams.set("input", JSON.stringify({ 0: data }));
+        }
+        const response = await fetch(queryUrl.toString());
+        const result = (await response.json()) as TrpcBatchResponse[];
+        if (result[0]?.error) {
+          throw new Error(result[0].error.message || JSON.stringify(result[0].error));
+        }
+        return result[0]?.result?.data;
+      } else {
+        // For mutations, use POST with JSON body
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 0: data }),
+        });
+        const result = (await response.json()) as TrpcBatchResponse[];
+        if (result[0]?.error) {
+          throw new Error(result[0].error.message || JSON.stringify(result[0].error));
+        }
+        return result[0]?.result?.data;
+      }
+    },
+    [daemonBaseUrl],
+  );
+
+  return (
+    <div className="mt-4 p-4 border rounded-lg bg-muted/30">
+      <TrpcToolsSection
+        procedures={procedures as Array<[string, ProcedureInputs]>}
+        executeProcedure={executeDaemonProcedure}
+        title="Invoke Daemon Procedures"
+      />
+    </div>
+  );
+}
 
 // Icon map for services
 const SERVICE_ICONS: Record<string, typeof Server> = {
@@ -161,6 +232,9 @@ function MachineDetailPage() {
   // Get attach command for an agent using its harness session ID
   const getAgentAttachCommand = (harnessSessionId: string) =>
     `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
+
+  // State for tRPC tools section visibility
+  const [showTrpcTools, setShowTrpcTools] = useState(false);
 
   return (
     <div className="p-4 space-y-6">
@@ -376,6 +450,35 @@ function MachineDetailPage() {
                   </div>
                 </div>
               ))}
+            </>
+          )}
+
+          {/* Daemon tRPC Tools */}
+          {iterateDaemonService && metadata.daemonStatus === "ready" && (
+            <>
+              <div className="pt-4 border-t">
+                <button
+                  onClick={() => setShowTrpcTools(!showTrpcTools)}
+                  className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Wrench className="h-4 w-4" />
+                  Daemon tRPC Tools
+                  <span className="text-xs">({showTrpcTools ? "hide" : "show"})</span>
+                </button>
+              </div>
+              {showTrpcTools && (
+                <Suspense
+                  fallback={
+                    <div className="p-4 flex items-center gap-2">
+                      <Spinner /> Loading procedures...
+                    </div>
+                  }
+                >
+                  <DaemonTrpcToolsSection
+                    daemonBaseUrl={iterateDaemonService.options[0]?.url ?? ""}
+                  />
+                </Suspense>
+              )}
             </>
           )}
         </div>
