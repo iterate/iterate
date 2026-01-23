@@ -100,7 +100,7 @@ const snapshot = await (async () => {
       {
         name: snapshotName,
         image,
-        resources: { cpu: 1, memory: 1, disk: 10 },
+        resources: { cpu: 2, memory: 4, disk: 10 },
       },
       { onLogs: console.log },
     );
