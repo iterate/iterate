@@ -7,7 +7,7 @@ import { organizationUserMembership, organization, project as projectTable } fro
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
-import { waitUntil } from "../../env.ts";
+import { waitUntil } from "../cloudflare-env.ts";
 import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 

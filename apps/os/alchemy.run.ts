@@ -322,9 +322,29 @@ async function setupDatabase() {
     }
   };
 
+  const seedGlobalSecrets = async (origin: string) => {
+    // Seed global secrets (OpenAI, Anthropic keys) into the database
+    // These are the lowest priority secrets, overridable at org/project/user level
+    const res = await Exec("db-seed-secrets", {
+      env: {
+        PSCALE_DATABASE_URL: origin,
+        ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      },
+      command: "tsx ./scripts/seed-global-secrets.ts",
+    });
+
+    if (res.exitCode !== 0) {
+      console.warn(`Warning: Failed to seed global secrets: ${res.stderr}`);
+      // Don't fail deployment if seeding fails - secrets can be added manually
+    }
+  };
+
   if (isDevelopment) {
     const origin = "postgres://postgres:postgres@localhost:5432/os";
     await migrate(origin);
+    await seedGlobalSecrets(origin);
     return {
       DATABASE_URL: origin,
     };
@@ -356,6 +376,7 @@ async function setupDatabase() {
       delete: true,
     });
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -379,6 +400,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -402,6 +424,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -415,7 +438,7 @@ const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/
 
 const domains = [`${subdomain}.iterate.com`];
 
-async function deployWorker() {
+async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
   const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
     "realtime-pusher",
     {
@@ -429,8 +452,8 @@ async function deployWorker() {
 
   const worker = await TanStackStart("os", {
     bindings: {
-      ...(await setupDatabase()),
-      ...(await setupEnvironmentVariables()),
+      ...dbConfig,
+      ...envSecrets,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
@@ -475,8 +498,12 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 }
 
-// Deploy worker (starts vite in dev mode)
-export const worker = await deployWorker();
+// Setup database and env first
+const dbConfig = await setupDatabase();
+const envSecrets = await setupEnvironmentVariables();
+
+// Deploy main worker (includes egress proxy on /api/egress-proxy)
+export const worker = await deployWorker(dbConfig, envSecrets);
 
 // Create tunnel resource BEFORE finalize so it's properly tracked
 // (fixes bug where tunnel was created after finalize, causing orphan deletion)

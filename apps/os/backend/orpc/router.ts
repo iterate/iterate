@@ -7,7 +7,7 @@ import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { parseTokenIdFromApiKey } from "../trpc/routers/machine.ts";
+import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
@@ -231,7 +231,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const machineId = machine.id;
 
   // Run all DB queries in parallel
-  const [projectEnvVars, githubConnection, slackConnection, projectRepos] = await Promise.all([
+  const [projectEnvVars, githubConnection, slackSecret, projectRepos] = await Promise.all([
     db.query.projectEnvVar.findMany({
       where: and(
         eq(schema.projectEnvVar.projectId, project.id),
@@ -243,9 +243,15 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       where: (conn, { and: whereAnd, eq: whereEq }) =>
         whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
     }),
-    db.query.projectConnection.findFirst({
-      where: (conn, { and: whereAnd, eq: whereEq }) =>
-        whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "slack")),
+    // Check if Slack secret exists (to conditionally inject magic string)
+    db.query.secret.findFirst({
+      columns: { id: true },
+      where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+        whereAnd(
+          whereEq(s.projectId, project.id),
+          whereEq(s.key, "slack.access_token"),
+          whereIsNull(s.userId), // Only match project-scoped secrets
+        ),
     }),
     db.query.projectRepo.findMany({
       where: eq(schema.projectRepo.projectId, project.id),
@@ -261,7 +267,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     }
   }
 
-  // Decrypt env vars, Slack token, and fetch repo info in parallel
+  // Process env vars and fetch repo info in parallel
   type RepoInfo = {
     url: string;
     branch: string;
@@ -270,34 +276,15 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     name: string;
   };
 
-  const [decryptedEnvVars, slackToken, repoResults] = await Promise.all([
-    // Decrypt all env vars (project-level and machine-specific)
-    Promise.all(
-      projectEnvVars.map(async (envVar) => {
-        try {
-          return {
-            key: envVar.key,
-            value: await decrypt(envVar.encryptedValue),
-            machineId: envVar.machineId,
-          };
-        } catch (err) {
-          logger.error("Failed to decrypt env var", { key: envVar.key, err });
-          return null;
-        }
-      }),
+  const [decryptedEnvVars, repoResults] = await Promise.all([
+    // Env vars are now stored plain text (secrets go in the secret table)
+    Promise.resolve(
+      projectEnvVars.map((envVar) => ({
+        key: envVar.key,
+        value: envVar.value,
+        machineId: envVar.machineId,
+      })),
     ),
-    // Decrypt Slack token if available
-    (async () => {
-      if (!slackConnection) return null;
-      const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
-      if (!providerData.encryptedAccessToken) return null;
-      try {
-        return await decrypt(providerData.encryptedAccessToken);
-      } catch (err) {
-        logger.error("Failed to decrypt Slack token", err);
-        return null;
-      }
-    })(),
     // Fetch repo info for all repos
     installationToken && projectRepos.length > 0
       ? Promise.all(
@@ -308,7 +295,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
               return null;
             }
             return {
-              url: `https://x-access-token:${installationToken}@github.com/${repoInfo.owner}/${repoInfo.name}.git`,
+              // Plain URL - auth is handled by GIT_CONFIG_* env vars which rewrite to include magic string
+              url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
               branch: repoInfo.defaultBranch,
               path: `~/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
               owner: repoInfo.owner,
@@ -330,20 +318,19 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     if (item && item.machineId) envVars[item.key] = item.value;
   }
 
-  // Fallback API keys if not set by user (only if defined in env)
-  if (!envVars["OPENAI_API_KEY"] && env.OPENAI_API_KEY) {
-    envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
-  }
-  if (!envVars["ANTHROPIC_API_KEY"] && env.ANTHROPIC_API_KEY) {
-    envVars["ANTHROPIC_API_KEY"] = env.ANTHROPIC_API_KEY;
-  }
+  // Always use magic strings for API keys - egress proxy resolves them at request time
+  // Secret lookup priority: user > project > org > global
+  // Use single quotes inside the magic string so it's valid when embedded in JSON configs
+  envVars["OPENAI_API_KEY"] = "getIterateSecret({secretKey: 'openai_api_key'})";
+  envVars["ANTHROPIC_API_KEY"] = "getIterateSecret({secretKey: 'anthropic_api_key'})";
 
-  // Add tokens from connections
-  if (installationToken) {
-    envVars["ITERATE_GITHUB_ACCESS_TOKEN"] = installationToken;
-  }
-  if (slackToken) {
-    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = slackToken;
+  // GitHub CLI needs GH_TOKEN/GITHUB_TOKEN env vars - use magic string for egress proxy resolution
+  envVars["GH_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
+  envVars["GITHUB_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
+
+  // Slack token via magic string (only if Slack is connected to this project)
+  if (slackSecret) {
+    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = "getIterateSecret({secretKey: 'slack.access_token'})";
   }
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);

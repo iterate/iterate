@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import * as jose from "jose";
 import type { CloudflareEnv } from "../../../env.ts";
-import type { Variables } from "../../worker.ts";
+import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
@@ -192,6 +192,63 @@ githubApp.get(
             owner: repo.owner.login,
             name: repo.name,
             defaultBranch: repo.default_branch,
+          });
+        }
+      }
+
+      // Upsert secret for egress proxy to use (project-scoped for sandbox git operations)
+      // This allows the magic string `getIterateSecret({secretKey: "github.access_token"})` to resolve
+      // We store the installation token (not user token) because git operations need app-level access
+      const projectInfo = await tx.query.project.findFirst({
+        where: eq(schema.project.id, projectId),
+      });
+
+      if (projectInfo) {
+        // Get a fresh installation token - this is what git operations need
+        const installationToken = await getGitHubInstallationToken(c.env, installation_id);
+        if (!installationToken) {
+          logger.error("Failed to get GitHub installation token", {
+            installationId: installation_id,
+          });
+          // Fall back to user token (may not work for private repos)
+        }
+
+        const tokenToStore = installationToken || accessToken;
+        const encryptedToken = await encrypt(tokenToStore);
+
+        // Only store installationId in metadata if we have an installation token
+        // If we fell back to user token, don't store installationId (would cause refresh failures)
+        const secretMetadata = installationToken ? { githubInstallationId: installation_id } : {};
+
+        const existingSecret = await tx.query.secret.findFirst({
+          where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+            whereAnd(
+              whereEq(s.key, "github.access_token"),
+              whereEq(s.projectId, projectId),
+              whereIsNull(s.userId), // Only match project-scoped secrets, not user-scoped
+            ),
+        });
+
+        const githubEgressRule = `$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')`;
+
+        if (existingSecret) {
+          await tx
+            .update(schema.secret)
+            .set({
+              encryptedValue: encryptedToken,
+              lastSuccessAt: new Date(),
+              metadata: secretMetadata,
+              egressProxyRule: githubEgressRule,
+            })
+            .where(eq(schema.secret.id, existingSecret.id));
+        } else {
+          await tx.insert(schema.secret).values({
+            key: "github.access_token",
+            encryptedValue: encryptedToken,
+            organizationId: projectInfo.organizationId,
+            projectId,
+            metadata: secretMetadata,
+            egressProxyRule: githubEgressRule,
           });
         }
       }

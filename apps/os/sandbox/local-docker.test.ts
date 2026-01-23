@@ -63,6 +63,8 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
       AutoRemove: false,
       // Mount local repo so entry.sh can rsync it into the container
       Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
+      // Map host.docker.internal to the host machine (needed on Linux, automatic on Mac Docker Desktop)
+      ExtraHosts: ["host.docker.internal:host-gateway"],
     },
   };
 

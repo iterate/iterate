@@ -9,8 +9,8 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
-import { getDb, type DB } from "./db/client.ts";
-import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
+import { getDb } from "./db/client.ts";
+import { getAuth } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
@@ -18,17 +18,14 @@ import { githubApp } from "./integrations/github/github.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
+import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
+import type { Variables } from "./types.ts";
 
-export type Variables = {
-  auth: Auth;
-  session: AuthSession;
-  db: DB;
-  trpcCaller: ReturnType<typeof appRouter.createCaller>;
-};
+export type { Variables };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
@@ -122,6 +119,9 @@ app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
+
+// Mount egress proxy (for sandbox outbound traffic)
+app.route("", egressProxyApp);
 
 // oRPC handler for machine status (called by daemon to report ready)
 const orpcHandler = new RPCHandler(workerRouter, {

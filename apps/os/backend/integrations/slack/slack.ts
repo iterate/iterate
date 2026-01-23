@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
-import type { Variables } from "../../worker.ts";
+import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
@@ -296,6 +296,43 @@ slackApp.get(
               encryptedAccessToken,
             },
           });
+        }
+
+        // Upsert secret for egress proxy to use
+        // This allows the magic string `getIterateSecret({secretKey: "slack.access_token"})` to resolve
+        const projectInfo = await tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+        });
+
+        if (projectInfo) {
+          const existingSecret = await tx.query.secret.findFirst({
+            where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
+              whereAnd(
+                whereEq(s.key, "slack.access_token"),
+                whereEq(s.projectId, projectId),
+                whereIsNull(s.userId), // Only match project-scoped secrets
+              ),
+          });
+
+          const slackEgressRule = `$contains(url.hostname, 'slack.com')`;
+          if (existingSecret) {
+            await tx
+              .update(schema.secret)
+              .set({
+                encryptedValue: encryptedAccessToken,
+                lastSuccessAt: new Date(),
+                egressProxyRule: slackEgressRule,
+              })
+              .where(eq(schema.secret.id, existingSecret.id));
+          } else {
+            await tx.insert(schema.secret).values({
+              key: "slack.access_token",
+              encryptedValue: encryptedAccessToken,
+              organizationId: projectInfo.organizationId,
+              projectId,
+              egressProxyRule: slackEgressRule,
+            });
+          }
         }
 
         return tx.query.project.findFirst({

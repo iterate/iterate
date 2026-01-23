@@ -5,7 +5,7 @@ import { typeid } from "typeid-js";
 import { minimatch } from "minimatch";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
+import { env, isNonProd, waitUntil, type CloudflareEnv } from "../cloudflare-env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 

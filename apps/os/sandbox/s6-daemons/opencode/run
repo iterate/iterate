@@ -1,10 +1,15 @@
 #!/bin/sh
 exec 2>&1
 
+ENV_FILE="$HOME/.iterate/.env"
+
 # Source env vars written by bootstrap (API keys, etc.)
-[ -f ~/.iterate/.env ] && set -a && . ~/.iterate/.env && set +a
+[ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT=$(node -p "require('$SCRIPT_DIR/metadata.json').port")
 
-exec opencode serve --port "$PORT" --hostname 0.0.0.0 --log-level DEBUG
+# Use tini to forward signals to entire process group and reap zombies
+# -s: subreaper mode (catches orphaned processes)
+# -g: kills entire process group on SIGTERM
+exec tini -sg -- opencode serve --port "$PORT" --hostname 0.0.0.0 --log-level DEBUG

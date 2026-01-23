@@ -1,0 +1,28 @@
+#!/bin/sh
+exec 2>&1
+
+MITMPROXY_DIR="$HOME/.mitmproxy"
+CA_CERT="$MITMPROXY_DIR/mitmproxy-ca-cert.pem"
+
+# Generate CA cert if missing (mitmdump creates it on first run)
+if [ ! -f "$CA_CERT" ]; then
+  echo "Generating CA certificate..."
+  mkdir -p "$MITMPROXY_DIR"
+  mitmdump -p 0 --set confdir="$MITMPROXY_DIR" &
+  PID=$!
+  sleep 2
+  kill $PID 2>/dev/null
+fi
+
+# Install to system trust store
+if [ -f "$CA_CERT" ]; then
+  sudo mkdir -p /usr/local/share/ca-certificates/iterate
+  sudo cp "$CA_CERT" /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt
+  sudo update-ca-certificates
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec mitmdump -p 8888 \
+  --set confdir="$MITMPROXY_DIR" \
+  -s "$SCRIPT_DIR/addon.py" \
+  --ssl-insecure

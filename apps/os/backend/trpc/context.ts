@@ -1,6 +1,6 @@
 import type { Context as HonoContext } from "hono";
 import type { CloudflareEnv } from "../../env.ts";
-import type { Variables } from "../worker.ts";
+import type { Variables } from "../types.ts";
 
 export type Context = {
   env: CloudflareEnv;

@@ -7,7 +7,7 @@ import type { PropsWithChildren } from "react";
 import superjson from "superjson";
 import { appRouter, type AppRouter } from "../../backend/trpc/root.ts";
 import { createContext } from "../../backend/trpc/context.ts";
-import type { Variables } from "../../backend/worker.ts";
+import type { Variables } from "../../backend/types.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
 /* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */

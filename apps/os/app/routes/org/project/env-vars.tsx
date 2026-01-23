@@ -257,7 +257,7 @@ function EnvVarSection({
     id: string;
     key: string;
     type: "user" | "system" | null;
-    maskedValue: string;
+    value: string;
     updatedAt: Date;
   }>;
   onDelete: (key: string) => void;
@@ -292,9 +292,7 @@ function EnvVarSection({
                   )}
                 </span>
               </TableCell>
-              <TableCell className="font-mono text-muted-foreground">
-                {envVar.maskedValue}
-              </TableCell>
+              <TableCell className="font-mono text-muted-foreground">{envVar.value}</TableCell>
               <TableCell className="text-muted-foreground">
                 {new Date(envVar.updatedAt).toLocaleDateString()}
               </TableCell>
