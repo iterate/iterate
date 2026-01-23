@@ -325,7 +325,7 @@ async function resolveSecret(
   const urlContext = { orgSlug: context.orgSlug, projectSlug: context.projectSlug };
 
   // Look up the secret (uses request-scoped cache if provided)
-  logger.info("Looking up secret", {
+  logger.debug("Looking up secret", {
     secretKey,
     organizationId: context.organizationId,
     projectId: context.projectId,
@@ -343,10 +343,9 @@ async function resolveSecret(
     cache,
   );
 
-  logger.info("Secret lookup result", {
+  logger.debug("Secret lookup result", {
     secretKey,
     found: !!secret,
-    secretId: secret?.secretId,
   });
 
   if (!secret) {
@@ -460,10 +459,7 @@ async function replaceMagicStrings(
       isConnector: secretResult.isConnector,
     });
 
-    logger.info("Egress proxy replaced magic string", {
-      secretKey: parsed.secretKey,
-      hasUserId: !!parsed.userId,
-    });
+    logger.debug("Replaced magic string", { secretKey: parsed.secretKey });
   }
 
   return { ok: true, result, usedSecrets };
@@ -495,7 +491,6 @@ async function processHeaderValue(
 
     // URL-decode the credentials (git URL-encodes the password from git config)
     // This handles magic strings like getIterateSecret%28%7BsecretKey%3A...%7D%29
-    const beforeUrlDecode = decoded;
     try {
       decoded = decodeURIComponent(decoded);
     } catch {
@@ -506,28 +501,14 @@ async function processHeaderValue(
     // Reset regex lastIndex since we used .test()
     MAGIC_STRING_PATTERN.lastIndex = 0;
 
-    logger.info("Basic auth decoded", {
-      beforeUrlDecode: beforeUrlDecode.substring(0, 80),
-      afterUrlDecode: decoded.substring(0, 80),
-      containsMagicPattern: hasMagic,
-    });
-
     // Check if decoded value contains magic strings
     if (!hasMagic) {
       // No magic strings in decoded value
       return { ok: true, result: headerValue, usedSecrets: [] };
     }
 
-    logger.info("Calling replaceMagicStrings for Basic auth");
-
     // Replace magic strings in decoded credentials
     const result = await replaceMagicStrings(db, decoded, context, cache);
-
-    logger.info("replaceMagicStrings result", {
-      ok: result.ok,
-      error: !result.ok ? result.error : undefined,
-      usedSecretsCount: result.ok ? result.usedSecrets.length : 0,
-    });
 
     if (!result.ok) {
       return result;
@@ -597,12 +578,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     originalUrl: originalURL,
   };
 
-  logger.info("Egress proxy forwarding", {
-    method: originalMethod,
-    url: originalURL,
-    host: originalHost,
-    projectId: context.projectId,
-  });
+  logger.debug("Egress proxy forwarding", { method: originalMethod, url: originalURL });
 
   // Track secrets used for potential 401 retry
   const usedSecrets: Array<{ secretId: string; isConnector: boolean }> = [];
@@ -656,22 +632,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
         return secretErrorResponse(c, result.error);
       }
 
-      // Debug: log auth-related header processing
-      const keyLower = key.toLowerCase();
-      if (keyLower === "authorization" || keyLower === "x-api-key") {
-        logger.info("Processing auth header", {
-          headerKey: key,
-          headerValuePrefix: value.substring(0, 80),
-          containsMagic: value.includes("getIterateSecret"),
-        });
-      }
-
       if (result.result !== value) {
-        logger.info("Header transformed", {
-          headerKey: key,
-          hadMagicString: true,
-          usedSecretsCount: result.usedSecrets.length,
-        });
         forwardHeaders.set(key, result.result);
         usedSecrets.push(...result.usedSecrets);
       } else {
@@ -696,10 +657,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       const connectorSecrets = usedSecrets.filter((s) => s.isConnector);
 
       if (connectorSecrets.length > 0) {
-        logger.info("Egress proxy received 401, attempting refresh", {
-          url: originalURL,
-          secretCount: connectorSecrets.length,
-        });
+        logger.debug("Received 401, attempting refresh", { url: originalURL });
 
         // Try to refresh the first connector secret (usually there's only one)
         const secretToRefresh = connectorSecrets[0];
@@ -762,10 +720,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
             body: requestBody,
           });
 
-          logger.info("Egress proxy retry after refresh", {
-            url: originalURL,
-            status: response.status,
-          });
+          logger.debug("Retry after refresh", { status: response.status });
         } else {
           // Refresh failed - return helpful error
           return c.json(
@@ -789,10 +744,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       }
     });
 
-    logger.info("Egress proxy response", {
-      url: processedURL,
-      status: response.status,
-    });
+    logger.debug("Egress proxy response", { status: response.status });
 
     return new Response(response.body, {
       status: response.status,

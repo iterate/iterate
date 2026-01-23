@@ -76,10 +76,7 @@ export async function attemptSecretRefresh(
 
   // Check if connector is refreshable
   if (!connector?.refreshable) {
-    logger.info("attemptSecretRefresh: connector not refreshable", {
-      secretId,
-      connector: connector?.name,
-    });
+    logger.debug("Connector not refreshable", { connector: connector?.name });
     return { ok: false, code: "NOT_REFRESHABLE", reauthUrl };
   }
 
@@ -88,7 +85,7 @@ export async function attemptSecretRefresh(
   // GitHub uses installation tokens (regenerated via App), not refresh tokens
   if (connector.name === "GitHub") {
     if (!metadata?.githubInstallationId) {
-      logger.warn("attemptSecretRefresh: no GitHub installation ID", { secretId });
+      logger.debug("No GitHub installation ID for refresh", { secretId });
       return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
     }
 
@@ -118,7 +115,7 @@ export async function attemptSecretRefresh(
         })
         .where(eq(schema.secret.id, secretId));
 
-      logger.info("attemptSecretRefresh: GitHub success", { secretId });
+      logger.debug("GitHub token refresh success", { secretId });
       return { ok: true, newValue: newTokenData.accessToken };
     } catch (error) {
       logger.error("attemptSecretRefresh: GitHub error", {
@@ -180,7 +177,7 @@ export async function attemptSecretRefresh(
       })
       .where(eq(schema.secret.id, secretId));
 
-    logger.info("attemptSecretRefresh: success", { secretId, connector: connector.name });
+    logger.debug("Token refresh success", { connector: connector.name });
     return { ok: true, newValue: newTokenData.accessToken };
   } catch (error) {
     logger.error("attemptSecretRefresh: error", {
