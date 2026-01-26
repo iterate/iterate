@@ -10,12 +10,15 @@ import { createTRPCRouter, publicProcedure } from "./init.ts";
 // Store for platform-injected env vars
 const platformEnvVars: Record<string, string> = {};
 
-// Store for cloned repos status
+// Store for cloned repos status and paths.
+// Only contains CUSTOMER repos (from projectRepo table via getEnv).
+// The iterate/iterate repo is baked into the Docker image, not tracked here.
 const clonedReposStatus: Map<
   string,
   {
     status: "pending" | "cloning" | "cloned" | "error";
     error?: string;
+    path?: string;
   }
 > = new Map();
 
@@ -212,22 +215,39 @@ export function cloneRepos(repos: RepoInfo[]): void {
       continue;
     }
 
-    clonedReposStatus.set(repoKey, { status: "cloning" });
+    clonedReposStatus.set(repoKey, { status: "cloning", path: expandedPath });
 
     // Clone in background
     cloneRepo(repo.url, expandedPath, repo.branch)
       .then(() => {
-        clonedReposStatus.set(repoKey, { status: "cloned" });
+        clonedReposStatus.set(repoKey, { status: "cloned", path: expandedPath });
         console.log(`[platform] Cloned ${repoKey} to ${expandedPath}`);
       })
       .catch((err) => {
         clonedReposStatus.set(repoKey, {
           status: "error",
           error: err instanceof Error ? err.message : String(err),
+          path: expandedPath,
         });
         console.error(`[platform] Failed to clone ${repoKey}:`, err);
       });
   }
+}
+
+/**
+ * Get the path to the first customer repository.
+ * Returns null if no customer repos have been cloned yet.
+ *
+ * Note: This only returns customer repos (from projectRepo table).
+ * The iterate/iterate repo is baked into the Docker image and not tracked here.
+ */
+export function getCustomerRepoPath(): string | null {
+  const values = Array.from(clonedReposStatus.values());
+  // Prefer fully cloned repos but fall back to first path even if still cloning (better than nothing)
+  const repo =
+    values.find((info) => info.status === "cloned" && info.path) ||
+    values.find((info) => info.path);
+  return repo?.path || null;
 }
 
 /**

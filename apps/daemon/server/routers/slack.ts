@@ -23,11 +23,20 @@ import type {
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
+import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
 
-// Working directory for agents - uses ITERATE_REPO env var with fallback to sandbox path
-const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+// Fallback working directory if no customer repo is cloned
+const FALLBACK_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+
+/**
+ * Get the working directory for new agents.
+ * Prefers customer repo, falls back to iterate repo.
+ */
+function getAgentWorkingDirectory(): string {
+  return getCustomerRepoPath() || FALLBACK_REPO;
+}
 
 export const slackRouter = new Hono();
 
@@ -162,7 +171,7 @@ slackRouter.post("/webhook", async (c) => {
       const agent = await createAgent({
         slug: agentSlug,
         harnessType: "opencode",
-        workingDirectory: ITERATE_REPO,
+        workingDirectory: getAgentWorkingDirectory(),
       });
 
       const message = formatNewThreadMentionMessage(event, threadTs, eventId);
@@ -185,7 +194,7 @@ slackRouter.post("/webhook", async (c) => {
         agent = await createAgent({
           slug: agentSlug,
           harnessType: "opencode",
-          workingDirectory: ITERATE_REPO,
+          workingDirectory: getAgentWorkingDirectory(),
         });
         wasCreated = true;
       }
