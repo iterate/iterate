@@ -23,15 +23,19 @@ curl http://127.0.0.1:2375/version
 
 ### Local Docker Snapshots
 
-When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background from the repo root using `apps/os/sandbox/Dockerfile`. Docker's layer caching ensures this is fast (~2s) if nothing changed, while still picking up Dockerfile changes without manual rebuilds.
+`iterate-sandbox:local` is not built automatically on `pnpm dev`. Build it when you need local-docker machines or when CI spec runs time out during webserver startup.
 
-To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
+To build the local Docker snapshot from the repo root or `apps/os`:
 
 ```bash
-pnpm snapshot:local-docker
+pnpm sandbox:local-docker:build
 ```
 
 New local-docker machines always use the latest `iterate-sandbox:local` image tag.
+
+#### Common errors
+
+- Local-docker machines fail to start: the image was never built or Docker/OrbStack is not running.
 
 ### Creating a Local Machine
 
