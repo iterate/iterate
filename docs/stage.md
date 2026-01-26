@@ -6,23 +6,34 @@ Stage is an **input**, not something derived. The deployer decides what stage to
 
 Stage determines the URL namespace and identity of a deployment:
 
-| Stage     | URL                    |
-| --------- | ---------------------- |
-| `prd`     | os.iterate.com         |
-| `stg`     | os-staging.iterate.com |
-| `misha`   | os-misha.iterate.com   |
-| `pr-1234` | os-pr-1234.iterate.com |
+| Stage           | URL                          |
+| --------------- | ---------------------------- |
+| `prd`           | os.iterate.com               |
+| `stg`           | os-stg.iterate.com           |
+| `preview-alpha` | os-preview-alpha.iterate.com |
+| `dev-jonas`     | os-dev-jonas.iterate.com     |
 
 That's it. Stage is just "which URL". Everything else—secrets, database, OAuth clients, Slack tokens—are separate concerns configured via environment variables.
+
+## URL derivation
+
+Stage maps to URL via simple transformation:
+
+```ts
+const subdomain = `os-${stage}`.replace(/^os-prd$/, "os");
+const url = `${subdomain}.iterate.com`;
+```
+
+For `apps/iterate-com`, replace `os` with `www`.
 
 ## Usage
 
 ```bash
 # Deploy to a stage
-pnpm deploy --stage misha
+pnpm deploy --stage preview-alpha
 
-# Stage defaults to dev-$ITERATE_USER for local dev
-pnpm dev  # implicitly --stage dev-jonas
+# Local dev with your stage
+pnpm dev --stage dev-jonas
 ```
 
 ## Principles
@@ -75,14 +86,34 @@ You could run local against any stage's config. They're orthogonal.
 
 ## Secrets & Doppler
 
-Secrets come from Doppler configs: `dev`, `stg`, `prd`.
+Secrets come from Doppler configs. While stage and secrets are conceptually independent, we enforce a safety check: deploying to `prd` stage requires `prd` doppler config.
 
-While stage and secrets are conceptually independent, we enforce a safety check: deploying to `prd` stage requires `prd` doppler config. This prevents accidentally deploying production with dev secrets.
+### Branch configs
+
+Use Doppler branch configs for isolation:
+
+| Config pattern    | Purpose                              |
+| ----------------- | ------------------------------------ |
+| `dev`             | Base dev config (don't use directly) |
+| `dev_jonas`       | Engineer-specific dev config         |
+| `dev_rahul`       | Engineer-specific dev config         |
+| `stg`             | Base staging config                  |
+| `preview_alpha`   | Preview environment A                |
+| `preview_bravo`   | Preview environment B                |
+| `preview_charlie` | Preview environment C                |
+| `prd`             | Production                           |
+
+Engineers should use `dev_{name}` configs. Preview environments use `preview_alpha`, `preview_bravo`, etc. (not numbered—implies no ordering).
+
+**Never use `dev_personal`**. It's a Doppler built-in that makes it impossible for others to fix secrets. We've banned it.
+
+### Stage to config mapping
 
 ```
 prd stage → requires prd doppler config
 stg stage → requires stg doppler config
-dev-* / pr-* stages → requires dev doppler config
+preview-* stages → requires preview_* doppler config
+dev-* stages → requires dev_* doppler config
 ```
 
 Bypass with `SKIP_DOPPLER_CHECK=true` if you know what you're doing.
@@ -100,24 +131,25 @@ DATABASE_BRANCH=pr-1234       # optional, for planetscale branching
 
 Like doppler, we validate DB config to prevent accidents:
 
-| Stage           | Allowed DB         | Branch allowed? |
-| --------------- | ------------------ | --------------- |
-| `prd`           | production DB only | No              |
-| `stg`           | staging DB only    | No              |
-| `dev-*`, `pr-*` | dev DB only        | Yes             |
+| Stage       | Allowed DB         | Branch allowed? |
+| ----------- | ------------------ | --------------- |
+| `prd`       | production DB only | No              |
+| `stg`       | staging DB only    | No              |
+| `preview-*` | dev DB only        | Yes             |
+| `dev-*`     | dev DB only        | Yes             |
 
 Non-prd stages **fail** if `DATABASE_URL` points to production. Bypass with `SKIP_DB_SAFETY_CHECK=true`.
 
-### PR previews
+### Preview environments
 
 CI sets up isolated branches automatically:
 
 ```bash
 DATABASE_URL=<dev-db-connection>
-DATABASE_BRANCH=pr-1234  # created on PR open, deleted on PR close
+DATABASE_BRANCH=preview-alpha  # isolated branch per preview env
 ```
 
-Each PR gets its own branch of the dev database—isolated from other PRs but sharing the dev DB infrastructure.
+Each preview env gets its own branch of the dev database—isolated from other preview envs but sharing the dev DB infrastructure.
 
 ### Debugging with different DBs
 
