@@ -228,8 +228,15 @@ function setupDevTunnelEnv() {
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
   const dopplerConfig = z
-    .object({ environment: z.string() })
+    .object({ environment: z.string(), name: z.string() })
     .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
+
+  if (dopplerConfig.name === "dev_personal") {
+    const username = (await import("node:os")).userInfo().username;
+    throw new Error(
+      `dev_personal doppler config is not allowed. Use 'doppler setup' to select or create a config named 'dev_${username}' instead.`,
+    );
+  }
 
   if (isProduction && !dopplerConfig.environment.startsWith("prd")) {
     throw new Error(
