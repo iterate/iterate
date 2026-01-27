@@ -8,7 +8,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { trpcRouter } from "./trpc/router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
-import { slackRouter } from "./routers/slack.ts";
+import { loadConfig } from "./config-loader.ts";
 
 const app = baseApp.use(
   logger(),
@@ -25,6 +25,16 @@ const app = baseApp.use(
   }),
   secureHeaders(),
 );
+
+// Plugin fallthrough - try config handler first, fall through on 404
+app.use("*", async (c, next) => {
+  const config = await loadConfig();
+  if (!config) return next();
+
+  const response = await config.fetch(c.req.raw, c.env);
+  if (response.status === 404) return next();
+  return response;
+});
 
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -49,7 +59,6 @@ app.all("/api/trpc/*", (c) => {
 });
 
 app.route("/api/pty", ptyRouter);
-app.route("/api/integrations/slack", slackRouter);
 
 const distDir = path.join(import.meta.dirname, "../dist");
 app.use("/*", serveStatic({ root: distDir }));

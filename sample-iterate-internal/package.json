@@ -1,0 +1,22 @@
+{
+  "name": "@iterate-com/iterate-internal",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsx build.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "better-sqlite3": "^11.6.0",
+    "nanoid": "^5.0.9"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2"
+  }
+}

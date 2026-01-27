@@ -375,4 +375,82 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(spa.headers.get("content-type")).toContain("text/html");
     }, 210000);
   });
+
+  // ============ Config Loading ============
+  describe.concurrent("Config Loading", () => {
+    let container: ContainerInfo;
+
+    beforeAll(async () => {
+      // Create container with ITERATE_CONFIG_PATH pointing to sample-iterate-internal
+      const containerName = createContainerName("config-test");
+      const port = getRandomPort();
+
+      const envVars = [
+        "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        // Point to the sample-iterate-internal that gets synced from local repo
+        `ITERATE_CONFIG_PATH=${CONTAINER_REPO_PATH}/sample-iterate-internal`,
+      ];
+
+      const config: Record<string, unknown> = {
+        Image: IMAGE_NAME,
+        name: containerName,
+        Env: envVars,
+        Tty: false,
+        HostConfig: {
+          AutoRemove: false,
+          Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
+          ExtraHosts: ["host.docker.internal:host-gateway"],
+          PortBindings: {
+            "3000/tcp": [{ HostPort: String(port) }],
+          },
+        },
+        ExposedPorts: { "3000/tcp": {} },
+      };
+
+      const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", config);
+      await dockerApi("POST", `/containers/${createResponse.Id}/start`, {});
+
+      container = { id: createResponse.Id, port };
+      await waitForContainerReady(container.id);
+
+      // Install dependencies in sample-iterate-internal
+      console.log("Installing sample-iterate-internal dependencies...");
+      await execInContainer(container.id, [
+        "sh",
+        "-c",
+        `cd ${CONTAINER_REPO_PATH}/sample-iterate-internal && pnpm install`,
+      ]);
+    }, 300000);
+
+    afterAll(async () => {
+      if (container?.id) await destroyContainer(container.id);
+    }, 30000);
+
+    test("daemon loads iterate.config.ts from ITERATE_CONFIG_PATH", async () => {
+      await waitForDaemonReady(container.port!);
+      const baseUrl = `http://localhost:${container.port}`;
+
+      // Health endpoint should still work (fallthrough)
+      const health = await fetch(`${baseUrl}/api/health`);
+      expect(health.ok).toBe(true);
+
+      // Slack webhook should be handled by the config (not 404)
+      const slackResponse = await fetch(`${baseUrl}/api/integrations/slack/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "url_verification", challenge: "test" }),
+      });
+      // Should get a response from the config, not a 404
+      expect(slackResponse.status).not.toBe(404);
+    }, 210000);
+
+    test("fallthrough works for unhandled routes", async () => {
+      await waitForDaemonReady(container.port!);
+
+      // tRPC should still work (fallthrough from config's 404)
+      const trpc = createDaemonTrpcClient(container.port!);
+      const cwd = await trpc.getServerCwd.query();
+      expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
+    }, 210000);
+  });
 });
