@@ -243,11 +243,7 @@ export function cloneRepos(repos: RepoInfo[]): void {
  */
 export function getCustomerRepoPath(): string | null {
   const values = Array.from(clonedReposStatus.values());
-  // Prefer fully cloned repos but fall back to first path even if still cloning (better than nothing)
-  const repo =
-    values.find((info) => info.status === "cloned" && info.path) ||
-    values.find((info) => info.path);
-  return repo?.path || null;
+  return values.find((info) => info.status === "cloned" && info.path)?.path || null;
 }
 
 /**
