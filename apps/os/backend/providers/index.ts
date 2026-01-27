@@ -1,5 +1,5 @@
 import type { MachineType } from "../db/schema.ts";
-import type { CloudflareEnv } from "../cloudflare-env.ts";
+import type { CloudflareEnv } from "../../env.ts";
 import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
 import { createLocalProvider } from "./local-docker.ts";

@@ -5,7 +5,7 @@
  * use encryption-core.ts directly with encryptWithSecret/decryptWithSecret.
  */
 
-import { env } from "../cloudflare-env.ts";
+import { env } from "../../env.ts";
 import { encryptWithSecret, decryptWithSecret } from "./encryption-core.ts";
 
 // Re-export core functions for convenience
