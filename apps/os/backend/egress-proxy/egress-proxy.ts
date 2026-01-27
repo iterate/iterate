@@ -67,6 +67,7 @@ const STRIP_REQUEST_HEADERS = [
   "x-iterate-original-url",
   "x-iterate-original-host",
   "x-iterate-original-method",
+  "x-iterate-content-length",
   "x-iterate-api-key",
   "host",
   "connection",
@@ -605,6 +606,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const originalURL = c.req.header("X-Iterate-Original-URL");
   const originalHost = c.req.header("X-Iterate-Original-Host");
   const originalMethod = c.req.header("X-Iterate-Original-Method") || c.req.method;
+  const trustedContentLength = c.req.header("X-Iterate-Content-Length");
   const apiKey = c.req.header("X-Iterate-API-Key");
 
   // Validate required headers
@@ -708,11 +710,21 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       }
     }
 
+    // Use the trusted content length from mitmproxy if available
+    // mitmproxy knows the exact body size, so this avoids Content-Length mismatches
+    // that can occur when streaming through proxy chains
+    if (trustedContentLength) {
+      forwardHeaders.set("content-length", trustedContentLength);
+    }
+
     // Forward the request to the original destination
+    // Use duplex: "half" to enable proper streaming of request bodies
     let response = await fetch(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
       body: requestBody,
+      // @ts-expect-error - Cloudflare Workers support duplex streaming
+      duplex: "half",
     });
 
     // Handle 401 - attempt refresh for connector secrets

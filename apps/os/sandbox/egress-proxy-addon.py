@@ -82,6 +82,12 @@ class EgressProxyAddon:
         flow.request.headers["X-Iterate-Original-Host"] = original_host
         flow.request.headers["X-Iterate-Original-Method"] = flow.request.method
         
+        # Pass the actual content length so the worker can set it correctly
+        # This ensures Content-Length matches the actual body bytes, avoiding
+        # issues where the header doesn't match due to encoding changes
+        if flow.request.content:
+            flow.request.headers["X-Iterate-Content-Length"] = str(len(flow.request.content))
+        
         # Add API key for worker auth
         if API_KEY:
             flow.request.headers["X-Iterate-API-Key"] = API_KEY
