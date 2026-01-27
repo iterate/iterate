@@ -65,7 +65,8 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 # getIterateSecret() magic string in your requests. The egress proxy will
 # replace it with the actual secret value.
 #
-# Format: getIterateSecret({secretKey: "<key>", userId?: "<user_id>"})
+# Format: getIterateSecret({secretKey: "<key>", userId?: "<user_id>", userEmail?: "<email>"})
+# Tip: ~/.iterate/.env is the canonical example of the env var format and values.
 #
 # Examples:
 #   # In HTTP headers
@@ -76,6 +77,7 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 #
 #   # User-specific secrets (e.g., personal OAuth tokens)
 #   Authorization: Bearer getIterateSecret({secretKey: "gmail.access_token", userId: "usr_123"})
+#   Authorization: Bearer getIterateSecret({secretKey: "google_oauth", userEmail: "user@example.com"})
 #
 # The egress proxy (HTTPS_PROXY) intercepts all outbound requests and
 # replaces getIterateSecret() strings in both headers AND the URL path.

@@ -21,13 +21,14 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop fd-find gh python3-pip rsync sqlite3 sudo tini tmux && \
+    apt-get install -y btop build-essential fd-find gh git inotify-tools make python3-pip rsync s6 sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
 
 # Install mitmproxy for egress proxy
 RUN pip3 install --break-system-packages mitmproxy
+
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
@@ -39,7 +40,7 @@ RUN mkdir -p /var/log/pidnap && \
     chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx pidnap@0.0.0-dev.2
+RUN npm install -g pnpm tsx pidnap@0.0.0-dev.4
 
 # Copy entry script (needs stable location for ENTRYPOINT)
 COPY apps/os/sandbox/entry.sh /app/entry.sh

@@ -56,6 +56,8 @@ function ProjectConnectorsContent() {
     // Note: slack_workspace_already_connected now redirects to /slack-conflict instead
     if (search.error === "slack_oauth_denied") {
       toast.error("Slack authorization was denied.");
+    } else if (search.error === "google_oauth_denied") {
+      toast.error("Google authorization was denied.");
     }
   }, [search.error]);
 
@@ -97,6 +99,48 @@ function ProjectConnectorsContent() {
     },
     onError: (error) => {
       toast.error(`Failed to disconnect Slack: ${error.message}`);
+    },
+  });
+
+  // Google connection (user-scoped)
+  const { data: googleConnection } = useSuspenseQuery(
+    trpc.project.getGoogleConnection.queryOptions({
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+    }),
+  );
+
+  const startGoogleOAuth = useMutation({
+    mutationFn: () =>
+      trpcClient.project.startGoogleOAuthFlow.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      }),
+    onSuccess: (data) => {
+      window.location.href = data.authorizationUrl;
+    },
+    onError: (error) => {
+      toast.error(`Failed to start Google connection: ${error.message}`);
+    },
+  });
+
+  const disconnectGoogle = useMutation({
+    mutationFn: () =>
+      trpcClient.project.disconnectGoogle.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      }),
+    onSuccess: () => {
+      toast.success("Google disconnected");
+      queryClient.invalidateQueries({
+        queryKey: trpc.project.getGoogleConnection.queryKey({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      });
+    },
+    onError: (error) => {
+      toast.error(`Failed to disconnect Google: ${error.message}`);
     },
   });
 
@@ -180,24 +224,53 @@ function ProjectConnectorsContent() {
         </div>
 
         <ItemGroup className="space-y-3">
-          {/* Gmail - Coming Soon */}
+          {/* Google Connection */}
           <Item variant="outline">
             <ItemMedia variant="icon">
               <Mail className="h-4 w-4" />
             </ItemMedia>
             <ItemContent>
               <ItemTitle>
-                Gmail
-                <Badge variant="outline" className="ml-2">
-                  Coming soon
-                </Badge>
+                Google
+                {googleConnection.connected && (
+                  <Badge variant="secondary" className="ml-2">
+                    Connected
+                  </Badge>
+                )}
               </ItemTitle>
-              <ItemDescription>Gmail and Calendar access for your account.</ItemDescription>
+              <ItemDescription>
+                {googleConnection.connected && googleConnection.email ? (
+                  <span className="flex items-center gap-2">
+                    Connected as{" "}
+                    <span className="font-medium text-foreground">{googleConnection.email}</span>
+                  </span>
+                ) : (
+                  "Gmail, Calendar, Docs, Sheets, and Drive access for your account."
+                )}
+              </ItemDescription>
             </ItemContent>
             <ItemActions>
-              <Button size="sm" disabled>
-                Connect Gmail
-              </Button>
+              {googleConnection.connected ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => disconnectGoogle.mutate()}
+                  disabled={disconnectGoogle.isPending}
+                  className="text-destructive border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
+                >
+                  {disconnectGoogle.isPending && <Spinner className="mr-2" />}
+                  Disconnect
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => startGoogleOAuth.mutate()}
+                  disabled={startGoogleOAuth.isPending}
+                >
+                  {startGoogleOAuth.isPending && <Spinner className="mr-2" />}
+                  Connect Google
+                </Button>
+              )}
             </ItemActions>
           </Item>
         </ItemGroup>
