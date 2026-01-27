@@ -9,6 +9,8 @@ import { trpcRouter } from "./trpc/router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
+import { agentsRouter } from "./routers/agents.ts";
+import { opencodeRouter } from "./routers/opencode.ts";
 
 const app = baseApp.use(
   logger(),
@@ -29,6 +31,9 @@ const app = baseApp.use(
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+app.route("/api/agents", agentsRouter);
+app.route("/api/opencode", opencodeRouter);
 
 app.all("/api/trpc/*", (c) => {
   return fetchRequestHandler({
