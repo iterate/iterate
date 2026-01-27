@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { simpleGit } from "simple-git";
 
 import { x } from "tinyexec";
-
+import { getTmuxSocketPath } from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
 // Store for platform-injected env vars
@@ -23,10 +23,11 @@ const clonedReposStatus: Map<
 > = new Map();
 
 /**
- * Apply environment variables to the daemon process.
+ * Apply environment variables to the daemon process and tmux sessions.
  * This function:
  * 1. Replaces vars in memory and process.env (removes stale keys)
  * 2. Writes them to ~/.iterate/.env file in dotenv format for pidnap
+ * 3. Sends inline export commands to tmux sessions (bash-escaped)
  */
 export async function applyEnvVars(vars: Record<string, string>): Promise<{
   injectedCount: number;
@@ -120,11 +121,33 @@ NODE_USE_ENV_PROXY=1
     console.log("[platform] Env vars unchanged, skipping write");
   }
 
-  // Note: We no longer source the env file in tmux sessions. The file is written
-  // in dotenv format (no shell escaping) for pidnap to parse. Tmux sessions don't
-  // get live env var updates, but this is acceptable since tmux is being phased out.
-  // Processes managed by pidnap (egress-proxy, daemon, opencode) get restarted with
-  // fresh env vars when the file changes.
+  // Refresh tmux sessions with new env vars by sending inline export commands.
+  // We use single-quoted strings with '\'' to escape single quotes, which is safe
+  // for any value (no shell interpretation). This is separate from the dotenv file
+  // format above because bash and dotenv have incompatible escaping rules.
+  const tmuxSocket = getTmuxSocketPath();
+  const listResult = await x("tmux", ["-S", tmuxSocket, "list-sessions", "-F", "#{session_name}"]);
+  const sessions = listResult.stdout.trim().split("\n").filter(Boolean);
+
+  if (sessions.length > 0) {
+    // Build export commands with proper bash escaping (single quotes, '\'' for literal ')
+    const exportCommands = Object.entries(vars)
+      .map(([key, value]) => {
+        const escaped = value.replace(/'/g, "'\\''");
+        return `export ${key}='${escaped}'`;
+      })
+      .join("; ");
+
+    // Send export commands to each session in parallel
+    await Promise.all(
+      sessions.map((session) =>
+        x("tmux", ["-S", tmuxSocket, "send-keys", "-t", session, exportCommands, "Enter"], {
+          throwOnError: true,
+        }),
+      ),
+    );
+    console.log(`[platform] Refreshed env vars in ${sessions.length} tmux sessions`);
+  }
 
   return {
     injectedCount: Object.keys(vars).length,
