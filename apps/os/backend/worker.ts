@@ -21,10 +21,12 @@ import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
+import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
+import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 
 export type { Variables };
@@ -123,6 +125,7 @@ app.route("/api/integrations/google", googleApp);
 app.route("/api/integrations/resend", resendApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
+app.route("/api", egressApprovalsApp);
 
 // Mount egress proxy (for sandbox outbound traffic)
 app.route("", egressProxyApp);
@@ -194,4 +197,4 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { RealtimePusher };
+export { RealtimePusher, ApprovalCoordinator };
