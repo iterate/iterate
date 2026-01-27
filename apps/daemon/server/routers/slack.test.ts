@@ -23,6 +23,11 @@ vi.mock("../db/index.ts", () => ({
   },
 }));
 
+// Mock platform to provide customer repo path
+vi.mock("../trpc/platform.ts", () => ({
+  getCustomerRepoPath: vi.fn(() => "/home/iterate/src/github.com/customer/repo"),
+}));
+
 const { slackRouter } = await import("./slack.ts");
 const { getAgent, createAgent, appendToAgent } = await import("../services/agent-manager.ts");
 
