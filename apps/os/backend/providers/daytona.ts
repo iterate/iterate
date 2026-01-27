@@ -9,7 +9,7 @@ import type {
 // Common log paths in sandbox (pidnap process manager)
 const DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
 const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
-const PIDNAP_STATUS_CMD = "pidnap status";
+const PIDNAP_STATUS_CMD = "pidnap status --url http://localhost:9000/rpc";
 
 const TERMINAL_PORT = 22222;
 const DEFAULT_DAEMON_PORT = 3000;

@@ -6,7 +6,7 @@ import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from
 // Common log paths in sandbox (pidnap process manager)
 const DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
 const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
-const PIDNAP_STATUS_CMD = "pidnap status";
+const PIDNAP_STATUS_CMD = "pidnap status --url http://localhost:9000/rpc";
 
 const TERMINAL_PORT = 22222;
 const DEFAULT_DAEMON_PORT = 3000;
@@ -260,7 +260,7 @@ export interface LocalDockerProviderConfig {
 
 export function createLocalDockerProvider(config: LocalDockerProviderConfig): MachineProvider {
   const { imageName, externalId, metadata, buildProxyUrl } = config;
-  const containerId = metadata.containerId;
+  // const containerId = metadata.containerId;
 
   const getUrl = (port: number): string => {
     if (metadata.ports) {
