@@ -107,11 +107,9 @@ export default defineConfig({
     {
       name: "opencode",
       definition: {
-        command: `sh`,
-        args: [
-          "-c",
-          `([ -d "$ITERATE_CUSTOMER_REPO_PATH" ] && cd $ITERATE_CUSTOMER_REPO_PATH; opencode serve --port 4096 --hostname 0.0.0.0 --log-level DEBUG)`,
-        ],
+        // Note, the client needs to handle the working directory by passing in a directory when creating a client using the SDK.
+        command: "opencode",
+        args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
       },
       port: 4096,
       envReloadDelay: 500,

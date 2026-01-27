@@ -43,7 +43,11 @@ export interface AgentHarness {
   /**
    * Send a message/event to an existing agent session.
    */
-  append(harnessSessionId: string, event: AgentEvent): Promise<void>;
+  append(
+    harnessSessionId: string,
+    event: AgentEvent,
+    params: { workingDirectory: string },
+  ): Promise<void>;
 
   /**
    * Get the command to start this agent in a terminal.
