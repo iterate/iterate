@@ -21,10 +21,11 @@
  *
  * Magic string format (can appear in headers or path):
  *   getIterateSecret({secretKey: "openai_api_key", machineId: "mach_xxx", userId: "usr_xxx"})
+ *   getIterateSecret({secretKey: "google_oauth", userEmail: "user@example.com"})
  */
 
 import { Hono } from "hono";
-import { eq, and, isNull, or } from "drizzle-orm";
+import { eq, and, isNull, or, sql } from "drizzle-orm";
 import JSON5 from "json5";
 import jsonata, { type Expression } from "jsonata";
 import { logger } from "../tag-logger.ts";
@@ -82,7 +83,7 @@ const STRIP_REQUEST_HEADERS = [
 // Headers to strip from responses
 const STRIP_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
 
-// Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "..."})
+// Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "...", userEmail?: "..."})
 export const MAGIC_STRING_PATTERN = /getIterateSecret\(\s*\{([^}]+)\}\s*\)/g;
 
 // Error types for secret resolution
@@ -102,6 +103,7 @@ export type EgressContext = {
   organizationId?: string;
   projectId?: string;
   userId?: string;
+  userEmail?: string;
   orgSlug?: string;
   projectSlug?: string;
   originalUrl: string;
@@ -113,19 +115,19 @@ type RequestSecretCache = Map<string, SecretCacheEntry | null>;
 
 function makeSecretCacheKey(
   secretKey: string,
-  context: { organizationId?: string; projectId?: string; userId?: string },
+  context: { organizationId?: string; projectId?: string; userId?: string; userEmail?: string },
 ): string {
-  return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}`;
+  return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}:${context.userEmail ?? ""}`;
 }
 
 /**
  * Parse the magic string arguments using JSON5.
  * JSON5 allows unquoted keys and single-quoted strings.
- * Returns { secretKey, machineId?, userId? } or null if invalid.
+ * Returns { secretKey, machineId?, userId?, userEmail? } or null if invalid.
  */
 export function parseMagicString(
   match: string,
-): { secretKey: string; machineId?: string; userId?: string } | null {
+): { secretKey: string; machineId?: string; userId?: string; userEmail?: string } | null {
   // Extract the object part: {...}
   const objectMatch = match.match(/\{[^}]+\}/);
   if (!objectMatch) return null;
@@ -135,12 +137,14 @@ export function parseMagicString(
       secretKey?: string;
       machineId?: string;
       userId?: string;
+      userEmail?: string;
     };
     if (!parsed.secretKey) return null;
     return {
       secretKey: parsed.secretKey,
       machineId: parsed.machineId,
       userId: parsed.userId,
+      userEmail: parsed.userEmail,
     };
   } catch {
     return null;
@@ -218,6 +222,7 @@ async function lookupSecret(
     organizationId?: string;
     projectId?: string;
     userId?: string;
+    userEmail?: string;
   },
   cache?: RequestSecretCache,
 ): Promise<{ value: string; secretId: string; egressProxyRule?: string } | null> {
@@ -270,6 +275,19 @@ async function lookupSecret(
       and(
         eq(schema.secret.key, secretKey),
         eq(schema.secret.userId, context.userId),
+        eq(schema.secret.projectId, context.projectId),
+      ),
+    );
+  }
+
+  if (!context.userId && context.userEmail && context.projectId) {
+    conditions.push(
+      and(
+        eq(schema.secret.key, secretKey),
+        eq(
+          schema.secret.userId,
+          sql`(select id from "user" where email = ${context.userEmail} limit 1)`,
+        ),
         eq(schema.secret.projectId, context.projectId),
       ),
     );
@@ -337,6 +355,7 @@ async function resolveSecret(
     organizationId: context.organizationId,
     projectId: context.projectId,
     userId: context.userId,
+    userEmail: context.userEmail,
   });
 
   const secret = await lookupSecret(
@@ -346,6 +365,7 @@ async function resolveSecret(
       organizationId: context.organizationId,
       projectId: context.projectId,
       userId: context.userId,
+      userEmail: context.userEmail,
     },
     cache,
   );
@@ -472,6 +492,7 @@ async function replaceMagicStrings(
     const secretContext: EgressContext = {
       ...context,
       userId: parsed.userId ?? context.userId,
+      userEmail: parsed.userEmail ?? context.userEmail,
     };
     const secretResult = await resolveSecret(db, parsed.secretKey, secretContext, cache);
 
