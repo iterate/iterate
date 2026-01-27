@@ -521,7 +521,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
       // 3. Modify iterate.config.ts to add /api/test/ping endpoint
       const newConfigContent = `import { Hono } from "hono";
-import { slackRouter } from "./integrations/slack/router.ts";
+import { slackRouter } from "./plugins/slack/router.ts";
 
 const app = new Hono();
 
