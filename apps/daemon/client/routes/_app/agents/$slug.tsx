@@ -4,7 +4,6 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, LoaderIcon } from "lucide-react";
 import type { SerializedAgent } from "../../../../server/trpc/router.ts";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
-import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
 
 const XtermTerminal = lazy(() =>
   import("@/components/xterm-terminal.tsx").then((mod) => ({
@@ -12,37 +11,23 @@ const XtermTerminal = lazy(() =>
   })),
 );
 
-/**
- * Get the CLI command for agents that don't use tmux sessions.
- * For opencode: connects via attach command to existing SDK session
- * For claude/pi: spawns the CLI directly
- */
+/** Build an attach command when the active route is an OpenCode session. */
 function getAgentCommand(agent: SerializedAgent): string | undefined {
-  // If agent has a tmux session, we attach to that instead
-  if (agent.tmuxSession) return undefined;
-
-  switch (agent.harnessType) {
-    case "opencode":
-      // OpenCode uses SDK - attach to the session by ID
-      return agent.harnessSessionId ? `opencode attach ${agent.harnessSessionId}` : "opencode";
-    case "claude-code":
-      // Claude CLI - use --resume if we have a session, otherwise start fresh
-      return agent.initialPrompt ? `claude --prompt "${agent.initialPrompt}"` : "claude";
-    case "pi":
-      // Pi CLI - use initial prompt if available
-      return agent.initialPrompt ? `pi --prompt "${agent.initialPrompt}"` : "pi";
-    default:
-      return undefined;
-  }
+  const destination = agent.activeRoute?.destination;
+  if (!destination) return undefined;
+  const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
+  if (!match) return undefined;
+  return `opencode attach ${match[1]}`;
 }
 
 export const Route = createFileRoute("/_app/agents/$slug")({
   beforeLoad: async ({ params }) => {
-    const agent = await trpcClient.getAgent.query({ slug: params.slug });
+    const agentPath = decodeURIComponent(params.slug);
+    const agent = await trpcClient.getAgent.query({ path: agentPath });
     if (!agent) {
       throw redirect({
         to: "/agents/new",
-        search: { name: params.slug },
+        search: { path: agentPath },
       });
     }
   },
@@ -51,10 +36,10 @@ export const Route = createFileRoute("/_app/agents/$slug")({
 
 function AgentPage() {
   const { slug } = Route.useParams();
+  const agentPath = decodeURIComponent(slug);
   const trpc = useTRPC();
 
-  const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ slug }));
-  useEnsureAgentStarted(slug);
+  const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ path: agentPath }));
 
   // Get the command to run for agents without tmux sessions
   const initialCommand = useMemo(() => {
@@ -72,7 +57,7 @@ function AgentPage() {
     );
   }
 
-  // Connect to agent's tmux session or spawn CLI directly
+  // Open a shell and attach if an active OpenCode session exists
   return (
     <Suspense
       fallback={
@@ -81,11 +66,7 @@ function AgentPage() {
         </div>
       }
     >
-      <XtermTerminal
-        key={agent.slug}
-        tmuxSessionName={agent.tmuxSession ?? undefined}
-        initialCommand={initialCommand}
-      />
+      <XtermTerminal key={agent.path} initialCommand={initialCommand} />
     </Suspense>
   );
 }

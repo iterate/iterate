@@ -6,14 +6,10 @@ import * as pty from "@lydell/node-pty";
 import type { WSContext } from "hono/ws";
 import type { WebSocket } from "ws";
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
 import XTermHeadless from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { upgradeWebSocket } from "../utils/hono.ts";
 import { hasTmuxSession, sendKeys } from "../tmux-control.ts";
-import { db } from "../db/index.ts";
-import * as schema from "../db/schema.ts";
-import { getHarness, getCommandString } from "../agents/index.ts";
 
 const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 const COMMAND_PREFIX = "\x00[command]\x00";
@@ -66,20 +62,7 @@ async function spawnPtyProcess(
 ): Promise<pty.IPty | null> {
   if (tmuxSessionName) {
     if (!hasTmuxSession(tmuxSessionName)) {
-      let commandInfo = "";
-      const [agent] = await db
-        .select()
-        .from(schema.agents)
-        .where(eq(schema.agents.tmuxSession, tmuxSessionName))
-        .limit(1);
-      if (agent) {
-        const harness = getHarness(agent.harnessType);
-        const cmd = harness.getStartCommand(agent.workingDirectory, {
-          prompt: agent.initialPrompt ?? undefined,
-        });
-        commandInfo = `\r\n\r\nCommand: cd "${agent.workingDirectory}" && ${getCommandString(cmd)}`;
-      }
-      const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.${commandInfo}\r\n\r\nThe session may have exited or was never created.\r\nTry restarting the agent or check if the command failed to start.`;
+      const errorMsg = `Tmux session "${tmuxSessionName}" does not exist.\r\n\r\nThe session may have exited or was never created.\r\nTry restarting the session or check if the command failed to start.`;
       ws.send(`\x1b[31m${errorMsg}\x1b[0m\r\n`);
       ws.close(4000, "Session does not exist");
       return null;
