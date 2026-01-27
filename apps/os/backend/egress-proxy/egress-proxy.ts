@@ -21,10 +21,11 @@
  *
  * Magic string format (can appear in headers or path):
  *   getIterateSecret({secretKey: "openai_api_key", machineId: "mach_xxx", userId: "usr_xxx"})
+ *   getIterateSecret({secretKey: "google_oauth", userEmail: "user@example.com"})
  */
 
 import { Hono } from "hono";
-import { eq, and, isNull, or } from "drizzle-orm";
+import { eq, and, isNull, or, sql } from "drizzle-orm";
 import JSON5 from "json5";
 import jsonata, { type Expression } from "jsonata";
 import { logger } from "../tag-logger.ts";
@@ -82,7 +83,7 @@ const STRIP_REQUEST_HEADERS = [
 // Headers to strip from responses
 const STRIP_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
 
-// Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "..."})
+// Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "...", userEmail?: "..."})
 export const MAGIC_STRING_PATTERN = /getIterateSecret\(\s*\{([^}]+)\}\s*\)/g;
 
 // Error types for secret resolution
@@ -102,6 +103,7 @@ export type EgressContext = {
   organizationId?: string;
   projectId?: string;
   userId?: string;
+  userEmail?: string;
   orgSlug?: string;
   projectSlug?: string;
   originalUrl: string;
@@ -113,19 +115,19 @@ type RequestSecretCache = Map<string, SecretCacheEntry | null>;
 
 function makeSecretCacheKey(
   secretKey: string,
-  context: { organizationId?: string; projectId?: string; userId?: string },
+  context: { organizationId?: string; projectId?: string; userId?: string; userEmail?: string },
 ): string {
-  return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}`;
+  return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}:${context.userEmail ?? ""}`;
 }
 
 /**
  * Parse the magic string arguments using JSON5.
  * JSON5 allows unquoted keys and single-quoted strings.
- * Returns { secretKey, machineId?, userId? } or null if invalid.
+ * Returns { secretKey, machineId?, userId?, userEmail? } or null if invalid.
  */
 export function parseMagicString(
   match: string,
-): { secretKey: string; machineId?: string; userId?: string } | null {
+): { secretKey: string; machineId?: string; userId?: string; userEmail?: string } | null {
   // Extract the object part: {...}
   const objectMatch = match.match(/\{[^}]+\}/);
   if (!objectMatch) return null;
@@ -135,12 +137,14 @@ export function parseMagicString(
       secretKey?: string;
       machineId?: string;
       userId?: string;
+      userEmail?: string;
     };
     if (!parsed.secretKey) return null;
     return {
       secretKey: parsed.secretKey,
       machineId: parsed.machineId,
       userId: parsed.userId,
+      userEmail: parsed.userEmail,
     };
   } catch {
     return null;
@@ -218,6 +222,7 @@ async function lookupSecret(
     organizationId?: string;
     projectId?: string;
     userId?: string;
+    userEmail?: string;
   },
   cache?: RequestSecretCache,
 ): Promise<{ value: string; secretId: string; egressProxyRule?: string } | null> {
@@ -270,6 +275,19 @@ async function lookupSecret(
       and(
         eq(schema.secret.key, secretKey),
         eq(schema.secret.userId, context.userId),
+        eq(schema.secret.projectId, context.projectId),
+      ),
+    );
+  }
+
+  if (!context.userId && context.userEmail && context.projectId) {
+    conditions.push(
+      and(
+        eq(schema.secret.key, secretKey),
+        eq(
+          schema.secret.userId,
+          sql`(select id from "user" where email = ${context.userEmail} limit 1)`,
+        ),
         eq(schema.secret.projectId, context.projectId),
       ),
     );
@@ -337,6 +355,7 @@ async function resolveSecret(
     organizationId: context.organizationId,
     projectId: context.projectId,
     userId: context.userId,
+    userEmail: context.userEmail,
   });
 
   const secret = await lookupSecret(
@@ -346,6 +365,7 @@ async function resolveSecret(
       organizationId: context.organizationId,
       projectId: context.projectId,
       userId: context.userId,
+      userEmail: context.userEmail,
     },
     cache,
   );
@@ -359,22 +379,36 @@ async function resolveSecret(
     // Secret not found - return appropriate error
     if (connector) {
       // This is a connector URL - provide helpful connect URL
-      const connectUrl = getFullReauthUrl(connector, urlContext, env.VITE_PUBLIC_URL);
-      return {
-        ok: false,
-        error: {
-          code: "NOT_FOUND",
-          message: `${connector.name} is not connected. Please connect it first.`,
-          connectUrl,
-        },
-      };
+      try {
+        const connectUrl = getFullReauthUrl(connector, urlContext, env.VITE_PUBLIC_URL);
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `${connector.name} is not connected. Please connect it first.`,
+            connectUrl,
+          },
+        };
+      } catch (err) {
+        logger.error("Failed to build connect URL", {
+          connector: connector.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `${connector.name} is not connected. Please connect it in your project settings.`,
+          },
+        };
+      }
     }
     // Non-connector secret not found
     return {
       ok: false,
       error: {
         code: "NOT_FOUND",
-        message: `Secret '${secretKey}' not found.`,
+        message: `Secret '${secretKey}' not found. Add it in your project settings or use a magic string with a valid secret key.`,
       },
     };
   }
@@ -451,9 +485,16 @@ async function replaceMagicStrings(
     }
 
     // Use resolveSecret with full context for connector-aware errors
-    // Note: We intentionally ignore parsed.userId from magic strings to prevent cross-user access
-    // User-scoped secrets are only accessible via the authenticated session context
-    const secretResult = await resolveSecret(db, parsed.secretKey, context, cache);
+    // SECURITY NOTE: We allow userId from magic strings, which means any code in the sandbox
+    // can access any user's secrets by passing their userId. This is a known limitation -
+    // agents currently can operate on behalf of any user. We haven't decided on the right
+    // security model yet, but this needs to exist for user-scoped connectors (like Google) to work.
+    const secretContext: EgressContext = {
+      ...context,
+      userId: parsed.userId ?? context.userId,
+      userEmail: parsed.userEmail ?? context.userEmail,
+    };
+    const secretResult = await resolveSecret(db, parsed.secretKey, secretContext, cache);
 
     if (!secretResult.ok) {
       // Return the error immediately - don't continue with partial replacement
@@ -532,13 +573,17 @@ async function processHeaderValue(
 
 /**
  * Return a JSON error response for secret errors.
- * Uses 502 Bad Gateway for NOT_FOUND (connector not configured)
- * Uses 401 Unauthorized for auth failures that need re-auth
+ * Uses 424 Failed Dependency for NOT_FOUND (connector not configured) - we avoid 502
+ * because Cloudflare replaces 502 response bodies with their generic error page.
+ * Uses 401 Unauthorized for auth failures that need re-auth.
  */
 function secretErrorResponse(
   c: { json: (data: unknown, status: number) => Response },
   error: SecretError,
 ): Response {
+  // Use 424 Failed Dependency instead of 502 - Cloudflare intercepts 502 responses
+  const status = error.code === "NOT_FOUND" ? 424 : 401;
+
   return c.json(
     {
       error: error.code.toLowerCase(),
@@ -547,7 +592,7 @@ function secretErrorResponse(
       connectUrl: error.connectUrl,
       reauthUrl: error.reauthUrl,
     },
-    error.code === "NOT_FOUND" ? 502 : 401,
+    status,
   );
 }
 

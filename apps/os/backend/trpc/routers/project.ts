@@ -18,6 +18,11 @@ import {
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
 import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
+import {
+  revokeGoogleToken,
+  createGoogleClient,
+  GOOGLE_OAUTH_SCOPES,
+} from "../../integrations/google/google.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
@@ -431,4 +436,118 @@ export const projectRouter = router({
         previousOrgSlug: existingConnection.project?.organization?.slug,
       };
     }),
+
+  // Start Google OAuth flow (user-scoped connection)
+  startGoogleOAuthFlow: projectProtectedMutation
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = arctic.generateState();
+      const codeVerifier = arctic.generateCodeVerifier();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        projectId: ctx.project.id,
+        callbackURL: input.callbackURL,
+        codeVerifier,
+      });
+
+      await ctx.db.insert(verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      const google = createGoogleClient(ctx.env);
+      const authorizationUrl = google.createAuthorizationURL(
+        state,
+        codeVerifier,
+        GOOGLE_OAUTH_SCOPES,
+      );
+
+      // Request offline access to get refresh token
+      authorizationUrl.searchParams.set("access_type", "offline");
+      // Force consent screen to ensure we get a refresh token even for returning users
+      authorizationUrl.searchParams.set("prompt", "consent");
+
+      return { authorizationUrl: authorizationUrl.toString() };
+    }),
+
+  // Get Google connection status for the current user in this project
+  getGoogleConnection: projectProtectedProcedure.query(async ({ ctx }) => {
+    // Google connections are user-scoped, so filter by userId
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "google" && c.userId === ctx.user.id,
+    );
+
+    const providerData = connection?.providerData as {
+      googleUserId?: string;
+      email?: string;
+      name?: string;
+      picture?: string;
+    } | null;
+
+    return {
+      connected: !!connection,
+      email: providerData?.email ?? null,
+      name: providerData?.name ?? null,
+      picture: providerData?.picture ?? null,
+    };
+  }),
+
+  // Disconnect Google (user-scoped)
+  disconnectGoogle: projectProtectedMutation.mutation(async ({ ctx }) => {
+    // Google connections are user-scoped
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "google" && c.userId === ctx.user.id,
+    );
+
+    if (!connection) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Google connection found for your account in this project",
+      });
+    }
+
+    // Revoke the Google token (best effort - don't fail disconnect if revocation fails)
+    const providerData = connection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        await revokeGoogleToken(accessToken);
+      } catch {
+        // Token revocation failed, but we still delete the connection
+      }
+    }
+
+    await ctx.db.transaction(async (tx) => {
+      // Delete the connection
+      await tx
+        .delete(schema.projectConnection)
+        .where(
+          and(
+            eq(projectConnection.projectId, ctx.project.id),
+            eq(projectConnection.provider, "google"),
+            eq(projectConnection.userId, ctx.user.id),
+          ),
+        );
+
+      // Delete the associated secret
+      await tx
+        .delete(schema.secret)
+        .where(
+          and(
+            eq(schema.secret.projectId, ctx.project.id),
+            eq(schema.secret.key, "google.access_token"),
+            eq(schema.secret.userId, ctx.user.id),
+          ),
+        );
+    });
+
+    return { success: true };
+  }),
 });
