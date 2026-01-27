@@ -169,10 +169,7 @@ function MachineDetailPage() {
 
   // Build URL for agent terminal with command (uses iterate-daemon's /terminal endpoint)
   const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
-    const url = new URL(`${daemonBaseUrl}/terminal`, window.location.origin);
-    url.searchParams.set("command", command);
-    url.searchParams.set("autorun", "true");
-    return url.toString();
+    return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
   // Get attach command for an agent using its harness session ID

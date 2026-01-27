@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_app/daemon-logs")({
 function DaemonLogsPage() {
   useEnsureTmuxSession({
     sessionName: "daemon-logs",
-    command: "tail -f /var/log/iterate-daemon/current",
+    command: "tail -f /var/log/pidnap/process/iterate-daemon.log",
   });
 
   return <XtermTerminal key="daemon-logs" tmuxSessionName="daemon-logs" />;

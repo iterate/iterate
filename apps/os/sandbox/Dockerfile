@@ -39,7 +39,7 @@ RUN mkdir -p /var/log/pidnap && \
     chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx pidnap@0.0.0-dev.2
+RUN npm install -g pnpm tsx pidnap@0.0.0-dev.4
 
 # Copy entry script (needs stable location for ENTRYPOINT)
 COPY apps/os/sandbox/entry.sh /app/entry.sh

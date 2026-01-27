@@ -3,11 +3,10 @@ import { fileURLToPath } from "node:url";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
-// Common log paths in sandbox
-const DAEMON_LOG = "/var/log/iterate-daemon/current";
-const OPENCODE_LOG = "/var/log/opencode/current";
-const S6_STATUS_CMD =
-  'export S6DIR=/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons && for svc in $S6DIR/*/; do echo "=== $(basename $svc) ==="; s6-svstat "$svc"; done';
+// Common log paths in sandbox (pidnap process manager)
+const DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
+const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
+const PIDNAP_STATUS_CMD = "pidnap status --url http://localhost:9000/rpc";
 
 const TERMINAL_PORT = 22222;
 const DEFAULT_DAEMON_PORT = 3000;
@@ -261,7 +260,7 @@ export interface LocalDockerProviderConfig {
 
 export function createLocalDockerProvider(config: LocalDockerProviderConfig): MachineProvider {
   const { imageName, externalId, metadata, buildProxyUrl } = config;
-  const containerId = metadata.containerId;
+  // const containerId = metadata.containerId;
 
   const getUrl = (port: number): string => {
     if (metadata.ports) {
@@ -396,18 +395,11 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       isDevOnly: true,
     },
 
-    commands: containerId
-      ? [
-          { label: "Terminal shell", command: `docker exec -it ${containerId} /bin/bash` },
-          { label: "Daemon logs", command: `docker exec ${containerId} tail -f ${DAEMON_LOG}` },
-          { label: "OpenCode logs", command: `docker exec ${containerId} tail -f ${OPENCODE_LOG}` },
-          { label: "Entry logs", command: `docker logs -f ${containerId}` },
-          {
-            label: "Service status",
-            command: `docker exec ${containerId} sh -c '${S6_STATUS_CMD}'`,
-          },
-        ]
-      : [],
+    commands: [
+      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+      { label: "Service status", command: PIDNAP_STATUS_CMD },
+    ],
 
     terminalOptions: [{ label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) }],
   };

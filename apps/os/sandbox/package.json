@@ -3,6 +3,6 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "pidnap": "0.0.0-dev.2"
+    "pidnap": "0.0.0-dev.4"
   }
 }

@@ -53,7 +53,7 @@ fi
 echo "Starting pidnap..."
 echo ""
 echo "Reminder - logs will be in /var/log/pidnap/"
-echo "  pidnap status          - show manager status"
+echo "  pidnap status         - show manager status"
 echo "  pidnap processes list  - list all processes"
 echo ""
 export ITERATE_REPO

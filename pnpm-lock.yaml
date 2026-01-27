@@ -949,8 +949,8 @@ importers:
   apps/os/sandbox:
     dependencies:
       pidnap:
-        specifier: 0.0.0-dev.2
-        version: 0.0.0-dev.2(crossws@0.4.1(srvx@0.10.0))(typescript@5.9.3)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+        specifier: 0.0.0-dev.4
+        version: 0.0.0-dev.4(crossws@0.4.1(srvx@0.10.0))(typescript@5.9.3)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
 
   packages/shared:
     devDependencies:
@@ -9022,8 +9022,8 @@ packages:
     resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
     engines: {node: '>=12'}
 
-  pidnap@0.0.0-dev.2:
-    resolution: {integrity: sha512-dKp+Y+xVkqgAHRosNzHgSDoX8fRXyGLU+WUx+ohYUbMsMuG5N3CJN+jVhMl0LW7Z0EKSmzAd6GIkuFzaozqw6Q==}
+  pidnap@0.0.0-dev.4:
+    resolution: {integrity: sha512-Nl8UVEcZ0TA+Sz8WjoLgfgpbRJEBgWq4AqAKhgbjXmIpK7TMqju4dyVjiADgg0nxuXA3jUrnCf82mZoAxp4fUA==}
     hasBin: true
 
   pidtree@0.6.0:
@@ -20321,7 +20321,7 @@ snapshots:
 
   picomatch@4.0.3: {}
 
-  pidnap@0.0.0-dev.2(crossws@0.4.1(srvx@0.10.0))(typescript@5.9.3)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
+  pidnap@0.0.0-dev.4(crossws@0.4.1(srvx@0.10.0))(typescript@5.9.3)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
     dependencies:
       '@orpc/client': 1.13.4(@opentelemetry/api@1.9.0)
       '@orpc/contract': 1.13.4(@opentelemetry/api@1.9.0)
