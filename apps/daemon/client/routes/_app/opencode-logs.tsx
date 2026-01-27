@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_app/opencode-logs")({
 function OpenCodeLogsPage() {
   useEnsureTmuxSession({
     sessionName: "opencode-logs",
-    command: "tail -f /var/log/opencode/current",
+    command: "tail -f /var/log/pidnap/process/opencode.log",
   });
 
   return <XtermTerminal key="opencode-logs" tmuxSessionName="opencode-logs" />;
