@@ -553,9 +553,9 @@ CONFIGEOF`,
         `cd ${CONTAINER_REPO_PATH}/sample-iterate-internal && pnpm build`,
       ]);
 
-      // 5. Restart the daemon service using s6
+      // 5. Restart the daemon service using pidnap
       console.log("Restarting daemon service...");
-      await execInContainer(container.id, ["s6-svc", "-t", "/run/service/iterate-daemon"]);
+      await execInContainer(container.id, ["pidnap", "processes", "restart", "iterate-daemon"]);
 
       // 6. Wait for daemon to be ready again
       await waitForDaemonReady(container.port!);
