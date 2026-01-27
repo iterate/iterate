@@ -20,7 +20,7 @@ jobs:
       - run: pnpm install
       - uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --project os --config dev
+        run: doppler setup --project os --config dev_test
       - name: Install Playwright browsers
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
