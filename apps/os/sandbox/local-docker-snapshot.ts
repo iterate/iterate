@@ -12,6 +12,9 @@ if (process.env.SANDBOX_ITERATE_REPO_REF) {
   console.log(`Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
   buildArgs.push(`--build-arg SANDBOX_ITERATE_REPO_REF="${process.env.SANDBOX_ITERATE_REPO_REF}"`);
 }
+if (process.argv.includes("--no-cache")) {
+  buildArgs.push("--no-cache");
+}
 
 console.log(`Building local docker snapshot: ${imageName}`);
 execSync(`docker build ${buildArgs.join(" ")} -t ${imageName} -f ${dockerfilePath} ${repoRoot}`, {

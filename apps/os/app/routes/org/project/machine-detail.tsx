@@ -173,8 +173,10 @@ function MachineDetailPage() {
   };
 
   // Get attach command for an agent using its harness session ID
-  const getAgentAttachCommand = (harnessSessionId: string) =>
-    `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
+  const getAgentAttachCommand = (harnessSessionId: string) => {
+    const baseCmd = `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
+    return `${baseCmd} --dir '${agentsData?.customerRepoPath}'`;
+  };
 
   return (
     <div className="p-4 space-y-6">

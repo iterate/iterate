@@ -298,7 +298,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
               // Plain URL - auth is handled by GIT_CONFIG_* env vars which rewrite to include magic string
               url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
               branch: repoInfo.defaultBranch,
-              path: `~/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
+              path: `/home/iterate/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
               owner: repoInfo.owner,
               name: repoInfo.name,
             };
@@ -336,7 +336,6 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Set customer repo path for opencode server working directory
-  // Uses first repo's expanded path (~ replaced with actual home dir on daemon side)
   if (repos.length > 0) {
     envVars["ITERATE_CUSTOMER_REPO_PATH"] = repos[0].path;
   }

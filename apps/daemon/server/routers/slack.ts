@@ -137,7 +137,7 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      await appendToAgent(existingAgent, message);
+      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
       return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
     } catch (error) {
       logger.error("[Slack Webhook] Failed to handle reaction event", error);
@@ -158,7 +158,9 @@ slackRouter.post("/webhook", async (c) => {
       if (existingAgent) {
         // Rare: agent already exists for what we think is a new thread
         const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-        await appendToAgent(existingAgent, message);
+        await appendToAgent(existingAgent, message, {
+          workingDirectory: getAgentWorkingDirectory(),
+        });
         return c.json({
           success: true,
           agentSlug,
@@ -175,7 +177,7 @@ slackRouter.post("/webhook", async (c) => {
       });
 
       const message = formatNewThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message);
+      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
       return c.json({
         success: true,
         agentSlug,
@@ -200,7 +202,7 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message);
+      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
       return c.json({
         success: true,
         agentSlug,
@@ -221,7 +223,7 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatFyiMessage(event, threadTs, eventId);
-      await appendToAgent(existingAgent, message);
+      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
       return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }
 

@@ -48,8 +48,6 @@ Daemon (/api/integrations/slack/webhook)
 
 ### Agent Manager (apps/daemon/server/services/agent-manager.ts)
 
-- `ensureAgentRunning()`: Creates new agent or returns existing one
-- `sendMessageToAgent()`: Sends message to agent's tmux session
 - Uses per-harness ready wait heuristics (pi: 3s, claude-code: 5s)
 
 ## Database Schema
