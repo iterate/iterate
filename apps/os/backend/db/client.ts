@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { env } from "../cloudflare-env.ts";
+import { env } from "../../env.ts";
 import * as schema from "./schema.ts";
 
 export const getDb = () => {

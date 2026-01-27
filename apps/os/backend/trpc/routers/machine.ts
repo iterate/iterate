@@ -10,7 +10,7 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import type { CloudflareEnv } from "../../cloudflare-env.ts";
+import type { CloudflareEnv } from "../../../env.ts";
 import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
