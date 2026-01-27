@@ -8,27 +8,23 @@ PNPM_VERSION="${PNPM_VERSION:-10.17.1}"
 DOPPLER_CONFIG="${DOPPLER_CONFIG:-dev}"
 
 echo "Installing Doppler CLI"
-# Download directly from GitHub (cli.doppler.com/install.sh fails in Claude Code web proxy)
+# Download directly from GitHub (cli.doppler.com fails in Claude Code web proxy)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64) ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
 esac
-
-# Get latest version from GitHub redirect
-LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/DopplerHQ/cli/releases/latest")
-DOPPLER_VERSION=$(echo "$LATEST_URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')
+DOPPLER_VERSION=$(curl -fsSL "https://api.github.com/repos/DopplerHQ/cli/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+')
 echo "Installing Doppler v${DOPPLER_VERSION} for ${OS}/${ARCH}"
-
 case "$OS" in
   linux)
-    curl -fsSL -o /tmp/doppler.deb "https://github.com/DopplerHQ/cli/releases/download/v${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_linux_${ARCH}.deb"
+    curl -fsSL -o /tmp/doppler.deb "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_linux_${ARCH}.deb"
     sudo dpkg -i /tmp/doppler.deb
     rm /tmp/doppler.deb
     ;;
   darwin)
-    curl -fsSL -o /tmp/doppler.tar.gz "https://github.com/DopplerHQ/cli/releases/download/v${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_macOS_${ARCH}.tar.gz"
+    curl -fsSL -o /tmp/doppler.tar.gz "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_VERSION}/doppler_${DOPPLER_VERSION}_macOS_${ARCH}.tar.gz"
     tar -xzf /tmp/doppler.tar.gz -C /tmp
     sudo mv /tmp/doppler /usr/local/bin/
     rm /tmp/doppler.tar.gz
@@ -45,7 +41,8 @@ if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 fi
 # shellcheck disable=SC1090
-source "$NVM_DIR/nvm.sh"
+# NVM source returns exit code 3 if no default version is set, which is fine
+source "$NVM_DIR/nvm.sh" || true
 
 echo "Using Node.js version $NODE_VERSION"
 nvm install "$NODE_VERSION"
