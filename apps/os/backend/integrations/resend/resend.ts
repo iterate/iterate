@@ -94,6 +94,43 @@ export interface ResendEmailReceivedPayload {
 }
 
 /**
+ * Full email content fetched from Resend API
+ */
+export interface ResendEmailContent {
+  id: string;
+  from: string;
+  to: string[];
+  cc: string[] | null;
+  bcc: string[] | null;
+  subject: string;
+  created_at: string;
+  text: string;
+  html: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Fetch the full email content (including body) from Resend API.
+ * The webhook only includes metadata - we need to call this to get text/html body.
+ */
+export async function fetchEmailContent(
+  client: Resend,
+  emailId: string,
+): Promise<ResendEmailContent | null> {
+  try {
+    const { data, error } = await client.emails.receiving.get(emailId);
+    if (error) {
+      logger.error("[Resend] Failed to fetch email content", { emailId, error });
+      return null;
+    }
+    return data as ResendEmailContent;
+  } catch (err) {
+    logger.error("[Resend] Error fetching email content", { emailId, error: err });
+    return null;
+  }
+}
+
+/**
  * Parse sender email from "Name <email@domain.com>" format
  */
 function parseSenderEmail(from: string): string {
@@ -364,6 +401,10 @@ resendApp.post("/webhook", async (c) => {
 
         const targetMachine = targetProject.machines[0];
 
+        // Fetch full email content (body) from Resend API
+        const resendClient = createResendClient(env.RESEND_ALPHAITERATECOM_API_KEY);
+        const emailContent = await fetchEmailContent(resendClient, resendEmailId);
+
         // Forward to machine if available
         if (targetMachine) {
           logger.debug("[Resend Webhook] Forwarding to machine", { machineId: targetMachine.id });
@@ -374,6 +415,12 @@ resendApp.post("/webhook", async (c) => {
               _iterate: {
                 userId: user.id,
                 projectId: targetProject.id,
+                emailBody: emailContent
+                  ? {
+                      text: emailContent.text,
+                      html: emailContent.html,
+                    }
+                  : null,
               },
             },
             env,

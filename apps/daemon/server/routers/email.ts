@@ -65,6 +65,11 @@ interface ResendEmailPayload {
   _iterate?: {
     userId: string;
     projectId: string;
+    /** Email body content fetched from Resend API */
+    emailBody?: {
+      text: string;
+      html: string;
+    } | null;
   };
 }
 
@@ -131,13 +136,21 @@ emailRouter.post("/webhook", async (c) => {
   const { name: senderName, email: senderEmail } = parseSender(emailData.from);
   const subject = emailData.subject || "(no subject)";
   const threadSlug = subjectToSlug(subject);
+  const emailBody = payload._iterate?.emailBody;
 
   try {
     const existingAgent = await getAgent(threadSlug);
 
     if (existingAgent) {
       // Reply to existing thread
-      const message = formatReplyMessage(senderName, senderEmail, subject, emailData, eventId);
+      const message = formatReplyMessage(
+        senderName,
+        senderEmail,
+        subject,
+        emailData,
+        emailBody,
+        eventId,
+      );
       await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
       return c.json({
         success: true,
@@ -155,7 +168,14 @@ emailRouter.post("/webhook", async (c) => {
       workingDirectory: getAgentWorkingDirectory(),
     });
 
-    const message = formatNewEmailMessage(senderName, senderEmail, subject, emailData, eventId);
+    const message = formatNewEmailMessage(
+      senderName,
+      senderEmail,
+      subject,
+      emailData,
+      emailBody,
+      eventId,
+    );
     await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
 
     return c.json({
@@ -204,12 +224,18 @@ function formatNewEmailMessage(
   senderEmail: string,
   subject: string,
   emailData: ResendEmailPayload["data"],
+  emailBody: { text: string; html: string } | null | undefined,
   eventId: string,
 ): string {
   const attachmentInfo =
     emailData.attachments.length > 0
       ? `\nAttachments: ${emailData.attachments.map((a) => a.filename).join(", ")}`
       : "";
+
+  // Use plain text body if available, fallback to note about missing content
+  const bodyContent = emailBody?.text
+    ? `\n---\n${emailBody.text}\n---`
+    : "\n(Email body could not be retrieved)";
 
   return [
     `New email received.`,
@@ -218,8 +244,8 @@ function formatNewEmailMessage(
     `To: ${emailData.to.join(", ")}`,
     `Subject: ${subject}`,
     attachmentInfo,
+    bodyContent,
     "",
-    `Note: Email body content is not included in webhooks. Use the Resend API to fetch full content if needed.`,
     `email_id=${emailData.email_id} message_id=${emailData.message_id} eventId=${eventId}`,
   ].join("\n");
 }
@@ -232,6 +258,7 @@ function formatReplyMessage(
   senderEmail: string,
   subject: string,
   emailData: ResendEmailPayload["data"],
+  emailBody: { text: string; html: string } | null | undefined,
   eventId: string,
 ): string {
   const attachmentInfo =
@@ -239,14 +266,19 @@ function formatReplyMessage(
       ? `\nAttachments: ${emailData.attachments.map((a) => a.filename).join(", ")}`
       : "";
 
+  // Use plain text body if available, fallback to note about missing content
+  const bodyContent = emailBody?.text
+    ? `\n---\n${emailBody.text}\n---`
+    : "\n(Email body could not be retrieved)";
+
   return [
     `Reply received in email thread.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `Subject: ${subject}`,
     attachmentInfo,
+    bodyContent,
     "",
-    `Note: Email body content is not included in webhooks. Use the Resend API to fetch full content if needed.`,
     `email_id=${emailData.email_id} message_id=${emailData.message_id} eventId=${eventId}`,
   ].join("\n");
 }
