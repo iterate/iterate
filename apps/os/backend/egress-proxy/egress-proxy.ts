@@ -694,7 +694,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     const hasConnectorSecrets = usedSecrets.some((s) => s.isConnector);
     const needsBody = hasRequestBody(originalMethod);
 
-    // Get the request body - either buffered (for connector retry) or streamed
+    // Get the request body - either buffered (for connector retry) or streamed via FixedLengthStream
+    // Note: Cloudflare Workers ignores manually-set Content-Length headers for streaming bodies.
+    // To preserve Content-Length with streaming, we must use FixedLengthStream.
     let requestBody: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
     if (needsBody) {
       if (hasConnectorSecrets) {
@@ -704,17 +706,18 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
         } catch {
           // Body may be empty or already consumed
         }
+      } else if (trustedContentLength && c.req.raw.body) {
+        // Use FixedLengthStream to stream with correct Content-Length
+        // This tells Cloudflare Workers the exact size, so it sets Content-Length instead of chunked
+        const fixedStream = new FixedLengthStream(parseInt(trustedContentLength, 10));
+        c.req.raw.body.pipeTo(fixedStream.writable).catch(() => {
+          // Ignore pipe errors - connection may close early
+        });
+        requestBody = fixedStream.readable;
       } else {
-        // Stream body directly - no retry needed for non-connector requests
+        // Stream body directly - will use chunked encoding
         requestBody = c.req.raw.body;
       }
-    }
-
-    // Use the trusted content length from mitmproxy if available
-    // mitmproxy knows the exact body size, so this avoids Content-Length mismatches
-    // that can occur when streaming through proxy chains
-    if (trustedContentLength) {
-      forwardHeaders.set("content-length", trustedContentLength);
     }
 
     // Forward the request to the original destination
