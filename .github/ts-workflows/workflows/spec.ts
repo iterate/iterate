@@ -29,7 +29,7 @@ export default workflow({
         { uses: "dopplerhq/cli-action@v2" },
         {
           name: "Setup Doppler",
-          run: "doppler setup --project os --config dev",
+          run: "doppler setup --project os --config dev_test",
         },
         {
           name: "Install Playwright browsers",
