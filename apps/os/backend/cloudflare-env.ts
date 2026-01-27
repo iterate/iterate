@@ -64,6 +64,10 @@ export interface CloudflareEnv {
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_METERED_PRICE_ID: string;
 
+  // Resend
+  RESEND_ALPHAITERATECOM_API_KEY: string;
+  RESEND_WEBHOOK_SECRET?: string;
+
   // PostHog
   POSTHOG_PUBLIC_KEY?: string;
 

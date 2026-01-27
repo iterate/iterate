@@ -8,6 +8,7 @@ import * as schema from "../db/schema.ts";
 import { env, isNonProd, waitUntil, type CloudflareEnv } from "../cloudflare-env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
+import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -125,8 +126,36 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                   );
                   return;
                 }
-                logger.info(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
-                // TODO: Implement actual email sending (e.g., Resend, SendGrid, etc.)
+
+                // Send OTP via Resend
+                const client = createResendClient(envParam.RESEND_ALPHAITERATECOM_API_KEY);
+                const result = await sendEmail(client, {
+                  from: "Iterate <noreply@alpha.iterate.com>",
+                  to: email,
+                  subject: `Your verification code: ${otp}`,
+                  text: `Your verification code is: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this code, you can safely ignore this email.`,
+                  html: `
+                    <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+                      <h2 style="color: #333; margin-bottom: 20px;">Verification Code</h2>
+                      <p style="color: #666; margin-bottom: 20px;">Your verification code is:</p>
+                      <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px;">
+                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 4px; color: #333;">${otp}</span>
+                      </div>
+                      <p style="color: #999; font-size: 14px;">This code expires in 5 minutes.</p>
+                      <p style="color: #999; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
+                    </div>
+                  `,
+                });
+
+                if ("error" in result) {
+                  logger.error("[EMAIL OTP] Failed to send OTP email", {
+                    email,
+                    error: result.error,
+                  });
+                  throw new Error(`Failed to send verification email: ${result.error}`);
+                }
+
+                logger.info("[EMAIL OTP] Sent OTP email", { email, emailId: result.id });
               },
             }),
           ]
