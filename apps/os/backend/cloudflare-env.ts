@@ -66,7 +66,7 @@ export interface CloudflareEnv {
 
   // Resend
   RESEND_ALPHAITERATECOM_API_KEY: string;
-  RESEND_WEBHOOK_SECRET?: string;
+  RESEND_ALPHAITERATECOM_WEBHOOK_SECRET?: string;
 
   // PostHog
   POSTHOG_PUBLIC_KEY?: string;

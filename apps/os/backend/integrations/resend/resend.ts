@@ -252,7 +252,7 @@ async function verifyResendWebhook(
  */
 resendApp.post("/webhook", async (c) => {
   const body = await c.req.text();
-  const webhookSecret = c.env.RESEND_WEBHOOK_SECRET;
+  const webhookSecret = c.env.RESEND_ALPHAITERATECOM_WEBHOOK_SECRET;
 
   // Verify webhook signature if secret is configured
   if (webhookSecret) {
