@@ -30,9 +30,20 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 // Helper to mock fetch for tRPC calls
-function mockTrpcFetch(options: { getAgent?: Agent | null; createAgent?: Agent }) {
-  const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+function mockTrpcFetch(options: {
+  getAgent?: Agent | null;
+  createAgent?: Agent;
+  customerRepoPath?: string | null;
+}) {
+  const mockFetch = vi.fn(async (url: string | URL | Request) => {
     const urlStr = typeof url === "string" ? url : url.toString();
+
+    if (urlStr.includes("/api/trpc/getCustomerRepoPath")) {
+      return new Response(
+        JSON.stringify({ result: { data: { path: options.customerRepoPath ?? null } } }),
+        { status: 200 },
+      );
+    }
 
     if (urlStr.includes("/api/trpc/getAgent")) {
       return new Response(JSON.stringify({ result: { data: options.getAgent ?? null } }), {

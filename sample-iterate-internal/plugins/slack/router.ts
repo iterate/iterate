@@ -21,7 +21,24 @@ import type {
 import { storeEvent, eventExists, findThreadTs } from "./db.ts";
 
 const DAEMON_URL = process.env.ITERATE_PROJECT_BASE_URL || "http://localhost:3000";
-const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const FALLBACK_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+
+/**
+ * Get the working directory for new agents.
+ * Prefers customer repo (from platform service), falls back to ITERATE_REPO.
+ */
+async function getAgentWorkingDirectory(): Promise<string> {
+  try {
+    const res = await fetch(`${DAEMON_URL}/api/trpc/getCustomerRepoPath`);
+    const json = (await res.json()) as { result?: { data: { path: string | null } } };
+    const customerPath = json.result?.data?.path;
+    if (customerPath) return customerPath;
+  } catch (err) {
+    console.error("[slack] Failed to get customer repo path:", err);
+  }
+  return FALLBACK_REPO;
+}
+
 
 export const slackRouter = new Hono();
 
@@ -212,7 +229,7 @@ slackRouter.post("/webhook", async (c) => {
       const agent = await createAgent({
         slug: agentSlug,
         harnessType: "opencode",
-        workingDirectory: ITERATE_REPO,
+        workingDirectory: await getAgentWorkingDirectory(),
       });
 
       const message = formatNewThreadMentionMessage(msgEvent, msgThreadTs, eventId);
@@ -235,7 +252,7 @@ slackRouter.post("/webhook", async (c) => {
         agent = await createAgent({
           slug: agentSlug,
           harnessType: "opencode",
-          workingDirectory: ITERATE_REPO,
+          workingDirectory: await getAgentWorkingDirectory(),
         });
         wasCreated = true;
       }

@@ -355,6 +355,15 @@ export const platformRouter = createTRPCRouter({
       return { success: false };
     }
   }),
+
+  /**
+   * Get the path to the customer's cloned repository.
+   * Returns null if no customer repo has been cloned yet.
+   * Used by config plugins to determine the working directory for agents.
+   */
+  getCustomerRepoPath: publicProcedure.query(() => {
+    return { path: getCustomerRepoPath() };
+  }),
 });
 
 export type PlatformRouter = typeof platformRouter;
