@@ -335,6 +335,12 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
+  // Set customer repo path for opencode server working directory
+  // Uses first repo's expanded path (~ replaced with actual home dir on daemon side)
+  if (repos.length > 0) {
+    envVars["ITERATE_CUSTOMER_REPO_PATH"] = repos[0].path;
+  }
+
   logger.info("Returning env data for machine", {
     machineId,
     envVarCount: Object.keys(envVars).length,
