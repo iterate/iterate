@@ -39,7 +39,6 @@ async function getAgentWorkingDirectory(): Promise<string> {
   return FALLBACK_REPO;
 }
 
-
 export const slackRouter = new Hono();
 
 // Middleware to log request and response bodies
