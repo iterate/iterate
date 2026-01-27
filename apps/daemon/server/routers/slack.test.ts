@@ -97,11 +97,15 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("You've been mentioned to start a new conversation"),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("channel="));
+      expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("channel="), {
+        workingDirectory: "/home/iterate/src/github.com/customer/repo",
+      });
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("thread_ts="),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
     });
 
@@ -179,6 +183,7 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("You've been mentioned in an existing thread"),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
     });
 
@@ -218,6 +223,7 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("You've been mentioned in an existing thread"),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
     });
   });
@@ -258,10 +264,12 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("FYI: Another message in this thread"),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("you were not @mentioned"),
+        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
     });
 
