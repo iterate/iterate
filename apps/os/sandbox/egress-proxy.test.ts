@@ -113,7 +113,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
   test("addon script exists", async () => {
     const result = await execInContainer(containerId, [
       "cat",
-      `${CONTAINER_REPO_PATH}/apps/os/sandbox/s6-daemons/egress-proxy/addon.py`,
+      `${CONTAINER_REPO_PATH}/apps/os/sandbox/egress-proxy-addon.py`,
     ]);
     expect(result).toContain("EgressProxyAddon");
     expect(result).toContain("mitmproxy");
@@ -151,7 +151,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
       "host.docker.internal",
     );
     const healthUrl = `${baseUrl}/api/health`;
-    const addonPath = `${CONTAINER_REPO_PATH}/apps/os/sandbox/s6-daemons/egress-proxy/addon.py`;
+    const addonPath = `${CONTAINER_REPO_PATH}/apps/os/sandbox/egress-proxy-addon.py`;
 
     // Check worker is reachable - FAIL if not (don't skip)
     const healthCheck = await execInContainer(containerId, [

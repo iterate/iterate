@@ -324,21 +324,21 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
 
         printSection("ENTRY.SH STDOUT (sandbox boot log)");
         // entry.sh output goes to the main container log, which we can see via journal or docker logs
-        // For Daytona, we check dmesg or the s6-svscan output
+        // For Daytona, we check dmesg or the pidnap output
         const entryLogs = await sandbox.process.executeCommand(
           "dmesg 2>/dev/null | tail -50 || echo '(dmesg not available)'",
         );
         console.log(entryLogs.result);
 
-        printSection("DAEMON LOGS (/var/log/iterate-daemon/current)");
+        printSection("DAEMON LOGS (/var/log/pidnap/process/iterate-daemon.log)");
         const daemonLogsEarly = await sandbox.process.executeCommand(
-          "cat /var/log/iterate-daemon/current 2>/dev/null || echo '(no daemon logs yet)'",
+          "cat /var/log/pidnap/process/iterate-daemon.log 2>/dev/null || echo '(no daemon logs yet)'",
         );
         console.log(daemonLogsEarly.result);
 
-        printSection("OPENCODE LOGS (/var/log/opencode/current)");
+        printSection("OPENCODE LOGS (/var/log/pidnap/process/opencode.log)");
         const opencodeLogsEarly = await sandbox.process.executeCommand(
-          "cat /var/log/opencode/current 2>/dev/null || echo '(no opencode logs yet)'",
+          "cat /var/log/pidnap/process/opencode.log 2>/dev/null || echo '(no opencode logs yet)'",
         );
         console.log(opencodeLogsEarly.result);
 
@@ -366,7 +366,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
         // 9. Show full logs after bootstrap
         printSection("DAEMON LOGS (FULL - after bootstrap)");
         const daemonLogs = await sandbox.process.executeCommand(
-          "cat /var/log/iterate-daemon/current 2>/dev/null || echo '(no logs)'",
+          "cat /var/log/pidnap/process/iterate-daemon.log 2>/dev/null || echo '(no logs)'",
         );
         const daemonLogText = daemonLogs.result ?? "";
         console.log(daemonLogText);
@@ -379,7 +379,7 @@ describe.runIf(RUN_DAYTONA_BOOTSTRAP_TESTS)("Daytona bootstrap integration", () 
 
         printSection("OPENCODE LOGS (FULL - after bootstrap)");
         const opencodeLogs = await sandbox.process.executeCommand(
-          "cat /var/log/opencode/current 2>/dev/null || echo '(no logs)'",
+          "cat /var/log/pidnap/process/opencode.log 2>/dev/null || echo '(no logs)'",
         );
         console.log(opencodeLogs.result);
 

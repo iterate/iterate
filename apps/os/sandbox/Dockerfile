@@ -1,6 +1,6 @@
 FROM node:24
 
-# Build cache buster: 2026-01-20T13:16
+# Build cache buster: 2026-01-26T11:00
 # (change this comment to force Daytona to rebuild when cache is stale)
 
 # === Version Configuration ===
@@ -21,7 +21,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop fd-find gh inotify-tools python3-pip rsync s6 sqlite3 sudo tini tmux && \
+    apt-get install -y btop fd-find gh python3-pip rsync sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
@@ -34,12 +34,12 @@ RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
     chmod 0440 /etc/sudoers.d/iterate
 
-# Create s6 log directories (owned by iterate user so services can write logs)
-RUN mkdir -p /var/log/iterate-daemon /var/log/opencode /var/log/egress-proxy && \
-    chown -R iterate:iterate /var/log/iterate-daemon /var/log/opencode /var/log/egress-proxy
+# Create log directories (owned by iterate user so pidnap can write logs)
+RUN mkdir -p /var/log/pidnap && \
+    chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx
+RUN npm install -g pnpm tsx pidnap@0.0.0-dev.2
 
 # Copy entry script (needs stable location for ENTRYPOINT)
 COPY apps/os/sandbox/entry.sh /app/entry.sh
@@ -71,8 +71,9 @@ ENV PATH="/home/iterate/.bun/bin:$PATH"
 # === Agent packages (npm, userspace) ===
 
 RUN npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
-    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
-    npm install -g --libc=glibc opencode-ai@${SANDBOX_OPENCODE_VERSION}
+    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
+
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 
 # Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
 # Note: npm creates a symlink, must rm first or echo writes through to cli.js
@@ -82,7 +83,9 @@ RUN mkdir -p /home/iterate/.local/bin && \
     echo '#!/bin/sh' > /home/iterate/.local/bin/claude && \
     echo "exec node $CLAUDE_BIN --dangerously-skip-permissions \"\$@\"" >> /home/iterate/.local/bin/claude && \
     chmod +x /home/iterate/.local/bin/claude
+
 ENV PATH="/home/iterate/.local/bin:$PATH"
+ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 # === Iterate repo ===
 # Two modes based on SANDBOX_ITERATE_REPO_REF:
@@ -104,9 +107,7 @@ RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
 
 # Make scripts executable (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh && \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/run 2>/dev/null || true && \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/log/run 2>/dev/null || true; \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
     fi
 
 # Install deps and build daemon (only if repo was cloned)

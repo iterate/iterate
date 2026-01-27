@@ -1,5 +1,0 @@
-{
-  "name": "egress-proxy",
-  "description": "MITM proxy for egress traffic - routes through iterate OS worker",
-  "port": 8888
-}

@@ -3,6 +3,7 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/os/sandbox
   - packages/*
   - .github/ts-workflows
 
@@ -19,6 +20,7 @@ minimumReleaseAgeExclude:
   - '@mariozechner/pi-coding-agent'
   - '@mariozechner/pi-agent-core'
   - '@mariozechner/pi-tui'
+  - pidnap
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

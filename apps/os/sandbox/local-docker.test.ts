@@ -1,7 +1,7 @@
 /**
- * Local Docker + s6 Integration Tests
+ * Local Docker + pidnap Integration Tests
  *
- * Verifies sandbox container setup with s6 process supervision.
+ * Verifies sandbox container setup with pidnap process supervision.
  * Image rebuilt once, each test group gets its own container.
  *
  * RUN WITH:
@@ -44,7 +44,7 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
   const port = options?.exposePort ? getRandomPort() : undefined;
 
   const envVars = [
-    "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   ];
 
   if (process.env.ANTHROPIC_API_KEY) {
@@ -230,7 +230,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
-      // s6-daemons moved into apps/os/sandbox/
 
       // has bind mount for local repo (entry.sh syncs from this)
       const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
