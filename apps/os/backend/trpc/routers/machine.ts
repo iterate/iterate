@@ -667,12 +667,15 @@ export const machineRouter = router({
           buildProxyUrl: () => "", // Not used here
         });
         const daemonClient = createDaemonTrpcClient(provider.previewUrl);
-        const agents = await daemonClient.listAgents.query();
-        return { agents };
+        const [agents, serverInfo] = await Promise.all([
+          daemonClient.listAgents.query(),
+          daemonClient.getServerCwd.query(),
+        ]);
+        return { agents, customerRepoPath: serverInfo.customerRepoPath };
       } catch (err) {
         logger.error("Failed to fetch agents from daemon", err);
         // Return empty list on error (daemon might not be ready)
-        return { agents: [] };
+        return { agents: [], customerRepoPath: null };
       }
     }),
 });

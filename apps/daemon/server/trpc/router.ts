@@ -49,7 +49,11 @@ export const trpcRouter = createTRPCRouter({
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
   getServerCwd: publicProcedure.query(() => {
-    return { cwd: process.cwd(), homeDir: homedir() };
+    return {
+      cwd: process.cwd(),
+      homeDir: homedir(),
+      customerRepoPath: process.env.ITERATE_CUSTOMER_REPO_PATH?.replace("~", homedir()) ?? null,
+    };
   }),
 
   // ============ Utility tmux sessions (for btop, logs, etc - NOT agents) ============
