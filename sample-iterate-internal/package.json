@@ -5,17 +5,20 @@
   "private": true,
   "scripts": {
     "build": "esbuild iterate.config.ts --bundle --outfile=dist/index.js --format=esm --platform=node --target=node20 --sourcemap --external:better-sqlite3 --keep-names",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "hono": "^4.6.0",
+    "@slack/types": "^2.14.0",
     "better-sqlite3": "^11.6.0",
+    "hono": "^4.6.0",
     "nanoid": "^5.0.9"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
     "esbuild": "^0.24.0",
     "typescript": "^5.7.2",
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^22.10.2"
+    "vitest": "^2.1.0"
   }
 }

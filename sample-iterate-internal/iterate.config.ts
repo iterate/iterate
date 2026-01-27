@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { slackRouter } from "./integrations/slack/router.ts";
+import { slackRouter } from "./plugins/slack/router.ts";
 
 const app = new Hono();
 

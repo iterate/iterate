@@ -9,8 +9,9 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
     "declaration": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["*.ts", "integrations/**/*.ts"],
+  "include": ["*.ts", "plugins/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
