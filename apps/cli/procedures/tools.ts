@@ -73,7 +73,11 @@ export const toolsRouter = t.router({
       .meta({ description: "Send an email reply" })
       .input(
         z.object({
-          to: z.string().describe("Recipient email address"),
+          to: z
+            .string()
+            .describe("Recipient email address. Comma separated for multiple recipients."),
+          cc: z.string().optional().describe("Comma separated list of CC emails"),
+          bcc: z.string().optional().describe("Comma separated list of BCC emails"),
           subject: z.string().describe("Email subject (use Re: prefix for replies)"),
           body: z.string().describe("Plain text email body"),
           html: z.string().optional().describe("Optional HTML email body"),
@@ -85,7 +89,9 @@ export const toolsRouter = t.router({
 
         const { data, error } = await client.emails.send({
           from: `Iterate Agent <${fromAddress}>`,
-          to: [input.to],
+          to: input.to.split(","),
+          cc: input.cc?.split(","),
+          bcc: input.bcc?.split(","),
           subject: input.subject,
           text: input.body,
           html: input.html,
