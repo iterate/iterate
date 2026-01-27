@@ -359,22 +359,36 @@ async function resolveSecret(
     // Secret not found - return appropriate error
     if (connector) {
       // This is a connector URL - provide helpful connect URL
-      const connectUrl = getFullReauthUrl(connector, urlContext, env.VITE_PUBLIC_URL);
-      return {
-        ok: false,
-        error: {
-          code: "NOT_FOUND",
-          message: `${connector.name} is not connected. Please connect it first.`,
-          connectUrl,
-        },
-      };
+      try {
+        const connectUrl = getFullReauthUrl(connector, urlContext, env.VITE_PUBLIC_URL);
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `${connector.name} is not connected. Please connect it first.`,
+            connectUrl,
+          },
+        };
+      } catch (err) {
+        logger.error("Failed to build connect URL", {
+          connector: connector.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          ok: false,
+          error: {
+            code: "NOT_FOUND",
+            message: `${connector.name} is not connected. Please connect it in your project settings.`,
+          },
+        };
+      }
     }
     // Non-connector secret not found
     return {
       ok: false,
       error: {
         code: "NOT_FOUND",
-        message: `Secret '${secretKey}' not found.`,
+        message: `Secret '${secretKey}' not found. Add it in your project settings or use a magic string with a valid secret key.`,
       },
     };
   }
@@ -451,9 +465,15 @@ async function replaceMagicStrings(
     }
 
     // Use resolveSecret with full context for connector-aware errors
-    // Note: We intentionally ignore parsed.userId from magic strings to prevent cross-user access
-    // User-scoped secrets are only accessible via the authenticated session context
-    const secretResult = await resolveSecret(db, parsed.secretKey, context, cache);
+    // SECURITY NOTE: We allow userId from magic strings, which means any code in the sandbox
+    // can access any user's secrets by passing their userId. This is a known limitation -
+    // agents currently can operate on behalf of any user. We haven't decided on the right
+    // security model yet, but this needs to exist for user-scoped connectors (like Google) to work.
+    const secretContext: EgressContext = {
+      ...context,
+      userId: parsed.userId ?? context.userId,
+    };
+    const secretResult = await resolveSecret(db, parsed.secretKey, secretContext, cache);
 
     if (!secretResult.ok) {
       // Return the error immediately - don't continue with partial replacement
@@ -532,13 +552,17 @@ async function processHeaderValue(
 
 /**
  * Return a JSON error response for secret errors.
- * Uses 502 Bad Gateway for NOT_FOUND (connector not configured)
- * Uses 401 Unauthorized for auth failures that need re-auth
+ * Uses 424 Failed Dependency for NOT_FOUND (connector not configured) - we avoid 502
+ * because Cloudflare replaces 502 response bodies with their generic error page.
+ * Uses 401 Unauthorized for auth failures that need re-auth.
  */
 function secretErrorResponse(
   c: { json: (data: unknown, status: number) => Response },
   error: SecretError,
 ): Response {
+  // Use 424 Failed Dependency instead of 502 - Cloudflare intercepts 502 responses
+  const status = error.code === "NOT_FOUND" ? 424 : 401;
+
   return c.json(
     {
       error: error.code.toLowerCase(),
@@ -547,7 +571,7 @@ function secretErrorResponse(
       connectUrl: error.connectUrl,
       reauthUrl: error.reauthUrl,
     },
-    error.code === "NOT_FOUND" ? 502 : 401,
+    status,
   );
 }
 
