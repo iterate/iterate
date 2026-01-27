@@ -12,7 +12,7 @@ import {
   type TmuxSession,
 } from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
-import { platformRouter } from "./platform.ts";
+import { platformRouter, getCustomerRepoPath } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
 
@@ -52,7 +52,7 @@ export const trpcRouter = createTRPCRouter({
     return {
       cwd: process.cwd(),
       homeDir: homedir(),
-      customerRepoPath: process.env.ITERATE_CUSTOMER_REPO_PATH?.replace("~", homedir()) ?? null,
+      customerRepoPath: getCustomerRepoPath(),
     };
   }),
 
