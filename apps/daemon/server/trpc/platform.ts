@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { simpleGit } from "simple-git";
-import { quote } from "shell-quote";
+
 import { x } from "tinyexec";
 import { getTmuxSocketPath } from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
@@ -92,7 +92,11 @@ export NODE_USE_ENV_PROXY=1
   const envFileContent =
     envFileHeader +
     Object.entries(platformEnvVars)
-      .map(([key, value]) => `export ${key}=${quote([value])}`)
+      // Double quotes work for both bash `source` and dotenv parsing (pidnap).
+      // We don't use shell-quote because it escapes @ without quotes, which dotenv
+      // interprets literally (e.g., \@ stays as \@). No escaping is done here;
+      // values containing " $ ` or \ may behave unexpectedly but these are rare.
+      .map(([key, value]) => `export ${key}="${value}"`)
       .join("\n");
 
   // Check if content changed before writing
