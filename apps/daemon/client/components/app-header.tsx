@@ -1,14 +1,5 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
-import {
-  ChevronDownIcon,
-  ChevronLeft,
-  PlusIcon,
-  RotateCcwIcon,
-  SquareIcon,
-  Trash2Icon,
-} from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { ChevronDownIcon, ChevronLeft, PlusIcon } from "lucide-react";
 
 import type { SerializedAgent } from "@server/trpc/router.ts";
 import { cn } from "@/lib/utils.ts";
@@ -23,7 +14,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,7 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
-import { trpcClient, useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { HEADER_ACTIONS_ID } from "@/components/header-actions-constants.ts";
 
 interface AppHeaderProps {
@@ -42,49 +32,14 @@ interface AppHeaderProps {
 export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const location = useLocation();
   const trpc = useTRPC();
-  const queryClient = useQueryClient();
 
   const isAgentRoute = location.pathname.startsWith("/agents/");
   const isNewAgentRoute = location.pathname === "/agents/new";
   const isTerminalRoute = location.pathname === "/terminal";
 
-  const resetAgent = useMutation({
-    mutationFn: () => trpcClient.resetAgent.mutate({ slug: agent!.slug }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-      toast.success("Agent reset");
-    },
-    onError: () => {
-      toast.error("Failed to reset agent");
-    },
-  });
-
-  const stopAgent = useMutation({
-    mutationFn: () => trpcClient.stopAgent.mutate({ slug: agent!.slug }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-      queryClient.removeQueries({ queryKey: ["ensureAgentStarted", agent!.slug] });
-      toast.success("Agent stopped");
-    },
-    onError: () => {
-      toast.error("Failed to stop agent");
-    },
-  });
-
-  const deleteAgent = useMutation({
-    mutationFn: () => trpcClient.deleteAgent.mutate({ slug: agent!.slug }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-      toast.success("Agent deleted");
-    },
-    onError: () => {
-      toast.error("Failed to delete agent");
-    },
-  });
-
   // Determine display name for mobile
-  const mobileDisplayName = agent?.slug
-    ? agent.slug
+  const mobileDisplayName = agent?.path
+    ? agent.path
     : isNewAgentRoute
       ? "New Agent"
       : isTerminalRoute
@@ -168,54 +123,7 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
         </div>
 
         {/* Right side - actions without max-width, pushed to far right */}
-        <div id={HEADER_ACTIONS_ID} className="flex items-center gap-2">
-          {agent && (
-            <div className="flex items-center gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => resetAgent.mutate()}
-                    disabled={resetAgent.isPending}
-                  >
-                    <RotateCcwIcon className="size-4" />
-                    <span className="sr-only">Reset Agent</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Reset agent session</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => stopAgent.mutate()}
-                    disabled={stopAgent.isPending || agent.status !== "running"}
-                  >
-                    <SquareIcon className="size-4" />
-                    <span className="sr-only">Stop Agent</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Stop agent</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => deleteAgent.mutate()}
-                    disabled={deleteAgent.isPending}
-                  >
-                    <Trash2Icon className="size-4" />
-                    <span className="sr-only">Delete Agent</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete agent</TooltipContent>
-              </Tooltip>
-            </div>
-          )}
-        </div>
+        <div id={HEADER_ACTIONS_ID} className="flex items-center gap-2" />
       </div>
     </header>
   );
@@ -239,42 +147,47 @@ function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdo
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label={`${currentAgent.slug}, switch agent`}
+            aria-label={`${currentAgent.path}, switch agent`}
             aria-haspopup="menu"
             className={cn(DROPDOWN_TRIGGER_CLASSES, "font-normal text-foreground")}
           >
             <BreadcrumbPage className="pointer-events-none max-w-[150px] truncate sm:max-w-[200px]">
-              {currentAgent.slug}
+              {currentAgent.path}
             </BreadcrumbPage>
             <ChevronDownIcon className="h-3 w-3 opacity-60" aria-hidden="true" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-48">
           {agents.map((agentItem) => {
-            const isCurrent = agentItem.id === currentAgent.id;
+            const isCurrent = agentItem.path === currentAgent.path;
             return (
               <DropdownMenuItem
-                key={agentItem.id}
+                key={agentItem.path}
                 className="gap-2"
                 aria-current={isCurrent ? "true" : undefined}
-                onClick={() => navigate({ to: "/agents/$slug", params: { slug: agentItem.slug } })}
+                onClick={() =>
+                  navigate({
+                    to: "/agents/$slug",
+                    params: { slug: encodeURIComponent(agentItem.path) },
+                  })
+                }
               >
                 <div
                   className="flex size-5 items-center justify-center rounded-sm border bg-muted/50"
                   aria-hidden="true"
                 >
                   <span className="text-xs font-medium">
-                    {agentItem.slug.charAt(0).toUpperCase()}
+                    {agentItem.path.charAt(1)?.toUpperCase() ?? "A"}
                   </span>
                 </div>
-                <span className="truncate">{agentItem.slug}</span>
+                <span className="truncate">{agentItem.path}</span>
                 {isCurrent && <span className="sr-only">(current)</span>}
               </DropdownMenuItem>
             );
           })}
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild className="gap-2">
-            <Link to="/agents/new" search={{ name: undefined }}>
+            <Link to="/agents/new" search={{ path: undefined }}>
               <div
                 className="flex size-5 items-center justify-center rounded-sm border border-dashed"
                 aria-hidden="true"

@@ -172,10 +172,11 @@ function MachineDetailPage() {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
-  // Get attach command for an agent using its harness session ID
-  const getAgentAttachCommand = (harnessSessionId: string) => {
-    const baseCmd = `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
-    return `${baseCmd} --dir '${agentsData?.customerRepoPath}'`;
+  const getAgentAttachCommand = (destination?: string | null) => {
+    if (!destination) return null;
+    const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
+    if (!match) return null;
+    return `opencode attach 'http://localhost:4096' --session ${match[1]}`;
   };
 
   return (
@@ -369,35 +370,37 @@ function MachineDetailPage() {
               </div>
               {agents.map((agent) => (
                 <div
-                  key={agent.id}
+                  key={agent.path}
                   className="flex items-center justify-between p-3 border rounded-lg bg-card"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{agent.slug}</div>
+                      <div className="text-sm font-medium truncate">{agent.path}</div>
                       <div className="text-xs text-muted-foreground">
-                        {agent.status} · {agent.harnessType} · {formatAgentTime(agent.updatedAt)}
+                        {formatAgentTime(agent.updatedAt)} · {agent.workingDirectory}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {agent.harnessSessionId &&
-                      iterateDaemonService?.options.map((option, index) => (
-                        <a
-                          key={index}
-                          href={buildAgentTerminalUrl(
-                            option.url,
-                            getAgentAttachCommand(agent.harnessSessionId!),
-                          )}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                          {option.label}
-                        </a>
-                      ))}
+                    {iterateDaemonService?.options
+                      .map((option, index) => {
+                        const command = getAgentAttachCommand(agent.activeRoute?.destination);
+                        if (!command) return null;
+                        return (
+                          <a
+                            key={index}
+                            href={buildAgentTerminalUrl(option.url, command)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            {option.label}
+                          </a>
+                        );
+                      })
+                      .filter(Boolean)}
                   </div>
                 </div>
               ))}

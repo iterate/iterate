@@ -1,19 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Agent } from "../db/schema.ts";
 
-vi.mock("../services/agent-manager.ts", () => ({
-  getAgent: vi.fn(),
-  createAgent: vi.fn(),
-  appendToAgent: vi.fn(),
-}));
+const selectLimitQueue: unknown[][] = [];
 
-// Mock the database to avoid needing migrations in tests
 vi.mock("../db/index.ts", () => ({
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
-          limit: vi.fn(() => Promise.resolve([])),
+          limit: vi.fn(() => Promise.resolve(selectLimitQueue.shift() ?? [])),
         })),
       })),
     })),
@@ -23,28 +18,13 @@ vi.mock("../db/index.ts", () => ({
   },
 }));
 
-// Mock platform to provide customer repo path
-vi.mock("../trpc/platform.ts", () => ({
-  getCustomerRepoPath: vi.fn(() => "/home/iterate/src/github.com/customer/repo"),
-}));
-
 const { slackRouter } = await import("./slack.ts");
-const { getAgent, createAgent, appendToAgent } = await import("../services/agent-manager.ts");
-
-const mockedGetAgent = vi.mocked(getAgent);
-const mockedCreateAgent = vi.mocked(createAgent);
-const mockedAppendToAgent = vi.mocked(appendToAgent);
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   const now = new Date();
   return {
-    id: "agent-1",
-    slug: "slack-123",
-    harnessType: "opencode",
-    harnessSessionId: "opencode-session-123",
+    path: "/slack/123",
     workingDirectory: "/home/iterate/src/github.com/iterate/iterate",
-    status: "running",
-    initialPrompt: null,
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
@@ -52,27 +32,42 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
+function mockGatewayResponse(wasCreated: boolean) {
+  return Promise.resolve(
+    new Response(JSON.stringify({ wasCreated }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
 describe("slack router", () => {
+  const fetchSpy = vi.fn();
+
   beforeEach(() => {
-    mockedGetAgent.mockReset();
-    mockedCreateAgent.mockReset();
-    mockedAppendToAgent.mockReset();
+    selectLimitQueue.length = 0;
+    fetchSpy.mockReset();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   describe("new thread @mention (case 1)", () => {
     it("creates agent and sends new thread message when no agent exists", async () => {
-      const ts = "1234567890.123456"; // No thread_ts means new thread
+      const ts = "1234567890.123456";
       const botUserId = "U_BOT";
-      const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
 
-      mockedGetAgent.mockResolvedValue(null);
-      mockedCreateAgent.mockResolvedValue(agent);
+      selectLimitQueue.push([], []); // storeEvent, agentExists
+      fetchSpy.mockImplementation(() => mockGatewayResponse(true));
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_1",
         event: {
           type: "app_mention",
-          ts, // No thread_ts - this is a new thread
+          ts,
           text: `<@${botUserId}> hello`,
           user: "U_USER",
           channel: "C_TEST",
@@ -92,36 +87,20 @@ describe("slack router", () => {
       expect(body.success).toBe(true);
       expect(body.case).toBe("new_thread_mention");
       expect(body.created).toBe(true);
-      expect(mockedCreateAgent).toHaveBeenCalled();
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("[Agent: slack-1234567890-123456] New Slack thread started"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("channel="), {
-        workingDirectory: "/home/iterate/src/github.com/customer/repo",
-      });
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("thread_ts="),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
     it("treats as mid-thread if agent already exists for 'new thread'", async () => {
       const ts = "1234567890.123456";
       const botUserId = "U_BOT";
-      const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
+      const agent = makeAgent({ path: `/slack/${ts.replace(".", "-")}` });
 
-      mockedGetAgent.mockResolvedValue(agent); // Agent already exists
+      selectLimitQueue.push([], [agent]);
+      fetchSpy.mockImplementation(() => mockGatewayResponse(false));
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_2",
         event: {
           type: "app_mention",
           ts,
@@ -142,9 +121,9 @@ describe("slack router", () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.success).toBe(true);
-      expect(body.case).toBe("mid_thread_mention"); // Treated as mid-thread
+      expect(body.case).toBe("mid_thread_mention");
       expect(body.created).toBe(false);
-      expect(mockedCreateAgent).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -153,16 +132,16 @@ describe("slack router", () => {
       const threadTs = "1234567890.123456";
       const ts = "1234567891.654321";
       const botUserId = "U_BOT";
-      const agent = makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` });
 
-      mockedGetAgent.mockResolvedValue(null);
-      mockedCreateAgent.mockResolvedValue(agent);
+      selectLimitQueue.push([], []); // storeEvent, agentExists
+      fetchSpy.mockImplementation(() => mockGatewayResponse(true));
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_3",
         event: {
           type: "app_mention",
-          thread_ts: threadTs, // Has thread_ts - this is a reply
+          thread_ts: threadTs,
           ts,
           text: `<@${botUserId}> can you help?`,
           user: "U_USER",
@@ -180,32 +159,23 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.case).toBe("mid_thread_mention");
       expect(body.created).toBe(true);
-      expect(mockedCreateAgent).toHaveBeenCalled();
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("You've been @mentioned in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
     it("uses existing agent when mentioned in thread with existing agent", async () => {
       const threadTs = "9999999999.999999";
       const ts = "9999999999.888888";
       const botUserId = "U_BOT";
-      const agent = makeAgent({ slug: `slack-${threadTs.replace(".", "-")}` });
+      const agent = makeAgent({ path: `/slack/${threadTs.replace(".", "-")}` });
 
-      mockedGetAgent.mockResolvedValue(agent);
+      selectLimitQueue.push([], [agent]);
+      fetchSpy.mockImplementation(() => mockGatewayResponse(false));
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_4",
         event: {
           type: "app_mention",
           thread_ts: threadTs,
@@ -228,17 +198,7 @@ describe("slack router", () => {
       const body = await response.json();
       expect(body.case).toBe("mid_thread_mention");
       expect(body.created).toBe(false);
-      expect(mockedCreateAgent).not.toHaveBeenCalled();
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("You've been @mentioned in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -246,12 +206,14 @@ describe("slack router", () => {
     it("sends FYI message when no @mention but agent exists", async () => {
       const ts = "8888888888.888888";
       const botUserId = "U_BOT";
-      const agent = makeAgent({ slug: `slack-${ts.replace(".", "-")}` });
+      const agent = makeAgent({ path: `/slack/${ts.replace(".", "-")}` });
 
-      mockedGetAgent.mockResolvedValue(agent);
+      selectLimitQueue.push([], [agent]);
+      fetchSpy.mockImplementation(() => mockGatewayResponse(false));
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_5",
         event: {
           type: "message",
           ts,
@@ -272,29 +234,20 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.case).toBe("fyi_message");
-      expect(mockedCreateAgent).not.toHaveBeenCalled();
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("Another message in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("(FYI, no @mention)"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
+      expect(body.created).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
     it("ignores FYI message when no agent exists", async () => {
       const ts = "7777777777.777777";
       const botUserId = "U_BOT";
 
-      mockedGetAgent.mockResolvedValue(null);
+      selectLimitQueue.push([], []); // storeEvent, agentExists
 
       const payload = {
         type: "event_callback",
+        event_id: "evt_6",
         event: {
           type: "message",
           ts,
@@ -315,10 +268,8 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.message).toContain("no mention and no existing agent");
-      expect(mockedCreateAgent).not.toHaveBeenCalled();
-      expect(mockedAppendToAgent).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -327,8 +278,11 @@ describe("slack router", () => {
       const ts = "6666666666.666666";
       const botUserId = "U_BOT";
 
+      selectLimitQueue.push([]); // storeEvent
+
       const payload = {
         type: "event_callback",
+        event_id: "evt_7",
         event: {
           type: "message",
           ts,
@@ -350,18 +304,18 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.message).toContain("bot message");
-      expect(mockedGetAgent).not.toHaveBeenCalled();
-      expect(mockedCreateAgent).not.toHaveBeenCalled();
-      expect(mockedAppendToAgent).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it("ignores messages without bot authorization", async () => {
       const ts = "5555555555.555555";
 
+      selectLimitQueue.push([]); // storeEvent
+
       const payload = {
         type: "event_callback",
+        event_id: "evt_8",
         event: {
           type: "message",
           ts,
@@ -371,7 +325,7 @@ describe("slack router", () => {
           event_ts: ts,
           channel_type: "channel",
         },
-        authorizations: [], // No bot authorization
+        authorizations: [],
       };
 
       const response = await slackRouter.request("/webhook", {
@@ -382,15 +336,17 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.message).toContain("no bot user recipient");
     });
 
     it("ignores messages with no timestamp", async () => {
       const botUserId = "U_BOT";
 
+      selectLimitQueue.push([]); // storeEvent
+
       const payload = {
         type: "event_callback",
+        event_id: "evt_9",
         event: {
           type: "message",
           channel: "C_TEST",
@@ -409,7 +365,6 @@ describe("slack router", () => {
 
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.success).toBe(true);
       expect(body.message).toContain("no thread timestamp");
     });
   });
