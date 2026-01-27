@@ -62,13 +62,13 @@ log "Setting up mitmproxy..."
 
 # Copy addon script
 mkdir -p /app/egress-proxy
-cp /local-iterate-repo/apps/os/sandbox/s6-daemons/egress-proxy/addon.py /app/egress-proxy/
+cp /local-iterate-repo/apps/os/sandbox/egress-proxy-addon.py /app/egress-proxy/
 
 # Start mitmproxy in background
 log "Starting mitmproxy on port 8888..."
 ITERATE_EGRESS_PROXY_URL="$ITERATE_EGRESS_PROXY_URL" \
 ITERATE_OS_API_KEY="$ITERATE_OS_API_KEY" \
-mitmdump -p 8888 -s /app/egress-proxy/addon.py --ssl-insecure &
+mitmdump -p 8888 -s /app/egress-proxy/egress-proxy-addon.py --ssl-insecure &
 PROXY_PID=$!
 
 sleep 3
