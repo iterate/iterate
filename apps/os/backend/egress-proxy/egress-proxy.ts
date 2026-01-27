@@ -593,17 +593,6 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   // Request-scoped cache to avoid duplicate DB lookups for the same secret
   const secretCache: RequestSecretCache = new Map();
 
-  // Buffer the request body upfront so it can be reused on 401 retry
-  // (Request bodies are streams and can only be read once)
-  let requestBody: ArrayBuffer | null = null;
-  if (hasRequestBody(originalMethod)) {
-    try {
-      requestBody = await c.req.raw.arrayBuffer();
-    } catch {
-      // Body may be empty or already consumed
-    }
-  }
-
   try {
     // Collect headers to process
     const originalHeaderEntries: Array<[string, string]> = [];
@@ -614,6 +603,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     });
 
     // Process URL and all headers in parallel for better performance
+    // We do this BEFORE reading the body to determine if connector secrets are used
     const [urlResult, ...headerResults] = await Promise.all([
       replaceMagicStrings(db, originalURL, context, secretCache),
       ...originalHeaderEntries.map(([key, value]) =>
@@ -650,6 +640,27 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     // Set the correct Host header for the destination
     if (originalHost) {
       forwardHeaders.set("Host", originalHost);
+    }
+
+    // Determine if we need to buffer the body for potential 401 retry
+    // Only connector secrets can trigger OAuth refresh, so only buffer when they're used
+    const hasConnectorSecrets = usedSecrets.some((s) => s.isConnector);
+    const needsBody = hasRequestBody(originalMethod);
+
+    // Get the request body - either buffered (for connector retry) or streamed
+    let requestBody: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
+    if (needsBody) {
+      if (hasConnectorSecrets) {
+        // Buffer body for potential 401 retry with OAuth refresh
+        try {
+          requestBody = await c.req.raw.arrayBuffer();
+        } catch {
+          // Body may be empty or already consumed
+        }
+      } else {
+        // Stream body directly - no retry needed for non-connector requests
+        requestBody = c.req.raw.body;
+      }
     }
 
     // Forward the request to the original destination
