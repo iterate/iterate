@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsx build.ts",
+    "build": "esbuild iterate.config.ts --bundle --outfile=dist/index.js --format=esm --platform=node --target=node20 --sourcemap --external:better-sqlite3 --keep-names",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,7 +14,6 @@
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.2"

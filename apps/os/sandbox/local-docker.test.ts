@@ -453,4 +453,131 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
     }, 210000);
   });
+
+  // ============ Config Hot Reload ============
+  describe("Config Hot Reload", () => {
+    let container: ContainerInfo;
+
+    beforeAll(async () => {
+      // Create container with ITERATE_CONFIG_PATH pointing to sample-iterate-internal
+      const containerName = createContainerName("config-reload-test");
+      const port = getRandomPort();
+
+      const envVars = [
+        "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        `ITERATE_CONFIG_PATH=${CONTAINER_REPO_PATH}/sample-iterate-internal`,
+      ];
+
+      const config: Record<string, unknown> = {
+        Image: IMAGE_NAME,
+        name: containerName,
+        Env: envVars,
+        Tty: false,
+        HostConfig: {
+          AutoRemove: false,
+          Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
+          ExtraHosts: ["host.docker.internal:host-gateway"],
+          PortBindings: {
+            "3000/tcp": [{ HostPort: String(port) }],
+          },
+        },
+        ExposedPorts: { "3000/tcp": {} },
+      };
+
+      const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", config);
+      await dockerApi("POST", `/containers/${createResponse.Id}/start`, {});
+
+      container = { id: createResponse.Id, port };
+      await waitForContainerReady(container.id);
+
+      // Install dependencies in sample-iterate-internal
+      console.log("Installing sample-iterate-internal dependencies...");
+      await execInContainer(container.id, [
+        "sh",
+        "-c",
+        `cd ${CONTAINER_REPO_PATH}/sample-iterate-internal && pnpm install`,
+      ]);
+    }, 300000);
+
+    afterAll(async () => {
+      if (container?.id) await destroyContainer(container.id);
+    }, 30000);
+
+    test("daemon picks up config changes after restart", async () => {
+      await waitForDaemonReady(container.port!);
+      const baseUrl = `http://localhost:${container.port}`;
+
+      // 1. Verify initial config works - Slack webhook returns non-404
+      const initialSlack = await fetch(`${baseUrl}/api/integrations/slack/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "url_verification", challenge: "test" }),
+      });
+      expect(initialSlack.status).not.toBe(404);
+
+      // 2. Verify new endpoint doesn't exist yet
+      const initialPing = await fetch(`${baseUrl}/api/test/ping`);
+      expect(initialPing.status).toBe(404);
+
+      // 3. Modify iterate.config.ts to add /api/test/ping endpoint
+      const newConfigContent = `import { Hono } from "hono";
+import { slackRouter } from "./integrations/slack/router.ts";
+
+const app = new Hono();
+
+// Mount Slack integration
+app.route("/api/integrations/slack", slackRouter);
+
+// New test endpoint added dynamically
+app.get("/api/test/ping", (c) => c.text("pong"));
+
+// Return 404 for unhandled routes so daemon can try its own routes
+app.all("*", (c) => c.notFound());
+
+export default { fetch: app.fetch };
+`;
+
+      await execInContainer(container.id, [
+        "sh",
+        "-c",
+        `cat > ${CONTAINER_REPO_PATH}/sample-iterate-internal/iterate.config.ts << 'CONFIGEOF'
+${newConfigContent}
+CONFIGEOF`,
+      ]);
+
+      // 4. Rebuild the config
+      console.log("Rebuilding config with new endpoint...");
+      await execInContainer(container.id, [
+        "sh",
+        "-c",
+        `cd ${CONTAINER_REPO_PATH}/sample-iterate-internal && pnpm build`,
+      ]);
+
+      // 5. Restart the daemon service using s6
+      console.log("Restarting daemon service...");
+      await execInContainer(container.id, ["s6-svc", "-t", "/run/service/iterate-daemon"]);
+
+      // 6. Wait for daemon to be ready again
+      await waitForDaemonReady(container.port!);
+
+      // 7. Verify new endpoint now works
+      const newPing = await fetch(`${baseUrl}/api/test/ping`);
+      expect(newPing.status).toBe(200);
+      const pingText = await newPing.text();
+      expect(pingText).toBe("pong");
+
+      // 8. Verify original Slack webhook still works
+      const finalSlack = await fetch(`${baseUrl}/api/integrations/slack/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "url_verification", challenge: "verify" }),
+      });
+      expect(finalSlack.status).not.toBe(404);
+
+      // 9. Verify daemon's own routes still work (fallthrough)
+      const trpc = createDaemonTrpcClient(container.port!);
+      const cwd = await trpc.getServerCwd.query();
+      expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
+    }, 300000);
+  });
 });
