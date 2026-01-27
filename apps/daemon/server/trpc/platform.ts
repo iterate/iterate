@@ -52,9 +52,7 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
   Object.assign(platformEnvVars, vars);
   Object.assign(process.env, vars);
 
-  console.log(
-    `[platform] Applied ${Object.keys(vars).length} env vars, removed ${keysToRemove.length} stale`,
-  );
+  console.log(`[platform] Applied ${Object.keys(vars)} env vars, removed ${keysToRemove} stale`);
 
   // Write env vars to a file that tmux sessions can source
   const envFileHeader = `# iterate sandbox environment variables
