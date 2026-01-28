@@ -128,17 +128,19 @@ When creating PRs, always include attribution in the PR description so reviewers
 
 - **Requested by:** @username (or user email)
 - **Slack thread:** [link to thread]
-- **Agent session:** [attach command]
+- **Agent session:** [clickable link to attach]
 ```
 
 Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
 
-To get your agent session attach command, query the daemon database for your harness_session_id:
+To get your agent session link, build a URL to the terminal with the attach command:
 
 ```bash
-CUSTOMER_REPO="${ITERATE_CUSTOMER_REPO_PATH:-$HOME/src/github.com/iterate/iterate}"
 SESSION_ID=$(sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT harness_session_id FROM agents WHERE status='running' LIMIT 1")
-echo "opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$CUSTOMER_REPO'"
+REPO_DIR="${ITERATE_CUSTOMER_REPO_PATH:-/home/iterate/src/github.com/iterate/iterate}"
+CMD="opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$REPO_DIR'"
+ENCODED_CMD=$(printf '%s' "$CMD" | jq -sRr @uri)
+echo "${ITERATE_OS_BASE_URL}/orgs/${ITERATE_ORG_SLUG}/projects/${ITERATE_PROJECT_SLUG}/machines/${ITERATE_MACHINE_ID}/proxy/3000/terminal?command=${ENCODED_CMD}&autorun=true"
 ```
 
 ## Handling APIs and Secrets

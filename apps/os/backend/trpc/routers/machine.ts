@@ -323,6 +323,9 @@ export const machineRouter = router({
             ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
             ITERATE_OS_API_KEY: apiKey,
             ITERATE_MACHINE_ID: machineId,
+            // Org/project slugs for building dashboard URLs from within the sandbox
+            ITERATE_ORG_SLUG: input.organizationSlug,
+            ITERATE_PROJECT_SLUG: input.projectSlug,
             // Egress proxy URL for sandbox mitmproxy (mounted on main worker)
             ITERATE_EGRESS_PROXY_URL: `${ctx.env.VITE_PUBLIC_URL}/api/egress-proxy`,
             // GitHub auth via egress proxy magic string - gh CLI sends this in Authorization header
