@@ -138,10 +138,10 @@ To get your agent session link, first get your session ID using the `get-current
 ```bash
 # Replace SESSION_ID with the result from get-current-session-id tool
 SESSION_ID="ses_xxxxx"
-REPO_DIR="${ITERATE_CUSTOMER_REPO_PATH:-/home/iterate/src/github.com/iterate/iterate}"
-CMD="opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$REPO_DIR'"
-ENCODED_CMD=$(printf '%s' "$CMD" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
-echo "${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/3000/terminal?command=${ENCODED_CMD}&autorun=true"
+node -p "
+  const cmd = \`opencode attach 'http://localhost:4096' --session ${SESSION_ID} --dir '\${process.env.ITERATE_CUSTOMER_REPO_PATH || '/home/iterate/src/github.com/iterate/iterate'}'\`;
+  \`\${process.env.ITERATE_OS_BASE_URL}/org/\${process.env.ITERATE_ORG_SLUG}/proj/\${process.env.ITERATE_PROJECT_SLUG}/\${process.env.ITERATE_MACHINE_ID}/proxy/3000/terminal?command=\${encodeURIComponent(cmd)}&autorun=true\`
+"
 ```
 
 ## Building URLs
