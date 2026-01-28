@@ -337,10 +337,15 @@ async function setupDatabase() {
     const res = await Exec("db-seed-secrets", {
       env: {
         PSCALE_DATABASE_URL: origin,
+        DATABASE_URL: origin,
         ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      },
+        RESEND_BOT_API_KEY: process.env.RESEND_BOT_API_KEY,
+      } satisfies Record<
+        import("./scripts/seed-global-secrets.ts").GlobalSecretEnvVarName,
+        string | undefined
+      >,
       command: "tsx ./scripts/seed-global-secrets.ts",
     });
 

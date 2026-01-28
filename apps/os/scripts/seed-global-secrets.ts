@@ -13,11 +13,7 @@ import * as schema from "../backend/db/schema.ts";
 import { encryptWithSecret } from "../backend/utils/encryption-core.ts";
 
 // Global secrets configuration: env var name -> secret key + egress rule
-const GLOBAL_SECRETS_CONFIG: Array<{
-  envVar: string;
-  key: string;
-  egressProxyRule: string;
-}> = [
+export const GLOBAL_SECRETS_CONFIG = [
   {
     envVar: "OPENAI_API_KEY",
     key: "openai_api_key",
@@ -33,7 +29,17 @@ const GLOBAL_SECRETS_CONFIG: Array<{
     key: "resend.api_key",
     egressProxyRule: `url.hostname = 'api.resend.com'`,
   },
-];
+] as const satisfies Array<{
+  envVar: string;
+  key: string;
+  egressProxyRule: string;
+}>;
+
+export type GlobalSecretEnvVarName =
+  | (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"]
+  | "PSCALE_DATABASE_URL"
+  | "DATABASE_URL"
+  | "ENCRYPTION_SECRET";
 
 async function main() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
