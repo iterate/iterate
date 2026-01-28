@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
-import type { CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 
-export class RealtimePusher extends DurableObject<CloudflareEnv> {
+/** This DO doesn't need any bindings, use empty record to avoid circular deps */
+export class RealtimePusher extends DurableObject<Record<string, unknown>> {
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") === "websocket") {
       return this.handleWebSocketUpgrade();

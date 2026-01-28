@@ -27,7 +27,7 @@
 import { Hono } from "hono";
 import { eq, and, isNull, or, sql } from "drizzle-orm";
 import JSON5 from "json5";
-import jsonata, { type Expression } from "jsonata";
+import { typeid } from "typeid-js";
 import { logger } from "../tag-logger.ts";
 import * as schema from "../db/schema.ts";
 import { decrypt } from "../utils/encryption.ts";
@@ -36,26 +36,11 @@ import { getConnectorForUrl, getFullReauthUrl } from "../services/connectors.ts"
 import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-refresh.ts";
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
+import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
-
-// Cache for compiled JSONata expressions (module-level, persists across requests in same isolate)
-// Limited to 100 entries to prevent unbounded memory growth
-const JSONATA_CACHE_MAX_SIZE = 100;
-const jsonataCache = new Map<string, Expression>();
-
-function getCompiledJsonata(expression: string): Expression {
-  let compiled = jsonataCache.get(expression);
-  if (!compiled) {
-    // Evict oldest entry if cache is full (simple FIFO eviction)
-    if (jsonataCache.size >= JSONATA_CACHE_MAX_SIZE) {
-      const firstKey = jsonataCache.keys().next().value;
-      if (firstKey) jsonataCache.delete(firstKey);
-    }
-    compiled = jsonata(expression);
-    jsonataCache.set(expression, compiled);
-  }
-  return compiled;
-}
+import { checkEgressPolicy } from "./policy-check.ts";
+import type { ApprovalStatus, DecisionStatus, PolicyCheckResult } from "./types.ts";
+import { matchesEgressRule } from "./egress-rules.ts";
 
 export const egressProxyApp = new Hono<{
   Bindings: CloudflareEnv;
@@ -148,61 +133,6 @@ export function parseMagicString(
     };
   } catch {
     return null;
-  }
-}
-
-/**
- * Context object passed to JSONata egress rule expressions.
- * The expression can reference url.hostname, url.pathname, etc.
- */
-export type EgressRuleContext = {
-  url: {
-    hostname: string;
-    pathname: string;
-    href: string;
-    protocol: string;
-    port: string;
-  };
-  headers: Record<string, string>;
-};
-
-/**
- * Evaluate a JSONata egress proxy rule against a URL and headers.
- * Returns true if the rule matches (allows the request), false otherwise.
- *
- * Example rules:
- * - `url.hostname = 'api.openai.com'` - exact hostname match
- * - `$contains(url.hostname, 'googleapis.com')` - contains match
- * - `url.hostname = 'api.openai.com' or url.hostname = 'api.anthropic.com'` - OR
- */
-export async function matchesEgressRule(
-  urlString: string,
-  expression: string,
-  headers?: Record<string, string>,
-): Promise<boolean> {
-  try {
-    const url = new URL(urlString.startsWith("http") ? urlString : `https://${urlString}`);
-    const context: EgressRuleContext = {
-      url: {
-        hostname: url.hostname,
-        pathname: url.pathname,
-        href: url.href,
-        protocol: url.protocol,
-        port: url.port,
-      },
-      headers: headers ?? {},
-    };
-    // Use cached compiled expression
-    const expr = getCompiledJsonata(expression);
-    const result = await expr.evaluate(context);
-    return !!result;
-  } catch (err) {
-    logger.warn("Failed to evaluate egress rule", {
-      expression,
-      url: urlString,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
   }
 }
 
@@ -723,24 +653,68 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       forwardHeaders.set("X-Forwarded-Proto", forwardedProto);
     }
 
-    // Determine if we need to buffer the body for potential 401 retry
-    // Only connector secrets can trigger OAuth refresh, so only buffer when they're used
-    const hasConnectorSecrets = usedSecrets.some((s) => s.isConnector);
+    // Buffer body for policy checks/approvals/retries
     const needsBody = hasRequestBody(originalMethod);
-
-    // Get the request body - either buffered (for connector retry) or streamed
-    let requestBody: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
+    let requestBody: ArrayBuffer | null = null;
     if (needsBody) {
-      if (hasConnectorSecrets) {
-        // Buffer body for potential 401 retry with OAuth refresh
-        try {
-          requestBody = await c.req.raw.arrayBuffer();
-        } catch {
-          // Body may be empty or already consumed
-        }
-      } else {
-        // Stream body directly - no retry needed for non-connector requests
-        requestBody = c.req.raw.body;
+      try {
+        requestBody = await c.req.raw.arrayBuffer();
+      } catch {
+        // Body may be empty or already consumed
+      }
+    }
+
+    if (!context.projectId) {
+      return c.json({ error: "Missing project context" }, 400);
+    }
+
+    const policyRequestHeaders = headersToRecord(forwardHeaders);
+    const policyResult = await checkEgressPolicy(
+      {
+        method: originalMethod,
+        url: processedURL,
+        headers: policyRequestHeaders,
+        body: decodeBodyText(requestBody),
+      },
+      context.projectId,
+      db,
+    );
+
+    if (policyResult.decision === "deny") {
+      return c.json(
+        {
+          error: "Request denied by policy",
+          reason: policyResult.reason,
+        },
+        403,
+      );
+    }
+
+    if (policyResult.decision === "human_approval") {
+      const approval = await waitForHumanApproval({
+        db,
+        env: c.env,
+        method: originalMethod,
+        url: processedURL,
+        headers: policyRequestHeaders,
+        body: requestBody,
+        projectId: context.projectId,
+        policyResult,
+        context,
+      });
+
+      if (approval.decision !== "approved") {
+        return c.json(
+          {
+            error:
+              approval.decision === "timeout"
+                ? "Approval timed out"
+                : "Request rejected by operator",
+            approvalId: approval.approvalId,
+            status: approval.decision,
+          },
+          approval.decision === "timeout" ? 408 : 403,
+        );
       }
     }
 
@@ -1029,4 +1003,86 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
     projectSlug: accessToken.project.slug,
     orgSlug: accessToken.project.organization.slug,
   };
+}
+
+async function waitForHumanApproval({
+  db,
+  env: workerEnv,
+  method,
+  url,
+  headers,
+  body,
+  projectId,
+  policyResult,
+  context,
+}: {
+  db: DB;
+  env: CloudflareEnv;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: ArrayBuffer | null;
+  projectId: string;
+  policyResult: PolicyCheckResult;
+  context: EgressContext;
+}): Promise<{ decision: ApprovalStatus; approvalId: string }> {
+  const approvalId = typeid("ega").toString();
+  const bodyText = decodeBodyText(body);
+  const contextPayload = JSON.stringify({
+    orgSlug: context.orgSlug,
+    projectSlug: context.projectSlug,
+  });
+
+  await db.insert(schema.egressApproval).values({
+    id: approvalId,
+    projectId,
+    policyId: policyResult.policy?.id ?? null,
+    method,
+    url,
+    headers,
+    body: bodyText,
+    status: "pending",
+    context: contextPayload,
+  });
+  waitUntil(broadcastInvalidation(workerEnv));
+
+  const doId = workerEnv.APPROVAL_COORDINATOR.idFromName(projectId);
+  const stub = workerEnv.APPROVAL_COORDINATOR.get(doId);
+  const decisionResponse = await stub.fetch(
+    `https://approval-coordinator/wait/${approvalId}?timeout=300000`,
+  );
+  const decisionText = (await decisionResponse.text()).trim();
+  const decision = isDecisionStatus(decisionText) ? decisionText : "timeout";
+
+  await db
+    .update(schema.egressApproval)
+    .set({
+      status: decision,
+      decidedAt: new Date(),
+    })
+    .where(
+      and(eq(schema.egressApproval.id, approvalId), eq(schema.egressApproval.status, "pending")),
+    );
+  waitUntil(broadcastInvalidation(workerEnv));
+
+  return { decision, approvalId };
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    record[key.toLowerCase()] = value;
+  });
+  return record;
+}
+
+function decodeBodyText(body: ArrayBuffer | null): string | null {
+  if (!body || body.byteLength === 0) {
+    return null;
+  }
+  return new TextDecoder().decode(body);
+}
+
+function isDecisionStatus(value: string): value is DecisionStatus {
+  return value === "approved" || value === "rejected" || value === "timeout";
 }

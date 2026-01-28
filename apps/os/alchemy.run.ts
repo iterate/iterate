@@ -461,6 +461,12 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       sqlite: true,
     },
   );
+  const APPROVAL_COORDINATOR = DurableObjectNamespace<
+    import("./backend/worker.ts").ApprovalCoordinator
+  >("approval-coordinator", {
+    className: "ApprovalCoordinator",
+    sqlite: true,
+  });
 
   const devGitRef = getCurrentGitRef();
   console.log(`Current git branch: ${devGitRef}`);
@@ -472,6 +478,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
+      APPROVAL_COORDINATOR,
       // In dev, pass the current git branch for Daytona sandboxes
       ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
