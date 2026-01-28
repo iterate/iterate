@@ -121,6 +121,73 @@ If a message contains files or attachments, query the raw event to get file URLs
 4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you. However, if you're the only other participant in the thread (just you and the user), always respond.
 5. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
 
+## Working in Isolation (Git Worktrees)
+
+When making code changes, you should create an isolated git worktree first. This prevents conflicts when multiple agents work on the same repo simultaneously.
+
+**When to use a worktree:**
+
+- Making code changes that will result in a PR
+- Any task involving file edits, new features, or bug fixes
+- NOT needed for: answering questions, reading code, running queries
+
+**Creating a worktree:**
+
+First, get your session ID using the `get-current-session-id` tool. Use this in the branch name.
+
+```bash
+# Variables - use your session ID from get-current-session-id tool
+REPO_PATH="${ITERATE_CUSTOMER_REPO_PATH:-$PWD}"
+SESSION_ID="ses_abc123"  # from get-current-session-id tool
+BRANCH_NAME="agent/${SESSION_ID}/short-description"  # e.g., agent/ses_abc123/add-loading-spinner
+
+# Derive worktree path: replace src/ with worktrees/ in the repo path
+# Example: /home/iterate/src/github.com/org/repo -> /home/iterate/worktrees/github.com/org/repo/...
+WORKTREE_PATH="${REPO_PATH/src\//worktrees/}/${BRANCH_NAME}"
+
+# Create the worktree
+mkdir -p "$(dirname "$WORKTREE_PATH")"
+git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH"
+```
+
+**Configure git identity for the requesting user:**
+
+Set the git author to the user who requested the change. This shows up in GitHub as "User Name & iterate[bot]":
+
+```bash
+# In the worktree, set author to the requesting user
+cd "$WORKTREE_PATH"
+git config user.name "User Name"
+git config user.email "user@example.com"
+```
+
+**Working in the worktree:**
+
+After creating the worktree, use that path for all operations:
+
+- Bash tool: use `workdir="$WORKTREE_PATH"`
+- Edit/Write tools: use absolute paths like `$WORKTREE_PATH/src/file.ts`
+
+**When done - create PR from the branch:**
+
+```bash
+cd "$WORKTREE_PATH" && git add -A && git commit -m "feat: description" && git push -u origin "$BRANCH_NAME"
+gh pr create --title "..." --body "..."
+```
+
+**Resuming work on an existing PR:**
+
+If asked to continue work on an existing PR/branch:
+
+```bash
+# Check if worktree already exists
+git worktree list | grep "$BRANCH_NAME"
+
+# If not, create worktree from existing branch
+git fetch origin "$BRANCH_NAME"
+git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+```
+
 ## Creating Pull Requests
 
 When creating PRs, always include attribution in the PR description so reviewers know the context:
