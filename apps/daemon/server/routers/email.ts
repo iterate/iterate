@@ -140,8 +140,13 @@ emailRouter.post("/webhook", async (c) => {
   const emailData = payload.data;
   const resendEmailId = emailData.email_id;
 
-  // Store the raw event for later inspection
-  const eventId = await storeEvent(payload, resendEmailId);
+  // Store the raw event for later inspection and dedup check
+  const { eventId, isDuplicate } = await storeEvent(payload, resendEmailId);
+
+  if (isDuplicate) {
+    console.log(`[daemon/email] Duplicate event, skipping`, { eventId, resendEmailId });
+    return c.json({ success: true, message: "Duplicate event", eventId });
+  }
 
   const { name: senderName, email: senderEmail } = parseSender(emailData.from);
   const subject = emailData.subject;
@@ -203,8 +208,12 @@ emailRouter.post("/webhook", async (c) => {
 
 /**
  * Store the raw webhook event in SQLite for later inspection.
+ * Returns { eventId, isDuplicate } so caller can skip processing duplicates.
  */
-async function storeEvent(payload: ResendEmailPayload, resendEmailId: string): Promise<string> {
+async function storeEvent(
+  payload: ResendEmailPayload,
+  resendEmailId: string,
+): Promise<{ eventId: string; isDuplicate: boolean }> {
   // Check for existing event with same email_id (dedup)
   const existing = await db
     .select()
@@ -212,7 +221,7 @@ async function storeEvent(payload: ResendEmailPayload, resendEmailId: string): P
     .where(eq(schema.events.externalId, resendEmailId))
     .limit(1);
   if (existing[0]) {
-    return existing[0].id;
+    return { eventId: existing[0].id, isDuplicate: true };
   }
 
   const eventId = `evt_${nanoid(12)}`;
@@ -223,7 +232,7 @@ async function storeEvent(payload: ResendEmailPayload, resendEmailId: string): P
     payload: payload as unknown as Record<string, unknown>,
   });
 
-  return eventId;
+  return { eventId, isDuplicate: false };
 }
 
 /**
