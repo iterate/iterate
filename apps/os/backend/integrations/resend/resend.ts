@@ -9,7 +9,7 @@
  *
  * To receive inbound emails:
  * 1. Go to Resend Dashboard > Receiving
- * 2. Add a custom domain (e.g., alpha.iterate.com)
+ * 2. Add a custom domain (e.g., mail.iterate.com)
  * 3. Configure DNS records as instructed by Resend
  * 4. Add a webhook endpoint pointing to: https://your-domain/api/integrations/resend/webhook
  * 5. Select "email.received" event type
@@ -140,7 +140,7 @@ function parseSenderEmail(from: string): string {
 
 /**
  * Parse recipient email to extract the local part (before @)
- * e.g., "agent+projectslug@alpha.iterate.com" -> "agent+projectslug"
+ * e.g., "agent+projectslug@mail.iterate.com" -> "agent+projectslug"
  */
 function parseRecipientLocal(to: string): string {
   const email = to.includes("<") ? parseSenderEmail(to) : to;
@@ -291,7 +291,7 @@ resendApp.post("/webhook", async (c) => {
   const resendEmailId = emailData.email_id;
 
   // Validate inbound email is addressed to this stage
-  // Expected format: {stage}@alpha.iterate.com or {stage}+{extra}@alpha.iterate.com
+  // Expected format: {stage}@{RESEND_BOT_DOMAIN} or {stage}+{extra}@{RESEND_BOT_DOMAIN}
   const expectedStage = c.env.VITE_APP_STAGE;
   const recipientEmail = emailData.to[0] || "";
   const recipientLocal = parseRecipientLocal(recipientEmail); // e.g., "dev-mmkal" or "dev-mmkal+projectslug"

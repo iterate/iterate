@@ -285,6 +285,7 @@ const Env = z.object({
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
+  RESEND_BOT_DOMAIN: Required,
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
