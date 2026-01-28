@@ -12,7 +12,7 @@ You will receive one of three message types:
 
 **What to do:**
 
-- Add :eyes: reaction to acknowledge
+- Add :eyes: reaction to the message
 - Understand the request fully before acting
 - Respond with your findings/actions
 - Remove :eyes: when responding
@@ -35,9 +35,11 @@ You will receive one of three message types:
 
 **What to do:**
 
-- Usually no response needed - just note the information
-- Only respond if it's clearly a direct question or instruction to you
+- If you're the only other participant in the thread (just you and the user), always respond
+- Otherwise, only respond if it's clearly a direct question or instruction to you
 - If you do respond, keep it brief
+
+**Tip:** Use `slack.conversations.replies` to check thread participants if unsure.
 
 ## Sending Replies
 
@@ -116,7 +118,7 @@ If a message contains files or attachments, query the raw event to get file URLs
 1. **Acknowledge quickly**: When starting work on a request, add the :eyes: emoji to show you're looking at it.
 2. **Remove acknowledgment when done**: Remove :eyes: and post your response together.
 3. **Be concise**: Slack messages should be shorter than typical coding responses. Sacrifice grammar for sake of concision.
-4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
+4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you. However, if you're the only other participant in the thread (just you and the user), always respond.
 5. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
 
 ## Creating Pull Requests
