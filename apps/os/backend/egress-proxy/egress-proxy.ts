@@ -621,6 +621,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     return c.json({ error: "Invalid or missing API key" }, 401);
   }
 
+  const forwardedHost = getForwardedHost(originalHost, originalURL);
+  const forwardedProto = getForwardedProto(originalURL);
+
   // Build full context including URL for connector detection
   const context: EgressContext = {
     organizationId: apiKeyContext.organizationId,
@@ -685,6 +688,12 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     // Set the correct Host header for the destination
     if (originalHost) {
       forwardHeaders.set("Host", originalHost);
+    }
+    if (forwardedHost) {
+      forwardHeaders.set("X-Forwarded-Host", forwardedHost);
+    }
+    if (forwardedProto) {
+      forwardHeaders.set("X-Forwarded-Proto", forwardedProto);
     }
 
     // Determine if we need to buffer the body for potential 401 retry
@@ -775,6 +784,12 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
           if (originalHost) {
             retryHeaders.set("Host", originalHost);
           }
+          if (forwardedHost) {
+            retryHeaders.set("X-Forwarded-Host", forwardedHost);
+          }
+          if (forwardedProto) {
+            retryHeaders.set("X-Forwarded-Proto", forwardedProto);
+          }
 
           // Retry the request with buffered body
           response = await fetch(retryUrlResult.result, {
@@ -835,6 +850,25 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
  */
 function hasRequestBody(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
+}
+
+function getForwardedHost(originalHost: string | undefined, originalUrl: string): string | null {
+  if (originalHost) return originalHost;
+  try {
+    const url = new URL(originalUrl);
+    return url.host || null;
+  } catch {
+    return null;
+  }
+}
+
+function getForwardedProto(originalUrl: string): string | null {
+  try {
+    const url = new URL(originalUrl);
+    return url.protocol.replace(":", "") || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
