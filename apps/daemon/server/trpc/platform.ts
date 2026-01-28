@@ -92,10 +92,8 @@ NODE_USE_ENV_PROXY=1
   const envFileContent =
     envFileHeader +
     Object.entries(platformEnvVars)
-      // Double-quoted values in dotenv format. The dotenv library reads these literally
-      // (no shell interpretation), so special chars like @ ' $ are preserved as-is.
-      // Values containing " (double quote) would break parsing, but this is rare.
-      .map(([key, value]) => `${key}="${value}"`)
+      // Double-quoted values in dotenv format. Escape backslashes and double quotes.
+      .map(([key, value]) => `${key}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
       .join("\n");
 
   // Check if content changed before writing
