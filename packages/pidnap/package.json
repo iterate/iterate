@@ -29,7 +29,7 @@
     }
   },
   "scripts": {
-    "dev": "tsx src/cli.ts",
+    "cli:dev": "tsx src/cli.ts",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest",

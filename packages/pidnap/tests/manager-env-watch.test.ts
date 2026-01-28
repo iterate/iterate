@@ -48,7 +48,7 @@ describe("Manager - Env File Watching", () => {
     expect(proc).toBeDefined();
 
     const initialDefinition = proc!.lazyProcess.definition;
-    expect(initialDefinition.env.TEST_VAR).toBe("original");
+    expect(initialDefinition.env?.TEST_VAR).toBe("original");
 
     // Wait a bit before changing
     await wait(200);
@@ -61,7 +61,7 @@ describe("Manager - Env File Watching", () => {
 
     // Process should have been reloaded
     const reloadedDefinition = proc!.lazyProcess.definition;
-    expect(reloadedDefinition.env.TEST_VAR).toBe("updated");
+    expect(reloadedDefinition.env?.TEST_VAR).toBe("updated");
 
     await manager.stop();
   }, 10000); // 10 second timeout
@@ -91,7 +91,7 @@ describe("Manager - Env File Watching", () => {
 
     const proc = manager.getRestartingProcess("test-proc");
     const initialDefinition = proc!.lazyProcess.definition;
-    expect(initialDefinition.env.TEST_VAR).toBe("original");
+    expect(initialDefinition.env?.TEST_VAR).toBe("original");
 
     await wait(200);
 
@@ -103,7 +103,7 @@ describe("Manager - Env File Watching", () => {
 
     // Process should have been reloaded quickly
     const reloadedDefinition = proc!.lazyProcess.definition;
-    expect(reloadedDefinition.env.TEST_VAR).toBe("updated");
+    expect(reloadedDefinition.env?.TEST_VAR).toBe("updated");
 
     await manager.stop();
   }, 5000);
@@ -133,7 +133,7 @@ describe("Manager - Env File Watching", () => {
 
     const proc = manager.getRestartingProcess("test-proc");
     const initialDefinition = proc!.lazyProcess.definition;
-    expect(initialDefinition.env.TEST_VAR).toBe("original");
+    expect(initialDefinition.env?.TEST_VAR).toBe("original");
 
     await wait(200);
 
@@ -145,7 +145,7 @@ describe("Manager - Env File Watching", () => {
 
     // Process should have been reloaded quickly
     const reloadedDefinition = proc!.lazyProcess.definition;
-    expect(reloadedDefinition.env.TEST_VAR).toBe("updated");
+    expect(reloadedDefinition.env?.TEST_VAR).toBe("updated");
 
     await manager.stop();
   }, 5000);
@@ -175,7 +175,7 @@ describe("Manager - Env File Watching", () => {
 
     const proc = manager.getRestartingProcess("test-proc");
     const initialDefinition = proc!.lazyProcess.definition;
-    expect(initialDefinition.env.TEST_VAR).toBe("original");
+    expect(initialDefinition.env?.TEST_VAR).toBe("original");
 
     // Change env file
     writeFileSync(join(testDir, ".env"), "TEST_VAR=updated");
@@ -185,7 +185,7 @@ describe("Manager - Env File Watching", () => {
 
     // Process should NOT have been reloaded
     const definition = proc!.lazyProcess.definition;
-    expect(definition.env.TEST_VAR).toBe("original");
+    expect(definition.env?.TEST_VAR).toBe("original");
 
     await manager.stop();
   });
@@ -215,7 +215,7 @@ describe("Manager - Env File Watching", () => {
 
     const proc = manager.getRestartingProcess("test-proc");
     const initialDefinition = proc!.lazyProcess.definition;
-    expect(initialDefinition.env.TEST_VAR).toBe("original");
+    expect(initialDefinition.env?.TEST_VAR).toBe("original");
 
     await wait(200);
 
@@ -227,7 +227,7 @@ describe("Manager - Env File Watching", () => {
 
     // Process should have been reloaded
     const reloadedDefinition = proc!.lazyProcess.definition;
-    expect(reloadedDefinition.env.TEST_VAR).toBe("updated");
+    expect(reloadedDefinition.env?.TEST_VAR).toBe("updated");
 
     await manager.stop();
   }, 5000);
@@ -270,8 +270,8 @@ describe("Manager - Env File Watching", () => {
     const initialDef1 = proc1!.lazyProcess.definition;
     const initialDef2 = proc2!.lazyProcess.definition;
 
-    expect(initialDef1.env.APP1_VAR).toBe("original");
-    expect(initialDef2.env.APP1_VAR).toBeUndefined();
+    expect(initialDef1.env?.APP1_VAR).toBe("original");
+    expect(initialDef2.env?.APP1_VAR).toBeUndefined();
 
     await wait(200);
 
@@ -282,7 +282,7 @@ describe("Manager - Env File Watching", () => {
 
     // Only app1 should be reloaded
     const reloadedDef1 = proc1!.lazyProcess.definition;
-    expect(reloadedDef1.env.APP1_VAR).toBe("updated");
+    expect(reloadedDef1.env?.APP1_VAR).toBe("updated");
 
     // app2 should be unchanged (same definition reference since no reload)
     const def2 = proc2!.lazyProcess.definition;
@@ -328,8 +328,8 @@ describe("Manager - Env File Watching", () => {
     const initialDef1 = proc1!.lazyProcess.definition;
     const initialDef2 = proc2!.lazyProcess.definition;
 
-    expect(initialDef1.env.GLOBAL_VAR).toBe("original");
-    expect(initialDef2.env.GLOBAL_VAR).toBe("original");
+    expect(initialDef1.env?.GLOBAL_VAR).toBe("original");
+    expect(initialDef2.env?.GLOBAL_VAR).toBe("original");
 
     await wait(200);
 
@@ -342,8 +342,8 @@ describe("Manager - Env File Watching", () => {
     const reloadedDef1 = proc1!.lazyProcess.definition;
     const reloadedDef2 = proc2!.lazyProcess.definition;
 
-    expect(reloadedDef1.env.GLOBAL_VAR).toBe("updated");
-    expect(reloadedDef2.env.GLOBAL_VAR).toBe("updated");
+    expect(reloadedDef1.env?.GLOBAL_VAR).toBe("updated");
+    expect(reloadedDef2.env?.GLOBAL_VAR).toBe("updated");
 
     await manager.stop();
   }, 5000);

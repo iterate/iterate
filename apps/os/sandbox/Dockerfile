@@ -3,7 +3,8 @@ WORKDIR /app
 RUN corepack enable
 COPY packages/pidnap/package.json ./
 RUN pnpm install
-COPY --exclude=node_modules --exclude=dist --exclude=tests --exclude=logs packages/pidnap/ ./
+COPY packages/pidnap/src ./src
+COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
 RUN pnpm build
 RUN pnpm pack
 RUN mv *.tgz pidnap.tgz
