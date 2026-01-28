@@ -8,23 +8,26 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseDocument } from "yaml";
 import { z } from "zod/v4";
-import { getCustomerRepoPath } from "@server/trpc/platform.ts";
+import { getCustomerRepoPath } from "../trpc/platform.ts";
 import { createAgent, appendToAgent } from "../services/agent-manager.ts";
 
 // Default interval: 15 minutes
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 
-const TaskFrontmatter = z.object({
-  state: z.enum(["pending", "in_progress", "completed"]),
+export const TaskState = z.enum(["pending", "in_progress", "completed"]);
+export type TaskState = z.infer<typeof TaskState>;
+
+export const TaskFrontmatter = z.object({
+  state: TaskState,
   due: z.string(), // ISO timestamp
   schedule: z.string().optional(), // cron expression for recurring
   lockedBy: z.string().optional(), // agent slug when in_progress
   priority: z.enum(["low", "normal", "high"]).optional(),
 });
 
-type TaskFrontmatter = z.infer<typeof TaskFrontmatter>;
+export type TaskFrontmatter = z.infer<typeof TaskFrontmatter>;
 
-interface ParsedTask {
+export interface ParsedTask {
   filename: string;
   frontmatter: TaskFrontmatter;
   body: string;
@@ -33,6 +36,13 @@ interface ParsedTask {
 
 let schedulerRunning = false;
 let tasksDir: string;
+
+/**
+ * Get the tasks directory path.
+ */
+export function getTasksDir(): string {
+  return tasksDir || path.join(process.cwd(), "cron-tasks");
+}
 
 /**
  * Initialize and start the cron task scheduler.

@@ -8,8 +8,6 @@ state: pending
 due: 2026-01-28T09:00:00Z
 schedule: "0 9 * * *"
 priority: high
-workingDirectory: /home/user/project
-harnessType: opencode
 ---
 
 # Daily Report
@@ -24,8 +22,6 @@ Send a summary to Slack.`;
     expect(task!.frontmatter.due).toBe("2026-01-28T09:00:00Z");
     expect(task!.frontmatter.schedule).toBe("0 9 * * *");
     expect(task!.frontmatter.priority).toBe("high");
-    expect(task!.frontmatter.workingDirectory).toBe("/home/user/project");
-    expect(task!.frontmatter.harnessType).toBe("opencode");
     expect(task!.body).toContain("# Daily Report");
   });
 
@@ -33,8 +29,6 @@ Send a summary to Slack.`;
     const content = `---
 state: pending
 due: 2026-01-28T09:00:00Z
-workingDirectory: /tmp
-harnessType: opencode
 ---
 
 Simple task.`;
@@ -58,7 +52,7 @@ Simple task.`;
 state: pending
 ---
 
-Missing due and workingDirectory.`;
+Missing due field.`;
 
     const task = parseTaskFile(content, "incomplete.md");
     expect(task).toBeNull();
@@ -72,8 +66,6 @@ state: pending
 due: 2026-01-28T09:00:00Z
 schedule: "0 9 * * *"
 priority: normal
-workingDirectory: /home/user/project
-harnessType: opencode
 ---
 
 # Daily Report
@@ -94,8 +86,6 @@ Send a summary to Slack.`;
       frontmatter: {
         state: "pending" as const,
         due: "2026-01-28T09:00:00Z",
-        workingDirectory: "/tmp",
-        harnessType: "opencode" as const,
       },
       body: "Simple task.",
       raw: "",

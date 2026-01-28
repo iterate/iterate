@@ -24,10 +24,10 @@ due: 2026-01-28T09:00Z # ISO timestamp - task runs after this time
 schedule: "0 9 * * *" # optional cron expression for recurring tasks
 lockedBy: cron-abc123 # agent slug when in_progress (derived createdAt = lockedAt)
 priority: normal # low | normal | high (processing order)
-workingDirectory: /path # where the agent runs
-harnessType: opencode # agent type to use
 ---
 ```
+
+Note: `workingDirectory` and `harnessType` are derived from environment (customer repo path, opencode harness).
 
 ## File Structure
 
@@ -94,8 +94,6 @@ state: pending
 due: 2026-01-28T09:00:00Z
 schedule: "0 9 * * *"
 priority: normal
-workingDirectory: /home/user/project
-harnessType: opencode
 ---
 
 # Daily US Box Office Report
@@ -110,6 +108,29 @@ Include:
 
 After completing, this task will auto-recreate for tomorrow at 9am.
 If this report is no longer needed, update the schedule to null before completing.
+```
+
+## CLI Commands
+
+Manage tasks via the CLI:
+
+```bash
+# List pending tasks
+iterate task list
+
+# List completed tasks
+iterate task list --state completed
+
+# Get a specific task
+iterate task get --filename daily-report.md
+
+# Add a new task
+iterate task add \
+  --filename daily-report.md \
+  --due 2026-01-29T09:00:00Z \
+  --schedule "0 9 * * *" \
+  --priority normal \
+  --body "# Daily Report\n\nSend summary to Slack."
 ```
 
 ## Implementation

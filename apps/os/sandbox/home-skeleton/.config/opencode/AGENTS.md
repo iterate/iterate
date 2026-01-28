@@ -207,3 +207,53 @@ Key points:
 - Set `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` to fix initial TLS verification
 - The tunnel URL will be printed in the output (e.g., `https://random-words.trycloudflare.com`)
 - Look for "Registered tunnel connection" in the logs to confirm it's working
+
+## Scheduled Tasks
+
+You can schedule tasks to run at a specific time or on a recurring schedule. Tasks are markdown files stored in `$ITERATE_REPO/apps/daemon/cron-tasks/pending/`.
+
+**When to create a task:**
+
+- User asks you to do something "later", "tomorrow", "every morning", etc.
+- User requests a recurring report or check
+- You need to defer work to a specific time
+
+**Creating a task:**
+
+```bash
+iterate task add \
+  --filename my-task.md \
+  --due "2026-01-29T09:00:00Z" \
+  --body "# Task Title
+
+Your task instructions here.
+Include all context needed - the cron agent won't have access to this conversation."
+```
+
+For recurring tasks, add `--schedule`:
+
+```bash
+iterate task add \
+  --filename daily-standup.md \
+  --due "2026-01-29T09:00:00Z" \
+  --schedule "0 9 * * *" \
+  --body "# Daily Standup Reminder
+
+Send a reminder to #engineering about standup in 15 minutes."
+```
+
+**Listing tasks:**
+
+```bash
+iterate task list                    # pending tasks
+iterate task list --state completed  # completed tasks
+iterate task get --filename my-task.md
+```
+
+**Task frontmatter fields:**
+
+- `due`: ISO timestamp when task should run (required)
+- `schedule`: Cron expression for recurring tasks (optional, e.g., `"0 9 * * *"`)
+- `priority`: `low` | `normal` | `high` (optional, default: normal)
+
+**Important:** The task body should contain ALL context needed. The cron agent that runs the task won't have access to the current conversation - include user names, channel IDs, specific instructions, etc.
