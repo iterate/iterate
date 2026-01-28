@@ -186,3 +186,22 @@ Would get you the calendar info for the user `test@example.com`.
 Note, this email is the email we store in OUR system, not the one for the downstream service. If a user connected a google account xyz@gmail.com but signed up with test@example.com, then you should use test@example.com.
 
 To further understand how env vars are injected and formatted, you can `cat ~/.iterate/.env`. You can also read the code in the iterate repo's egress-proxy to see how it works.
+
+## Cloudflare Tunnels
+
+To expose a local port to the internet via Cloudflare Tunnel:
+
+```bash
+# Start a local server (e.g., on port 6666)
+npx serve . -l 6666
+
+# Create a tunnel - MUST use http2 protocol (quic fails with egress proxy's self-signed certs)
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt cloudflared tunnel --url localhost:6666 --protocol http2
+```
+
+Key points:
+
+- Always use `--protocol http2` - quic doesn't work with self-signed certs in the egress proxy
+- Set `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` to fix initial TLS verification
+- The tunnel URL will be printed in the output (e.g., `https://random-words.trycloudflare.com`)
+- Look for "Registered tunnel connection" in the logs to confirm it's working
