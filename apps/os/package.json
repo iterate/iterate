@@ -92,6 +92,7 @@
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.67.0",
     "remeda": "^2.32.0",
+    "resend": "^6.8.0",
     "safe-stringify": "^1.2.0",
     "sonner": "^2.0.7",
     "stripe": "^20.1.2",

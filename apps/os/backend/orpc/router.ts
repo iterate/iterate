@@ -333,6 +333,11 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     envVars["ITERATE_SLACK_ACCESS_TOKEN"] = "getIterateSecret({secretKey: 'slack.access_token'})";
   }
 
+  // Resend API key for email replies via magic string (egress proxy resolves at request time)
+  // From address uses stage prefix for routing (e.g., dev-mmkal@alpha.iterate.com, prd@alpha.iterate.com)
+  envVars["ITERATE_RESEND_API_KEY"] = "getIterateSecret({secretKey: 'resend.api_key'})";
+  envVars["ITERATE_RESEND_FROM_ADDRESS"] = `${env.VITE_APP_STAGE}@alpha.iterate.com`;
+
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Set customer repo path for opencode server working directory
