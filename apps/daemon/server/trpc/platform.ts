@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { quote } from "shell-quote";
 import { simpleGit } from "simple-git";
 
 import { x } from "tinyexec";
@@ -130,12 +131,9 @@ NODE_USE_ENV_PROXY=1
   const sessions = listResult.stdout.trim().split("\n").filter(Boolean);
 
   if (sessions.length > 0) {
-    // Build export commands with proper bash escaping (single quotes, '\'' for literal ')
+    // Build export commands with proper shell escaping via shell-quote
     const exportCommands = Object.entries(vars)
-      .map(([key, value]) => {
-        const escaped = value.replace(/'/g, "'\\''");
-        return `export ${key}='${escaped}'`;
-      })
+      .map(([key, value]) => `export ${key}=${quote([value])}`)
       .join("; ");
 
     // Send export commands to each session in parallel
