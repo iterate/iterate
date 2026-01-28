@@ -290,6 +290,22 @@ resendApp.post("/webhook", async (c) => {
   const senderEmail = parseSenderEmail(emailData.from);
   const resendEmailId = emailData.email_id;
 
+  // Validate inbound email is addressed to this stage
+  // Expected format: {stage}@alpha.iterate.com or {stage}+{extra}@alpha.iterate.com
+  const expectedStage = c.env.VITE_APP_STAGE;
+  const recipientEmail = emailData.to[0] || "";
+  const recipientLocal = recipientEmail.split("@")[0]; // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
+  const recipientStage = recipientLocal.split("+")[0]; // Strip any +suffix
+
+  if (recipientStage !== expectedStage) {
+    logger.info("[Resend Webhook] Email addressed to different stage, ignoring", {
+      expectedStage,
+      recipientStage,
+      recipientEmail,
+    });
+    return c.json({ ok: true, message: "Email addressed to different stage" });
+  }
+
   logger.debug("[Resend Webhook] Received email", {
     from: senderEmail,
     to: emailData.to,

@@ -334,8 +334,9 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   }
 
   // Resend API key for email replies (global secret, always available)
+  // From address uses stage prefix for routing (e.g., dev-mmkal@alpha.iterate.com, prd@alpha.iterate.com)
   envVars["ITERATE_RESEND_API_KEY"] = env.RESEND_ALPHAITERATECOM_API_KEY;
-  envVars["ITERATE_RESEND_FROM_ADDRESS"] = "agent@alpha.iterate.com";
+  envVars["ITERATE_RESEND_FROM_ADDRESS"] = `${env.VITE_APP_STAGE}@alpha.iterate.com`;
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 

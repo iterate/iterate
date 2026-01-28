@@ -128,9 +128,10 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 }
 
                 // Send OTP via Resend
+                // Use stage prefix in from address for routing (e.g., noreply+dev-mmkal@alpha.iterate.com)
                 const client = createResendClient(envParam.RESEND_ALPHAITERATECOM_API_KEY);
                 const result = await sendEmail(client, {
-                  from: "Iterate <noreply@alpha.iterate.com>",
+                  from: `Iterate <noreply+${envParam.VITE_APP_STAGE}@alpha.iterate.com>`,
                   to: email,
                   subject: `Your verification code: ${otp}`,
                   text: `Your verification code is: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this code, you can safely ignore this email.`,
