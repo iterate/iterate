@@ -303,16 +303,16 @@ resendApp.post("/webhook", async (c) => {
 
   if (recipientStage !== expectedStage) {
     // In production, forward to the correct stage instead of ignoring
-    // Only forward if: 1) we're in prod, 2) not already forwarded, 3) target is a dev stage
-    const isProduction = expectedStage === "prd";
+    // Only forward if: 1) we're in staging, 2) not already forwarded, 3) target is a dev stage
+    const isStaging = expectedStage === "stg";
     const isDevStage = recipientStage.startsWith("dev-");
 
-    if (isProduction && !alreadyForwarded && isDevStage) {
+    if (isStaging && !alreadyForwarded && isDevStage) {
       // Build target URL by replacing hostname in current URL
-      // Expected: prd-os.iterate.com -> dev-xxx-os.dev.iterate.com
+      // Expected: stg-os.iterate.com -> dev-xxx-os.dev.iterate.com
       const currentUrl = new URL(c.req.url);
 
-      // Replace prd-os with {stage}-os and iterate.com with dev.iterate.com
+      // Replace hostname {stage}-os.dev.iterate.com
       const targetHostname = `${recipientStage}-os.dev.iterate.com`;
       const targetUrl = new URL(currentUrl);
       targetUrl.hostname = targetHostname;
