@@ -3,6 +3,7 @@ import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
 import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-refresh.ts";
+import { startCronTaskScheduler } from "./cron-tasks/scheduler.ts";
 
 export const startServer = async (params: { port: number; hostname: string }) => {
   return new Promise<ServerType>((resolve, reject) => {
@@ -45,6 +46,7 @@ async function bootstrapWithControlPlane(): Promise<void> {
   await reportStatusToPlatform();
   await fetchBootstrapData();
   startBootstrapRefreshScheduler();
+  startCronTaskScheduler();
 }
 
 /**
