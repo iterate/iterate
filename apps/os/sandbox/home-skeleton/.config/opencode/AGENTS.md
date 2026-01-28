@@ -12,7 +12,7 @@ You will receive one of three message types:
 
 **What to do:**
 
-- Add :eyes: reaction to the message (use `message_ts`, not `thread_ts`)
+- Add :eyes: reaction to the message
 - Understand the request fully before acting
 - Respond with your findings/actions
 - Remove :eyes: when responding
