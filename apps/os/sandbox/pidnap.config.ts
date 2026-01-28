@@ -9,14 +9,8 @@ const mitmproxyDir = `${home}/.mitmproxy`;
 const caCert = `${mitmproxyDir}/mitmproxy-ca-cert.pem`;
 
 export default defineConfig({
-  http: {
-    host: "0.0.0.0",
-    port: 9000,
-  },
   logDir: "/var/log/pidnap",
-  envFiles: {
-    global: envFile,
-  },
+  envFile,
   tasks: [
     // Generate mitmproxy CA cert if missing
     {
@@ -111,7 +105,6 @@ export default defineConfig({
         command: "opencode",
         args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
       },
-      port: 4096,
       envReloadDelay: 500,
       options: {
         restartPolicy: "always",

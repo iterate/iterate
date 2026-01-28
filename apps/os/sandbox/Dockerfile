@@ -1,3 +1,14 @@
+FROM node:24 AS pidnap-builder
+WORKDIR /app
+RUN corepack enable
+COPY packages/pidnap/package.json ./
+RUN pnpm install
+COPY packages/pidnap/src ./src
+COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
+RUN pnpm build
+RUN pnpm pack
+RUN mv *.tgz pidnap.tgz
+
 FROM node:24
 
 # Build cache buster: 2026-01-26T11:00
@@ -40,7 +51,7 @@ RUN mkdir -p /var/log/pidnap && \
     chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx pidnap@0.0.0-dev.4
+RUN npm install -g pnpm tsx
 
 # Copy entry script (needs stable location for ENTRYPOINT)
 COPY apps/os/sandbox/entry.sh /app/entry.sh
@@ -98,12 +109,20 @@ ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 # Re-declare ARG after USER switch (ARGs don't persist across USER)
 ARG SANDBOX_ITERATE_REPO_REF
 
+COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
+RUN npm install -g /app/pidnap.tgz
+
 # If ref provided, clone from git; otherwise create placeholder for local mount
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
     cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
     else \
     mkdir -p $ITERATE_REPO/apps/os/sandbox; \
+    fi
+
+# Patch package.json to use the built tgz (if repo was cloned)
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+    sed -i 's|workspace:|file:/app/pidnap.tgz|g' $ITERATE_REPO/apps/os/sandbox/package.json; \
     fi
 
 # Make scripts executable (only if repo was cloned)
@@ -117,7 +136,7 @@ RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     fi
 
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO/apps/daemon && npx vite build; \
+    cd $ITERATE_REPO/apps/daemon && pnpm vite build; \
     fi
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)

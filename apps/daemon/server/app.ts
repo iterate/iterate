@@ -9,6 +9,7 @@ import { trpcRouter } from "./trpc/router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
+import { emailRouter } from "./routers/email.ts";
 
 const app = baseApp.use(
   logger(),
@@ -50,6 +51,7 @@ app.all("/api/trpc/*", (c) => {
 
 app.route("/api/pty", ptyRouter);
 app.route("/api/integrations/slack", slackRouter);
+app.route("/api/integrations/email", emailRouter);
 
 const distDir = path.join(import.meta.dirname, "../dist");
 app.use("/*", serveStatic({ root: distDir }));
