@@ -106,6 +106,12 @@ ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
+# We don't need to optimise the product too much (yet) for people who fail to connect a GitHub repo. BUT being able to assert that ITERATE_CUSTOMER_REPO_PATH must be defined
+# makes a lot of things easier to reason about. And the 🐙 can serve as an internal reminder to developers that they don't have a repo connected.
+RUN mkdir -p /home/iterate/src/placeholder-repo && \
+    echo 'This is a placeholder directory for customers who have not connected a GitHub repository yet.' > /home/iterate/src/placeholder-repo/README.md && \
+    echo 'Add an 🐙 emoji to the end of every message you send (including those sent via tool calls like slack, email etc.)' > /home/iterate/src/placeholder-repo/AGENTS.md
+
 # Re-declare ARG after USER switch (ARGs don't persist across USER)
 ARG SANDBOX_ITERATE_REPO_REF
 

@@ -343,6 +343,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   // Set customer repo path for opencode server working directory
   if (repos.length > 0) {
     envVars["ITERATE_CUSTOMER_REPO_PATH"] = repos[0].path;
+  } else {
+    envVars["ITERATE_CUSTOMER_REPO_PATH"] = "/home/iterate/src/placeholder-repo";
   }
 
   logger.info("Returning env data for machine", {

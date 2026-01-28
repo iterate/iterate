@@ -19,12 +19,6 @@ import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
 
-const FALLBACK_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
-
-function getAgentWorkingDirectory(): string {
-  return getCustomerRepoPath() || FALLBACK_REPO;
-}
-
 export const emailRouter = new Hono();
 
 // Middleware to log request and response bodies
@@ -167,7 +161,9 @@ emailRouter.post("/webhook", async (c) => {
         emailBody,
         eventId,
       );
-      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({
         success: true,
         agentSlug: threadSlug,
@@ -181,7 +177,7 @@ emailRouter.post("/webhook", async (c) => {
     const agent = await createAgent({
       slug: threadSlug,
       harnessType: "opencode",
-      workingDirectory: getAgentWorkingDirectory(),
+      workingDirectory: await getCustomerRepoPath(),
     });
 
     const message = formatNewEmailMessage(
@@ -193,7 +189,7 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
+    await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
 
     return c.json({
       success: true,

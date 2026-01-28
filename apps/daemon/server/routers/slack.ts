@@ -27,17 +27,6 @@ import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
 
-// Fallback working directory if no customer repo is cloned
-const FALLBACK_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
-
-/**
- * Get the working directory for new agents.
- * Prefers customer repo, falls back to iterate repo.
- */
-function getAgentWorkingDirectory(): string {
-  return getCustomerRepoPath() || FALLBACK_REPO;
-}
-
 export const slackRouter = new Hono();
 
 // Middleware to log request and response bodies
@@ -137,7 +126,9 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
     } catch (error) {
       logger.error("[Slack Webhook] Failed to handle reaction event", error);
@@ -159,7 +150,7 @@ slackRouter.post("/webhook", async (c) => {
         // Rare: agent already exists for what we think is a new thread
         const message = formatMidThreadMentionMessage(event, threadTs, eventId);
         await appendToAgent(existingAgent, message, {
-          workingDirectory: getAgentWorkingDirectory(),
+          workingDirectory: await getCustomerRepoPath(),
         });
         return c.json({
           success: true,
@@ -173,11 +164,11 @@ slackRouter.post("/webhook", async (c) => {
       const agent = await createAgent({
         slug: agentSlug,
         harnessType: "opencode",
-        workingDirectory: getAgentWorkingDirectory(),
+        workingDirectory: await getCustomerRepoPath(),
       });
 
       const message = formatNewThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
         agentSlug,
@@ -196,13 +187,13 @@ slackRouter.post("/webhook", async (c) => {
         agent = await createAgent({
           slug: agentSlug,
           harnessType: "opencode",
-          workingDirectory: getAgentWorkingDirectory(),
+          workingDirectory: await getCustomerRepoPath(),
         });
         wasCreated = true;
       }
 
       const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
         agentSlug,
@@ -223,7 +214,9 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatFyiMessage(event, threadTs, eventId);
-      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }
 
