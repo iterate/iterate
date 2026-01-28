@@ -640,15 +640,12 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     parsedUrl?.pathname === "/emails" &&
     originalMethod === "POST";
 
-  let preBufferedBody: ArrayBuffer | null = null;
-
   if (isResendEmailSend) {
-    // Buffer the body to inspect recipients
-    preBufferedBody = await c.req.raw.arrayBuffer();
+    // Clone the request to inspect recipients without consuming the original body
     const validationError = await validateResendEmailRecipients(
       db,
       apiKeyContext.organizationId,
-      preBufferedBody,
+      c.req.raw.clone(),
     );
 
     if (validationError) {
@@ -722,13 +719,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     const needsBody = hasRequestBody(originalMethod);
 
     // Get the request body - either buffered (for connector retry) or streamed
-    // If we already buffered for Resend validation, reuse that buffer
     let requestBody: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
     if (needsBody) {
-      if (preBufferedBody) {
-        // Use the body we already buffered for Resend validation
-        requestBody = preBufferedBody;
-      } else if (hasConnectorSecrets) {
+      if (hasConnectorSecrets) {
         // Buffer body for potential 401 retry with OAuth refresh
         try {
           requestBody = await c.req.raw.arrayBuffer();
@@ -871,64 +864,55 @@ function hasRequestBody(method: string): boolean {
 }
 
 /**
+ * Normalize email address - extract from "Name <email>" format if needed
+ */
+function normalizeEmail(email: string): string {
+  const match = email.match(/<([^>]+)>/);
+  return (match ? match[1] : email).toLowerCase().trim();
+}
+
+/**
  * Validate Resend email recipients.
  * Returns null if valid, or an error response if invalid.
  *
- * Policy: At least one recipient must be an org member.
+ * Policy: At least one recipient (to or cc) must be an org member.
  * This allows reply-all to external recipients while preventing pure spam.
+ * Note: bcc is intentionally not checked - if you're bcc'ing someone, you're hiding them.
  */
 async function validateResendEmailRecipients(
   db: DB,
   organizationId: string,
-  body: ArrayBuffer,
+  request: { json: () => Promise<unknown> },
 ): Promise<{ error: string } | null> {
-  let payload: { to?: string | string[]; cc?: string | string[]; bcc?: string | string[] };
+  let payload: { to?: string | string[]; cc?: string | string[] };
   try {
-    const text = new TextDecoder().decode(body);
-    payload = JSON.parse(text);
+    payload = (await request.json()) as typeof payload;
   } catch {
     return { error: "Invalid JSON body for Resend email request" };
   }
 
-  // Collect all recipients from to, cc, bcc
-  const allRecipients: string[] = [];
-  for (const field of [payload.to, payload.cc, payload.bcc]) {
-    if (field) {
-      if (Array.isArray(field)) {
-        allRecipients.push(...field);
-      } else {
-        allRecipients.push(field);
-      }
-    }
-  }
+  // Collect and normalize all recipients from to and cc
+  const allRecipients = [payload.to || [], payload.cc || []].flat().map(normalizeEmail);
 
   if (allRecipients.length === 0) {
     return { error: "No recipients specified in email" };
   }
 
-  // Normalize emails (extract from "Name <email>" format if needed)
-  const normalizedRecipients = allRecipients.map((r) => {
-    const match = r.match(/<([^>]+)>/);
-    return (match ? match[1] : r).toLowerCase().trim();
-  });
-
-  // Get all org members' emails
+  // Get org members' emails that match any recipient
   const orgMembers = await db.query.organizationUserMembership.findMany({
     where: eq(schema.organizationUserMembership.organizationId, organizationId),
     with: { user: { columns: { email: true } } },
   });
-  const orgEmails = new Set(orgMembers.map((m) => m.user.email.toLowerCase()));
 
-  // Check if at least one recipient is an org member
-  const hasOrgMember = normalizedRecipients.some((email) => orgEmails.has(email));
+  const hasOrgMember = orgMembers.some((m) => allRecipients.includes(m.user.email.toLowerCase()));
 
   if (!hasOrgMember) {
     return {
-      error: `Email blocked: At least one recipient must be an organization member. Recipients: ${normalizedRecipients.join(", ")}`,
+      error: `Email blocked: At least one recipient must be an organization member. Recipients: ${allRecipients.join(", ")}`,
     };
   }
 
-  return null; // Valid
+  return null;
 }
 
 /**
