@@ -86,14 +86,18 @@ function parseSender(from: string): { name: string; email: string } {
 
 /**
  * Normalize subject for use as thread identifier.
- * Strips Re:, Fwd:, etc. prefixes and normalizes whitespace.
+ * Strips all Re:, Fwd:, etc. prefixes (including nested like "Re: Re: Fwd:") and normalizes whitespace.
  */
 function normalizeSubject(subject: string): string {
-  return subject
-    .replace(/^(Re|Fwd|Fw):\s*/gi, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  let result = subject;
+  // Keep stripping prefixes until none remain
+  let previous: string;
+  do {
+    previous = result;
+    result = result.replace(/^(Re|Fwd|Fw):\s*/i, "");
+  } while (result !== previous);
+
+  return result.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /**
