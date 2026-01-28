@@ -89,9 +89,9 @@ export const toolsRouter = t.router({
 
         const { data, error } = await client.emails.send({
           from: `Iterate Agent <${fromAddress}>`,
-          to: input.to.split(","),
-          cc: input.cc?.split(","),
-          bcc: input.bcc?.split(","),
+          to: input.to.split(",").map((e) => e.trim()),
+          cc: input.cc?.split(",").map((e) => e.trim()),
+          bcc: input.bcc?.split(",").map((e) => e.trim()),
           subject: input.subject,
           text: input.body,
           html: input.html,
