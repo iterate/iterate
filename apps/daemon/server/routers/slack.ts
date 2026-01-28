@@ -365,15 +365,16 @@ function formatNewThreadMentionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
-  const messageTs = event.ts || threadTs;
+  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
   return [
-    `You've been mentioned to start a new conversation.`,
+    `[Agent: ${agentSlug}] New Slack thread started.`,
+    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
 }
 
@@ -390,15 +391,27 @@ function formatMidThreadMentionMessage(
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
+  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
-  return [
-    `You've been mentioned in an existing thread.`,
+  const lines = [
+    `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,
+    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts (i.e., this is a reply, not the root)
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -415,14 +428,24 @@ function formatFyiMessage(
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
 
-  return [
-    `New message in this thread (no @mention, but you're a participant).`,
+  const lines = [
+    `Another message in thread ${threadTs} (FYI, no @mention).`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -437,15 +460,29 @@ function formatReactionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const action = reactionCase === "reaction_added" ? "added" : "removed";
   const channel = event.item.type === "message" ? event.item.channel : "unknown";
+  const messageTs = event.item.type === "message" ? event.item.ts : "unknown";
 
-  return [
-    `Reaction ${action}: :${event.reaction}:`,
+  const lines = [
+    `Reaction ${action} in thread ${threadTs}: :${event.reaction}:`,
     "",
     `From: ${user}`,
-    `On message: ${event.item.type === "message" ? event.item.ts : "unknown"}`,
-    "",
-    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts
+  if (messageTs !== threadTs) {
+    lines.push(`On message: ${messageTs}`);
+  }
+
+  lines.push("");
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**

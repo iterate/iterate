@@ -159,6 +159,7 @@ emailRouter.post("/webhook", async (c) => {
     if (existingAgent) {
       // Reply to existing thread
       const message = formatReplyMessage(
+        threadSlug,
         senderName,
         senderEmail,
         subject,
@@ -184,6 +185,7 @@ emailRouter.post("/webhook", async (c) => {
     });
 
     const message = formatNewEmailMessage(
+      threadSlug,
       senderName,
       senderEmail,
       subject,
@@ -239,6 +241,7 @@ async function storeEvent(
  * Format message for a new email (first in thread).
  */
 function formatNewEmailMessage(
+  agentSlug: string,
   senderName: string,
   senderEmail: string,
   subject: string,
@@ -257,7 +260,8 @@ function formatNewEmailMessage(
     : "\n(Email body could not be retrieved)";
 
   return [
-    `New email received.`,
+    `[Agent: ${agentSlug}] New email thread started.`,
+    `Refer to EMAIL.md for how to respond via \`iterate tool email\`.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `To: ${emailData.to.join(", ")}`,
@@ -273,6 +277,7 @@ function formatNewEmailMessage(
  * Format message for a reply email (continuing thread).
  */
 function formatReplyMessage(
+  agentSlug: string,
   senderName: string,
   senderEmail: string,
   subject: string,
@@ -291,7 +296,7 @@ function formatReplyMessage(
     : "\n(Email body could not be retrieved)";
 
   return [
-    `Reply received in email thread.`,
+    `Another email in thread ${agentSlug}.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `Subject: ${subject}`,
