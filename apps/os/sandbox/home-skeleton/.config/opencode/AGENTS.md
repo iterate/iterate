@@ -136,12 +136,13 @@ Build the Slack thread link using the workspace, channel and thread_ts: `https:/
 To get your agent session link, first get your session ID using the `get-current-session-id` tool (installed at `~/.opencode/tool/get-current-session-id.ts`), then build the URL:
 
 ```bash
-# Replace SESSION_ID with the result from get-current-session-id tool
-SESSION_ID="ses_xxxxx"
-node -p "
-  const cmd = \`opencode attach 'http://localhost:4096' --session ${SESSION_ID} --dir '\${process.env.ITERATE_CUSTOMER_REPO_PATH || '/home/iterate/src/github.com/iterate/iterate'}'\`;
-  \`\${process.env.ITERATE_OS_BASE_URL}/org/\${process.env.ITERATE_ORG_SLUG}/proj/\${process.env.ITERATE_PROJECT_SLUG}/\${process.env.ITERATE_MACHINE_ID}/proxy/3000/terminal?command=\${encodeURIComponent(cmd)}&autorun=true\`
-"
+# Replace ses_xxxxx with the result from get-current-session-id tool
+node -p '
+  const { ITERATE_CUSTOMER_REPO_PATH: repoPath, ITERATE_OS_BASE_URL: baseUrl, ITERATE_ORG_SLUG: orgSlug, ITERATE_PROJECT_SLUG: projectSlug, ITERATE_MACHINE_ID: machineId } = process.env;
+  const command = `opencode attach 'http://localhost:4096' --session ses_xxxxx --dir ${repoPath}`;
+  const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy`;
+  `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+'
 ```
 
 ## Building URLs
