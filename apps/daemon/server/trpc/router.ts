@@ -48,11 +48,11 @@ export const trpcRouter = createTRPCRouter({
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
-  getServerCwd: publicProcedure.query(() => {
+  getServerCwd: publicProcedure.query(async () => {
     return {
       cwd: process.cwd(),
       homeDir: homedir(),
-      customerRepoPath: getCustomerRepoPath(),
+      customerRepoPath: await getCustomerRepoPath(),
     };
   }),
 

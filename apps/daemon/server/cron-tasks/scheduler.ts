@@ -225,8 +225,7 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
     const prompt = buildPromptFromTask(task);
 
     // Create cron agent
-    const workingDirectory =
-      getCustomerRepoPath() || "/home/iterate/src/github.com/iterate/iterate";
+    const workingDirectory = await getCustomerRepoPath();
     const agent = await createAgent({
       slug,
       harnessType: "opencode",
