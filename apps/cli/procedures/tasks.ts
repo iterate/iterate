@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 import {
   getTasksDir,
   parseTaskFile,
+  processPendingTasks,
   serializeTask,
   type ParsedTask,
 } from "@iterate-com/daemon/server/cron-tasks/scheduler.ts";
@@ -51,8 +52,8 @@ const TASKS_DIR_DESCRIPTION =
 /**
  * Get the folder path for a given state.
  */
-function getStateFolder(state: "pending" | "completed"): string {
-  return path.join(getTasksDir(), state);
+async function getStateFolder(state: "pending" | "completed"): Promise<string> {
+  return path.join(await getTasksDir(), state);
 }
 
 export const tasksRouter = t.router({
@@ -67,7 +68,7 @@ export const tasksRouter = t.router({
       }),
     )
     .query(async ({ input }) => {
-      const folder = getStateFolder(input.state);
+      const folder = await getStateFolder(input.state);
 
       try {
         await fs.mkdir(folder, { recursive: true });
@@ -117,7 +118,7 @@ export const tasksRouter = t.router({
       }),
     )
     .query(async ({ input }) => {
-      const folder = getStateFolder(input.state);
+      const folder = await getStateFolder(input.state);
       const filepath = path.join(folder, input.filename);
 
       try {
@@ -153,7 +154,7 @@ export const tasksRouter = t.router({
       }),
     )
     .mutation(async ({ input }) => {
-      const folder = getStateFolder("pending");
+      const folder = await getStateFolder("pending");
       await fs.mkdir(folder, { recursive: true });
 
       const filepath = path.join(folder, input.filename);
@@ -181,5 +182,11 @@ export const tasksRouter = t.router({
       await fs.writeFile(filepath, content);
 
       return { created: true, filepath, task: task.frontmatter };
+    }),
+
+  processPending: t.procedure
+    .meta({ description: `Process pending tasks. ${TASKS_DIR_DESCRIPTION}` })
+    .mutation(async () => {
+      await processPendingTasks();
     }),
 });

@@ -46,7 +46,7 @@ async function bootstrapWithControlPlane(): Promise<void> {
   await reportStatusToPlatform();
   await fetchBootstrapData();
   startBootstrapRefreshScheduler();
-  startCronTaskScheduler();
+  await startCronTaskScheduler();
 }
 
 /**

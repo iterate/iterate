@@ -11,8 +11,8 @@ import { z } from "zod/v4";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
 import { createAgent, appendToAgent } from "../services/agent-manager.ts";
 
-// Default interval: 15 minutes
-const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
+// Default interval: 1 minute
+const DEFAULT_INTERVAL_MS = 1 * 60 * 1000;
 
 export const TaskState = z.enum(["pending", "in_progress", "completed"]);
 export type TaskState = z.infer<typeof TaskState>;
@@ -35,21 +35,18 @@ export interface ParsedTask {
 }
 
 let schedulerRunning = false;
-let tasksDir: string;
 
-/**
- * Get the tasks directory path.
- */
-export function getTasksDir(): string {
-  return tasksDir || path.join(process.cwd(), "cron-tasks");
-}
+export const getTasksDir = async () => {
+  const customerRepoPath = await getCustomerRepoPath();
+  return path.join(customerRepoPath, "iterate/tasks");
+};
 
 /**
  * Initialize and start the cron task scheduler.
  */
-export function startCronTaskScheduler(options?: { tasksDir?: string }): void {
+export async function startCronTaskScheduler() {
   const intervalMs = parseInt(process.env.CRON_TASK_INTERVAL_MS || "", 10) || DEFAULT_INTERVAL_MS;
-  tasksDir = options?.tasksDir || path.join(process.cwd(), "cron-tasks");
+  const tasksDir = await getTasksDir();
 
   if (schedulerRunning) {
     console.log("[cron-tasks] Scheduler already running");
@@ -159,7 +156,8 @@ function getPriorityOrder(priority?: TaskFrontmatter["priority"]): number {
 /**
  * Scan pending folder and process due tasks.
  */
-async function processPendingTasks(): Promise<void> {
+export async function processPendingTasks(): Promise<void> {
+  const tasksDir = await getTasksDir();
   const pendingDir = path.join(tasksDir, "pending");
 
   // Ensure directories exist
@@ -300,6 +298,7 @@ async function markTaskFailed(task: ParsedTask, pendingDir: string, error: unkno
  * This should be called by the agent completion handler.
  */
 export async function markTaskCompleted(taskFilename: string): Promise<void> {
+  const tasksDir = await getTasksDir();
   const pendingPath = path.join(tasksDir, "pending", taskFilename);
   const completedDir = path.join(tasksDir, "completed");
 
@@ -351,6 +350,7 @@ async function createNextRecurrence(task: ParsedTask): Promise<void> {
     raw: "",
   };
 
+  const tasksDir = await getTasksDir();
   const pendingPath = path.join(tasksDir, "pending", task.filename);
   await fs.writeFile(pendingPath, serializeTask(newTask));
 
