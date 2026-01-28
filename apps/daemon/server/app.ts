@@ -10,7 +10,7 @@ import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 import { agentsRouter } from "./routers/agents.ts";
-import { opencodeRouter } from "./routers/opencode.ts";
+import { opencodeRouter, piRouter, claudeRouter, codexRouter } from "./routers/agents/index.ts";
 
 const app = baseApp.use(
   logger(),
@@ -34,6 +34,9 @@ app.get("/api/health", (c) => {
 
 app.route("/api/agents", agentsRouter);
 app.route("/api/opencode", opencodeRouter);
+app.route("/api/pi", piRouter);
+app.route("/api/claude", claudeRouter);
+app.route("/api/codex", codexRouter);
 
 app.all("/api/trpc/*", (c) => {
   return fetchRequestHandler({

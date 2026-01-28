@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import type { IterateEvent } from "../types/events.ts";
-import { isPromptEvent } from "../types/events.ts";
-import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
+import type { IterateEvent } from "../../types/events.ts";
+import { isPromptEvent } from "../../types/events.ts";
+import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
 
 const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:4096";
 
