@@ -294,7 +294,7 @@ resendApp.post("/webhook", async (c) => {
   // Expected format: {stage}@alpha.iterate.com or {stage}+{extra}@alpha.iterate.com
   const expectedStage = c.env.VITE_APP_STAGE;
   const recipientEmail = emailData.to[0] || "";
-  const recipientLocal = recipientEmail.split("@")[0]; // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
+  const recipientLocal = parseRecipientLocal(recipientEmail); // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
   const recipientStage = recipientLocal.split("+")[0]; // Strip any +suffix
 
   // Header to track forwarding and prevent infinite loops

@@ -101,10 +101,16 @@ function normalizeSubject(subject: string): string {
 }
 
 /**
- * Create a slug-safe thread ID from subject
+ * Create a slug-safe thread ID from email data
  */
-function subjectToSlug(subject: string): string {
-  const normalized = normalizeSubject(subject);
+function getSlug(email: { subject: string; email_id: string }): string {
+  const normalized = normalizeSubject(email.subject);
+
+  // Handle empty/missing subjects by using email ID as fallback
+  if (!normalized) {
+    return `email-nosubject-${email.email_id}`.slice(0, 50);
+  }
+
   // Create a short hash of the subject for the slug
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
@@ -138,8 +144,8 @@ emailRouter.post("/webhook", async (c) => {
   const eventId = await storeEvent(payload, resendEmailId);
 
   const { name: senderName, email: senderEmail } = parseSender(emailData.from);
-  const subject = emailData.subject || "(no subject)";
-  const threadSlug = subjectToSlug(subject);
+  const subject = emailData.subject;
+  const threadSlug = getSlug(emailData);
   const emailBody = payload._iterate?.emailBody;
 
   try {
