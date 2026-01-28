@@ -67,6 +67,7 @@ const STRIP_REQUEST_HEADERS = [
   "x-iterate-original-url",
   "x-iterate-original-host",
   "x-iterate-original-method",
+  "x-iterate-content-length",
   "x-iterate-api-key",
   "host",
   "connection",
@@ -605,6 +606,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const originalURL = c.req.header("X-Iterate-Original-URL");
   const originalHost = c.req.header("X-Iterate-Original-Host");
   const originalMethod = c.req.header("X-Iterate-Original-Method") || c.req.method;
+  const trustedContentLength = c.req.header("X-Iterate-Content-Length");
   const apiKey = c.req.header("X-Iterate-API-Key");
 
   // Validate required headers
@@ -728,7 +730,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     const hasConnectorSecrets = usedSecrets.some((s) => s.isConnector);
     const needsBody = hasRequestBody(originalMethod);
 
-    // Get the request body - either buffered (for connector retry) or streamed
+    // Get the request body - either buffered (for connector retry) or streamed via FixedLengthStream
+    // Note: Cloudflare Workers ignores manually-set Content-Length headers for streaming bodies.
+    // To preserve Content-Length with streaming, we must use FixedLengthStream.
     let requestBody: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
     if (needsBody) {
       if (hasConnectorSecrets) {
@@ -738,17 +742,28 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
         } catch {
           // Body may be empty or already consumed
         }
+      } else if (trustedContentLength && c.req.raw.body) {
+        // Use FixedLengthStream to stream with correct Content-Length
+        // This tells Cloudflare Workers the exact size, so it sets Content-Length instead of chunked
+        const fixedStream = new FixedLengthStream(parseInt(trustedContentLength, 10));
+        c.req.raw.body.pipeTo(fixedStream.writable).catch(() => {
+          // Ignore pipe errors - connection may close early
+        });
+        requestBody = fixedStream.readable;
       } else {
-        // Stream body directly - no retry needed for non-connector requests
+        // Stream body directly - will use chunked encoding
         requestBody = c.req.raw.body;
       }
     }
 
     // Forward the request to the original destination
+    // Use duplex: "half" to enable proper streaming of request bodies
     let response = await fetch(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
       body: requestBody,
+      // @ts-expect-error - Cloudflare Workers support duplex streaming
+      duplex: "half",
     });
 
     // Handle 401 - attempt refresh for connector secrets
