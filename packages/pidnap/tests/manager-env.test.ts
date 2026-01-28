@@ -43,7 +43,7 @@ describe("Manager with EnvManager integration", () => {
                 OVERRIDE: "definition",
               },
             },
-            envFile: "custom.env", // This replaces .env.app1 (if any)
+            envOptions: { envFile: "custom.env" }, // This replaces .env.app1 (if any)
           },
         ],
       },
@@ -105,7 +105,7 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
-  it("should handle cron processes with envFile", async () => {
+  it("should handle cron processes with envOptions", async () => {
     writeFileSync(join(testDir, ".env"), "GLOBAL=base");
     writeFileSync(join(testDir, "cron.env"), "CRON_VAR=cron_value");
 
@@ -123,7 +123,7 @@ describe("Manager with EnvManager integration", () => {
             options: {
               schedule: "0 0 * * *",
             },
-            envFile: "cron.env",
+            envOptions: { envFile: "cron.env" },
           },
         ],
       },
@@ -144,7 +144,7 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
-  it("should handle tasks with envFile", async () => {
+  it("should handle tasks with envOptions", async () => {
     writeFileSync(join(testDir, ".env"), "GLOBAL=base");
     writeFileSync(join(testDir, "task.env"), "TASK_VAR=task_value");
 
@@ -159,7 +159,7 @@ describe("Manager with EnvManager integration", () => {
               command: "echo",
               args: ["setup"],
             },
-            envFile: "task.env",
+            envOptions: { envFile: "task.env" },
           },
         ],
       },
@@ -201,7 +201,7 @@ describe("Manager with EnvManager integration", () => {
               command: "echo",
               args: ["test"],
             },
-            envFile: "custom.env", // Custom env file overrides .env.app
+            envOptions: { envFile: "custom.env" }, // Custom env file overrides .env.app
           },
         ],
       },
@@ -291,6 +291,206 @@ describe("Manager with EnvManager integration", () => {
       CONFIG_VAR: "config_value",
       SPECIFIC: "specific_value",
     });
+
+    await manager.stop();
+  });
+
+  it("should skip global env when inheritGlobalEnv is false", async () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=base\nSHARED=global");
+    writeFileSync(join(testDir, ".env.app"), "APP_VAR=app_value\nSHARED=app");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        env: {
+          CONFIG_VAR: "config_value",
+        },
+        processes: [
+          {
+            name: "app",
+            definition: {
+              command: "echo",
+              args: ["test"],
+              env: {
+                SPECIFIC: "specific_value",
+              },
+            },
+            envOptions: { inheritGlobalEnv: false },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("app");
+    const definition = proc!.lazyProcess.definition;
+
+    // Should NOT include GLOBAL from .env, but should include .env.app, config, and definition
+    expect(definition.env).toEqual({
+      APP_VAR: "app_value",
+      SHARED: "app", // From .env.app (not from .env since global is skipped)
+      CONFIG_VAR: "config_value",
+      SPECIFIC: "specific_value",
+    });
+
+    await manager.stop();
+  });
+
+  it("should set inheritProcessEnv to false on definition", async () => {
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "isolated",
+            definition: {
+              command: "echo",
+              args: ["test"],
+              env: {
+                ONLY_THIS: "value",
+              },
+            },
+            envOptions: { inheritProcessEnv: false },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("isolated");
+    const definition = proc!.lazyProcess.definition;
+
+    // Should have inheritProcessEnv set to false
+    expect(definition.inheritProcessEnv).toBe(false);
+    expect(definition.env).toEqual({
+      ONLY_THIS: "value",
+    });
+
+    await manager.stop();
+  });
+
+  it("should combine inheritGlobalEnv and inheritProcessEnv options", async () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
+    writeFileSync(join(testDir, "custom.env"), "CUSTOM=value");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        env: {
+          CONFIG: "config_value",
+        },
+        processes: [
+          {
+            name: "minimal",
+            definition: {
+              command: "echo",
+              args: ["test"],
+              env: {
+                ONLY: "this",
+              },
+            },
+            envOptions: {
+              envFile: "custom.env",
+              inheritGlobalEnv: false,
+              inheritProcessEnv: false,
+            },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("minimal");
+    const definition = proc!.lazyProcess.definition;
+
+    // Should NOT include GLOBAL from .env
+    // Should include custom.env vars, config.env, and definition.env
+    expect(definition.env).toEqual({
+      CUSTOM: "value", // From custom.env
+      CONFIG: "config_value", // From config.env
+      ONLY: "this", // From definition.env
+    });
+    expect(definition.inheritProcessEnv).toBe(false);
+
+    await manager.stop();
+  });
+
+  it("should work with addTask and envOptions", async () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const result = manager.addTask(
+      "dynamic-task",
+      {
+        command: "echo",
+        args: ["task"],
+        env: { TASK_ENV: "value" },
+      },
+      { inheritGlobalEnv: false },
+    );
+
+    const taskList = manager.getTaskList();
+    // Use the returned id to find the task
+    const task = taskList!.tasks.find((t) => t.id === result.id);
+    const processDefinition = task!.processes[0].process;
+
+    // Should NOT include GLOBAL from .env
+    expect(processDefinition.env).toEqual({
+      TASK_ENV: "value",
+    });
+
+    await manager.stop();
+  });
+
+  it("should work with addProcess and envOptions", async () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = await manager.addProcess(
+      "dynamic-proc",
+      {
+        command: "echo",
+        args: ["proc"],
+        env: { PROC_ENV: "value" },
+      },
+      undefined, // options
+      { inheritGlobalEnv: false, inheritProcessEnv: false },
+    );
+
+    const definition = proc!.lazyProcess.definition;
+
+    // Should NOT include GLOBAL from .env
+    expect(definition.env).toEqual({
+      PROC_ENV: "value",
+    });
+    expect(definition.inheritProcessEnv).toBe(false);
 
     await manager.stop();
   });

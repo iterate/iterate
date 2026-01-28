@@ -78,10 +78,11 @@ export class EnvManager {
     }
   }
 
-  public getEnvVars(key: string): Record<string, string> {
+  public getEnvVars(key: string, options?: { inheritGlobalEnv?: boolean }): Record<string, string> {
     const specificEnv = this.env.get(key);
+    const inheritGlobal = options?.inheritGlobalEnv ?? true;
     return {
-      ...this.globalEnv,
+      ...(inheritGlobal ? this.globalEnv : {}),
       ...specificEnv,
     };
   }
