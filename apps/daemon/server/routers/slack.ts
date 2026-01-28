@@ -365,6 +365,7 @@ function formatNewThreadMentionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
+  const messageTs = event.ts || threadTs;
 
   return [
     `You've been mentioned to start a new conversation.`,
@@ -372,7 +373,7 @@ function formatNewThreadMentionMessage(
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
+    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
   ].join("\n");
 }
 
@@ -388,6 +389,7 @@ function formatMidThreadMentionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
+  const messageTs = event.ts || threadTs;
 
   return [
     `You've been mentioned in an existing thread.`,
@@ -395,7 +397,7 @@ function formatMidThreadMentionMessage(
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
+    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
   ].join("\n");
 }
 
@@ -411,14 +413,15 @@ function formatFyiMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
+  const messageTs = event.ts || threadTs;
 
   return [
-    `FYI: Another message in this thread (you were not @mentioned).`,
+    `New message in this thread (no @mention, but you're a participant).`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
+    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
   ].join("\n");
 }
 
