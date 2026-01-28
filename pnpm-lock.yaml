@@ -870,6 +870,9 @@ importers:
       '@effect/vitest':
         specifier: ^0.22.0
         version: 0.22.5(effect@3.19.14)(vitest@4.0.15)
+      '@opencode-ai/plugin':
+        specifier: ^1.1.36
+        version: 1.1.36
       '@playwright/test':
         specifier: ^1.57.0
         version: 1.57.0
@@ -3455,8 +3458,14 @@ packages:
     resolution: {integrity: sha512-hAX0pT/73190NLqBPPWSdBVGtbY6VOhWYK3qqHqtXQ1gK7kS2yz4+ivsN07hpJ6I3aeMtKP6J6npsEKOAzuTLA==}
     engines: {node: '>=20.0'}
 
+  '@opencode-ai/plugin@1.1.36':
+    resolution: {integrity: sha512-b2XWeFZN7UzgwkkzTIi6qSntkpEA9En2zvpqakQzZAGQm6QBdGAlv6r1u5hEnmF12Gzyj5umTMWr5GzVbP/oAA==}
+
   '@opencode-ai/sdk@1.1.18':
     resolution: {integrity: sha512-2HN9q1sacXXOVZxD+Afn9BasNOHltwI7DxF8I+rvnGVCtlUC6z/RpwqGOJey7mzkOZ60ERWOI6s+08oTMbytrA==}
+
+  '@opencode-ai/sdk@1.1.36':
+    resolution: {integrity: sha512-feNHWnbxhg03TI2QrWnw3Chc0eYrWSDSmHIy/ejpSVfcKlfXREw1Tpg0L4EjrpeSc4jB1eM673dh+WM/Ko2SFQ==}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -10689,6 +10698,9 @@ packages:
   zod@4.1.13:
     resolution: {integrity: sha512-AvvthqfqrAhNH9dnfmrfKzX5upOdjUVJYFqNSlkmGf64gRaTzlPwz99IHYnVs28qYAybvAlBV+H7pn0saFY4Ig==}
 
+  zod@4.1.8:
+    resolution: {integrity: sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ==}
+
   zustand@4.5.7:
     resolution: {integrity: sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw==}
     engines: {node: '>=12.7.0'}
@@ -13725,7 +13737,14 @@ snapshots:
 
   '@oozcitak/util@10.0.0': {}
 
+  '@opencode-ai/plugin@1.1.36':
+    dependencies:
+      '@opencode-ai/sdk': 1.1.36
+      zod: 4.1.8
+
   '@opencode-ai/sdk@1.1.18': {}
+
+  '@opencode-ai/sdk@1.1.36': {}
 
   '@opentelemetry/api@1.9.0': {}
 
@@ -22204,6 +22223,8 @@ snapshots:
   zod@4.1.12: {}
 
   zod@4.1.13: {}
+
+  zod@4.1.8: {}
 
   zustand@4.5.7(@types/react@19.2.7)(react@19.2.3):
     dependencies:
