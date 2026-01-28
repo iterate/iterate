@@ -1,0 +1,8 @@
+{
+  "name": "demo-config",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@slack/web-api": "^7.0.0"
+  }
+}

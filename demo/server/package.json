@@ -1,0 +1,11 @@
+{
+  "name": "demo-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch server.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  }
+}
