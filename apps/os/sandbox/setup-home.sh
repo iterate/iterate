@@ -17,3 +17,21 @@ HOME_SKELETON="$ITERATE_REPO/apps/os/sandbox/home-skeleton"
 
 echo "Setting up home directory from $HOME_SKELETON..."
 cp -r "$HOME_SKELETON"/. "$HOME/"
+
+# Append Daytona-specific instructions if running in Daytona (not local-docker mode)
+# Local-docker mode is detected by presence of /local-iterate-repo mount
+if [[ ! -d "/local-iterate-repo" ]]; then
+  echo "Daytona mode detected, appending port forwarding instructions..."
+
+  # OpenCode
+  DAYTONA_OPENCODE="$HOME_SKELETON/.config/opencode/AGENTS.daytona.md"
+  if [[ -f "$DAYTONA_OPENCODE" ]]; then
+    cat "$DAYTONA_OPENCODE" >> "$HOME/.config/opencode/AGENTS.md"
+  fi
+
+  # Claude Code
+  DAYTONA_CLAUDE="$HOME_SKELETON/.claude/CLAUDE.daytona.md"
+  if [[ -f "$DAYTONA_CLAUDE" ]]; then
+    cat "$DAYTONA_CLAUDE" >> "$HOME/.claude/CLAUDE.md"
+  fi
+fi
