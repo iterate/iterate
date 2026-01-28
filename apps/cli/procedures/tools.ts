@@ -85,7 +85,10 @@ export const toolsRouter = t.router({
       )
       .mutation(async ({ input }) => {
         const client = getResendClient();
-        const fromAddress = process.env.ITERATE_RESEND_FROM_ADDRESS || "agent@alpha.iterate.com";
+        const fromAddress = process.env.ITERATE_RESEND_FROM_ADDRESS;
+        if (!fromAddress) {
+          throw new Error("Failed to get from addresss from env.ITERATE_RESEND_FROM_ADDRESS");
+        }
 
         const splitEmails = (emails: string) => {
           const list = emails.split(",");

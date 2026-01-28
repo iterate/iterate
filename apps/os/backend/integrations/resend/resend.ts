@@ -9,7 +9,7 @@
  *
  * To receive inbound emails:
  * 1. Go to Resend Dashboard > Receiving
- * 2. Add a custom domain (e.g., alpha.iterate.com)
+ * 2. Add a custom domain (e.g., mail.iterate.com)
  * 3. Configure DNS records as instructed by Resend
  * 4. Add a webhook endpoint pointing to: https://your-domain/api/integrations/resend/webhook
  * 5. Select "email.received" event type
@@ -140,7 +140,7 @@ function parseSenderEmail(from: string): string {
 
 /**
  * Parse recipient email to extract the local part (before @)
- * e.g., "agent+projectslug@alpha.iterate.com" -> "agent+projectslug"
+ * e.g., "agent+projectslug@mail.iterate.com" -> "agent+projectslug"
  */
 function parseRecipientLocal(to: string): string {
   const email = to.includes("<") ? parseSenderEmail(to) : to;
@@ -291,7 +291,7 @@ resendApp.post("/webhook", async (c) => {
   const resendEmailId = emailData.email_id;
 
   // Validate inbound email is addressed to this stage
-  // Expected format: {stage}@alpha.iterate.com or {stage}+{extra}@alpha.iterate.com
+  // Expected format: {stage}@{RESEND_BOT_DOMAIN} or {stage}+{extra}@{RESEND_BOT_DOMAIN}
   const expectedStage = c.env.VITE_APP_STAGE;
   const recipientEmail = emailData.to[0] || "";
   const recipientLocal = parseRecipientLocal(recipientEmail); // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
@@ -303,16 +303,16 @@ resendApp.post("/webhook", async (c) => {
 
   if (recipientStage !== expectedStage) {
     // In production, forward to the correct stage instead of ignoring
-    // Only forward if: 1) we're in prod, 2) not already forwarded, 3) target is a dev stage
-    const isProduction = expectedStage === "prd";
+    // Only forward if: 1) we're in staging, 2) not already forwarded, 3) target is a dev stage
+    const isStaging = expectedStage === "stg";
     const isDevStage = recipientStage.startsWith("dev-");
 
-    if (isProduction && !alreadyForwarded && isDevStage) {
+    if (isStaging && !alreadyForwarded && isDevStage) {
       // Build target URL by replacing hostname in current URL
-      // Expected: prd-os.iterate.com -> dev-xxx-os.dev.iterate.com
+      // Expected: stg-os.iterate.com -> dev-xxx-os.dev.iterate.com
       const currentUrl = new URL(c.req.url);
 
-      // Replace prd-os with {stage}-os and iterate.com with dev.iterate.com
+      // Replace hostname {stage}-os.dev.iterate.com
       const targetHostname = `${recipientStage}-os.dev.iterate.com`;
       const targetUrl = new URL(currentUrl);
       targetUrl.hostname = targetHostname;
