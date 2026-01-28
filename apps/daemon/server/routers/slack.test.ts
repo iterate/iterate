@@ -263,12 +263,9 @@ describe("slack router", () => {
       expect(mockedCreateAgent).not.toHaveBeenCalled();
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
-        expect.stringContaining("FYI: Another message in this thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
-      );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(
-        agent,
-        expect.stringContaining("you were not @mentioned"),
+        expect.stringContaining(
+          "New message in this thread (no @mention, but you're a participant)",
+        ),
         { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
       );
     });
