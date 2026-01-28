@@ -119,6 +119,20 @@ If a message contains files or attachments, query the raw event to get file URLs
 4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
 5. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
 
+## Creating Pull Requests
+
+When creating PRs, always include attribution in the PR description so reviewers know the context:
+
+```markdown
+## Context
+
+- **Requested by:** @username (or user email)
+- **Slack thread:** https://iterate-com.slack.com/archives/CHANNEL_ID/pTHREAD_TS
+- **Machine:** $ITERATE_MACHINE_ID
+```
+
+Build the Slack thread link using the channel and thread_ts from the conversation. Replace the `.` in thread_ts with nothing to form the `pTHREAD_TS` (e.g., `1234567890.123456` becomes `p1234567890123456`).
+
 ## Handling APIs and Secrets
 
 You can call arbitrary APIs using whatever you want (node fetch, curl etc). If you use our magic header format, we will automatically inject secrets (such as tokens) on your behalf so long as they have been added in your dashboard.

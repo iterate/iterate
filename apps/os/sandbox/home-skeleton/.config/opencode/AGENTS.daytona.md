@@ -4,17 +4,18 @@ This sandbox runs on Daytona with built-in port proxying. Traditional tunneling 
 
 **To expose a local server:**
 
-1. Start your dev server on any port (e.g., `python3 -m http.server 8080`)
+1. Start your dev server on any port (e.g., `npx serve -l 3000`)
 2. The public URL is: `https://{PORT}-{DAYTONA_SANDBOX_ID}.proxy.daytona.works`
 
 **Example:**
 
 ```bash
-# Start server
-python3 -m http.server 8080 &
+# Create and start a Vite project
+npm create vite@latest my-app -- --template react
+cd my-app && npm install && npm run dev -- --port 3000 &
 
 # Get the public URL
-echo "https://8080-$DAYTONA_SANDBOX_ID.proxy.daytona.works"
+echo "https://3000-$DAYTONA_SANDBOX_ID.proxy.daytona.works"
 ```
 
 The `DAYTONA_SANDBOX_ID` environment variable is automatically set.
