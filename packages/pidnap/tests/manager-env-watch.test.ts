@@ -35,7 +35,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            // envReloadDelay defaults to 5000ms
+            // reloadDelay defaults to 5000ms
           },
         ],
       },
@@ -66,7 +66,7 @@ describe("Manager - Env File Watching", () => {
     await manager.stop();
   }, 10000); // 10 second timeout
 
-  it("should reload process immediately when envReloadDelay is true", async () => {
+  it("should reload process immediately when reloadDelay is true", async () => {
     writeFileSync(join(testDir, ".env"), "TEST_VAR=original");
 
     const testLogger = logger({ name: "test" });
@@ -80,7 +80,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: true, // Immediate reload
+            envOptions: { reloadDelay: true }, // Immediate reload
           },
         ],
       },
@@ -108,7 +108,7 @@ describe("Manager - Env File Watching", () => {
     await manager.stop();
   }, 5000);
 
-  it("should reload process immediately when envReloadDelay is 'immediately'", async () => {
+  it("should reload process immediately when reloadDelay is 'immediately'", async () => {
     writeFileSync(join(testDir, ".env"), "TEST_VAR=original");
 
     const testLogger = logger({ name: "test" });
@@ -122,7 +122,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: "immediately",
+            envOptions: { reloadDelay: "immediately" },
           },
         ],
       },
@@ -150,7 +150,7 @@ describe("Manager - Env File Watching", () => {
     await manager.stop();
   }, 5000);
 
-  it("should not reload process when envReloadDelay is false", async () => {
+  it("should not reload process when reloadDelay is false", async () => {
     writeFileSync(join(testDir, ".env"), "TEST_VAR=original");
 
     const testLogger = logger({ name: "test" });
@@ -164,7 +164,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: false, // Disabled
+            envOptions: { reloadDelay: false }, // Disabled
           },
         ],
       },
@@ -204,7 +204,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: 1000, // 1 second
+            envOptions: { reloadDelay: 1000 }, // 1 second
           },
         ],
       },
@@ -247,7 +247,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: true,
+            envOptions: { reloadDelay: true },
           },
           {
             name: "app2",
@@ -255,7 +255,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: true,
+            envOptions: { reloadDelay: true },
           },
         ],
       },
@@ -305,7 +305,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: true,
+            envOptions: { reloadDelay: true },
           },
           {
             name: "app2",
@@ -313,7 +313,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            envReloadDelay: true,
+            envOptions: { reloadDelay: true },
           },
         ],
       },
@@ -347,4 +347,94 @@ describe("Manager - Env File Watching", () => {
 
     await manager.stop();
   }, 5000);
+
+  it("should reload cron when env file changes", async () => {
+    writeFileSync(join(testDir, ".env"), "CRON_VAR=original");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        crons: [
+          {
+            name: "test-cron",
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+            options: {
+              schedule: "0 0 * * *", // Daily at midnight
+            },
+            envOptions: { reloadDelay: true }, // Immediate reload
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const cron = manager.getCronProcess("test-cron");
+    expect(cron).toBeDefined();
+
+    const initialDefinition = cron!.lazyProcess.definition;
+    expect(initialDefinition.env?.CRON_VAR).toBe("original");
+
+    await wait(200);
+
+    // Change env file
+    writeFileSync(join(testDir, ".env"), "CRON_VAR=updated");
+
+    // Wait for file watch + debounce + immediate reload
+    await wait(1000);
+
+    // Cron should have updated definition
+    const reloadedDefinition = cron!.lazyProcess.definition;
+    expect(reloadedDefinition.env?.CRON_VAR).toBe("updated");
+
+    await manager.stop();
+  }, 5000);
+
+  it("should not reload cron when reloadDelay is false", async () => {
+    writeFileSync(join(testDir, ".env"), "CRON_VAR=original");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        crons: [
+          {
+            name: "test-cron",
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+            options: {
+              schedule: "0 0 * * *",
+            },
+            envOptions: { reloadDelay: false }, // Disabled
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const cron = manager.getCronProcess("test-cron");
+    const initialDefinition = cron!.lazyProcess.definition;
+    expect(initialDefinition.env?.CRON_VAR).toBe("original");
+
+    // Change env file
+    writeFileSync(join(testDir, ".env"), "CRON_VAR=updated");
+
+    // Wait to ensure no reload happens
+    await wait(1000);
+
+    // Cron should NOT have been reloaded
+    const definition = cron!.lazyProcess.definition;
+    expect(definition.env?.CRON_VAR).toBe("original");
+
+    await manager.stop();
+  });
 });

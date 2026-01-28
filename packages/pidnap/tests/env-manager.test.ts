@@ -190,6 +190,37 @@ describe("EnvManager", () => {
     envManager.close();
   });
 
+  it("should skip global env when inheritGlobalEnv is false", () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=global_value");
+    writeFileSync(join(testDir, ".env.app"), "APP=app_value");
+
+    const envManager = new EnvManager({ cwd: testDir }, logger);
+
+    // Default behavior includes global
+    expect(envManager.getEnvVars("app")).toEqual({
+      GLOBAL: "global_value",
+      APP: "app_value",
+    });
+
+    // With inheritGlobalEnv: false
+    expect(envManager.getEnvVars("app", { inheritGlobalEnv: false })).toEqual({
+      APP: "app_value",
+    });
+
+    envManager.close();
+  });
+
+  it("should return empty object when inheritGlobalEnv is false and no process-specific env", () => {
+    writeFileSync(join(testDir, ".env"), "GLOBAL=global_value");
+
+    const envManager = new EnvManager({ cwd: testDir }, logger);
+
+    // With inheritGlobalEnv: false and no .env.nonexistent
+    expect(envManager.getEnvVars("nonexistent", { inheritGlobalEnv: false })).toEqual({});
+
+    envManager.close();
+  });
+
   it("should track custom files via hasCustomFile", () => {
     writeFileSync(join(testDir, "custom.env"), "VAR=value");
 

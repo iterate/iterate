@@ -10,3 +10,4 @@ export * from "./task-list.ts";
 export * from "./lazy-process.ts";
 export * from "./env-manager.ts";
 export * from "./logger.ts";
+export * from "./manager.ts";

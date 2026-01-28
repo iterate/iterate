@@ -222,4 +222,91 @@ describe("LazyProcess", () => {
       expect(proc.state).toBe("stopped");
     });
   });
+
+  describe("environment variables", () => {
+    it("should inherit process.env by default", async () => {
+      // Set a unique env var that we can check - process exits 0 if found, 1 if not
+      const testEnvVar = `TEST_INHERIT_${Date.now()}`;
+      process.env[testEnvVar] = "inherited";
+
+      const definition: ProcessDefinition = {
+        command: "node",
+        args: ["-e", `process.exit(process.env.${testEnvVar} === 'inherited' ? 0 : 1)`],
+      };
+      const proc = new LazyProcess("test", definition, mockLogger);
+
+      await proc.start();
+      await proc.waitForExit();
+
+      // Exit code 0 means env var was inherited
+      expect(proc.exitCode).toBe(0);
+      expect(proc.state).toBe("stopped");
+
+      // Cleanup
+      delete process.env[testEnvVar];
+    });
+
+    it("should NOT inherit process.env when inheritProcessEnv is false", async () => {
+      // Set a unique env var that should NOT be inherited
+      const testEnvVar = `TEST_NO_INHERIT_${Date.now()}`;
+      process.env[testEnvVar] = "should_not_appear";
+
+      const definition: ProcessDefinition = {
+        command: "node",
+        args: ["-e", `process.exit(process.env.${testEnvVar} ? 1 : 0)`],
+        inheritProcessEnv: false,
+        env: {
+          // Need PATH for node to be found
+          PATH: process.env.PATH || "",
+        },
+      };
+      const proc = new LazyProcess("test", definition, mockLogger);
+
+      await proc.start();
+      await proc.waitForExit();
+
+      // Exit code 0 means env var was NOT inherited (which is correct)
+      expect(proc.exitCode).toBe(0);
+      expect(proc.state).toBe("stopped");
+
+      // Cleanup
+      delete process.env[testEnvVar];
+    });
+
+    it("should merge definition.env with process.env by default", async () => {
+      const definition: ProcessDefinition = {
+        command: "node",
+        args: ["-e", `process.exit(process.env.CUSTOM_VAR === 'custom_value' ? 0 : 1)`],
+        env: {
+          CUSTOM_VAR: "custom_value",
+        },
+      };
+      const proc = new LazyProcess("test", definition, mockLogger);
+
+      await proc.start();
+      await proc.waitForExit();
+
+      expect(proc.exitCode).toBe(0);
+      expect(proc.state).toBe("stopped");
+    });
+
+    it("should only use definition.env when inheritProcessEnv is false", async () => {
+      const definition: ProcessDefinition = {
+        command: "node",
+        args: ["-e", `process.exit(process.env.ONLY_THIS === 'only_value' ? 0 : 1)`],
+        inheritProcessEnv: false,
+        env: {
+          PATH: process.env.PATH || "",
+          ONLY_THIS: "only_value",
+        },
+      };
+      const proc = new LazyProcess("test", definition, mockLogger);
+
+      await proc.start();
+      await proc.waitForExit();
+
+      expect(proc.exitCode).toBe(0);
+      expect(proc.state).toBe("stopped");
+    });
+  });
 });

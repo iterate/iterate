@@ -9,6 +9,8 @@ export const ProcessDefinition = v.object({
   args: v.optional(v.array(v.string())),
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
+  /** Whether to inherit process.env from the parent process (default: true) */
+  inheritProcessEnv: v.optional(v.boolean()),
 });
 export type ProcessDefinition = v.InferOutput<typeof ProcessDefinition>;
 
@@ -75,7 +77,9 @@ export class LazyProcess {
     this.logger.debug(`Starting process: ${this.definition.command}`);
 
     try {
-      const env = this.definition.env ? { ...process.env, ...this.definition.env } : process.env;
+      const inheritProcessEnv = this.definition.inheritProcessEnv ?? true;
+      const baseEnv = inheritProcessEnv ? process.env : {};
+      const env = this.definition.env ? { ...baseEnv, ...this.definition.env } : baseEnv;
 
       this.childProcess = spawn(this.definition.command, this.definition.args ?? [], {
         cwd: this.definition.cwd,

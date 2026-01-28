@@ -16,32 +16,49 @@ export const HttpServerConfig = v.object({
 });
 export type HttpServerConfig = v.InferOutput<typeof HttpServerConfig>;
 
+export const EnvReloadDelay = v.union([v.number(), v.boolean(), v.literal("immediately")]);
+export type EnvReloadDelay = v.InferOutput<typeof EnvReloadDelay>;
+
+export const EnvOptions = v.object({
+  /** Custom env file path (replaces auto-discovered .env.<name>) */
+  envFile: v.optional(v.string()),
+  /** Whether to inherit process.env from the parent process (default: true) */
+  inheritProcessEnv: v.optional(v.boolean()),
+  /** Whether to inherit the global .env file (default: true) */
+  inheritGlobalEnv: v.optional(v.boolean()),
+  /**
+   * Delay before reloading when env file changes.
+   * - number: delay in ms
+   * - true or "immediately": reload immediately
+   * - false: don't reload on env changes
+   * Default: 5000ms for processes/crons, false for tasks
+   */
+  reloadDelay: v.optional(EnvReloadDelay),
+});
+export type EnvOptions = v.InferOutput<typeof EnvOptions>;
+
 export const CronProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
   options: CronProcessOptions,
-  envFile: v.optional(v.string()),
+  envOptions: v.optional(EnvOptions),
 });
 export type CronProcessEntry = v.InferOutput<typeof CronProcessEntry>;
-
-export const EnvReloadDelay = v.union([v.number(), v.boolean(), v.literal("immediately")]);
-export type EnvReloadDelay = v.InferOutput<typeof EnvReloadDelay>;
 
 export const RestartingProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
-  envFile: v.optional(v.string()),
-  envReloadDelay: v.optional(EnvReloadDelay),
+  envOptions: v.optional(EnvOptions),
 });
 export type RestartingProcessEntry = v.InferOutput<typeof RestartingProcessEntry>;
 
-export const TaskEntry = v.object({
+export const TaskEntryConfig = v.object({
   name: v.string(),
   definition: ProcessDefinition,
-  envFile: v.optional(v.string()),
+  envOptions: v.optional(EnvOptions),
 });
-export type TaskEntry = v.InferOutput<typeof TaskEntry>;
+export type TaskEntryConfig = v.InferOutput<typeof TaskEntryConfig>;
 
 export const ManagerConfig = v.object({
   http: v.optional(HttpServerConfig),
@@ -49,7 +66,7 @@ export const ManagerConfig = v.object({
   logDir: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
   envFile: v.optional(v.string()),
-  tasks: v.optional(v.array(TaskEntry)),
+  tasks: v.optional(v.array(TaskEntryConfig)),
   crons: v.optional(v.array(CronProcessEntry)),
   processes: v.optional(v.array(RestartingProcessEntry)),
 });
@@ -79,8 +96,8 @@ export class Manager {
   private restartingProcesses: Map<string, RestartingProcess> = new Map();
   private logDir: string;
 
-  // Env reload tracking
-  private processEnvReloadConfig: Map<string, EnvReloadDelay> = new Map();
+  // Env reload tracking (for processes and crons)
+  private envReloadConfig: Map<string, EnvReloadDelay> = new Map();
   private envReloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private envChangeUnsubscribe: (() => void) | null = null;
 
@@ -101,13 +118,13 @@ export class Manager {
 
     const customEnvFiles: Record<string, string> = {};
     for (const task of config.tasks ?? []) {
-      if (task.envFile) customEnvFiles[task.name] = task.envFile;
+      if (task.envOptions?.envFile) customEnvFiles[task.name] = task.envOptions.envFile;
     }
     for (const cron of config.crons ?? []) {
-      if (cron.envFile) customEnvFiles[cron.name] = cron.envFile;
+      if (cron.envOptions?.envFile) customEnvFiles[cron.name] = cron.envOptions.envFile;
     }
     for (const proc of config.processes ?? []) {
-      if (proc.envFile) customEnvFiles[proc.name] = proc.envFile;
+      if (proc.envOptions?.envFile) customEnvFiles[proc.name] = proc.envOptions.envFile;
     }
 
     this.envManager = new EnvManager(
@@ -182,8 +199,14 @@ export class Manager {
     return { used: false };
   }
 
-  private applyDefaults(processName: string, definition: ProcessDefinition): ProcessDefinition {
-    const envVarsFromManager = this.envManager.getEnvVars(processName);
+  private applyDefaults(
+    processName: string,
+    definition: ProcessDefinition,
+    envOptions?: EnvOptions,
+  ): ProcessDefinition {
+    const inheritGlobalEnv = envOptions?.inheritGlobalEnv ?? true;
+    const inheritProcessEnv = envOptions?.inheritProcessEnv ?? true;
+    const envVarsFromManager = this.envManager.getEnvVars(processName, { inheritGlobalEnv });
 
     return {
       ...definition,
@@ -193,6 +216,7 @@ export class Manager {
         ...this.config.env,
         ...definition.env,
       },
+      inheritProcessEnv,
     };
   }
 
@@ -222,29 +246,48 @@ export class Manager {
     if (this._state !== "running") return;
 
     if (event.type === "global") {
-      this.logger.info("Global env file changed, reloading all processes as per their policies");
-      for (const processName of this.restartingProcesses.keys()) {
-        const reloadDelay = this.processEnvReloadConfig.get(processName);
+      this.logger.info(
+        "Global env file changed, reloading all processes/crons as per their policies",
+      );
+      // Reload all processes
+      for (const name of this.restartingProcesses.keys()) {
+        const reloadDelay = this.envReloadConfig.get(name);
         if (reloadDelay === false) continue;
-        this.scheduleProcessReload(processName, reloadDelay);
+        this.scheduleReload(name, "process", reloadDelay);
+      }
+      // Reload all crons
+      for (const name of this.cronProcesses.keys()) {
+        const reloadDelay = this.envReloadConfig.get(name);
+        if (reloadDelay === false) continue;
+        this.scheduleReload(name, "cron", reloadDelay);
       }
       return;
     }
 
     if (event.type === "process") {
-      const processName = event.key;
-      const reloadDelay = this.processEnvReloadConfig.get(processName);
+      const name = event.key;
+      const reloadDelay = this.envReloadConfig.get(name);
       if (reloadDelay === false) return;
-      this.scheduleProcessReload(processName, reloadDelay);
+
+      // Check if it's a process or cron
+      if (this.restartingProcesses.has(name)) {
+        this.scheduleReload(name, "process", reloadDelay);
+      } else if (this.cronProcesses.has(name)) {
+        this.scheduleReload(name, "cron", reloadDelay);
+      }
     }
   }
 
   /**
-   * Schedule a process reload with debouncing
+   * Schedule a process or cron reload with debouncing
    */
-  private scheduleProcessReload(processName: string, reloadDelay?: EnvReloadDelay): void {
+  private scheduleReload(
+    name: string,
+    type: "process" | "cron",
+    reloadDelay?: EnvReloadDelay,
+  ): void {
     // Clear existing timer if any
-    const existingTimer = this.envReloadTimers.get(processName);
+    const existingTimer = this.envReloadTimers.get(name);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
@@ -261,14 +304,18 @@ export class Manager {
       delayMs = 5000; // Default 5 seconds
     }
 
-    this.logger.info(`Scheduling reload for process "${processName}" in ${delayMs}ms`);
+    this.logger.info(`Scheduling reload for ${type} "${name}" in ${delayMs}ms`);
 
     const timer = setTimeout(async () => {
-      await this.reloadProcessEnv(processName);
-      this.envReloadTimers.delete(processName);
+      if (type === "process") {
+        await this.reloadProcessEnv(name);
+      } else {
+        await this.reloadCronEnv(name);
+      }
+      this.envReloadTimers.delete(name);
     }, delayMs);
 
-    this.envReloadTimers.set(processName, timer);
+    this.envReloadTimers.set(name, timer);
   }
 
   /**
@@ -290,8 +337,39 @@ export class Manager {
       return;
     }
 
-    const updatedDefinition = this.applyDefaults(processName, processConfig.definition);
+    const updatedDefinition = this.applyDefaults(
+      processName,
+      processConfig.definition,
+      processConfig.envOptions,
+    );
     await proc.reload(updatedDefinition, true);
+  }
+
+  /**
+   * Reload a cron with updated env vars
+   */
+  private async reloadCronEnv(cronName: string): Promise<void> {
+    const cron = this.cronProcesses.get(cronName);
+    if (!cron) {
+      this.logger.warn(`Cron "${cronName}" not found for env reload`);
+      return;
+    }
+
+    this.logger.info(`Reloading cron "${cronName}" due to env change`);
+
+    // Get the original config for this cron
+    const cronConfig = this.config.crons?.find((c) => c.name === cronName);
+    if (!cronConfig) {
+      this.logger.warn(`Cron config for "${cronName}" not found`);
+      return;
+    }
+
+    const updatedDefinition = this.applyDefaults(
+      cronName,
+      cronConfig.definition,
+      cronConfig.envOptions,
+    );
+    cron.updateDefinition(updatedDefinition);
   }
 
   get state(): ManagerState {
@@ -429,6 +507,7 @@ export class Manager {
     options?: {
       restartImmediately?: boolean;
       updateOptions?: Partial<RestartingProcessOptions>;
+      envOptions?: EnvOptions;
     },
   ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
@@ -437,7 +516,11 @@ export class Manager {
     }
 
     // Apply global defaults to new definition
-    const definitionWithDefaults = this.applyDefaults(proc.name, newDefinition);
+    const definitionWithDefaults = this.applyDefaults(
+      proc.name,
+      newDefinition,
+      options?.envOptions,
+    );
 
     // Update options if provided
     if (options?.updateOptions) {
@@ -474,7 +557,7 @@ export class Manager {
   addTask(
     name: string,
     definition: ProcessDefinition,
-    envFile?: string,
+    envOptions?: EnvOptions,
   ): { id: string; state: string; processNames: string[] } {
     // Check for global name uniqueness
     const nameCheck = this.isNameUsed(name);
@@ -485,8 +568,8 @@ export class Manager {
     }
 
     // Register custom env file if provided
-    if (envFile) {
-      this.envManager.registerFile(name, envFile);
+    if (envOptions?.envFile) {
+      this.envManager.registerFile(name, envOptions.envFile);
     }
 
     if (!this.taskList) {
@@ -500,7 +583,7 @@ export class Manager {
 
     const namedProcess: NamedProcessDefinition = {
       name,
-      process: this.applyDefaults(name, definition),
+      process: this.applyDefaults(name, definition, envOptions),
     };
     const id = this.taskList.addTask(namedProcess);
 
@@ -540,8 +623,7 @@ export class Manager {
     name: string,
     definition: ProcessDefinition,
     options?: RestartingProcessOptions,
-    envReloadDelay?: EnvReloadDelay,
-    envFile?: string,
+    envOptions?: EnvOptions,
   ): Promise<RestartingProcess> {
     // Check for global name uniqueness
     const nameCheck = this.isNameUsed(name);
@@ -552,14 +634,14 @@ export class Manager {
     }
 
     // Register custom env file if provided
-    if (envFile) {
-      this.envManager.registerFile(name, envFile);
+    if (envOptions?.envFile) {
+      this.envManager.registerFile(name, envOptions.envFile);
     }
 
     const processLogger = this.logger.child(name, { logFile: this.processLogFile(name) });
     const restartingProcess = new RestartingProcess(
       name,
-      this.applyDefaults(name, definition),
+      this.applyDefaults(name, definition, envOptions),
       options ?? DEFAULT_RESTART_OPTIONS,
       processLogger,
     );
@@ -567,8 +649,8 @@ export class Manager {
 
     restartingProcess.start();
 
-    // Track env reload config for this process
-    this.processEnvReloadConfig.set(name, envReloadDelay ?? 5000);
+    // Track env reload config for this process (default 5000ms)
+    this.envReloadConfig.set(name, envOptions?.reloadDelay ?? 5000);
 
     this.logger.info(`Added and started restarting process: ${name}`);
     return restartingProcess;
@@ -630,7 +712,7 @@ export class Manager {
       const taskListLogger = this.logger.child("tasks");
       const tasksWithDefaults = this.config.tasks.map((task) => ({
         name: task.name,
-        process: this.applyDefaults(task.name, task.definition),
+        process: this.applyDefaults(task.name, task.definition, task.envOptions),
       }));
       this.taskList = new TaskList("init", taskListLogger, tasksWithDefaults, (processName) => {
         return this.taskLogFile(processName);
@@ -658,12 +740,16 @@ export class Manager {
         });
         const cronProcess = new CronProcess(
           entry.name,
-          this.applyDefaults(entry.name, entry.definition),
+          this.applyDefaults(entry.name, entry.definition, entry.envOptions),
           entry.options,
           processLogger,
         );
         this.cronProcesses.set(entry.name, cronProcess);
         cronProcess.start();
+
+        // Track env reload config for this cron (default 5000ms)
+        this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
+
         this.logger.info(`Started cron process: ${entry.name}`);
       }
     }
@@ -676,7 +762,7 @@ export class Manager {
         });
         const restartingProcess = new RestartingProcess(
           entry.name,
-          this.applyDefaults(entry.name, entry.definition),
+          this.applyDefaults(entry.name, entry.definition, entry.envOptions),
           entry.options ?? DEFAULT_RESTART_OPTIONS,
           processLogger,
         );
@@ -684,11 +770,8 @@ export class Manager {
 
         restartingProcess.start();
 
-        // Track env reload config for this process
-        this.processEnvReloadConfig.set(
-          entry.name,
-          entry.envReloadDelay ?? 5000, // Default to 5000ms
-        );
+        // Track env reload config for this process (default 5000ms)
+        this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
 
         this.logger.info(`Started restarting process: ${entry.name}`);
       }

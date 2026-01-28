@@ -76,7 +76,9 @@ export default defineConfig({
           "--ssl-insecure",
         ],
       },
-      envReloadDelay: false,
+      envOptions: {
+        reloadDelay: false,
+      },
       options: {
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
@@ -97,6 +99,9 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      envOptions: {
+        inheritGlobalEnv: false,
+      },
     },
     {
       name: "opencode",
@@ -105,7 +110,9 @@ export default defineConfig({
         command: "opencode",
         args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
       },
-      envReloadDelay: 500,
+      envOptions: {
+        reloadDelay: 500,
+      },
       options: {
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },

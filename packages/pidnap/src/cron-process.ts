@@ -149,6 +149,15 @@ export class CronProcess {
     await this.executeJob();
   }
 
+  /**
+   * Update the process definition (e.g., for env changes).
+   * Takes effect on the next scheduled run.
+   */
+  updateDefinition(definition: ProcessDefinition): void {
+    this.lazyProcess.updateDefinition(definition);
+    this.logger.info(`Definition updated, will take effect on next run`);
+  }
+
   private onCronTick(): void {
     if (this.stopRequested) return;
 
