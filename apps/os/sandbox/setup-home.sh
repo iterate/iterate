@@ -20,7 +20,6 @@ cp -r "$HOME_SKELETON"/. "$HOME/"
 
 # Append Daytona-specific instructions if running in Daytona (not local-docker mode)
 # Local-docker mode is detected by presence of /local-iterate-repo mount
-# Note: CLAUDE.md symlinks to AGENTS.md, so we only need to append once
 if [[ ! -d "/local-iterate-repo" ]]; then
   echo "Daytona mode detected, appending port forwarding instructions..."
 
