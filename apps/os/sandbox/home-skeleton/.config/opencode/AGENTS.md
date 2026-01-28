@@ -133,13 +133,11 @@ When creating PRs, always include attribution in the PR description so reviewers
 
 Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
 
-To get your agent session link, query the opencode API for the most recently updated session:
+To get your agent session link, first get your session ID using the `get-current-session-id` tool (installed at `~/.opencode/tool/get-current-session-id.ts`), then build the URL:
 
 ```bash
-# Get the most recently updated session (likely yours if you're actively running)
-SESSION_ID=$(curl -s http://localhost:4096/session | jq -r 'sort_by(.time.updated) | reverse | .[0].id')
-
-# Build the attach URL
+# Replace SESSION_ID with the result from get-current-session-id tool
+SESSION_ID="ses_xxxxx"
 REPO_DIR="${ITERATE_CUSTOMER_REPO_PATH:-/home/iterate/src/github.com/iterate/iterate}"
 CMD="opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$REPO_DIR'"
 ENCODED_CMD=$(printf '%s' "$CMD" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
