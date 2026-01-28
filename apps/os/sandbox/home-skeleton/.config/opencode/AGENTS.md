@@ -127,11 +127,11 @@ When creating PRs, always include attribution in the PR description so reviewers
 ## Context
 
 - **Requested by:** @username (or user email)
-- **Slack thread:** https://iterate-com.slack.com/archives/CHANNEL_ID/pTHREAD_TS
+- **Slack thread:** [link to thread]
 - **Machine:** $ITERATE_MACHINE_ID
 ```
 
-Build the Slack thread link using the channel and thread_ts from the conversation. Replace the `.` in thread_ts with nothing to form the `pTHREAD_TS` (e.g., `1234567890.123456` becomes `p1234567890123456`).
+Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
 
 ## Handling APIs and Secrets
 
