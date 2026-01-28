@@ -416,7 +416,7 @@ function formatFyiMessage(
   const messageTs = event.ts || threadTs;
 
   return [
-    `FYI: Another message in this thread (you were not @mentioned).`,
+    `New message in this thread (no @mention, but you're a participant).`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
