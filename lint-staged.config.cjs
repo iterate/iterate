@@ -14,7 +14,13 @@ const baseConfig = {
 };
 
 const agentConfig = {
-  "*.{ts,tsx,mts,cts}": [() => "pnpm typecheck", "eslint --fix --max-warnings 0"],
+  "*.{ts,tsx,mts,cts}": [
+    // using a function which ignores args (filepaths) means *don't* append the filepaths to the command
+    () => "pnpm typecheck",
+    // if tests prove slow, we could do smart dependency tracking to only run tests for changed files
+    () => "pnpm test",
+    "eslint --fix --max-warnings 0",
+  ],
   "*.{js,jsx,mjs,cjs}": ["eslint --fix --max-warnings 0"],
 };
 
