@@ -139,7 +139,7 @@ To get your agent session link, build a URL to the terminal with the attach comm
 SESSION_ID=$(sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT harness_session_id FROM agents WHERE status='running' LIMIT 1")
 REPO_DIR="${ITERATE_CUSTOMER_REPO_PATH:-/home/iterate/src/github.com/iterate/iterate}"
 CMD="opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$REPO_DIR'"
-ENCODED_CMD=$(printf '%s' "$CMD" | jq -sRr @uri)
+ENCODED_CMD=$(printf '%s' "$CMD" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
 echo "${ITERATE_OS_BASE_URL}/orgs/${ITERATE_ORG_SLUG}/projects/${ITERATE_PROJECT_SLUG}/machines/${ITERATE_MACHINE_ID}/proxy/3000/terminal?command=${ENCODED_CMD}&autorun=true"
 ```
 
