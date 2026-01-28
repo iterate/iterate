@@ -140,8 +140,33 @@ SESSION_ID=$(sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT harness_session
 REPO_DIR="${ITERATE_CUSTOMER_REPO_PATH:-/home/iterate/src/github.com/iterate/iterate}"
 CMD="opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$REPO_DIR'"
 ENCODED_CMD=$(printf '%s' "$CMD" | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
-echo "${ITERATE_OS_BASE_URL}/orgs/${ITERATE_ORG_SLUG}/projects/${ITERATE_PROJECT_SLUG}/machines/${ITERATE_MACHINE_ID}/proxy/3000/terminal?command=${ENCODED_CMD}&autorun=true"
+echo "${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/3000/terminal?command=${ENCODED_CMD}&autorun=true"
 ```
+
+## Building URLs
+
+The sandbox has these env vars for building URLs:
+
+- `ITERATE_OS_BASE_URL` - base URL (e.g., `https://os.iterate.com` or `https://dev-mmkal-os.dev.iterate.com`)
+- `ITERATE_ORG_ID` / `ITERATE_ORG_SLUG` - organization ID and slug
+- `ITERATE_PROJECT_ID` / `ITERATE_PROJECT_SLUG` - project ID and slug
+- `ITERATE_MACHINE_ID` / `ITERATE_MACHINE_NAME` - machine ID and name
+
+**Proxy URL format:**
+
+```
+${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/${PORT}/
+```
+
+Example: `https://os.iterate.com/org/nustom.com/proj/hullo/mach_01kg2323bmfzst5yzdmh8q3hs5/proxy/3000/`
+
+**Terminal URL (with optional command):**
+
+```
+${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/3000/terminal
+```
+
+Add `?command=...&autorun=true` to pre-fill and run a command.
 
 ## Handling APIs and Secrets
 
