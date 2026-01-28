@@ -285,6 +285,8 @@ const Env = z.object({
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
+  RESEND_BOT_API_KEY: Required,
+  RESEND_BOT_WEBHOOK_SECRET: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
@@ -335,10 +337,15 @@ async function setupDatabase() {
     const res = await Exec("db-seed-secrets", {
       env: {
         PSCALE_DATABASE_URL: origin,
+        DATABASE_URL: origin,
         ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      },
+        RESEND_BOT_API_KEY: process.env.RESEND_BOT_API_KEY,
+      } satisfies Record<
+        import("./scripts/seed-global-secrets.ts").GlobalSecretEnvVarName,
+        string | undefined
+      >,
       command: "tsx ./scripts/seed-global-secrets.ts",
     });
 

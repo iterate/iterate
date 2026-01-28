@@ -635,6 +635,33 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
 
   logger.debug("Egress proxy forwarding", { method: originalMethod, url: originalURL });
 
+  // Check for Resend email sending - validate recipients before forwarding
+  // This prevents using Iterate's Resend account to send spam to arbitrary addresses
+  // Block both /emails and /emails/batch endpoints
+  const parsedUrl = URL.canParse(originalURL) ? new URL(originalURL) : null;
+  const isResendEmailSend =
+    parsedUrl?.hostname === "api.resend.com" &&
+    (parsedUrl?.pathname === "/emails" || parsedUrl?.pathname === "/emails/batch") &&
+    originalMethod === "POST";
+
+  if (isResendEmailSend) {
+    // Clone the request to inspect recipients without consuming the original body
+    const validationError = await validateResendEmailRecipients(
+      db,
+      apiKeyContext.organizationId,
+      c.req.raw.clone(),
+    );
+
+    if (validationError) {
+      logger.warn("Resend email blocked", {
+        url: originalURL,
+        organizationId: apiKeyContext.organizationId,
+        error: validationError.error,
+      });
+      return c.json({ error: validationError.error }, 403);
+    }
+  }
+
   // Track secrets used for potential 401 retry
   const usedSecrets: Array<{ secretId: string; isConnector: boolean }> = [];
 
@@ -869,6 +896,70 @@ function getForwardedProto(originalUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Normalize email address - extract from "Name <email>" format if needed
+ */
+function normalizeEmail(email: string): string {
+  const match = email.match(/<([^>]+)>/);
+  return (match ? match[1] : email).toLowerCase().trim();
+}
+
+/** Single email payload shape */
+type ResendEmailPayload = { to?: string | string[]; cc?: string | string[] };
+
+/**
+ * Validate Resend email recipients.
+ * Returns null if valid, or an error response if invalid.
+ *
+ * Policy: At least one recipient (to or cc) must be an org member.
+ * This allows reply-all to external recipients while preventing pure spam.
+ *
+ * Note: bcc is intentionally NOT checked for blessing. If we checked bcc, an agent could
+ * bcc an org member while sending spam to external addresses in the to: field. By only
+ * checking to/cc, we ensure at least one visible recipient is an org member.
+ */
+async function validateResendEmailRecipients(
+  db: DB,
+  organizationId: string,
+  request: { json: () => Promise<unknown> },
+): Promise<{ error: string } | null> {
+  let payload: ResendEmailPayload | ResendEmailPayload[];
+  try {
+    payload = (await request.json()) as typeof payload;
+  } catch {
+    return { error: "Invalid JSON body for Resend email request" };
+  }
+
+  // Handle both single email and batch (array) payloads
+  const emails = Array.isArray(payload) ? payload : [payload];
+
+  // Get org members' emails upfront (single query for all emails in batch)
+  const orgMembers = await db.query.organizationUserMembership.findMany({
+    where: eq(schema.organizationUserMembership.organizationId, organizationId),
+    with: { user: { columns: { email: true } } },
+  });
+  const orgMemberEmails = new Set(orgMembers.map((m) => m.user.email.toLowerCase()));
+
+  // Validate each email in the batch
+  for (const email of emails) {
+    const allRecipients = [email.to || [], email.cc || []].flat().map(normalizeEmail);
+
+    if (allRecipients.length === 0) {
+      return { error: "No recipients specified in email" };
+    }
+
+    const hasOrgMember = allRecipients.some((r) => orgMemberEmails.has(r));
+
+    if (!hasOrgMember) {
+      return {
+        error: `Email blocked: At least one recipient must be an organization member. Recipients: ${allRecipients.join(", ")}`,
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
