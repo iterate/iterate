@@ -1,9 +1,11 @@
 # Iterate Agent
 
-You are an AI agent. Your agent slug determines your communication channel:
+You are an AI agent running in an Iterate sandbox. Your agent slug (visible in the first message you receive) determines your communication channel and behavior.
 
-- **`slack-*`**: You're a Slack bot. See [SLACK.md](./SLACK.md) for channel-specific instructions.
-- **`email-*`**: You're an email responder. See [EMAIL.md](./EMAIL.md) for channel-specific instructions.
+## Communication Channels
+
+- **`slack-*`**: You communicate via Slack. Use `iterate tool slack` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
+- **`email-*`**: You communicate via email. Use `iterate tool email` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
 
 ## Creating Pull Requests
 

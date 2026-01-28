@@ -39,11 +39,14 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
   # Make scripts executable (rsync preserves permissions but host may not have +x)
   chmod +x "$ITERATE_REPO/apps/os/sandbox/"*.sh
 
+  # Patch pidnap package.json to use the built tgz
+  sed -i 's|workspace:|file:/app/pidnap.tgz|g' "$ITERATE_REPO/apps/os/sandbox/package.json"
+
   echo "Installing dependencies..."
   (cd "$ITERATE_REPO" && pnpm install --no-frozen-lockfile)
 
   echo "Building daemon..."
-  (cd "$ITERATE_REPO/apps/daemon" && npx vite build)
+  (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
   # Setup home directory (agent configs from home-skeleton)
   "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
