@@ -128,10 +128,18 @@ When creating PRs, always include attribution in the PR description so reviewers
 
 - **Requested by:** @username (or user email)
 - **Slack thread:** [link to thread]
-- **Machine:** $ITERATE_MACHINE_ID
+- **Agent session:** [attach command]
 ```
 
 Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
+
+To get your agent session attach command, query the daemon database for your harness_session_id:
+
+```bash
+CUSTOMER_REPO="${ITERATE_CUSTOMER_REPO_PATH:-$HOME/src/github.com/iterate/iterate}"
+SESSION_ID=$(sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT harness_session_id FROM agents WHERE status='running' LIMIT 1")
+echo "opencode attach 'http://localhost:4096' --session $SESSION_ID --dir '$CUSTOMER_REPO'"
+```
 
 ## Handling APIs and Secrets
 
