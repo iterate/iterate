@@ -87,11 +87,15 @@ export const toolsRouter = t.router({
         const client = getResendClient();
         const fromAddress = process.env.ITERATE_RESEND_FROM_ADDRESS || "agent@alpha.iterate.com";
 
+        const splitEmails = (emails: string) => {
+          const list = emails.split(",");
+          return list.map((e) => e.trim()).filter(Boolean);
+        };
         const { data, error } = await client.emails.send({
           from: `Iterate Agent <${fromAddress}>`,
-          to: input.to.split(",").map((e) => e.trim()),
-          cc: input.cc?.split(",").map((e) => e.trim()),
-          bcc: input.bcc?.split(",").map((e) => e.trim()),
+          to: splitEmails(input.to),
+          cc: splitEmails(input.cc || ""),
+          bcc: splitEmails(input.bcc || ""),
           subject: input.subject,
           text: input.body,
           html: input.html,

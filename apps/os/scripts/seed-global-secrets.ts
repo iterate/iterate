@@ -28,6 +28,11 @@ const GLOBAL_SECRETS_CONFIG: Array<{
     key: "anthropic_api_key",
     egressProxyRule: `url.hostname = 'api.anthropic.com'`,
   },
+  {
+    envVar: "RESEND_BOT_API_KEY",
+    key: "resend.api_key",
+    egressProxyRule: `url.hostname = 'api.resend.com'`,
+  },
 ];
 
 async function main() {

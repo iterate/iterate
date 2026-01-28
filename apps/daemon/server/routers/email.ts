@@ -140,20 +140,20 @@ emailRouter.post("/webhook", async (c) => {
   const emailData = payload.data;
   const resendEmailId = emailData.email_id;
 
-  // Store the raw event for later inspection and dedup check
-  const { eventId, isDuplicate } = await storeEvent(payload, resendEmailId);
-
-  if (isDuplicate) {
-    console.log(`[daemon/email] Duplicate event, skipping`, { eventId, resendEmailId });
-    return c.json({ success: true, message: "Duplicate event", eventId });
-  }
-
-  const { name: senderName, email: senderEmail } = parseSender(emailData.from);
-  const subject = emailData.subject;
-  const threadSlug = getSlug(emailData);
-  const emailBody = payload._iterate?.emailBody;
-
   try {
+    // Store the raw event for later inspection and dedup check
+    const { eventId, isDuplicate } = await storeEvent(payload, resendEmailId);
+
+    if (isDuplicate) {
+      console.log(`[daemon/email] Duplicate event, skipping`, { eventId, resendEmailId });
+      return c.json({ success: true, message: "Duplicate event", eventId });
+    }
+
+    const { name: senderName, email: senderEmail } = parseSender(emailData.from);
+    const subject = emailData.subject;
+    const threadSlug = getSlug(emailData);
+    const emailBody = payload._iterate?.emailBody;
+
     const existingAgent = await getAgent(threadSlug);
 
     if (existingAgent) {
