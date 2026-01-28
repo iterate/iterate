@@ -223,7 +223,7 @@ You can schedule tasks to run at a specific time or on a recurring schedule. Tas
 ```bash
 iterate task add \
   --filename my-task.md \
-  --due "2026-01-29T09:00:00Z" \
+  --due "1h" \
   --body "# Task Title
 
 Your task instructions here.
@@ -235,12 +235,14 @@ For recurring tasks, add `--schedule`:
 ```bash
 iterate task add \
   --filename daily-standup.md \
-  --due "2026-01-29T09:00:00Z" \
+  --due "24h" \
   --schedule "0 9 * * *" \
   --body "# Daily Standup Reminder
 
 Send a reminder to #engineering about standup in 15 minutes."
 ```
+
+Use `--help` for more info, including how to specify and exact `--due` value. Note that `--schedule` and `--due` may depend on the user's timezone.
 
 **Listing tasks:**
 
@@ -250,10 +252,10 @@ iterate task list --state completed  # completed tasks
 iterate task get --filename my-task.md
 ```
 
-**Task frontmatter fields:**
+**Task CLI options:**
 
-- `due`: ISO timestamp when task should run (required)
-- `schedule`: Cron expression for recurring tasks (optional, e.g., `"0 9 * * *"`)
-- `priority`: `low` | `normal` | `high` (optional, default: normal)
+- `--due`: Duration until task runs (e.g., `"1h"`, `"30m"`, `"2 days"`, `"1 week"`)
+- `--schedule`: Cron expression for recurring tasks (optional, e.g., `"0 9 * * *"`)
+- `--priority`: `low` | `normal` | `high` (optional, default: normal)
 
 **Important:** The task body should contain ALL context needed. The cron agent that runs the task won't have access to the current conversation - include user names, channel IDs, specific instructions, etc.

@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parse as parseMs } from "ms";
 import { z } from "zod/v4";
 import {
   getTasksDir,
@@ -8,6 +9,40 @@ import {
   type ParsedTask,
 } from "@iterate-com/daemon/server/cron-tasks/scheduler.ts";
 import { t } from "../trpc.ts";
+
+/**
+ * Parse a duration string (e.g. "1h", "30m", "2 days") and return an ISO timestamp.
+ */
+const Due = z.union([
+  z
+    .string()
+    .transform((val, ctx) => {
+      if (val.match(/^\d4-/)) {
+        // looks like an ISO timestamp
+        const date = new Date(val);
+        if (!Number.isFinite(date.getTime())) {
+          ctx.addIssue({
+            code: "custom",
+            message: `Invalid ISO timestamp: "${val}"`,
+          });
+          return z.NEVER;
+        }
+        return date;
+      }
+      const ms = parseMs(val);
+      if (!Number.isFinite(ms)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Invalid duration: "${val}". Use formats like "1h", "30m", "2 days", "1 week"`,
+        });
+        return z.NEVER;
+      }
+      return new Date(Date.now() + ms);
+    })
+    .describe(
+      "Either the time until the task runs (e.g. '1h', '30m', '2 days', '1 week') or an ISO timestamp (e.g. '2026-01-29T09:00:00Z' or '2026-01-29T09:00:00-07:00'). Note that you will need to know the user's timezone to use the ISO timestamp.",
+    ),
+]);
 
 const TASKS_DIR_DESCRIPTION =
   "Tasks are stored as markdown files in the cron-tasks directory. " +
@@ -105,7 +140,7 @@ export const tasksRouter = t.router({
           .string()
           .describe("Task filename (e.g. daily-report.md). Will be created in pending/"),
         body: z.string().describe("Task body (markdown content after frontmatter)"),
-        due: z.string().describe("ISO timestamp when task should run (e.g. 2026-01-29T09:00:00Z)"),
+        due: Due,
         schedule: z
           .string()
           .optional()
@@ -131,16 +166,15 @@ export const tasksRouter = t.router({
         // File doesn't exist, good to create
       }
 
-      const task: ParsedTask = {
+      const task: Omit<ParsedTask, "raw"> = {
         filename: input.filename,
         frontmatter: {
           state: "pending",
-          due: input.due,
+          due: input.due.toISOString(),
           schedule: input.schedule,
           priority: input.priority,
         },
         body: input.body,
-        raw: "",
       };
 
       const content = serializeTask(task);

@@ -124,13 +124,19 @@ iterate task list --state completed
 # Get a specific task
 iterate task get --filename daily-report.md
 
-# Add a new task
+# Add a new task (due in 24 hours)
 iterate task add \
   --filename daily-report.md \
-  --due 2026-01-29T09:00:00Z \
+  --due "24h" \
   --schedule "0 9 * * *" \
   --priority normal \
   --body "# Daily Report\n\nSend summary to Slack."
+
+# Add a task for tomorrow morning
+iterate task add \
+  --filename reminder.md \
+  --due "1 day" \
+  --body "Send the weekly report to #general"
 ```
 
 ## Implementation

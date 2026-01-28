@@ -162,6 +162,9 @@ importers:
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.1
+      ms:
+        specifier: 4.0.0-nightly.202508271359
+        version: 4.0.0-nightly.202508271359
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -8626,6 +8629,10 @@ packages:
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+  ms@4.0.0-nightly.202508271359:
+    resolution: {integrity: sha512-WC/Eo7NzFrOV/RRrTaI0fxKVbNCzEy76j2VqNV8SxDf9D69gSE2Lh0QwYvDlhiYmheBYExAvEAxVf5NoN0cj2A==}
+    engines: {node: '>=20'}
 
   msgpackr-extract@3.0.3:
     resolution: {integrity: sha512-P0efT1C9jIdVRefqjzOQ9Xml57zpOXnIuS+csaB4MdZbTdmGDLo8XhzBG1N7aO11gKDDkJvBLULeFTo46wwreA==}
@@ -19926,6 +19933,8 @@ snapshots:
   mrmime@2.0.1: {}
 
   ms@2.1.3: {}
+
+  ms@4.0.0-nightly.202508271359: {}
 
   msgpackr-extract@3.0.3:
     dependencies:

@@ -116,7 +116,7 @@ export function parseTaskFile(content: string, filename: string): ParsedTask | n
 /**
  * Serialize a task back to markdown.
  */
-export function serializeTask(task: ParsedTask): string {
+export function serializeTask(task: Omit<ParsedTask, "raw">): string {
   const lines = ["---"];
   lines.push(`state: ${task.frontmatter.state}`);
   lines.push(`due: ${task.frontmatter.due}`);
