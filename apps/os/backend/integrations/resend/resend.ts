@@ -17,7 +17,7 @@
  *
  * For sending emails:
  * 1. Verify your sending domain in Resend Dashboard > Domains
- * 2. Copy API key and add to Doppler as RESEND_ALPHAITERATECOM_API_KEY
+ * 2. Copy API key and add to Doppler as RESEND_BOT_API_KEY
  */
 import { Hono } from "hono";
 import { Resend } from "resend";
@@ -252,11 +252,11 @@ async function verifyResendWebhook(
  */
 resendApp.post("/webhook", async (c) => {
   const body = await c.req.text();
-  const webhookSecret = c.env.RESEND_ALPHAITERATECOM_WEBHOOK_SECRET;
+  const webhookSecret = c.env.RESEND_BOT_WEBHOOK_SECRET;
 
   // Verify webhook signature if secret is configured
   if (webhookSecret) {
-    const client = createResendClient(c.env.RESEND_ALPHAITERATECOM_API_KEY);
+    const client = createResendClient(c.env.RESEND_BOT_API_KEY);
     const isValid = await verifyResendWebhook(
       client,
       body,
@@ -297,11 +297,66 @@ resendApp.post("/webhook", async (c) => {
   const recipientLocal = recipientEmail.split("@")[0]; // e.g., "dev-mmkal" or "dev-mmkal+projectslug"
   const recipientStage = recipientLocal.split("+")[0]; // Strip any +suffix
 
+  // Header to track forwarding and prevent infinite loops
+  const FORWARDED_HEADER = "x-iterate-forwarded-from";
+  const alreadyForwarded = c.req.header(FORWARDED_HEADER);
+
   if (recipientStage !== expectedStage) {
+    // In production, forward to the correct stage instead of ignoring
+    // Only forward if: 1) we're in prod, 2) not already forwarded, 3) target is a dev stage
+    const isProduction = expectedStage === "prd";
+    const isDevStage = recipientStage.startsWith("dev-");
+
+    if (isProduction && !alreadyForwarded && isDevStage) {
+      // Build target URL by replacing hostname in current URL
+      // Expected: prd-os.iterate.com -> dev-xxx-os.dev.iterate.com
+      const currentUrl = new URL(c.req.url);
+
+      // Replace prd-os with {stage}-os and iterate.com with dev.iterate.com
+      const targetHostname = `${recipientStage}-os.dev.iterate.com`;
+      const targetUrl = new URL(currentUrl);
+      targetUrl.hostname = targetHostname;
+
+      logger.info("[Resend Webhook] Forwarding email to correct stage", {
+        expectedStage,
+        recipientStage,
+        targetUrl: targetUrl.href,
+      });
+
+      try {
+        // Forward all headers, adding our forwarded-from header
+        const forwardHeaders = new Headers(c.req.raw.headers);
+        forwardHeaders.set(FORWARDED_HEADER, expectedStage);
+
+        const forwardResponse = await fetch(targetUrl.href, {
+          method: "POST",
+          headers: forwardHeaders,
+          body,
+        });
+
+        // Return the exact response from the target, with an extra header
+        const responseHeaders = new Headers(forwardResponse.headers);
+        responseHeaders.set("x-iterate-forwarded-to", recipientStage);
+
+        return new Response(forwardResponse.body, {
+          status: forwardResponse.status,
+          statusText: forwardResponse.statusText,
+          headers: responseHeaders,
+        });
+      } catch (error) {
+        logger.error("[Resend Webhook] Failed to forward email", {
+          error,
+          targetUrl: targetUrl.href,
+        });
+        return c.json({ ok: false, message: "Failed to forward to correct stage" }, 502);
+      }
+    }
+
     logger.info("[Resend Webhook] Email addressed to different stage, ignoring", {
       expectedStage,
       recipientStage,
       recipientEmail,
+      alreadyForwarded: alreadyForwarded ?? null,
     });
     return c.json({ ok: true, message: "Email addressed to different stage" });
   }
@@ -418,7 +473,7 @@ resendApp.post("/webhook", async (c) => {
         const targetMachine = targetProject.machines[0];
 
         // Fetch full email content (body) from Resend API
-        const resendClient = createResendClient(env.RESEND_ALPHAITERATECOM_API_KEY);
+        const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
         const emailContent = await fetchEmailContent(resendClient, resendEmailId);
 
         // Forward to machine if available

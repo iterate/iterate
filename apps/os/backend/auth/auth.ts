@@ -129,7 +129,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
 
                 // Send OTP via Resend
                 // Use stage prefix in from address for routing (e.g., noreply+dev-mmkal@alpha.iterate.com)
-                const client = createResendClient(envParam.RESEND_ALPHAITERATECOM_API_KEY);
+                const client = createResendClient(envParam.RESEND_BOT_API_KEY);
                 const result = await sendEmail(client, {
                   from: `Iterate <noreply+${envParam.VITE_APP_STAGE}@alpha.iterate.com>`,
                   to: email,
