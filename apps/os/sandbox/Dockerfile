@@ -101,6 +101,13 @@ RUN mkdir -p /home/iterate/.local/bin && \
     echo "exec node $CLAUDE_BIN --dangerously-skip-permissions \"\$@\"" >> /home/iterate/.local/bin/claude && \
     chmod +x /home/iterate/.local/bin/claude
 
+# Wrap codex to always use --dangerously-bypass-approvals-and-sandbox (safe in sandbox)
+RUN CODEX_BIN=$(which codex) && \
+    rm -f /home/iterate/.npm-global/bin/codex && \
+    echo '#!/bin/sh' > /home/iterate/.local/bin/codex && \
+    echo "exec $CODEX_BIN --dangerously-bypass-approvals-and-sandbox \"\$@\"" >> /home/iterate/.local/bin/codex && \
+    chmod +x /home/iterate/.local/bin/codex
+
 ENV PATH="/home/iterate/.local/bin:$PATH"
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
