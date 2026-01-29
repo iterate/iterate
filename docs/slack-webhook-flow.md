@@ -23,8 +23,7 @@ Daemon (/api/integrations/slack/webhook)
     │
     ├─── 5. Extract thread_id from payload
     ├─── 6. Upsert agent (slug: slack-{thread_id})
-    ├─── 7. Wait for tmux ready
-    └─── 8. Send formatted message to tmux
+    └─── 7. Send message to agent via harness
 ```
 
 ## Components
@@ -44,7 +43,7 @@ Daemon (/api/integrations/slack/webhook)
   - Uses `event.thread_ts` for thread replies
   - Uses `event.ts` for new messages (becomes the thread ID)
 - Creates/reuses agent with slug `slack-{thread_id}` using the `pi` harness
-- Sends formatted message to the agent's tmux session
+- Sends formatted message to the agent via the harness
 
 ### Agent Manager (apps/daemon/server/services/agent-manager.ts)
 
