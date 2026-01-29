@@ -17,7 +17,7 @@ FROM node:24
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
-ENV SANDBOX_OPENCODE_VERSION=1.1.42
+ENV SANDBOX_OPENCODE_VERSION=1.1.41
 ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
