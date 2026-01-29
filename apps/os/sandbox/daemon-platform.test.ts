@@ -3,7 +3,7 @@
  *
  * These tests verify the daemon's integration with the control plane:
  * - Fetching env vars from getEnv endpoint
- * - Applying env vars to tmux sessions
+ * - Applying env vars to the daemon process
  *
  * REQUIREMENTS:
  * - Docker with TCP API enabled on port 2375 (OrbStack has this by default)
@@ -150,10 +150,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
     console.log(`Starting container ${containerId.slice(0, 12)} with port ${DAEMON_PORT}...`);
     await dockerApi("POST", `/containers/${containerId}/start`, {});
 
-    // Wait for daemon to be ready - logs to /var/log/iterate-daemon/current via s6
+    // Wait for daemon to be ready - logs to /var/log/pidnap/process/iterate-daemon.log via pidnap
     await waitForFileLogPattern(
       containerId,
-      "/var/log/iterate-daemon/current",
+      "/var/log/pidnap/process/iterate-daemon.log",
       /Server running at/i,
       120000,
     );

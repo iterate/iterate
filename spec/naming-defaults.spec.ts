@@ -1,5 +1,6 @@
 import {
   login,
+  logout,
   test,
   createOrganization,
   createProject,
@@ -24,7 +25,7 @@ test.describe("naming defaults", () => {
     await page.locator(`[data-organization="${uniqueName}"]`).waitFor();
   });
 
-  test("organization slug gets suffix on conflict", async ({ page, browser }) => {
+  test("duplicate organization name shows error", async ({ page }) => {
     const sharedName = `conflict-org-${Date.now()}`;
 
     const testEmail1 = `naming1-${Date.now()}+test@nustom.com`;
@@ -32,12 +33,15 @@ test.describe("naming defaults", () => {
     await createOrganization(page, sharedName);
     await page.locator(`[data-organization="${sharedName}"]`).waitFor();
 
-    const context = await browser.newContext();
-    const page2 = await context.newPage();
+    await logout(page);
+
+    // Second user tries same name
     const testEmail2 = `naming2-${Date.now()}+test@nustom.com`;
-    await login(page2, testEmail2);
-    await createOrganization(page2, sharedName);
-    await page2.locator(`[data-organization^="${sharedName}-"]`).waitFor();
+    await login(page, testEmail2);
+    await page.getByLabel("Organization name").fill(sharedName);
+    await page.getByRole("button", { name: "Create organization" }).click();
+
+    await toast.error(page, "organization with this name already exists").waitFor();
   });
 
   test("project slug has no suffix when unique within org", async ({ page }) => {
@@ -77,7 +81,7 @@ test.describe("naming defaults", () => {
 
     await page
       .locator("input[placeholder='Machine name']")
-      .and(page.locator("[value^='daytona-']"))
+      .and(page.locator("[value^='daytona-'], [value^='local-docker-']"))
       .waitFor();
   });
 });

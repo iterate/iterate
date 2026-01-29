@@ -16,13 +16,18 @@ The Docker **build context** determines what version of iterate is bundled in th
 
 ## Key Files
 
-| File             | Purpose                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| `Dockerfile`     | Image definition; COPY repo from build context                                       |
-| `entry.sh`       | Container entrypoint; rsync in local mode, then start s6                             |
-| `setup-home.sh`  | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
-| `home-skeleton/` | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
-| `s6-daemons/`    | Service definitions for s6 process supervisor                                        |
+| File                       | Purpose                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `Dockerfile`               | Image definition; COPY repo from build context                                       |
+| `entry.sh`                 | Container entrypoint; rsync in local mode, then start pidnap                         |
+| `pidnap.config.ts`         | Process manager configuration (services, tasks, env watching)                        |
+| `egress-proxy-addon.py`    | mitmproxy addon for routing traffic through iterate egress worker                    |
+| `setup-home.sh`            | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
+| `home-skeleton/`           | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
+| `daytona-snapshot.ts`      | Script to build Daytona snapshot from git ref                                        |
+| `local-docker-snapshot.ts` | Script to build local Docker image                                                   |
+| `daytona.test.ts`          | Integration test for Daytona sandbox bootstrap                                       |
+| `local-docker.test.ts`     | Integration test for local Docker sandbox                                            |
 
 ## Version Configuration
 
@@ -37,13 +42,40 @@ Agent versions are `ENV` vars at the top of the Dockerfile (prefix `SANDBOX_`):
 
 To update: edit `ENV` values in `Dockerfile`, rebuild image.
 
-## Building
+## Building & Testing
+
+### Local Docker
 
 ```bash
-# Local development (uses your working directory)
-pnpm run snapshot:local-docker
+# Build local image (uses your working directory)
+pnpm snapshot:local-docker
 
-# Or directly:
+# Run tests against local Docker
+pnpm snapshot:local-docker:test
+```
+
+### Daytona
+
+```bash
+# Build snapshot from current branch
+SANDBOX_ITERATE_REPO_REF=$(git branch --show-current) pnpm snapshot:daytona:prd
+
+# Build snapshot from specific branch/SHA
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:prd
+
+# Run tests (auto-builds snapshot from current branch if not specified)
+pnpm snapshot:daytona:test
+
+# Run tests with specific branch
+SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:test
+
+# Run tests with existing snapshot (skips build)
+DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
+```
+
+### Direct Docker Build
+
+```bash
 docker build -t iterate-sandbox:local -f apps/os/sandbox/Dockerfile .
 ```
 
@@ -57,38 +89,70 @@ Local mode (mount at /local-iterate-repo exists):
   2. pnpm install
   3. vite build daemon
   4. setup-home.sh (copy home-skeleton to $HOME)
-  5. Start s6-svscan
+  5. Start pidnap
 
 Daytona/CI mode (no mount):
-  1. Start s6-svscan (code + configs already baked in)
+  1. Start pidnap (code + configs already baked in)
 ```
 
 ---
 
-# s6 Supervision
+# pidnap Process Manager
 
-Services in `s6-daemons/` are supervised by [s6](https://skarnet.org/software/s6/).
+Services are managed by [pidnap](https://www.npmjs.com/package/pidnap), configured in `pidnap.config.ts`.
 
 ## Services
 
-| Service        | Port | Logs                      | Description          |
-| -------------- | ---- | ------------------------- | -------------------- |
-| iterate-daemon | 3000 | `/var/log/iterate-daemon` | Main daemon + web UI |
-| opencode       | 4096 | `/var/log/opencode`       | OpenCode server      |
+| Service        | Port | Description                                      |
+| -------------- | ---- | ------------------------------------------------ |
+| egress-proxy   | 8888 | mitmproxy routing traffic through iterate egress |
+| iterate-daemon | 3000 | Main daemon + web UI                             |
+| opencode       | 4096 | OpenCode server                                  |
 
 ## Commands
 
 ```bash
-export S6DIR=~/src/github.com/iterate/iterate/apps/os/sandbox/s6-daemons
+# Manager status
+pidnap status
 
-s6-svstat $S6DIR/iterate-daemon   # status
-s6-svc -t $S6DIR/iterate-daemon   # restart (SIGTERM)
-s6-svc -d $S6DIR/iterate-daemon   # stop
-s6-svc -u $S6DIR/iterate-daemon   # start
+# List all processes
+pidnap processes list
+
+# Get specific process
+pidnap processes get iterate-daemon
+
+# Restart a process
+pidnap processes restart opencode
+
+# Stop a process
+pidnap processes stop iterate-daemon
+
+# Start a process
+pidnap processes start iterate-daemon
 ```
 
 ## Logs
 
+Logs are written to `/var/log/pidnap/`:
+
 ```bash
-tail -f /var/log/iterate-daemon/current
+# Process logs
+tail -f /var/log/pidnap/process/iterate-daemon.log
+tail -f /var/log/pidnap/process/opencode.log
+tail -f /var/log/pidnap/process/egress-proxy.log
+
+# Task logs (initialization)
+tail -f /var/log/pidnap/tasks/generate-ca.log
+tail -f /var/log/pidnap/tasks/db-migrate.log
+
+# pidnap manager log
+tail -f /var/log/pidnap/pidnap.log
 ```
+
+## Env File Watching
+
+pidnap watches `~/.iterate/.env` for changes. When the daemon writes new API keys:
+
+- `opencode` restarts after 500ms (quick reload for API keys)
+- `iterate-daemon` restarts after 5s
+- `egress-proxy` does not restart (reads env at request time)

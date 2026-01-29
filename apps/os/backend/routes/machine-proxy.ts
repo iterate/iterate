@@ -10,13 +10,13 @@ import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
 import type { CloudflareEnv } from "../../env.ts";
-import type { Variables } from "../worker.ts";
+import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { DAEMON_DEFINITIONS } from "../daemons.ts";
+import { createMachineProvider } from "../providers/index.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -102,96 +102,67 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   const machineRecord = access.machine;
   const externalId = machineRecord.externalId;
+  const metadata = machineRecord.metadata as Record<string, unknown>;
 
-  // 4. Build target URL based on machine type
+  // 4. Build target URL using provider
   const url = new URL(c.req.url);
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  if (machineRecord.type === "local-docker") {
-    // For local-docker, proxy to localhost with the container's mapped port
-    const meta = machineRecord.metadata as { ports?: Record<string, number>; port?: number };
-
-    let hostPort: number | undefined;
-
-    // New format: ports is a map of daemonId/terminal -> hostPort
-    if (meta?.ports) {
-      // Find which daemon this internal port corresponds to
-      const daemon = DAEMON_DEFINITIONS.find((d) => d.internalPort === portNum);
-      if (daemon && meta.ports[daemon.id]) {
-        hostPort = meta.ports[daemon.id];
-      } else if (portNum === 22222 && meta.ports["terminal"]) {
-        // Terminal port
-        hostPort = meta.ports["terminal"];
-      }
-    } else if (meta?.port) {
-      // Legacy fallback: single port field
-      hostPort = portNum === 22222 ? meta.port + 1 : meta.port;
-    }
-
-    if (!hostPort) {
-      return c.json({ error: "Local docker machine has no port mapping for port " + portNum }, 500);
-    }
-    const targetUrl = `http://localhost:${hostPort}${path}`;
-    const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
-
-    const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
-    return rewriteHTMLUrls(response, proxyBasePath);
-  }
-
-  if (machineRecord.type === "local") {
-    // For local machines, proxy to configured host:port
-    const metadata = machineRecord.metadata as { host?: string; port?: number };
-    if (!metadata.host || !metadata.port) {
-      return c.json({ error: "Local machine missing host or port configuration" }, 500);
-    }
-    const targetUrl = `http://${metadata.host}:${metadata.port}${path}`;
-    const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
-
-    const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
-    return rewriteHTMLUrls(response, proxyBasePath);
-  }
-
-  // Daytona machine handling
-  if (!/^[a-zA-Z0-9-]+$/.test(externalId)) {
-    logger.error("Invalid sandbox ID format", {
-      sandboxId: externalId,
-      machineId: machineRecord.id,
-    });
-    return c.json({ error: "Invalid sandbox configuration" }, 500);
-  }
-
-  const daytona = new Daytona({ apiKey: c.env.DAYTONA_API_KEY });
-  const deps = { db, daytona };
-
-  let token: string;
-  try {
-    token = await getPreviewToken(deps, machineRecord.id, externalId, portNum);
-  } catch (err) {
-    logger.error("Failed to get preview token", err);
-    return c.json({ error: "Failed to get preview token" }, 500);
-  }
-
-  const targetUrl = `https://${portNum}-${externalId}.proxy.daytona.works${path}`;
+  const provider = await createMachineProvider({
+    type: machineRecord.type,
+    env: c.env,
+    externalId,
+    metadata,
+    buildProxyUrl: () => "", // Not used here
+  });
+  const baseUrl = provider.getPreviewUrl(portNum);
+  const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
-  let response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
-
-  // Handle 401 - lazy refresh
-  if (response.status === 401) {
-    logger.info("Received 401 from Daytona, refreshing token", {
-      sandboxId: externalId,
-      port: portNum,
-    });
-    try {
-      token = await refreshPreviewToken(deps, machineRecord.id, externalId, portNum);
-      response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
-    } catch (err) {
-      logger.error("Failed to refresh token after 401", err);
-      return c.json({ error: "Authentication failed" }, 401);
+  // For Daytona, we need special auth handling
+  if (machineRecord.type === "daytona") {
+    if (!/^[a-zA-Z0-9-]+$/.test(externalId)) {
+      logger.error("Invalid sandbox ID format", {
+        sandboxId: externalId,
+        machineId: machineRecord.id,
+      });
+      return c.json({ error: "Invalid sandbox configuration" }, 500);
     }
+
+    const daytona = new Daytona({ apiKey: c.env.DAYTONA_API_KEY });
+    const deps = { db, daytona };
+
+    let token: string;
+    try {
+      token = await getPreviewToken(deps, machineRecord.id, externalId, portNum);
+    } catch (err) {
+      logger.error("Failed to get preview token", err);
+      return c.json({ error: "Failed to get preview token" }, 500);
+    }
+
+    let response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
+
+    // Handle 401 - lazy refresh
+    if (response.status === 401) {
+      logger.info("Received 401 from Daytona, refreshing token", {
+        sandboxId: externalId,
+        port: portNum,
+      });
+      try {
+        token = await refreshPreviewToken(deps, machineRecord.id, externalId, portNum);
+        response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
+      } catch (err) {
+        logger.error("Failed to refresh token after 401", err);
+        return c.json({ error: "Authentication failed" }, 401);
+      }
+    }
+
+    return rewriteHTMLUrls(response, proxyBasePath);
   }
 
+  // For local machines (local-docker, local, local-vanilla), simple proxy without auth
+  const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
   return rewriteHTMLUrls(response, proxyBasePath);
 });
 

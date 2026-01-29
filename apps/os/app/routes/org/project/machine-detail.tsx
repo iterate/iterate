@@ -2,18 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  ExternalLink,
-  Trash2,
-  RefreshCw,
-  Server,
-  Code2,
-  Terminal,
-  Copy,
-  FileText,
-  ScrollText,
-  Bot,
-} from "lucide-react";
+import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -28,23 +17,11 @@ export const Route = createFileRoute(
   component: MachineDetailPage,
 });
 
-// Service definitions
-const SERVICE_DEFS = [
-  {
-    id: "iterate-daemon",
-    name: "Iterate Daemon",
-    port: 3000,
-    logPath: "/var/log/iterate-daemon/current",
-    icon: Server,
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    port: 4096,
-    logPath: "/var/log/opencode/current",
-    icon: Code2,
-  },
-];
+// Icon map for services
+const SERVICE_ICONS: Record<string, typeof Server> = {
+  "iterate-daemon": Server,
+  opencode: Code2,
+};
 
 function MachineDetailPage() {
   const params = useParams({
@@ -85,9 +62,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  const isLocalDocker = machine.type === "local-docker";
-  const isLocal = machine.type === "local";
-  const isDaytona = machine.type === "daytona";
+  // Use commands, terminal info, and services from backend
+  const { commands, services } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -104,6 +80,23 @@ function MachineDetailPage() {
     },
     onError: (error) => {
       toast.error("Failed to restart: " + error.message);
+    },
+  });
+
+  const restartDaemon = useMutation({
+    mutationFn: async () => {
+      return trpcClient.machine.restartDaemon.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Daemon restarting");
+      queryClient.invalidateQueries({ queryKey: machineQueryKey });
+    },
+    onError: (error) => {
+      toast.error("Failed to restart daemon: " + error.message);
     },
   });
 
@@ -131,97 +124,11 @@ function MachineDetailPage() {
     },
   });
 
-  // URL helpers
-  const openServiceUrl = async (serviceId: string, useNative: boolean) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const daemon = result.daemons.find((d: { id: string }) => d.id === serviceId);
-      if (!daemon) {
-        toast.error(`Service ${serviceId} not found`);
-        return;
-      }
-      const url = useNative ? daemon.nativeUrl : daemon.proxyUrl;
-      if (url) {
-        window.open(url, "_blank");
-      } else {
-        toast.error("URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const openTerminal = async ({
-    useNative,
-    command,
-    autorun,
-  }: {
-    useNative: boolean;
-    command?: string;
-    autorun?: boolean;
-  }) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const urlBase = useNative ? result.nativeTerminalUrl : result.terminalUrl;
-      if (urlBase) {
-        const url = new URL(urlBase);
-        if (command) {
-          url.searchParams.set("command", command);
-          url.searchParams.set("autorun", autorun ? "true" : "false");
-        }
-        window.open(url, "_blank");
-      } else {
-        toast.error("Terminal URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  // Copy helpers
+  // Copy helper
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
     toast.success(`Copied: ${text}`);
   };
-
-  const copyLogsCommand = (service: (typeof SERVICE_DEFS)[number]) => {
-    const command = `tail -f ${service.logPath}`;
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker exec ${metadata.containerId} ${command}`);
-    } else {
-      copyToClipboard(command);
-    }
-  };
-
-  const copyEntryLogsCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker logs -f ${metadata.containerId}`);
-    } else if (isDaytona) {
-      toast.info("Entry logs for Daytona machines go to container stdout");
-    }
-  };
-
-  const copyTerminalCommand = () => {
-    if (isLocalDocker && metadata.containerId) {
-      copyToClipboard(`docker exec -it ${metadata.containerId} /bin/bash`);
-    }
-  };
-
-  // Get port for a service (from metadata or default)
-  const getServicePort = (serviceId: string, defaultPort: number) => {
-    return metadata.ports?.[serviceId] ?? defaultPort;
-  };
-
-  // Check if machine supports dual access (proxy + direct)
-  const hasDualAccess = isDaytona || isLocalDocker;
 
   // Query agents from the daemon
   const { data: agentsData } = useQuery(
@@ -232,52 +139,43 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "started" && metadata.daemonStatus === "ready",
+        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
         refetchInterval: 10000, // Poll every 10s
       },
     ),
   );
 
-  const agents = agentsData?.agents ?? [];
+  // Sort agents by updatedAt descending (most recent first)
+  const agents = [...(agentsData?.agents ?? [])].sort(
+    (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+  );
 
-  // URL helpers for agents - opens terminal with prefilled command
-  const openAgentTerminal = async ({
-    agentSlug,
-    useNative,
-    command,
-    autorun,
-  }: {
-    agentSlug: string;
-    useNative: boolean;
-    command?: string;
-    autorun?: boolean;
-  }) => {
-    try {
-      const result = await trpcClient.machine.getPreviewInfo.query({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        machineId: params.machineId,
-      });
-      const daemon = result.daemons.find((d: { id: string }) => d.id === "iterate-daemon");
-      if (!daemon) {
-        toast.error("Daemon URL not found");
-        return;
-      }
-      const baseUrl = useNative ? daemon.nativeUrl : daemon.proxyUrl;
-      if (baseUrl) {
-        agentSlug; // fill in this and construct the command
-        const url = new URL(`${baseUrl}/terminal`);
-        if (command) {
-          url.searchParams.set("command", command);
-          url.searchParams.set("autorun", autorun ? "true" : "false");
-        }
-        window.open(url, "_blank");
-      } else {
-        toast.error("URL not available");
-      }
-    } catch (err) {
-      toast.error(`Failed to get URL: ${err instanceof Error ? err.message : String(err)}`);
+  // Format agent time: show time, add date if >12h ago
+  const formatAgentTime = (dateStr: string | null) => {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const hoursAgo = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+    const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    if (hoursAgo > 12) {
+      const dateFormatted = date.toLocaleDateString([], { month: "short", day: "numeric" });
+      return `${dateFormatted} ${time}`;
     }
+    return time;
+  };
+
+  // Get iterate-daemon service for agent terminal access
+  const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
+
+  // Build URL for agent terminal with command (uses iterate-daemon's /terminal endpoint)
+  const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
+    return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+  };
+
+  // Get attach command for an agent using its harness session ID
+  const getAgentAttachCommand = (harnessSessionId: string) => {
+    const baseCmd = `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
+    return `${baseCmd} --dir '${agentsData?.customerRepoPath}'`;
   };
 
   return (
@@ -287,11 +185,20 @@ function MachineDetailPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => restartMachine.mutate()}
-          disabled={restartMachine.isPending || machine.state !== "started"}
+          onClick={() => restartDaemon.mutate()}
+          disabled={restartDaemon.isPending || machine.state === "archived"}
         >
           <RefreshCw className="h-4 w-4 mr-1" />
-          Restart
+          Restart Daemon
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => restartMachine.mutate()}
+          disabled={restartMachine.isPending || machine.state === "archived"}
+        >
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Restart Machine
         </Button>
         <Button
           variant="outline"
@@ -356,11 +263,11 @@ function MachineDetailPage() {
       </div>
 
       {/* Services List */}
-      {machine.state === "started" && (
+      {machine.state !== "archived" && (
         <div className="space-y-2">
-          {SERVICE_DEFS.map((service) => {
-            const Icon = service.icon;
-            const port = getServicePort(service.id, service.port);
+          {/* Services */}
+          {services.map((service) => {
+            const Icon = SERVICE_ICONS[service.id] ?? Server;
             return (
               <div
                 key={service.id}
@@ -370,105 +277,88 @@ function MachineDetailPage() {
                   <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate">{service.name}</div>
-                    <div className="text-xs text-muted-foreground font-mono">:{port}</div>
+                    <div className="text-xs text-muted-foreground font-mono">:{service.port}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  {hasDualAccess ? (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, true)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Direct
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openServiceUrl(service.id, false)}
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Proxy
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openServiceUrl(service.id, true)}
+                  {service.options.map((option, index) => (
+                    <a
+                      key={index}
+                      href={option.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
                     >
-                      <ExternalLink className="h-4 w-4 mr-1" />
-                      Open
-                    </Button>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => copyLogsCommand(service)}>
-                    <FileText className="h-4 w-4 mr-1" />
-                    Logs
-                  </Button>
+                      <ExternalLink className="h-4 w-4" />
+                      {option.label}
+                    </a>
+                  ))}
                 </div>
               </div>
             );
           })}
 
-          {/* Shell */}
-          <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-            <div className="flex items-center gap-3 min-w-0">
-              <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Shell</div>
-                <div className="text-xs text-muted-foreground">Terminal access</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              {isDaytona && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: true })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Direct
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openTerminal({ useNative: false })}
-                  >
-                    <ExternalLink className="h-4 w-4 mr-1" />
-                    Proxy
-                  </Button>
-                </>
-              )}
-              {isLocalDocker && (
-                <Button variant="ghost" size="sm" onClick={copyTerminalCommand}>
-                  <Copy className="h-4 w-4 mr-1" />
-                  Copy command
-                </Button>
-              )}
-              {isLocal && <span className="text-xs text-muted-foreground">SSH or local</span>}
-            </div>
-          </div>
-
-          {/* Entry logs (boot logs) */}
-          {(isLocalDocker || isDaytona) && (
+          {/* Shell - terminal access via iterate-daemon */}
+          {iterateDaemonService && (
             <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
               <div className="flex items-center gap-3 min-w-0">
-                <ScrollText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Entry Logs</div>
-                  <div className="text-xs text-muted-foreground">Container boot logs</div>
+                  <div className="text-sm font-medium">Shell</div>
+                  <div className="text-xs text-muted-foreground">Terminal access</div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={copyEntryLogsCommand}>
-                  <Copy className="h-4 w-4 mr-1" />
-                  {isLocalDocker ? "Copy command" : "Info"}
-                </Button>
+                {iterateDaemonService?.options.map((option, index) => (
+                  <a
+                    key={index}
+                    href={`${option.url}/terminal`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    {option.label}
+                  </a>
+                ))}
               </div>
             </div>
+          )}
+
+          {/* Commands - open in terminal */}
+          {commands.length > 0 && iterateDaemonService && (
+            <>
+              <div className="pt-4 border-t">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Commands</h3>
+              </div>
+              {commands.map((cmd, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{cmd.label}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {iterateDaemonService.options.map((option, optIndex) => (
+                      <a
+                        key={optIndex}
+                        href={buildAgentTerminalUrl(option.url, cmd.command)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {option.label}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
           )}
 
           {/* Agents */}
@@ -487,61 +377,27 @@ function MachineDetailPage() {
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{agent.slug}</div>
                       <div className="text-xs text-muted-foreground">
-                        {agent.harnessType} · {agent.status}
+                        {agent.status} · {agent.harnessType} · {formatAgentTime(agent.updatedAt)}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {hasDualAccess ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: true,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
+                    {agent.harnessSessionId &&
+                      iterateDaemonService?.options.map((option, index) => (
+                        <a
+                          key={index}
+                          href={buildAgentTerminalUrl(
+                            option.url,
+                            getAgentAttachCommand(agent.harnessSessionId!),
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
                         >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Direct
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            openAgentTerminal({
-                              agentSlug: agent.slug,
-                              useNative: false,
-                              command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                              autorun: true,
-                            })
-                          }
-                        >
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Proxy
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() =>
-                          openAgentTerminal({
-                            agentSlug: agent.slug,
-                            useNative: true,
-                            command: `opencode attach 'http://localhost:4096' --session "$(opencode session list | grep ${agent.slug} | cut -d' ' -f1)"`,
-                            autorun: true,
-                          })
-                        }
-                      >
-                        <ExternalLink className="h-4 w-4 mr-1" />
-                        Open
-                      </Button>
-                    )}
+                          <ExternalLink className="h-4 w-4" />
+                          {option.label}
+                        </a>
+                      ))}
                   </div>
                 </div>
               ))}

@@ -13,14 +13,11 @@ const XtermTerminal = lazy(() =>
 );
 
 /**
- * Get the CLI command for agents that don't use tmux sessions.
+ * Get the CLI command to spawn for the agent.
  * For opencode: connects via attach command to existing SDK session
  * For claude/pi: spawns the CLI directly
  */
 function getAgentCommand(agent: SerializedAgent): string | undefined {
-  // If agent has a tmux session, we attach to that instead
-  if (agent.tmuxSession) return undefined;
-
   switch (agent.harnessType) {
     case "opencode":
       // OpenCode uses SDK - attach to the session by ID
@@ -56,7 +53,6 @@ function AgentPage() {
   const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ slug }));
   useEnsureAgentStarted(slug);
 
-  // Get the command to run for agents without tmux sessions
   const initialCommand = useMemo(() => {
     if (!agent) return undefined;
     const command = getAgentCommand(agent);
@@ -72,7 +68,6 @@ function AgentPage() {
     );
   }
 
-  // Connect to agent's tmux session or spawn CLI directly
   return (
     <Suspense
       fallback={
@@ -81,11 +76,7 @@ function AgentPage() {
         </div>
       }
     >
-      <XtermTerminal
-        key={agent.slug}
-        tmuxSessionName={agent.tmuxSession ?? undefined}
-        initialCommand={initialCommand}
-      />
+      <XtermTerminal key={agent.slug} initialCommand={initialCommand} />
     </Suspense>
   );
 }

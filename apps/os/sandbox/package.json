@@ -1,0 +1,8 @@
+{
+  "name": "sandbox",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "pidnap": "workspace:"
+  }
+}

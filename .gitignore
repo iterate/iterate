@@ -50,4 +50,6 @@ session-ses*.md
 lint-staged.local.cjs
 
 playwriter-screenshot-*
-opencode.json
+
+# PR video recordings
+pr-videos/

@@ -1,9 +1,0 @@
-#!/bin/sh
-exec 2>&1
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORT=$(node -p "require('$SCRIPT_DIR/metadata.json').port")
-
-cd "$ITERATE_REPO/apps/daemon"
-pnpm db:migrate
-exec env HOSTNAME=0.0.0.0 PORT="$PORT" tsx server.ts

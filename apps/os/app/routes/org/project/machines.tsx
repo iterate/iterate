@@ -89,7 +89,7 @@ function ProjectMachinesPage() {
     });
   };
 
-  const defaultType: MachineType = "daytona";
+  const defaultType: MachineType = isNonProd ? "local-docker" : "daytona";
   const [newMachineType, setNewMachineType] = useState<MachineType>(defaultType);
   const [newMachineName, setNewMachineName] = useState(`${defaultType}-${dateSlug()}`);
   const [newLocalHost, setNewLocalHost] = useState("localhost");

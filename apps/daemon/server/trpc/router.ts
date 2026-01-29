@@ -5,14 +5,8 @@ import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
 import { getOrCreateAgent, resetAgent as resetAgentService } from "../services/agent-manager.ts";
-import {
-  createTmuxSession,
-  hasTmuxSession,
-  listTmuxSessions,
-  type TmuxSession,
-} from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
-import { platformRouter } from "./platform.ts";
+import { platformRouter, getCustomerRepoPath } from "./platform.ts";
 
 const AgentType = z.enum(agentTypes);
 
@@ -32,46 +26,17 @@ function serializeAgent(agent: Agent): SerializedAgent {
   };
 }
 
-/** Serialized tmux session with ISO date string */
-type SerializedTmuxSession = Omit<TmuxSession, "created"> & {
-  created: string;
-};
-
-function serializeTmuxSession(session: TmuxSession): SerializedTmuxSession {
-  return {
-    ...session,
-    created: session.created.toISOString(),
-  };
-}
-
 export const trpcRouter = createTRPCRouter({
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
   getServerCwd: publicProcedure.query(() => {
-    return { cwd: process.cwd(), homeDir: homedir() };
+    return {
+      cwd: process.cwd(),
+      homeDir: homedir(),
+      customerRepoPath: getCustomerRepoPath(),
+    };
   }),
-
-  // ============ Utility tmux sessions (for btop, logs, etc - NOT agents) ============
-
-  listTmuxSessions: publicProcedure.query((): SerializedTmuxSession[] => {
-    return listTmuxSessions().map(serializeTmuxSession);
-  }),
-
-  ensureTmuxSession: publicProcedure
-    .input(
-      z.object({
-        sessionName: z.string(),
-        command: z.string(),
-      }),
-    )
-    .mutation(({ input }): { created: boolean } => {
-      if (hasTmuxSession(input.sessionName)) {
-        return { created: false };
-      }
-      createTmuxSession(input.sessionName, input.command);
-      return { created: true };
-    }),
 
   // ============ Agent CRUD ============
 
@@ -101,7 +66,7 @@ export const trpcRouter = createTRPCRouter({
 
   /**
    * Create an agent using the harness system.
-   * For opencode agents, this creates an SDK session - no tmux.
+   * For opencode agents, this creates an SDK session.
    */
   createAgent: publicProcedure
     .input(
@@ -256,8 +221,32 @@ export const trpcRouter = createTRPCRouter({
 
       return { success: true };
     }),
+
+  // ============ Daemon Lifecycle ============
+
+  /**
+   * Restart the daemon process. The s6 supervisor will automatically restart it.
+   * This is much faster than restarting the entire Daytona sandbox.
+   */
+  restartDaemon: publicProcedure.mutation(async (): Promise<{ success: boolean }> => {
+    // Import lazily to avoid circular dependency issues at startup
+    const { reportStatusToPlatform } = await import("../start.ts");
+
+    // Report stopping status to platform before exiting
+    await reportStatusToPlatform({ status: "stopping" }).catch((err) => {
+      console.error("[restartDaemon] Failed to report stopping status:", err);
+    });
+
+    // Schedule exit after responding - s6 will restart us
+    setTimeout(() => {
+      console.log("[restartDaemon] Exiting for s6 restart...");
+      process.exit(0);
+    }, 100);
+
+    return { success: true };
+  }),
 });
 
 export type TRPCRouter = typeof trpcRouter;
 
-export type { SerializedAgent, SerializedTmuxSession };
+export type { SerializedAgent };

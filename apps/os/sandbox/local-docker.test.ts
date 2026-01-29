@@ -1,7 +1,7 @@
 /**
- * Local Docker + s6 Integration Tests
+ * Local Docker + pidnap Integration Tests
  *
- * Verifies sandbox container setup with s6 process supervision.
+ * Verifies sandbox container setup with pidnap process supervision.
  * Image rebuilt once, each test group gets its own container.
  *
  * RUN WITH:
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, DOCKER_API_URL, execInContainer } from "./test-helpers.ts";
+import { dockerApi, execInContainer } from "./test-helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
@@ -44,7 +44,7 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
   const port = options?.exposePort ? getRandomPort() : undefined;
 
   const envVars = [
-    "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   ];
 
   if (process.env.ANTHROPIC_API_KEY) {
@@ -63,6 +63,8 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
       AutoRemove: false,
       // Mount local repo so entry.sh can rsync it into the container
       Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
+      // Map host.docker.internal to the host machine (needed on Linux, automatic on Mac Docker Desktop)
+      ExtraHosts: ["host.docker.internal:host-gateway"],
     },
   };
 
@@ -88,22 +90,39 @@ async function destroyContainer(containerId: string): Promise<void> {
   await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
 }
 
-async function waitForContainerReady(containerId: string, timeoutMs = 30000): Promise<void> {
+async function waitForContainerReady(containerId: string, timeoutMs = 180000): Promise<void> {
   const start = Date.now();
+
+  // First wait for container to be running
   while (Date.now() - start < timeoutMs) {
     try {
-      const response = await fetch(`${DOCKER_API_URL}/containers/${containerId}/json`);
-      const info = (await response.json()) as { State: { Running: boolean } };
-      if (info.State.Running) {
-        await new Promise((r) => setTimeout(r, 2000));
-        return;
-      }
+      const info = await dockerApi<{ State: { Running: boolean } }>(
+        "GET",
+        `/containers/${containerId}/json`,
+      );
+      if (info.State.Running) break;
     } catch {
       // Container not ready yet
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error("Timeout waiting for container to start");
+
+  // Then wait for entry.sh to complete setup (creates ready file after setup-home.sh)
+  while (Date.now() - start < timeoutMs) {
+    try {
+      // Use sh -c with && echo to get output only on success
+      const result = await execInContainer(containerId, [
+        "sh",
+        "-c",
+        "test -f /tmp/.iterate-sandbox-ready && echo ready",
+      ]);
+      if (result.trim() === "ready") return;
+    } catch {
+      // File doesn't exist yet or container not ready
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error("Timeout waiting for container setup to complete");
 }
 
 async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
@@ -146,7 +165,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     beforeAll(async () => {
       container = await createContainer();
       await waitForContainerReady(container.id);
-    }, 60000);
+    }, 300000);
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
@@ -164,41 +183,49 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     });
 
     test.runIf(process.env.OPENAI_API_KEY)(
-      "opencode answers math question",
+      "opencode answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["opencode", "run", "what is 50 - 8"]);
-        expect(output).toContain("42");
+        const output = await execInContainer(container.id, [
+          "opencode",
+          "run",
+          "what messaging app are you built to help with?",
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
       },
-      10000,
+      30000,
     );
 
-    // Claude CLI refuses --dangerously-skip-permissions when running as root
-    // Skip this test since container runs as root
-    test.skip("claude answers math question", async () => {
-      const output = await execInContainer(container.id, ["claude", "-p", "what is 50 - 8"]);
-      expect(output).toContain("42");
-    });
-
-    // pi uses anthropic provider per home-skeleton/.pi/agent/settings.json
     test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "pi answers math question",
+      "claude answers secret question",
       async () => {
-        const output = await execInContainer(container.id, ["pi", "-p", "what is 50 - 8"]);
-        expect(output).toContain("42");
+        const output = await execInContainer(container.id, [
+          "claude",
+          "-p",
+          "what messaging app are you built to help with?",
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
       },
-      10000,
+      30000,
+    );
+
+    test.runIf(process.env.ANTHROPIC_API_KEY)(
+      "pi answers secret question",
+      async () => {
+        const output = await execInContainer(container.id, [
+          "pi",
+          "-p",
+          "what messaging app are you built to help with?",
+        ]);
+        expect(output.toLowerCase()).toContain("slack");
+      },
+      30000,
     );
 
     test("container setup correct", async () => {
-      // tmux installed
-      const tmux = await execInContainer(container.id, ["which", "tmux"]);
-      expect(tmux.trim()).toBe("/usr/bin/tmux");
-
       // repo cloned
       const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
-      // s6-daemons moved into apps/os/sandbox/
 
       // has bind mount for local repo (entry.sh syncs from this)
       const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
@@ -235,6 +262,17 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       ]);
       expect(commit).toContain("test");
     });
+
+    test("git status works in iterate repo", async () => {
+      const status = await execInContainer(container.id, [
+        "git",
+        "-C",
+        CONTAINER_REPO_PATH,
+        "status",
+      ]);
+      // CI checks out PR merge commits in detached HEAD state, which is fine
+      expect(status).toMatch(/On branch|HEAD detached/);
+    });
   });
 
   // ============ Daemon ============
@@ -244,7 +282,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     beforeAll(async () => {
       container = await createContainer({ exposePort: true });
       await waitForContainerReady(container.id);
-    }, 60000);
+    }, 300000);
 
     afterAll(async () => {
       if (container?.id) await destroyContainer(container.id);
@@ -269,7 +307,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
     }, 210000);
 
-    test("tmux and PTY work", async () => {
+    test("PTY endpoint works", async () => {
       await waitForDaemonReady(container.port!);
 
       // PTY endpoint exists
@@ -277,18 +315,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
-
-      // tmux via tRPC
-      const trpc = createDaemonTrpcClient(container.port!);
-      const sessionName = `test-${Date.now()}`;
-      const createResult = await trpc.ensureTmuxSession.mutate({
-        sessionName,
-        command: "bash",
-      });
-      expect(createResult.created).toBe(true);
-
-      const sessions = await trpc.listTmuxSessions.query();
-      expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {

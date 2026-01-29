@@ -3,28 +3,11 @@ const fs = require("fs");
 const resultsFile = process.argv[2] || "spec-results.json";
 const outputFile = process.argv[3] || "flaky-report.md";
 
-let results;
-try {
-  const jsonContent = fs.readFileSync(resultsFile, "utf8");
-  const lines = jsonContent.split("\n");
-  const jsonLine = lines.find((l) => l.startsWith("{"));
-  results = jsonLine ? JSON.parse(jsonLine) : null;
-} catch (err) {
-  console.log("Failed to parse results:", err.message);
-  fs.writeFileSync(
-    outputFile,
-    "# Flaky Test Detection Report\n\nNo results to analyze (JSON parse failed).\n",
-  );
-  process.exit(0);
-}
+const content = fs.readFileSync(resultsFile, "utf8");
+const results = JSON.parse(content);
 
-if (!results || !results.suites) {
-  console.log("No test suites found in results");
-  fs.writeFileSync(
-    outputFile,
-    "# Flaky Test Detection Report\n\nNo test suites found in results.\n",
-  );
-  process.exit(0);
+if (!results?.suites) {
+  throw new Error("No test suites found in results");
 }
 
 const testStats = new Map();
@@ -64,41 +47,52 @@ for (const suite of results.suites || []) {
   processSuite(suite);
 }
 
-const flakyTests = [];
+const allTests = [];
+let totalRuns = 0;
+let totalPassed = 0;
 for (const [, stats] of testStats) {
   if (stats.total > 0) {
+    totalRuns += stats.total;
+    totalPassed += stats.passed;
     const passRate = (stats.passed / stats.total) * 100;
-    if (passRate < 90) {
-      flakyTests.push({ ...stats, passRate: passRate.toFixed(1) });
-    }
+    allTests.push({ ...stats, passRate });
   }
 }
 
-let report = "# Flaky Test Detection Report\n\n";
-report += "Tests run 10 times each. Flaky = <90% pass rate.\n\n";
+const flakyCount = allTests.filter((t) => t.passRate < 100).length;
+const repeatCount = allTests.length > 0 ? Math.round(totalRuns / allTests.length) : 0;
 
-if (flakyTests.length === 0) {
-  report += "## No flaky tests detected!\n\nAll tests passed at least 90% of the time.\n";
-} else {
-  report += "## Flaky Tests Detected\n\n";
-  report += "| File | Test | Pass Rate | Passed | Failed |\n";
-  report += "|------|------|-----------|--------|--------|\n";
-  for (const test of flakyTests.sort((a, b) => parseFloat(a.passRate) - parseFloat(b.passRate))) {
-    report +=
-      "| " +
-      test.file +
-      " | " +
-      test.name +
-      " | " +
-      test.passRate +
-      "% | " +
-      test.passed +
-      "/" +
-      test.total +
-      " | " +
-      test.failed +
-      " |\n";
-  }
+let report = "# Flaky Test Detection Report\n\n";
+report += "## Summary\n\n";
+report += `- **${allTests.length}** unique tests\n`;
+report += `- **${repeatCount}x** repeats each\n`;
+report += `- **${totalRuns}** total runs\n`;
+report += `- **${totalPassed}/${totalRuns}** passed (${totalRuns > 0 ? ((totalPassed / totalRuns) * 100).toFixed(1) : 0}%)\n`;
+report += `- **${flakyCount}** flaky tests (<100% pass rate)\n\n`;
+
+report += "## Results\n\n";
+report += "| File | Test | Pass Rate | Passed | Failed |\n";
+report += "|------|------|-----------|--------|--------|\n";
+for (const test of allTests.sort(
+  (a, b) => a.passRate - b.passRate || a.file.localeCompare(b.file),
+)) {
+  const icon = test.passRate === 100 ? "\u2705" : "\u274c";
+  report +=
+    "| " +
+    test.file +
+    " | " +
+    test.name +
+    " | " +
+    icon +
+    " " +
+    test.passRate.toFixed(0) +
+    "% | " +
+    test.passed +
+    "/" +
+    test.total +
+    " | " +
+    test.failed +
+    " |\n";
 }
 
 console.log(report);
@@ -109,6 +103,6 @@ if (summaryFile) {
   fs.appendFileSync(summaryFile, report);
 }
 
-if (flakyTests.length > 0) {
-  console.log("::warning::Found " + flakyTests.length + " flaky test(s)");
+if (flakyCount > 0) {
+  console.log("::warning::Found " + flakyCount + " flaky test(s)");
 }

@@ -1,10 +1,5 @@
 import { createWorkerClient } from "./orpc/client.ts";
-import {
-  applyEnvVars,
-  configureGitHubCredential,
-  clearGitHubCredentials,
-  cloneRepos,
-} from "./trpc/platform.ts";
+import { applyEnvVars, clearGitHubCredentials, cloneRepos } from "./trpc/platform.ts";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const JITTER_MS = 5 * 60 * 1000; // +/- 5 minutes
@@ -83,13 +78,9 @@ export async function fetchBootstrapData(): Promise<void> {
     `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale`,
   );
 
-  // Configure or clear git credentials based on GitHub token presence
-  if (result.envVars.GITHUB_ACCESS_TOKEN) {
-    await configureGitHubCredential(result.envVars.GITHUB_ACCESS_TOKEN);
-  } else {
-    // Clear stale GitHub credentials when GitHub is disconnected
-    await clearGitHubCredentials();
-  }
+  // Clear any stale GitHub credentials from global git config
+  // (new auth is handled via GIT_CONFIG_* env vars with magic strings that egress proxy resolves)
+  await clearGitHubCredentials();
 
   // Clone repos if any
   if (result.repos.length > 0) {

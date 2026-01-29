@@ -1,4 +1,13 @@
-import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  timestamp,
+  text,
+  uniqueIndex,
+  unique,
+  jsonb,
+  index,
+  integer,
+} from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
@@ -7,13 +16,30 @@ import type { SlackEvent } from "@slack/web-api";
 export const UserRole = ["member", "admin", "owner"] as const;
 export type UserRole = (typeof UserRole)[number];
 
-// Machine states
-export const MachineState = ["started", "archived"] as const;
+// Machine states:
+// - starting: machine is being provisioned, not yet ready for use
+// - active: machine is ready and is the current active machine for the project
+// - archived: machine has been replaced or manually archived
+export const MachineState = ["starting", "active", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona", "local-docker", "local", "local-vanilla"] as const;
+export const MachineType = ["daytona", "local-docker", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
+
+// Secret metadata for OAuth tokens
+export type SecretMetadata = {
+  // For OAuth tokens - encrypted refresh token for automatic renewal
+  encryptedRefreshToken?: string;
+  // OAuth token expiry (ISO string)
+  expiresAt?: string;
+  // OAuth scopes granted
+  scopes?: string[];
+  // Connection ID this secret is associated with
+  connectionId?: string;
+  // GitHub App installation ID for regenerating installation tokens
+  githubInstallationId?: number;
+};
 
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
@@ -117,6 +143,7 @@ export const organization = pgTable("organization", (t) => ({
 export const organizationRelations = relations(organization, ({ many, one }) => ({
   projects: many(project),
   members: many(organizationUserMembership),
+  invites: many(organizationInvite),
   billingAccount: one(billingAccount),
 }));
 
@@ -155,6 +182,40 @@ export const organizationUserMembershipRelations = relations(
   }),
 );
 
+// Organization invites (pending invitations by email)
+export const organizationInvite = pgTable(
+  "organization_invite",
+  (t) => ({
+    id: iterateId("inv"),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    email: t.text().notNull(),
+    invitedByUserId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: t
+      .text({ enum: [...UserRole] })
+      .notNull()
+      .default("member"),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.organizationId, t.email)],
+);
+
+export const organizationInviteRelations = relations(organizationInvite, ({ one }) => ({
+  organization: one(organization, {
+    fields: [organizationInvite.organizationId],
+    references: [organization.id],
+  }),
+  invitedBy: one(user, {
+    fields: [organizationInvite.invitedByUserId],
+    references: [user.id],
+  }),
+}));
+
 // Project (renamed from instance/estate)
 export const project = pgTable(
   "project",
@@ -184,7 +245,7 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   connections: many(projectConnection),
 }));
 
-// Encrypted environment variables for a project
+// Environment variables for a project (non-secret, plain text values)
 export const projectEnvVar = pgTable(
   "project_env_var",
   (t) => ({
@@ -195,7 +256,7 @@ export const projectEnvVar = pgTable(
       .references(() => project.id, { onDelete: "cascade" }),
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
-    encryptedValue: t.text().notNull(),
+    value: t.text().notNull(), // Plain text - secrets go in the secret table
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
@@ -214,6 +275,117 @@ export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   machine: one(machine, {
     fields: [projectEnvVar.machineId],
     references: [machine.id],
+  }),
+}));
+
+// Secrets table - encrypted values with hierarchy (global > org > project > user)
+// All scope fields nullable: null = global scope
+export const secret = pgTable(
+  "secret",
+  (t) => ({
+    id: iterateId("sec"),
+    organizationId: t.text().references(() => organization.id, { onDelete: "cascade" }),
+    projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+    key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
+    encryptedValue: t.text().notNull(),
+    egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
+    metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
+    lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use
+    lastFailedAt: t.timestamp({ withTimezone: true }), // Last failed use (401, etc.)
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Unique within each scope level (NULLS NOT DISTINCT so global secrets with NULL scope are unique)
+    unique("secret_scope_key_idx")
+      .on(t.organizationId, t.projectId, t.userId, t.key)
+      .nullsNotDistinct(),
+    index().on(t.organizationId),
+    index().on(t.projectId),
+    index().on(t.userId),
+    index().on(t.key),
+  ],
+);
+
+export const secretRelations = relations(secret, ({ one }) => ({
+  organization: one(organization, {
+    fields: [secret.organizationId],
+    references: [organization.id],
+  }),
+  project: one(project, {
+    fields: [secret.projectId],
+    references: [project.id],
+  }),
+  user: one(user, {
+    fields: [secret.userId],
+    references: [user.id],
+  }),
+}));
+
+export const egressPolicy = pgTable(
+  "egress_policy",
+  (t) => ({
+    id: iterateId("egp"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    priority: integer().notNull().default(100),
+    urlPattern: t.text(),
+    method: t.text(),
+    headerMatch: jsonb().$type<Record<string, string>>(),
+    decision: t.text({ enum: ["allow", "deny", "human_approval"] }).notNull(),
+    reason: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.projectId, t.priority)],
+);
+
+export const egressPolicyRelations = relations(egressPolicy, ({ one }) => ({
+  project: one(project, {
+    fields: [egressPolicy.projectId],
+    references: [project.id],
+  }),
+}));
+
+export const egressApproval = pgTable(
+  "egress_approval",
+  (t) => ({
+    id: iterateId("ega"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    policyId: t.text().references(() => egressPolicy.id, { onDelete: "set null" }),
+    method: t.text().notNull(),
+    url: t.text().notNull(),
+    headers: jsonb().$type<Record<string, string>>().notNull(),
+    body: t.text(),
+    status: t
+      .text({ enum: ["pending", "approved", "rejected", "timeout"] })
+      .notNull()
+      .default("pending"),
+    decidedAt: t.timestamp(),
+    decidedBy: t.text().references(() => user.id, { onDelete: "set null" }),
+    sessionId: t.text(),
+    context: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.projectId, t.status), index().on(t.status)],
+);
+
+export const egressApprovalRelations = relations(egressApproval, ({ one }) => ({
+  project: one(project, {
+    fields: [egressApproval.projectId],
+    references: [project.id],
+  }),
+  policy: one(egressPolicy, {
+    fields: [egressApproval.policyId],
+    references: [egressPolicy.id],
+  }),
+  decidedByUser: one(user, {
+    fields: [egressApproval.decidedBy],
+    references: [user.id],
   }),
 }));
 
@@ -259,7 +431,7 @@ export const projectConnection = pgTable(
     scopes: t.text(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId)],
+  (t) => [index().on(t.provider, t.externalId), index().on(t.projectId)],
 );
 
 export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({
@@ -291,7 +463,7 @@ export const machine = pgTable(
     state: t
       .text({ enum: [...MachineState] })
       .notNull()
-      .default("started"),
+      .default("starting"),
     externalId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
@@ -299,10 +471,10 @@ export const machine = pgTable(
   (t) => [
     index().on(t.projectId),
     index().on(t.state),
-    // Only one active (non-archived) machine per project
+    // Only one active machine per project (starting machines don't count)
     uniqueIndex("machine_project_one_active")
       .on(t.projectId)
-      .where(sql`state != 'archived'`),
+      .where(sql`state = 'active'`),
   ],
 );
 

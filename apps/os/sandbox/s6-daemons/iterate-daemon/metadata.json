@@ -1,7 +1,0 @@
-{
-  "displayName": "Iterate Server",
-  "description": "Main daemon server with web UI",
-  "port": 3000,
-  "healthEndpoint": "/api/health",
-  "hasWebUI": true
-}

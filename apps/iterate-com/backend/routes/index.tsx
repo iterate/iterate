@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { usePostHog } from "posthog-js/react";
 import SiteHeader from "../components/site-header.tsx";
 import SiteFooter from "../components/site-footer.tsx";
@@ -6,7 +6,6 @@ import Member from "../components/member.tsx";
 import Investors from "../components/investors.tsx";
 import { Button } from "../components/button.tsx";
 import DisplayCards from "../components/ui/display-cards.tsx";
-import CalendarModal from "../components/calendar-modal.tsx";
 import jonasImg from "../assets/jonas.jpg?url";
 import zakImg from "../assets/zak.png?url";
 import nickImg from "../assets/nick.png?url";
@@ -17,20 +16,7 @@ import slackIcon from "../assets/slack.svg?url";
 
 export default function Home() {
   const addToSlackRef = useRef<HTMLButtonElement>(null);
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const posthog = usePostHog();
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
-      if (isCmdOrCtrl && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        setIsCalendarOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
 
   const handleAddToSlack = () => {
     const url = new URL("https://os.iterate.com/login");
@@ -74,15 +60,6 @@ export default function Home() {
                 <img src={slackIcon} alt="Slack" className="w-6 h-6 mr-2" />
                 <span>Add to Slack</span>
               </Button>
-              <p className="text-sm text-gray-500 mt-3 sm:text-right">
-                or{" "}
-                <button
-                  onClick={() => setIsCalendarOpen(true)}
-                  className="underline hover:text-gray-700"
-                >
-                  book a call with our team
-                </button>
-              </p>
             </div>
           </div>
           <div className="block lg:hidden mt-4 mb-8">
@@ -264,7 +241,6 @@ export default function Home() {
       </main>
 
       <SiteFooter />
-      <CalendarModal isOpen={isCalendarOpen} onClose={() => setIsCalendarOpen(false)} />
     </div>
   );
 }

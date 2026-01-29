@@ -5,6 +5,7 @@ on:
   push: {}
 env:
   SLACK_CLIENT_ID: fake123
+  DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 jobs:
   run:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
@@ -19,17 +20,17 @@ jobs:
       - run: pnpm install
       - uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --project os --config dev
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler setup --project os --config dev_test
       - name: Install Playwright browsers
         run: pnpm exec playwright install && pnpm exec playwright install-deps
       - name: Run specs
         run: |-
+          set -o pipefail
           mkdir -p test-results
           # tee everything to a log file but filter out WebServer logs which are noisy
           pnpm spec | tee test-results/spec.txt | grep -v WebServer
       - name: upload logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spec-results

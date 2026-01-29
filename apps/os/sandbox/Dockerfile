@@ -1,11 +1,25 @@
+FROM node:24 AS pidnap-builder
+WORKDIR /app
+RUN corepack enable
+COPY packages/pidnap/package.json ./
+RUN pnpm install
+COPY packages/pidnap/src ./src
+COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
+RUN pnpm build
+RUN pnpm pack
+RUN mv *.tgz pidnap.tgz
+
 FROM node:24
+
+# Build cache buster: 2026-01-26T11:00
+# (change this comment to force Daytona to rebuild when cache is stale)
 
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
-ENV SANDBOX_OPENCODE_VERSION=1.1.23
-ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.9
-ENV SANDBOX_PI_CODING_AGENT_VERSION=0.47.0
+ENV SANDBOX_OPENCODE_VERSION=1.1.27
+ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
+ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
 
 # === Build Args ===
@@ -18,19 +32,23 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop fd-find gh rsync s6 sudo tmux && \
+    apt-get install -y btop build-essential fd-find gh git inotify-tools make python3-pip rsync s6 sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
+
+# Install mitmproxy for egress proxy
+RUN pip3 install --break-system-packages mitmproxy
+
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
     chmod 0440 /etc/sudoers.d/iterate
 
-# Create s6 log directories (owned by iterate user so services can write logs)
-RUN mkdir -p /var/log/iterate-daemon /var/log/opencode && \
-    chown -R iterate:iterate /var/log/iterate-daemon /var/log/opencode
+# Create log directories (owned by iterate user so pidnap can write logs)
+RUN mkdir -p /var/log/pidnap && \
+    chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
 RUN npm install -g pnpm tsx
@@ -65,8 +83,9 @@ ENV PATH="/home/iterate/.bun/bin:$PATH"
 # === Agent packages (npm, userspace) ===
 
 RUN npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
-    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
-    npm install -g opencode-ai@${SANDBOX_OPENCODE_VERSION}
+    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
+
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 
 # Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
 # Note: npm creates a symlink, must rm first or echo writes through to cli.js
@@ -76,7 +95,9 @@ RUN mkdir -p /home/iterate/.local/bin && \
     echo '#!/bin/sh' > /home/iterate/.local/bin/claude && \
     echo "exec node $CLAUDE_BIN --dangerously-skip-permissions \"\$@\"" >> /home/iterate/.local/bin/claude && \
     chmod +x /home/iterate/.local/bin/claude
+
 ENV PATH="/home/iterate/.local/bin:$PATH"
+ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 # === Iterate repo ===
 # Two modes based on SANDBOX_ITERATE_REPO_REF:
@@ -88,28 +109,34 @@ ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 # Re-declare ARG after USER switch (ARGs don't persist across USER)
 ARG SANDBOX_ITERATE_REPO_REF
 
+COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
+RUN npm install -g /app/pidnap.tgz
+
 # If ref provided, clone from git; otherwise create placeholder for local mount
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
-      cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
+    git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
+    cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
     else \
-      mkdir -p $ITERATE_REPO/apps/os/sandbox; \
+    mkdir -p $ITERATE_REPO/apps/os/sandbox; \
+    fi
+
+# Patch package.json to use the built tgz (if repo was cloned)
+RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
+    sed -i 's|workspace:|file:/app/pidnap.tgz|g' $ITERATE_REPO/apps/os/sandbox/package.json; \
     fi
 
 # Make scripts executable (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh && \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/run 2>/dev/null || true && \
-      chmod +x $ITERATE_REPO/apps/os/sandbox/s6-daemons/*/log/run 2>/dev/null || true; \
+    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
     fi
 
 # Install deps and build daemon (only if repo was cloned)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      cd $ITERATE_REPO && pnpm install; \
+    cd $ITERATE_REPO && pnpm install; \
     fi
 
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      cd $ITERATE_REPO/apps/daemon && npx vite build; \
+    cd $ITERATE_REPO/apps/daemon && pnpm vite build; \
     fi
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
@@ -118,7 +145,7 @@ RUN mkdir -p ~/.iterate && \
 
 # Setup home directory (only if repo was cloned; entry.sh handles local mode)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
+    $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
     fi
 
 ENTRYPOINT [ "/app/entry.sh" ]

@@ -1,5 +1,4 @@
 import type { CloudflareEnv } from "../../env.ts";
-import { logger } from "../tag-logger.ts";
 
 export async function broadcastInvalidation(env: CloudflareEnv): Promise<void> {
   const id = env.REALTIME_PUSHER.idFromName("global");
@@ -10,6 +9,5 @@ export async function broadcastInvalidation(env: CloudflareEnv): Promise<void> {
     throw new Error(`Failed to broadcast invalidation: ${response.status}`);
   }
 
-  const result = (await response.json()) as { success: boolean; sent: number; failed: number };
-  logger.info(`Broadcast invalidation: sent=${result.sent}, failed=${result.failed}`);
+  await response.json();
 }

@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --reporter-hide-prefix --parallel dev",
+    "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -12,7 +12,8 @@
     "daemon": "cd apps/daemon && pnpm",
     "cli": "cd apps/cli && pnpm tsx main.ts",
     "spec": "playwright test",
-    "lint": "eslint . --fix",
+    "video": "VIDEO_MODE=1 playwright test",
+    "lint": "eslint . --fix --max-warnings 0",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "is-ci || husky",
@@ -29,7 +30,7 @@
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",
     "db:studio:staging": "PSCALE_DATABASE_URL=$(doppler secrets --config stg get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
-    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
+    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DANGEROUS_PRODUCTION_POSTGRES_URL) pnpm db:studio",
     "db:query": "docker exec -it postgres-iterate psql -U postgres -d iterate",
     "db:query:file": "docker exec -i postgres-iterate psql -U postgres -d iterate -f",
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
@@ -44,6 +45,7 @@
     "@types/node": "^24.10.1",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
     "@typescript-eslint/parser": "^8.48.0",
+    "emittery": "1.2.0",
     "eslint": "^9.39.1",
     "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",
@@ -58,11 +60,11 @@
     "is-ci": "4.1.0",
     "lint-staged": "^16.2.7",
     "playwright": "^1.57.0",
+    "playwright-core": "1.57.0",
     "prettier": "^3.7.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
-  "dependencies": {},
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {

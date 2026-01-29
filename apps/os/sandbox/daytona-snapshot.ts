@@ -16,10 +16,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
-const stage = getStage();
-// Generate snapshot name: <stage>--<timestamp>
-// e.g., "dev-jonas--20260111-193045", "stg--20260111-193045"
-const snapshotName = `${stage}--${generateTimestamp()}`;
+// Daytona snapshots require a commit SHA - ensures reproducible builds
+const commitSha = process.env.SANDBOX_ITERATE_REPO_REF;
+if (!commitSha || !/^[0-9a-f]{40}$/i.test(commitSha)) {
+  console.error("ERROR: SANDBOX_ITERATE_REPO_REF must be a 40-char commit SHA.");
+  console.error("");
+  console.error("Usage: SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona");
+  console.error("");
+  if (commitSha) {
+    console.error(`Got: ${commitSha}`);
+  }
+  process.exit(1);
+}
+
+const snapshotName = `iterate-sandbox-${commitSha}`;
 
 console.log(`Creating snapshot: ${snapshotName}`);
 
@@ -69,17 +79,16 @@ for (const relativePath of files) {
   chmodSync(targetPath, stats.mode & 0o777);
 }
 
-// Read Dockerfile and inject env var overrides for ARG defaults
-// Only SANDBOX_ITERATE_GIT_REF is an ARG - other versions are ENV vars edited directly in Dockerfile
+// Read Dockerfile and inject the git ref into ALL ARG declarations
+// Docker ARG values don't persist across USER switches, so both declarations need the value
 let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
 
-if (process.env.SANDBOX_ITERATE_REPO_REF) {
-  console.log(`Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
-  dockerfileContent = dockerfileContent.replace(
-    /^ARG SANDBOX_ITERATE_REPO_REF=.*$/m,
-    `ARG SANDBOX_ITERATE_REPO_REF="${process.env.SANDBOX_ITERATE_REPO_REF}"`,
-  );
-}
+console.log(`Using SANDBOX_ITERATE_REPO_REF=${commitSha}`);
+// Replace all ARG SANDBOX_ITERATE_REPO_REF declarations (with or without default value)
+dockerfileContent = dockerfileContent.replace(
+  /^ARG SANDBOX_ITERATE_REPO_REF(=.*)?$/gm,
+  `ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`,
+);
 
 writeFileSync(dockerfileTargetPath, dockerfileContent);
 
@@ -91,39 +100,20 @@ const snapshot = await (async () => {
       {
         name: snapshotName,
         image,
-        resources: { cpu: 1, memory: 1, disk: 10 },
+        resources: { cpu: 2, memory: 4, disk: 10 },
       },
       { onLogs: console.log },
     );
+  } catch (error) {
+    // Handle "already exists" as success (409 conflict) - snapshots are idempotent by commit SHA
+    if (error instanceof Error && "statusCode" in error && error.statusCode === 409) {
+      console.log(`Snapshot ${snapshotName} already exists, skipping creation`);
+      return { name: snapshotName, alreadyExisted: true };
+    }
+    throw error;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 })();
 
 console.log("Snapshot created successfully:", snapshot);
-
-function getStage(): string {
-  const iterateUser = process.env.ITERATE_USER;
-  const appStage = process.env.APP_STAGE;
-
-  if (iterateUser && iterateUser !== "unknown") {
-    return `dev-${iterateUser}`;
-  }
-
-  if (appStage) {
-    return appStage;
-  }
-
-  throw new Error("Cannot determine stage: set ITERATE_USER for dev or APP_STAGE for stg/prd");
-}
-
-function generateTimestamp(): string {
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(now.getUTCDate()).padStart(2, "0");
-  const hours = String(now.getUTCHours()).padStart(2, "0");
-  const minutes = String(now.getUTCMinutes()).padStart(2, "0");
-  const seconds = String(now.getUTCSeconds()).padStart(2, "0");
-  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
-}

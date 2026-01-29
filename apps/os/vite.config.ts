@@ -21,6 +21,7 @@ export default defineConfig({
   server: {
     cors: false,
     strictPort: false,
+    allowedHosts: ["host.docker.internal"],
   },
   plugins: [
     {
@@ -33,6 +34,7 @@ export default defineConfig({
         };
       },
     },
+    // @ts-expect-error - version mismatch
     vitePublicUrl(),
     devtools({
       eventBusConfig: {

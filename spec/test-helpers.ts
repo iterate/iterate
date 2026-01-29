@@ -1,18 +1,22 @@
-// eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
-import { type Page, test as base } from "@playwright/test";
-import { spinnerWaiter } from "./spinner-waiter.ts";
+import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
+import { addPlugins } from "./playwright-plugin.ts";
+import { hydrationWaiter, spinnerWaiter, videoMode, toastErrorReporter } from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
 
-export type TestInputs = {
-  spinnerWaiter: typeof spinnerWaiter;
-};
-export const test = base.extend<TestInputs>({
-  page: async ({ page }, use) => {
-    spinnerWaiter.setup(page);
+export const baseTest = base;
+
+export const test = base.extend({
+  page: async ({ page: basePage }, use, testInfo) => {
+    await using page = await addPlugins(basePage, testInfo, [
+      hydrationWaiter(),
+      spinnerWaiter(),
+      toastErrorReporter(),
+      !!process.env.VIDEO_MODE && videoMode(),
+    ]);
+
     await use(page);
   },
-  spinnerWaiter,
 });
 
 export async function login(page: Page, email: string) {
@@ -20,6 +24,7 @@ export async function login(page: Page, email: string) {
 
   const emailInput = page.getByTestId("email-input");
   await emailInput.waitFor();
+  // Wait for hydration to complete - input is disabled until then
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
@@ -34,7 +39,7 @@ export async function login(page: Page, email: string) {
 
   await page
     .locator("h1")
-    .filter({ hasText: /Create organization|Dashboard|Projects/ })
+    .filter({ hasText: /Welcome to Iterate|Create organization|Dashboard|Projects/ })
     .first()
     .waitFor();
 }
@@ -67,6 +72,12 @@ export function getOrganizationSlug(pathname: string) {
 
 export function sidebarButton(page: Page, text: string | RegExp) {
   return page.locator("[data-slot='sidebar']").getByText(text, { exact: true });
+}
+
+export async function logout(page: Page) {
+  await page.locator(`[data-slot="sidebar-footer"] button`).click();
+  await page.getByRole("menuitem", { name: "Log out" }).click();
+  await page.getByTestId("email-input").waitFor();
 }
 
 function toastLocator(page: Page, type: "error" | "success", text?: string | RegExp) {

@@ -3,11 +3,15 @@ import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
 import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-refresh.ts";
+import { loadConfig } from "./config-loader.ts";
 
 export const startServer = async (params: { port: number; hostname: string }) => {
+  // Load iterate.config.ts from CWD (or default) before starting server
+  await loadConfig();
+
   return new Promise<ServerType>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, ...params }, () => {
-      console.log(`\nServer running at http://${params.hostname}:${params.port}`);
+      console.log(`\n[daemon] Server running at http://${params.hostname}:${params.port}`);
 
       // Bootstrap: report status, fetch env vars, start refresh scheduler
       // Exit on errors so process manager can restart us

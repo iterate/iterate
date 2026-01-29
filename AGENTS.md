@@ -87,6 +87,7 @@ Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 
 ## Pointers
 
+- Egress proxy & secrets: `docs/egress-proxy-secrets.md`
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
 - Website (iterate.com): `apps/iterate-com`
 - Frontend: `apps/os/app/AGENTS.md`

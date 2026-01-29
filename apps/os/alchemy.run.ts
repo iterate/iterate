@@ -228,8 +228,15 @@ function setupDevTunnelEnv() {
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
   const dopplerConfig = z
-    .object({ environment: z.string() })
+    .object({ environment: z.string(), name: z.string() })
     .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
+
+  if (dopplerConfig.name === "dev_personal") {
+    const username = (await import("node:os")).userInfo().username;
+    throw new Error(
+      `dev_personal doppler config is not allowed. Use 'doppler setup' to select or create a config named 'dev_${username}' instead.`,
+    );
+  }
 
   if (isProduction && !dopplerConfig.environment.startsWith("prd")) {
     throw new Error(
@@ -260,7 +267,9 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required.default(`${app.stage}--`),
+  DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
+  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -276,15 +285,18 @@ const Env = z.object({
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
-  POSTHOG_KEY: Required,
+  RESEND_BOT_DOMAIN: Required,
+  RESEND_BOT_API_KEY: Required,
+  RESEND_BOT_WEBHOOK_SECRET: Optional,
+  POSTHOG_PUBLIC_KEY: Optional,
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
   // ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
-  VITE_POSTHOG_PROXY_URI: Optional,
-  SIGNUP_ALLOWLIST: Required.default("*@nustom.com"),
+  VITE_POSTHOG_PROXY_URL: Optional,
+  SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>>);
 
@@ -320,9 +332,34 @@ async function setupDatabase() {
     }
   };
 
+  const seedGlobalSecrets = async (origin: string) => {
+    // Seed global secrets (OpenAI, Anthropic keys) into the database
+    // These are the lowest priority secrets, overridable at org/project/user level
+    const res = await Exec("db-seed-secrets", {
+      env: {
+        PSCALE_DATABASE_URL: origin,
+        DATABASE_URL: origin,
+        ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        RESEND_BOT_API_KEY: process.env.RESEND_BOT_API_KEY,
+      } satisfies Record<
+        import("./scripts/seed-global-secrets.ts").GlobalSecretEnvVarName,
+        string | undefined
+      >,
+      command: "tsx ./scripts/seed-global-secrets.ts",
+    });
+
+    if (res.exitCode !== 0) {
+      console.warn(`Warning: Failed to seed global secrets: ${res.stderr}`);
+      // Don't fail deployment if seeding fails - secrets can be added manually
+    }
+  };
+
   if (isDevelopment) {
     const origin = "postgres://postgres:postgres@localhost:5432/os";
     await migrate(origin);
+    await seedGlobalSecrets(origin);
     return {
       DATABASE_URL: origin,
     };
@@ -354,6 +391,7 @@ async function setupDatabase() {
       delete: true,
     });
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -377,6 +415,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -400,6 +439,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
+    await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -413,7 +453,7 @@ const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/
 
 const domains = [`${subdomain}.iterate.com`];
 
-async function deployWorker() {
+async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
   const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
     "realtime-pusher",
     {
@@ -421,17 +461,24 @@ async function deployWorker() {
       sqlite: true,
     },
   );
+  const APPROVAL_COORDINATOR = DurableObjectNamespace<
+    import("./backend/worker.ts").ApprovalCoordinator
+  >("approval-coordinator", {
+    className: "ApprovalCoordinator",
+    sqlite: true,
+  });
 
   const devGitRef = getCurrentGitRef();
   console.log(`Current git branch: ${devGitRef}`);
 
   const worker = await TanStackStart("os", {
     bindings: {
-      ...(await setupDatabase()),
-      ...(await setupEnvironmentVariables()),
+      ...dbConfig,
+      ...envSecrets,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
+      APPROVAL_COORDINATOR,
       // In dev, pass the current git branch for Daytona sandboxes
       ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
@@ -473,8 +520,12 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 }
 
-// Deploy worker (starts vite in dev mode)
-export const worker = await deployWorker();
+// Setup database and env first
+const dbConfig = await setupDatabase();
+const envSecrets = await setupEnvironmentVariables();
+
+// Deploy main worker (includes egress proxy on /api/egress-proxy)
+export const worker = await deployWorker(dbConfig, envSecrets);
 
 // Create tunnel resource BEFORE finalize so it's properly tracked
 // (fixes bug where tunnel was created after finalize, causing orphan deletion)

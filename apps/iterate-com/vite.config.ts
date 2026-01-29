@@ -5,9 +5,6 @@ import tailwindcss from "@tailwindcss/vite";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
-  define: {
-    "import.meta.env.POSTHOG_PUBLIC_KEY": `"${process.env.POSTHOG_PUBLIC_KEY}"`,
-  },
   server: {
     port: 3000,
     strictPort: false,

@@ -89,12 +89,42 @@ Stripe customers are linked to PostHog persons via:
 
 ## Environment Variables
 
-### iterate-com
+Both apps use the same Doppler project (`os`) and share these env vars:
 
-- `POSTHOG_PUBLIC_KEY` - PostHog public key (injected at build time)
+- `POSTHOG_PUBLIC_KEY` - PostHog project API key (used for server-side tracking)
+- `VITE_POSTHOG_PUBLIC_KEY` - PostHog project API key for client (set as reference to `POSTHOG_PUBLIC_KEY` in Doppler)
+- `VITE_POSTHOG_PROXY_URL` - Proxy endpoint (defaults to `/api/integrations/posthog/proxy`)
+- `VITE_APP_STAGE` - Environment stage (dev, stg, prd) - automatically included as `$environment` in all events
 
-### os (apps/os)
+## Multi-Environment Setup
 
-- `VITE_POSTHOG_PUBLIC_KEY` - Frontend public key
-- `VITE_POSTHOG_PROXY_URI` - Proxy endpoint (defaults to `/ingest`)
-- `POSTHOG_KEY` - Backend API key for server-side events
+We use separate PostHog projects for each environment to keep data isolated:
+
+| Environment | PostHog Project | Doppler Config |
+| ----------- | --------------- | -------------- |
+| Production  | `iterate-prd`   | `prd`          |
+| Staging     | `iterate-stg`   | `stg`          |
+| Development | `iterate-dev`   | `dev`          |
+
+Each Doppler config has a different `POSTHOG_PUBLIC_KEY` pointing to its respective PostHog project.
+
+### Setting Up a New Environment
+
+1. **Create PostHog project**: In PostHog dashboard, click your project name → New project
+2. **Copy API key**: Project settings → Project API key
+3. **Update Doppler**: Set `POSTHOG_PUBLIC_KEY` in the appropriate config
+
+### Personal Dev Environments
+
+For isolated personal environments (e.g., `dev-jonas`), you can:
+
+- Create a personal PostHog project (e.g., `iterate-dev-jonas`)
+- Use a Doppler branch or separate config with your own API key
+
+### Consistent Properties
+
+All events (frontend and backend) automatically include:
+
+- `$environment` - The stage (dev/stg/prd) from `VITE_APP_STAGE`
+
+This allows filtering by environment within a project if needed, though with separate projects this is mainly useful for verification.

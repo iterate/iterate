@@ -1,0 +1,59 @@
+{
+  "name": "pidnap",
+  "version": "0.0.1-dev.0",
+  "bin": {
+    "pidnap": "./src/cli.ts"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/api/client.ts"
+  },
+  "publishConfig": {
+    "bin": {
+      "pidnap": "./dist/cli.mjs"
+    },
+    "exports": {
+      ".": {
+        "import": "./dist/index.mjs",
+        "types": "./dist/index.d.mts"
+      },
+      "./client": {
+        "import": "./dist/client.mjs",
+        "types": "./dist/client.d.mts"
+      }
+    }
+  },
+  "scripts": {
+    "cli:dev": "tsx src/cli.ts",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "prepack": "pnpm build",
+    "docker:dev": "docker build -t pidnap -f Dockerfile.example . && docker run --rm --name pidnap-dev pidnap",
+    "docker:shell": "docker exec -it pidnap-dev bash"
+  },
+  "dependencies": {
+    "@orpc/client": "^1.13.4",
+    "@orpc/contract": "^1.13.4",
+    "@orpc/server": "^1.13.4",
+    "@valibot/to-json-schema": "^1.5.0",
+    "chokidar": "^5.0.0",
+    "cli-table3": "^0.6.5",
+    "croner": "^9.1.0",
+    "dotenv": "^17.2.3",
+    "trpc-cli": "^0.12.2",
+    "tsx": "^4.21.0",
+    "valibot": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "tsdown": "^0.20.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

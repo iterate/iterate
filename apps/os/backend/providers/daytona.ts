@@ -1,44 +1,63 @@
 import { Daytona } from "@daytonaio/sdk";
-import { resolveLatestSnapshot } from "../integrations/daytona/snapshot-resolver.ts";
-import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
+import type {
+  MachineProvider,
+  CreateMachineConfig,
+  MachineProviderResult,
+  ProviderState,
+} from "./types.ts";
 
-export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): MachineProvider {
+// Common log paths in sandbox (pidnap process manager)
+const DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
+const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
+const PIDNAP_STATUS_CMD = "pidnap status --url http://localhost:9000/rpc";
+
+const TERMINAL_PORT = 22222;
+const DEFAULT_DAEMON_PORT = 3000;
+
+export interface DaytonaProviderConfig {
+  apiKey: string;
+  snapshotName: string; // iterate-sandbox-{commitSha}
+  autoStopInterval: number; // minutes, 0 = disabled
+  autoDeleteInterval: number; // minutes, -1 = disabled, 0 = delete on stop
+  externalId: string;
+  buildProxyUrl: (port: number) => string;
+}
+
+export function createDaytonaProvider(config: DaytonaProviderConfig): MachineProvider {
+  const { apiKey, snapshotName, autoStopInterval, autoDeleteInterval, externalId, buildProxyUrl } =
+    config;
   const daytona = new Daytona({ apiKey });
+
+  const getNativeUrl = (port: number) => `https://${port}-${externalId}.proxy.daytona.works`;
 
   return {
     type: "daytona",
 
-    async create(config: CreateMachineConfig): Promise<MachineProviderResult> {
-      const snapshotName = await resolveLatestSnapshot(snapshotPrefix, { apiKey });
-
+    async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const sandbox = await daytona.create({
-        name: config.machineId,
+        name: machineConfig.machineId,
         snapshot: snapshotName,
-        envVars: config.envVars,
-        autoStopInterval: snapshotPrefix.includes("dev")
-          ? 12 * 60 // 12 hours
-          : 0,
-        autoDeleteInterval: snapshotPrefix.includes("dev")
-          ? 12 * 60 // 12 hours
-          : 0,
+        envVars: machineConfig.envVars,
+        autoStopInterval,
+        autoDeleteInterval,
         public: true,
       });
       return { externalId: sandbox.id, metadata: { snapshotName } };
     },
 
-    async start(externalId: string): Promise<void> {
+    async start(): Promise<void> {
       const sandbox = await daytona.get(externalId);
       await sandbox.start();
     },
 
-    async stop(externalId: string): Promise<void> {
+    async stop(): Promise<void> {
       const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
       }
     },
 
-    async restart(externalId: string): Promise<void> {
+    async restart(): Promise<void> {
       const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
@@ -46,7 +65,7 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       await sandbox.start();
     },
 
-    async archive(externalId: string): Promise<void> {
+    async archive(): Promise<void> {
       const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
@@ -54,7 +73,7 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       await sandbox.archive();
     },
 
-    async delete(externalId: string): Promise<void> {
+    async delete(): Promise<void> {
       const sandbox = await daytona.get(externalId);
       if (sandbox.state === "started") {
         await sandbox.stop();
@@ -62,8 +81,34 @@ export function createDaytonaProvider(apiKey: string, snapshotPrefix: string): M
       await sandbox.delete();
     },
 
-    getPreviewUrl(externalId: string, _metadata?: Record<string, unknown>, port = 3000): string {
-      return `https://${port}-${externalId}.proxy.daytona.works`;
+    getPreviewUrl(port: number): string {
+      return getNativeUrl(port);
+    },
+
+    previewUrl: getNativeUrl(DEFAULT_DAEMON_PORT),
+
+    displayInfo: {
+      label: "Daytona",
+      isDevOnly: false,
+    },
+
+    commands: [
+      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+      { label: "Service status", command: PIDNAP_STATUS_CMD },
+    ],
+
+    terminalOptions: [
+      { label: "Direct", url: getNativeUrl(TERMINAL_PORT) },
+      { label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) },
+    ],
+
+    async getProviderState(): Promise<ProviderState> {
+      const sandbox = await daytona.get(externalId);
+      return {
+        state: sandbox.state ?? "unknown",
+        errorReason: sandbox.errorReason,
+      };
     },
   };
 }

@@ -60,6 +60,7 @@ const PAGE_NAMES: Record<string, string> = {
   repo: "Repo",
   "access-tokens": "Access Tokens",
   "env-vars": "Env Vars",
+  approvals: "Approvals",
   settings: "Settings",
   team: "Team",
   "new-project": "New Project",

@@ -23,8 +23,6 @@ export interface CreateAgentParams {
 export interface CreateAgentResult {
   /** Harness-specific session ID (e.g., OpenCode session ID) */
   harnessSessionId: string;
-  /** Tmux session name for terminal UI (optional - opencode uses SDK streaming instead) */
-  tmuxSession?: string;
 }
 
 export interface StartCommandOptions {
@@ -43,7 +41,11 @@ export interface AgentHarness {
   /**
    * Send a message/event to an existing agent session.
    */
-  append(harnessSessionId: string, event: AgentEvent): Promise<void>;
+  append(
+    harnessSessionId: string,
+    event: AgentEvent,
+    params: { workingDirectory: string },
+  ): Promise<void>;
 
   /**
    * Get the command to start this agent in a terminal.

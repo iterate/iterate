@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { env, type CloudflareEnv } from "../../env.ts";
+import { env } from "../../env.ts";
 import * as schema from "./schema.ts";
 
 export const getDb = () => {
@@ -10,7 +10,8 @@ export const getDb = () => {
   return drizzle(client, { schema, casing: "snake_case" });
 };
 
-export const getDbWithEnv = (envParam: CloudflareEnv) => {
+/** Accepts any env-like object with DATABASE_URL */
+export const getDbWithEnv = (envParam: { DATABASE_URL: string }) => {
   const client = postgres(envParam.DATABASE_URL, {
     prepare: false,
   });

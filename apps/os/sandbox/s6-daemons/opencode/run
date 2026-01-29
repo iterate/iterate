@@ -1,7 +1,0 @@
-#!/bin/sh
-exec 2>&1
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PORT=$(node -p "require('$SCRIPT_DIR/metadata.json').port")
-
-exec opencode serve --port "$PORT" --hostname 0.0.0.0 --log-level DEBUG

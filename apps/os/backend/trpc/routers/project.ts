@@ -18,7 +18,14 @@ import {
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
 import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
+import {
+  revokeGoogleToken,
+  createGoogleClient,
+  GOOGLE_OAUTH_SCOPES,
+} from "../../integrations/google/google.ts";
 import { decrypt } from "../../utils/encryption.ts";
+import { callClaudeHaiku } from "../../services/claude-haiku.ts";
+import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
 
 export const projectRouter = router({
   // Get minimal project info by ID (for conflict resolution, no org access required)
@@ -431,4 +438,341 @@ export const projectRouter = router({
         previousOrgSlug: existingConnection.project?.organization?.slug,
       };
     }),
+
+  // Start Google OAuth flow (user-scoped connection)
+  startGoogleOAuthFlow: projectProtectedMutation
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = arctic.generateState();
+      const codeVerifier = arctic.generateCodeVerifier();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        projectId: ctx.project.id,
+        callbackURL: input.callbackURL,
+        codeVerifier,
+      });
+
+      await ctx.db.insert(verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      const google = createGoogleClient(ctx.env);
+      const authorizationUrl = google.createAuthorizationURL(
+        state,
+        codeVerifier,
+        GOOGLE_OAUTH_SCOPES,
+      );
+
+      // Request offline access to get refresh token
+      authorizationUrl.searchParams.set("access_type", "offline");
+      // Force consent screen to ensure we get a refresh token even for returning users
+      authorizationUrl.searchParams.set("prompt", "consent");
+
+      return { authorizationUrl: authorizationUrl.toString() };
+    }),
+
+  // Get Google connection status for the current user in this project
+  getGoogleConnection: projectProtectedProcedure.query(async ({ ctx }) => {
+    // Google connections are user-scoped, so filter by userId
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "google" && c.userId === ctx.user.id,
+    );
+
+    const providerData = connection?.providerData as {
+      googleUserId?: string;
+      email?: string;
+      name?: string;
+      picture?: string;
+    } | null;
+
+    return {
+      connected: !!connection,
+      email: providerData?.email ?? null,
+      name: providerData?.name ?? null,
+      picture: providerData?.picture ?? null,
+    };
+  }),
+
+  // Disconnect Google (user-scoped)
+  disconnectGoogle: projectProtectedMutation.mutation(async ({ ctx }) => {
+    // Google connections are user-scoped
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "google" && c.userId === ctx.user.id,
+    );
+
+    if (!connection) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Google connection found for your account in this project",
+      });
+    }
+
+    // Revoke the Google token (best effort - don't fail disconnect if revocation fails)
+    const providerData = connection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        await revokeGoogleToken(accessToken);
+      } catch {
+        // Token revocation failed, but we still delete the connection
+      }
+    }
+
+    await ctx.db.transaction(async (tx) => {
+      // Delete the connection
+      await tx
+        .delete(schema.projectConnection)
+        .where(
+          and(
+            eq(projectConnection.projectId, ctx.project.id),
+            eq(projectConnection.provider, "google"),
+            eq(projectConnection.userId, ctx.user.id),
+          ),
+        );
+
+      // Delete the associated secret
+      await tx
+        .delete(schema.secret)
+        .where(
+          and(
+            eq(schema.secret.projectId, ctx.project.id),
+            eq(schema.secret.key, "google.access_token"),
+            eq(schema.secret.userId, ctx.user.id),
+          ),
+        );
+    });
+
+    return { success: true };
+  }),
+
+  listEgressPolicies: projectProtectedProcedure.query(async ({ ctx }) => {
+    const policies = await ctx.db.query.egressPolicy.findMany({
+      where: eq(schema.egressPolicy.projectId, ctx.project.id),
+      orderBy: (policy, { asc }) => [asc(policy.priority)],
+    });
+    return policies.map((policy) => ({
+      ...policy,
+      rule: policy.urlPattern ?? "",
+    }));
+  }),
+
+  createEgressPolicy: projectProtectedMutation
+    .input(
+      z.object({
+        rule: z.string().min(1),
+        decision: z.enum(["allow", "deny", "human_approval"]),
+        priority: z.number().int().min(0).max(1000).optional(),
+        reason: z.string().max(200).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const validationError = validateJsonataExpression(input.rule);
+      if (validationError) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Invalid JSONata expression: ${validationError}`,
+        });
+      }
+
+      const [policy] = await ctx.db
+        .insert(schema.egressPolicy)
+        .values({
+          projectId: ctx.project.id,
+          urlPattern: input.rule,
+          decision: input.decision,
+          priority: input.priority ?? 100,
+          reason: input.reason ?? null,
+        })
+        .returning();
+
+      return policy;
+    }),
+
+  deleteEgressPolicy: projectProtectedMutation
+    .input(z.object({ policyId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const [deleted] = await ctx.db
+        .delete(schema.egressPolicy)
+        .where(
+          and(
+            eq(schema.egressPolicy.id, input.policyId),
+            eq(schema.egressPolicy.projectId, ctx.project.id),
+          ),
+        )
+        .returning();
+
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Policy not found" });
+      }
+
+      return deleted;
+    }),
+
+  updateEgressPolicy: projectProtectedMutation
+    .input(
+      z.object({
+        policyId: z.string(),
+        rule: z.string().min(1),
+        decision: z.enum(["allow", "deny", "human_approval"]),
+        priority: z.number().int().min(0).max(1000).optional(),
+        reason: z.string().max(200).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const validationError = validateJsonataExpression(input.rule);
+      if (validationError) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Invalid JSONata expression: ${validationError}`,
+        });
+      }
+
+      const [updated] = await ctx.db
+        .update(schema.egressPolicy)
+        .set({
+          urlPattern: input.rule,
+          decision: input.decision,
+          priority: input.priority ?? 100,
+          reason: input.reason ?? null,
+        })
+        .where(
+          and(
+            eq(schema.egressPolicy.id, input.policyId),
+            eq(schema.egressPolicy.projectId, ctx.project.id),
+          ),
+        )
+        .returning();
+
+      if (!updated) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Policy not found" });
+      }
+
+      return updated;
+    }),
+
+  summarizeEgressApproval: projectProtectedMutation
+    .input(z.object({ approvalId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const approval = await ctx.db.query.egressApproval.findFirst({
+        where: and(
+          eq(schema.egressApproval.id, input.approvalId),
+          eq(schema.egressApproval.projectId, ctx.project.id),
+        ),
+      });
+
+      if (!approval) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Approval not found" });
+      }
+
+      const prompt = buildApprovalSummaryPrompt(approval);
+      const summary = await callClaudeHaiku(ctx.env, {
+        system: "Summarize the request in plain English. Keep it short and actionable.",
+        user: prompt,
+        maxTokens: 200,
+      });
+
+      return { summary };
+    }),
+
+  suggestEgressRule: projectProtectedMutation
+    .input(
+      z.object({
+        approvalId: z.string().optional(),
+        instruction: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const approval = input.approvalId
+        ? await ctx.db.query.egressApproval.findFirst({
+            where: and(
+              eq(schema.egressApproval.id, input.approvalId),
+              eq(schema.egressApproval.projectId, ctx.project.id),
+            ),
+          })
+        : null;
+
+      if (input.approvalId && !approval) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Approval not found" });
+      }
+
+      const prompt = buildRuleSuggestionPrompt(approval ?? null, input.instruction);
+      const suggestion = await callClaudeHaiku(ctx.env, {
+        system: `You generate JSONata boolean expressions to match outbound HTTP requests from AI agents.
+
+The input object has these fields:
+- method: HTTP method string (GET, POST, etc.)
+- url: Object with { hostname, pathname, href, protocol, port }
+- headers: Object with lowercase header names as keys
+- body: Request body as string (may be JSON)
+
+Common patterns:
+- Match hostname: url.hostname = "api.example.com"
+- Match path prefix: $startsWith(url.pathname, "/v1/")
+- Contains in URL: $contains(url.href, "gmail.googleapis.com")
+- Match subdomain pattern: $contains(url.hostname, "googleapis.com")
+- Check header: headers.authorization != null
+- Parse JSON body: $eval(body).recipient = "user@example.com"
+- Combine conditions: url.hostname = "api.stripe.com" and method = "POST"
+
+Return ONLY the JSONata expression, no explanation.`,
+        user: prompt,
+        maxTokens: 200,
+      });
+
+      return { rule: extractRuleExpression(suggestion) };
+    }),
 });
+
+function serializeRequestForPrompt(approval: typeof schema.egressApproval.$inferSelect): string {
+  return JSON.stringify(
+    {
+      method: approval.method,
+      url: approval.url,
+      headers: truncateObject(approval.headers, 50),
+      body: approval.body ? truncateString(approval.body, 2000) : undefined,
+    },
+    null,
+    2,
+  );
+}
+
+function buildApprovalSummaryPrompt(approval: typeof schema.egressApproval.$inferSelect) {
+  return ["Request details:", serializeRequestForPrompt(approval)].join("\n");
+}
+
+function buildRuleSuggestionPrompt(
+  approval: typeof schema.egressApproval.$inferSelect | null,
+  instruction: string,
+) {
+  const parts = ["User instruction:", instruction.trim()];
+  if (approval) {
+    parts.push("", "Example HTTP request to match:", serializeRequestForPrompt(approval));
+  }
+  return parts.join("\n");
+}
+
+function extractRuleExpression(response: string) {
+  const fenced = response.match(/```(?:jsonata)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+  return response.trim().split("\n")[0] ?? "";
+}
+
+function truncateString(value: string, maxLength: number) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}…`;
+}
+
+function truncateObject(value: Record<string, string>, maxEntries: number) {
+  const entries = Object.entries(value).slice(0, maxEntries);
+  return Object.fromEntries(entries);
+}

@@ -1,4 +1,15 @@
-We want to build and distribute the iterate CLI - it should work a bit like opencode,so here's some claude research on how opencode does it
+---
+state: later
+priority: low
+size: large
+tags:
+  - cli
+  - distribution
+---
+
+# Iterate CLI Distribution
+
+Research notes on how to distribute the iterate CLI (similar to opencode).
 
 Hybrid auto-daemon. Distributed as npm package or via brew or shell script. Ideally as self-contained bun binary.
 

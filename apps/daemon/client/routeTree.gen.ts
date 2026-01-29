@@ -12,15 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as LayoutLessTerminalRouteImport } from './routes/_layout-less/terminal'
-import { Route as AppOpencodeLogsRouteImport } from './routes/_app/opencode-logs'
-import { Route as AppDaemonLogsRouteImport } from './routes/_app/daemon-logs'
-import { Route as AppBtopRouteImport } from './routes/_app/btop'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
-import { Route as AppTmuxSessionsTmuxSessionNameRouteImport } from './routes/_app/tmux-sessions/$tmuxSessionName'
 import { Route as AppAgentsNewRouteImport } from './routes/_app/agents/new'
 import { Route as AppAgentsSlugRouteImport } from './routes/_app/agents/$slug'
 import { Route as AppAgentNewRouteImport } from './routes/_app/agent/new'
-import { Route as AppTmuxSessionsTmuxSessionNamePtyRouteImport } from './routes/_app/tmux-sessions/$tmuxSessionName/pty'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -36,32 +31,11 @@ const LayoutLessTerminalRoute = LayoutLessTerminalRouteImport.update({
   path: '/terminal',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppOpencodeLogsRoute = AppOpencodeLogsRouteImport.update({
-  id: '/opencode-logs',
-  path: '/opencode-logs',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppDaemonLogsRoute = AppDaemonLogsRouteImport.update({
-  id: '/daemon-logs',
-  path: '/daemon-logs',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppBtopRoute = AppBtopRouteImport.update({
-  id: '/btop',
-  path: '/btop',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   id: '/agents/',
   path: '/agents/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTmuxSessionsTmuxSessionNameRoute =
-  AppTmuxSessionsTmuxSessionNameRouteImport.update({
-    id: '/tmux-sessions/$tmuxSessionName',
-    path: '/tmux-sessions/$tmuxSessionName',
-    getParentRoute: () => AppRoute,
-  } as any)
 const AppAgentsNewRoute = AppAgentsNewRouteImport.update({
   id: '/agents/new',
   path: '/agents/new',
@@ -77,95 +51,59 @@ const AppAgentNewRoute = AppAgentNewRouteImport.update({
   path: '/agent/new',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTmuxSessionsTmuxSessionNamePtyRoute =
-  AppTmuxSessionsTmuxSessionNamePtyRouteImport.update({
-    id: '/pty',
-    path: '/pty',
-    getParentRoute: () => AppTmuxSessionsTmuxSessionNameRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
-  '/btop': typeof AppBtopRoute
-  '/daemon-logs': typeof AppDaemonLogsRoute
-  '/opencode-logs': typeof AppOpencodeLogsRoute
   '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
-  '/tmux-sessions/$tmuxSessionName': typeof AppTmuxSessionsTmuxSessionNameRouteWithChildren
   '/agents': typeof AppAgentsIndexRoute
-  '/tmux-sessions/$tmuxSessionName/pty': typeof AppTmuxSessionsTmuxSessionNamePtyRoute
 }
 export interface FileRoutesByTo {
-  '/btop': typeof AppBtopRoute
-  '/daemon-logs': typeof AppDaemonLogsRoute
-  '/opencode-logs': typeof AppOpencodeLogsRoute
   '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
   '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
-  '/tmux-sessions/$tmuxSessionName': typeof AppTmuxSessionsTmuxSessionNameRouteWithChildren
   '/agents': typeof AppAgentsIndexRoute
-  '/tmux-sessions/$tmuxSessionName/pty': typeof AppTmuxSessionsTmuxSessionNamePtyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
-  '/_app/btop': typeof AppBtopRoute
-  '/_app/daemon-logs': typeof AppDaemonLogsRoute
-  '/_app/opencode-logs': typeof AppOpencodeLogsRoute
   '/_layout-less/terminal': typeof LayoutLessTerminalRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agent/new': typeof AppAgentNewRoute
   '/_app/agents/$slug': typeof AppAgentsSlugRoute
   '/_app/agents/new': typeof AppAgentsNewRoute
-  '/_app/tmux-sessions/$tmuxSessionName': typeof AppTmuxSessionsTmuxSessionNameRouteWithChildren
   '/_app/agents/': typeof AppAgentsIndexRoute
-  '/_app/tmux-sessions/$tmuxSessionName/pty': typeof AppTmuxSessionsTmuxSessionNamePtyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/btop'
-    | '/daemon-logs'
-    | '/opencode-logs'
     | '/terminal'
     | '/'
     | '/agent/new'
     | '/agents/$slug'
     | '/agents/new'
-    | '/tmux-sessions/$tmuxSessionName'
     | '/agents'
-    | '/tmux-sessions/$tmuxSessionName/pty'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/btop'
-    | '/daemon-logs'
-    | '/opencode-logs'
     | '/terminal'
     | '/'
     | '/agent/new'
     | '/agents/$slug'
     | '/agents/new'
-    | '/tmux-sessions/$tmuxSessionName'
     | '/agents'
-    | '/tmux-sessions/$tmuxSessionName/pty'
   id:
     | '__root__'
     | '/_app'
-    | '/_app/btop'
-    | '/_app/daemon-logs'
-    | '/_app/opencode-logs'
     | '/_layout-less/terminal'
     | '/_app/'
     | '/_app/agent/new'
     | '/_app/agents/$slug'
     | '/_app/agents/new'
-    | '/_app/tmux-sessions/$tmuxSessionName'
     | '/_app/agents/'
-    | '/_app/tmux-sessions/$tmuxSessionName/pty'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -196,39 +134,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutLessTerminalRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/opencode-logs': {
-      id: '/_app/opencode-logs'
-      path: '/opencode-logs'
-      fullPath: '/opencode-logs'
-      preLoaderRoute: typeof AppOpencodeLogsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/daemon-logs': {
-      id: '/_app/daemon-logs'
-      path: '/daemon-logs'
-      fullPath: '/daemon-logs'
-      preLoaderRoute: typeof AppDaemonLogsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/btop': {
-      id: '/_app/btop'
-      path: '/btop'
-      fullPath: '/btop'
-      preLoaderRoute: typeof AppBtopRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/agents/': {
       id: '/_app/agents/'
       path: '/agents'
       fullPath: '/agents'
       preLoaderRoute: typeof AppAgentsIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/tmux-sessions/$tmuxSessionName': {
-      id: '/_app/tmux-sessions/$tmuxSessionName'
-      path: '/tmux-sessions/$tmuxSessionName'
-      fullPath: '/tmux-sessions/$tmuxSessionName'
-      preLoaderRoute: typeof AppTmuxSessionsTmuxSessionNameRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/new': {
@@ -252,53 +162,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentNewRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/tmux-sessions/$tmuxSessionName/pty': {
-      id: '/_app/tmux-sessions/$tmuxSessionName/pty'
-      path: '/pty'
-      fullPath: '/tmux-sessions/$tmuxSessionName/pty'
-      preLoaderRoute: typeof AppTmuxSessionsTmuxSessionNamePtyRouteImport
-      parentRoute: typeof AppTmuxSessionsTmuxSessionNameRoute
-    }
   }
 }
-
-interface AppTmuxSessionsTmuxSessionNameRouteChildren {
-  AppTmuxSessionsTmuxSessionNamePtyRoute: typeof AppTmuxSessionsTmuxSessionNamePtyRoute
-}
-
-const AppTmuxSessionsTmuxSessionNameRouteChildren: AppTmuxSessionsTmuxSessionNameRouteChildren =
-  {
-    AppTmuxSessionsTmuxSessionNamePtyRoute:
-      AppTmuxSessionsTmuxSessionNamePtyRoute,
-  }
-
-const AppTmuxSessionsTmuxSessionNameRouteWithChildren =
-  AppTmuxSessionsTmuxSessionNameRoute._addFileChildren(
-    AppTmuxSessionsTmuxSessionNameRouteChildren,
-  )
 
 interface AppRouteChildren {
-  AppBtopRoute: typeof AppBtopRoute
-  AppDaemonLogsRoute: typeof AppDaemonLogsRoute
-  AppOpencodeLogsRoute: typeof AppOpencodeLogsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAgentNewRoute: typeof AppAgentNewRoute
   AppAgentsSlugRoute: typeof AppAgentsSlugRoute
   AppAgentsNewRoute: typeof AppAgentsNewRoute
-  AppTmuxSessionsTmuxSessionNameRoute: typeof AppTmuxSessionsTmuxSessionNameRouteWithChildren
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppBtopRoute: AppBtopRoute,
-  AppDaemonLogsRoute: AppDaemonLogsRoute,
-  AppOpencodeLogsRoute: AppOpencodeLogsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAgentNewRoute: AppAgentNewRoute,
   AppAgentsSlugRoute: AppAgentsSlugRoute,
   AppAgentsNewRoute: AppAgentsNewRoute,
-  AppTmuxSessionsTmuxSessionNameRoute:
-    AppTmuxSessionsTmuxSessionNameRouteWithChildren,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
 }
 
