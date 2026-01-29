@@ -27,7 +27,9 @@ export const GLOBAL_SECRETS_CONFIG = [
   {
     envVar: "RESEND_BOT_API_KEY",
     key: "resend.api_key",
-    egressProxyRule: `url.hostname = 'api.resend.com'`,
+    // note: don't let ppl use this for reading emails or doing anything other than sending.
+    // there is an additional check in the egress proxy to make sure you can always send to your own org's email addresses.
+    egressProxyRule: `url.hostname = 'api.resend.com' and (url.pathname = '/emails' or url.pathname = '/emails/batch')`,
   },
 ] as const satisfies Array<{
   envVar: string;

@@ -338,6 +338,10 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   envVars["ITERATE_RESEND_API_KEY"] = "getIterateSecret({secretKey: 'resend.api_key'})";
   envVars["ITERATE_RESEND_FROM_ADDRESS"] = `${env.VITE_APP_STAGE}@${env.RESEND_BOT_DOMAIN}`;
 
+  // Google CLI (gogcli) access token - requires user to connect Google account
+  // Will fail at runtime if Google is not connected, which is acceptable
+  envVars["GOG_ACCESS_TOKEN"] = "getIterateSecret({secretKey: 'google.access_token'})";
+
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Set customer repo path for opencode server working directory

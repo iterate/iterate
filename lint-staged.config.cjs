@@ -9,10 +9,12 @@ try {
 // Agents set AGENT=1 or similar env vars
 const isAgent = process.env.AGENT === "1" || process.env.OPENCODE === "1";
 
+/** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["prettier --write --ignore-unknown"],
 };
 
+/** @type {import('lint-staged').Configuration} */
 const agentConfig = {
   "*": [
     ...(baseConfig["*"] || []),
