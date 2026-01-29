@@ -4,7 +4,6 @@ import { parse as parseMs } from "ms";
 import { z } from "zod/v4";
 import {
   getTasksDir,
-  getArchivedDir,
   parseTaskFile,
   processPendingTasks,
   serializeTask,
