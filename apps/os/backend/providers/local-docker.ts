@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { logger } from "backend/tag-logger.ts";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
@@ -43,6 +44,25 @@ export function getDockerHostConfig(): DockerHostConfig {
 function getRepoRoot(): string {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   return join(__dirname, "..", "..", "..", "..");
+}
+
+/**
+ * Build the local docker snapshot image before creating a container.
+ * This ensures the image is always up-to-date without manual intervention.
+ */
+async function buildLocalDockerSnapshot(): Promise<void> {
+  const { x } = await import("tinyexec");
+  const repoRoot = getRepoRoot();
+
+  logger.info("[local-docker] Building local docker snapshot...");
+  const result = await x("pnpm", ["snapshot:local-docker"], {
+    nodeOptions: { cwd: repoRoot, stdio: "inherit" },
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`Failed to build local docker snapshot: exit code ${result.exitCode}`);
+  }
+  logger.info("[local-docker] Local docker snapshot ready");
 }
 
 // Lazy-loaded undici dispatcher for Unix socket support
@@ -287,6 +307,10 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
     type: "local-docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      // Auto-build the local docker snapshot before creating container
+      // This ensures the image is up-to-date without manual `pnpm snapshot:local-docker`
+      await buildLocalDockerSnapshot();
+
       const terminalInternalPort = TERMINAL_PORT;
       const numPorts = DAEMON_DEFINITIONS.length + 1;
       const basePort = await findAvailablePortBlock(numPorts);
