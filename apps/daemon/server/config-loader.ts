@@ -43,6 +43,9 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<IterateCo
       console.log(`[config] Loading config from ${configPath}`);
       const fileUrl = pathToFileURL(configPath).href;
       const module = await import(fileUrl);
+      if (module.default === undefined) {
+        throw new Error(`Config file ${configPath} does not have a default export`);
+      }
       loadedConfig = module.default as IterateConfig;
       console.log(`[config] Loaded config:`, loadedConfig);
       return loadedConfig;
@@ -61,6 +64,9 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<IterateCo
       console.log(`[config] Loading default config from ${defaultConfigPath}`);
       const fileUrl = pathToFileURL(defaultConfigPath).href;
       const module = await import(fileUrl);
+      if (module.default === undefined) {
+        throw new Error(`Default config file ${defaultConfigPath} does not have a default export`);
+      }
       loadedConfig = module.default as IterateConfig;
       console.log(`[config] Loaded default config:`, loadedConfig);
       return loadedConfig;
@@ -84,11 +90,4 @@ export function getConfig(): IterateConfig {
     throw new Error("Config not loaded. Call loadConfig() first during server startup.");
   }
   return loadedConfig;
-}
-
-/**
- * Reset the cached config (mainly for testing).
- */
-export function resetConfig(): void {
-  loadedConfig = null;
 }
