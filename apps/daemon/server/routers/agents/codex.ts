@@ -1,3 +1,4 @@
+import { execSync, spawn } from "node:child_process";
 import { Hono } from "hono";
 import type { IterateEvent } from "../../types/events.ts";
 import { isPromptEvent } from "../../types/events.ts";
@@ -6,36 +7,98 @@ import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts
 export const codexRouter = new Hono();
 
 interface CodexSession {
-  threadId: string;
+  sessionId: string;
   workingDirectory: string;
 }
 
 // Track active sessions
 const sessions = new Map<string, CodexSession>();
 
-// Type definitions for Codex SDK
-interface CodexThread {
-  id: string;
-  run(prompt: string): Promise<unknown>;
+// JSONL event types from codex exec --json
+interface CodexJsonEvent {
+  type: string;
+  session_id?: string;
+  thread_id?: string;
+  // Other fields vary by event type
 }
 
-interface CodexClient {
-  startThread(): CodexThread;
-  resumeThread(threadId: string): CodexThread;
-}
-
-interface CodexConstructor {
-  new (opts: { workingDirectory: string }): CodexClient;
-}
-
-// Dynamic import wrapper for optional Codex SDK
-async function getCodexSDK(): Promise<{ Codex: CodexConstructor } | null> {
+/**
+ * Check if codex CLI is installed globally.
+ * Throws helpful error if not found.
+ */
+function assertCodexCliInstalled(): void {
   try {
-    const sdk = await import("@openai/codex-sdk");
-    return sdk as unknown as { Codex: CodexConstructor };
+    execSync("which codex", { stdio: "ignore" });
   } catch {
-    return null;
+    throw new Error(
+      "Codex CLI not installed. Run: npm install -g @openai/codex\n\n" +
+        "Note: We shell out to the CLI instead of using @openai/codex-sdk because " +
+        "the SDK is 139MB and causes pnpm to OOM on Node.js 24 due to a V8 bug " +
+        "(pnpm/pnpm#9743). The SDK just wraps the CLI anyway.",
+    );
   }
+}
+
+/**
+ * Run codex CLI and return session ID from JSONL output.
+ *
+ * We shell out to the CLI instead of using @openai/codex-sdk because the SDK
+ * package is 139MB and triggers a Node.js 24 V8 regression that causes pnpm
+ * to OOM during install (see: https://github.com/pnpm/pnpm/issues/9743).
+ * The SDK internally just spawns the CLI and parses JSONL anyway.
+ */
+async function runCodexCli(
+  args: string[],
+  workingDirectory: string,
+): Promise<{ sessionId: string; output: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("codex", args, {
+      cwd: workingDirectory,
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let sessionId = "";
+
+    proc.stdout.on("data", (data: Buffer) => {
+      const chunk = data.toString();
+      stdout += chunk;
+
+      // Parse JSONL lines to find session_id
+      for (const line of chunk.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as CodexJsonEvent;
+          // Session ID can come from various event types
+          if (event.session_id) {
+            sessionId = event.session_id;
+          } else if (event.thread_id) {
+            sessionId = event.thread_id;
+          }
+        } catch {
+          // Not JSON, ignore
+        }
+      }
+    });
+
+    proc.stderr.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0 && !sessionId) {
+        reject(new Error(`codex exited with code ${code}: ${stderr}`));
+      } else {
+        resolve({ sessionId, output: stdout });
+      }
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`Failed to spawn codex: ${err.message}`));
+    });
+  });
 }
 
 async function createCodexSession(
@@ -43,47 +106,35 @@ async function createCodexSession(
   workingDirectory: string,
   initialPrompt?: string,
 ): Promise<string> {
-  const sdk = await getCodexSDK();
-  if (!sdk) {
-    throw new Error("Codex SDK not installed. Run: pnpm add @openai/codex-sdk");
+  assertCodexCliInstalled();
+
+  // Codex requires a prompt to generate a session - use a minimal one if none provided
+  const prompt = initialPrompt || "hello";
+
+  const args = ["exec", "--json", "--skip-git-repo-check", "-C", workingDirectory, prompt];
+
+  const { sessionId } = await runCodexCli(args, workingDirectory);
+
+  if (!sessionId) {
+    throw new Error("Failed to get session ID from codex output");
   }
 
-  const codex = new sdk.Codex({
-    workingDirectory,
-  });
-
-  const thread = codex.startThread();
-
-  if (initialPrompt) {
-    await thread.run(initialPrompt);
-  }
-
-  const threadId = thread.id;
-  sessions.set(threadId, { threadId, workingDirectory });
-
-  return threadId;
+  sessions.set(sessionId, { sessionId, workingDirectory });
+  return sessionId;
 }
 
-async function sendEventsToSession(threadId: string, events: IterateEvent[]): Promise<void> {
-  const session = sessions.get(threadId);
+async function sendEventsToSession(sessionId: string, events: IterateEvent[]): Promise<void> {
+  const session = sessions.get(sessionId);
   if (!session) {
-    throw new Error(`Session ${threadId} not found`);
+    throw new Error(`Session ${sessionId} not found`);
   }
-
-  const sdk = await getCodexSDK();
-  if (!sdk) {
-    throw new Error("Codex SDK not installed");
-  }
-
-  const codex = new sdk.Codex({
-    workingDirectory: session.workingDirectory,
-  });
-
-  const thread = codex.resumeThread(threadId);
 
   for (const event of events) {
     if (!isPromptEvent(event)) continue;
-    await thread.run(event.message);
+
+    const args = ["exec", "resume", sessionId, "--json", event.message];
+
+    await runCodexCli(args, session.workingDirectory);
   }
 }
 
@@ -101,18 +152,19 @@ codexRouter.post("/new", async (c) => {
   const initialPrompt = initialPromptEvent?.message;
 
   try {
-    const threadId = await createCodexSession(agentPath, workingDirectory, initialPrompt);
+    const sessionId = await createCodexSession(agentPath, workingDirectory, initialPrompt);
 
     // Send remaining events (skip the first if it was used as initial prompt)
     const remainingEvents = initialPrompt ? eventList.slice(1) : eventList;
     if (remainingEvents.length > 0) {
-      await sendEventsToSession(threadId, remainingEvents);
+      await sendEventsToSession(sessionId, remainingEvents);
     }
 
     return c.json({
-      route: `/codex/sessions/${threadId}`,
-      sessionId: threadId,
+      route: `/codex/sessions/${sessionId}`,
+      sessionId,
       workingDirectory,
+      tui: `codex resume ${sessionId} --all`,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -120,14 +172,14 @@ codexRouter.post("/new", async (c) => {
   }
 });
 
-codexRouter.post("/sessions/:threadId", async (c) => {
-  const threadId = c.req.param("threadId");
+codexRouter.post("/sessions/:sessionId", async (c) => {
+  const sessionId = c.req.param("sessionId");
   const payload = await c.req.json();
   const events: IterateEvent[] = Array.isArray(payload) ? payload : [payload];
 
   try {
-    await sendEventsToSession(threadId, events);
-    return c.json({ success: true, sessionId: threadId });
+    await sendEventsToSession(sessionId, events);
+    return c.json({ success: true, sessionId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return c.json({ error: message }, 400);

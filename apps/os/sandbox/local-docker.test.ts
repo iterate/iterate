@@ -145,6 +145,38 @@ function createDaemonTrpcClient(port: number) {
   });
 }
 
+async function waitForOpencodeAssistantResponse(
+  containerId: string,
+  sessionId: string,
+  workingDirectory: string,
+  timeoutMs = 60000,
+): Promise<string> {
+  const start = Date.now();
+  const encodedDir = encodeURIComponent(workingDirectory);
+  const url = `http://localhost:4096/session/${sessionId}/message?directory=${encodedDir}&limit=50`;
+
+  while (Date.now() - start < timeoutMs) {
+    const raw = await execInContainer(containerId, ["curl", "-s", url]);
+    const messages = JSON.parse(raw) as Array<{
+      info?: { role?: string };
+      parts?: Array<{ type?: string; text?: string }>;
+    }>;
+
+    for (const message of messages) {
+      if (message.info?.role !== "assistant") continue;
+      const text = (message.parts ?? [])
+        .filter((part) => part.type === "text" && part.text)
+        .map((part) => part.text)
+        .join("");
+      if (text) return text;
+    }
+
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  throw new Error("Timeout waiting for opencode assistant response");
+}
+
 // ============ Tests ============
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
@@ -358,5 +390,38 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
     }, 210000);
+
+    test.runIf(process.env.OPENAI_API_KEY)(
+      "opencode sessions via daemon return responses",
+      async () => {
+        await waitForDaemonReady(container.port!);
+
+        const prompt = `local-docker-opencode-${Date.now()}`;
+        const response = await fetch(`http://localhost:${container.port}/api/opencode/new`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agentPath: "/opencode/local-docker",
+            events: [{ type: "prompt", message: `Reply with exactly: ${prompt}` }],
+          }),
+        });
+        expect(response.ok).toBe(true);
+        const payload = (await response.json()) as {
+          sessionId: string;
+          workingDirectory: string;
+        };
+        expect(payload.sessionId).toMatch(/^ses_/);
+        expect(payload.workingDirectory).toBeTruthy();
+
+        const assistantText = await waitForOpencodeAssistantResponse(
+          container.id,
+          payload.sessionId,
+          payload.workingDirectory,
+          120000,
+        );
+        expect(assistantText).toContain(prompt);
+      },
+      210000,
+    );
   });
 });

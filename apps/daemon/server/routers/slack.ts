@@ -24,7 +24,8 @@ import * as schema from "../db/schema.ts";
 import type { IterateEvent } from "../types/events.ts";
 
 const logger = console;
-const DAEMON_BASE_URL = "http://localhost:3000";
+const DAEMON_PORT = process.env.PORT || "3001";
+const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 export const slackRouter = new Hono();
 

@@ -291,9 +291,10 @@ export const trpcRouter = createTRPCRouter({
         });
       }
 
+      const daemonPort = process.env.PORT || "3001";
       const createUrl = newAgentPath.startsWith("http")
         ? newAgentPath
-        : `http://localhost:3000/api${newAgentPath}`;
+        : `http://localhost:${daemonPort}/api${newAgentPath}`;
 
       const createResponse = await fetch(createUrl, {
         method: "POST",

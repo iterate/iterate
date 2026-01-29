@@ -20,6 +20,7 @@ FROM node:24
 ENV SANDBOX_OPENCODE_VERSION=1.1.27
 ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
+ENV SANDBOX_CODEX_VERSION=0.92.0
 ENV SANDBOX_BUN_VERSION=1.3.6
 
 # === Build Args ===
@@ -81,9 +82,13 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${SANDBOX_BUN_VERSION}"
 ENV PATH="/home/iterate/.bun/bin:$PATH"
 
 # === Agent packages (npm, userspace) ===
+# Note: We install @openai/codex (CLI) instead of @openai/codex-sdk because the SDK
+# is 139MB and causes npm/pnpm to OOM on Node 24 due to V8 bug (pnpm/pnpm#9743).
+# The SDK just wraps the CLI anyway.
 
 RUN npm install -g @anthropic-ai/claude-code@${SANDBOX_CLAUDE_CODE_VERSION} && \
-    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
+    npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
+    npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 

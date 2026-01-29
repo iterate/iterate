@@ -131,6 +131,7 @@ claudeRouter.post("/new", async (c) => {
       route: `/claude/sessions/${sessionId}`,
       sessionId,
       workingDirectory,
+      tui: `claude --resume ${sessionId}`,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
