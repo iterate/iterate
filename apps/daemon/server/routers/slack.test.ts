@@ -42,7 +42,6 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     slug: "slack-123",
     harnessType: "opencode",
     harnessSessionId: "opencode-session-123",
-    tmuxSession: "tmux-1",
     workingDirectory: "/home/iterate/src/github.com/iterate/iterate",
     status: "running",
     initialPrompt: null,

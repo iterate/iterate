@@ -311,7 +311,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
     }, 210000);
 
-    test("tmux and PTY work", async () => {
+    test("PTY endpoint works", async () => {
       await waitForDaemonReady(container.port!);
 
       // PTY endpoint exists
@@ -319,18 +319,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
-
-      // tmux via tRPC
-      const trpc = createDaemonTrpcClient(container.port!);
-      const sessionName = `test-${Date.now()}`;
-      const createResult = await trpc.ensureTmuxSession.mutate({
-        sessionName,
-        command: "bash",
-      });
-      expect(createResult.created).toBe(true);
-
-      const sessions = await trpc.listTmuxSessions.query();
-      expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
