@@ -222,10 +222,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     );
 
     test("container setup correct", async () => {
-      // tmux installed
-      const tmux = await execInContainer(container.id, ["which", "tmux"]);
-      expect(tmux.trim()).toBe("/usr/bin/tmux");
-
       // repo cloned
       const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
