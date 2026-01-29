@@ -87,6 +87,11 @@ try {
 
   execSync(`docker build ${buildArgs} -t ${imageName} -f ${dockerfilePath} ${tempDir}`, {
     stdio: "inherit",
+    env: {
+      ...process.env,
+      DOCKER_BUILDKIT: "1",
+      BUILDKIT_PROGRESS: "plain",
+    },
   });
   console.log(`Local docker snapshot ready: ${imageName}`);
 } finally {
