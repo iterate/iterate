@@ -31,8 +31,11 @@ export {
   filenameToSlug,
 } from "./task-parser.ts";
 
-// Default interval: 1 minute
-const DEFAULT_INTERVAL_MS = 1 * 60 * 1000;
+/** Default interval for checking for pending tasks */
+const DEFAULT_INTERVAL_MS = 1 * 15 * 1000;
+
+/** Default stale threshold for nudging agents to "close the loop" */
+const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 
 // ============================================================================
 // Directory Helpers
@@ -144,17 +147,13 @@ export async function processPendingTasks(): Promise<void> {
   }
 }
 
-// Default stale threshold: 1 minute
-const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
-
 /**
  * Start the stale task watchdog.
  * Checks for in_progress tasks that have been locked for too long and nudges the agent.
  */
 function startStaleTaskWatchdog() {
-  const intervalMs = parseInt(process.env.STALE_TASK_INTERVAL_MS || "", 10) || DEFAULT_INTERVAL_MS;
-  const thresholdMs =
-    parseInt(process.env.STALE_TASK_THRESHOLD_MS || "", 10) || DEFAULT_STALE_THRESHOLD_MS;
+  const intervalMs = DEFAULT_INTERVAL_MS;
+  const thresholdMs = DEFAULT_STALE_THRESHOLD_MS;
 
   console.log(
     `[cron-tasks] Starting stale task watchdog, interval: ${intervalMs / 1000}s, threshold: ${thresholdMs / 1000}s`,
