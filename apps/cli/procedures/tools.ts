@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import dedent from "dedent";
-import { WebClient } from "@slack/web-api";
+import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
@@ -8,7 +8,9 @@ import { t } from "../trpc.ts";
 function getSlackClient() {
   const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
   if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
-  return new WebClient(token);
+  return new WebClient(token, {
+    logLevel: LogLevel.DEBUG,
+  });
 }
 
 function getResendClient() {
