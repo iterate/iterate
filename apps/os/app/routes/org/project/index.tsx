@@ -1,26 +1,11 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense } from "react";
 import { trpc } from "../../../lib/trpc.tsx";
-import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug/")({
-  component: ProjectHomeRoute,
+  // Note: project.bySlug is already preloaded in the parent project layout
+  component: ProjectHomePage,
 });
-
-function ProjectHomeRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
-      <ProjectHomePage />
-    </Suspense>
-  );
-}
 
 function ProjectHomePage() {
   const params = useParams({

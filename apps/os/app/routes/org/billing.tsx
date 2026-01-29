@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from "react";
+import { useEffect } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -15,7 +15,6 @@ import {
   CardTitle,
 } from "../../components/ui/card.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
-import { Spinner } from "../../components/ui/spinner.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 
 const Search = z.object({
@@ -24,25 +23,17 @@ const Search = z.object({
 });
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
-  component: BillingPage,
   validateSearch: Search,
+  loader: ({ context, params }) => {
+    // Non-blocking prefetch - speeds up perceived load time
+    context.queryClient.prefetchQuery(
+      trpc.billing.getBillingAccount.queryOptions({ organizationSlug: params.organizationSlug }),
+    );
+  },
+  component: BillingPage,
 });
 
 function BillingPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center p-8">
-          <Spinner />
-        </div>
-      }
-    >
-      <BillingContent />
-    </Suspense>
-  );
-}
-
-function BillingContent() {
   const params = useParams({ from: "/_auth/orgs/$organizationSlug/billing" });
   const search = useSearch({ from: "/_auth/orgs/$organizationSlug/billing" });
 
