@@ -26,6 +26,7 @@ dist
 .clinerules/
 
 .cache
+__pycache__/
 
 # ad-hoc ignored files/paths
 *ignoreme*
