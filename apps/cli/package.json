@@ -13,13 +13,13 @@
     "@slack/web-api": "^7.13.0",
     "@trpc/server": "^11.4.3",
     "dedent": "^1.7.0",
+    "ms": "4.0.0-nightly.202508271359",
     "resend": "^6.8.0",
     "trpc-cli": "^0.12.2",
     "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "ms": "4.0.0-nightly.202508271359",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }
