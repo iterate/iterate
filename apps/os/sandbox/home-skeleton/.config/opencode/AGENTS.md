@@ -103,6 +103,10 @@ You can schedule tasks to run at a specific time or on a recurring schedule. Tas
 - User asks you to do something "later", "tomorrow", "every morning", etc.
 - User requests a recurring report or check
 - You need to defer work to a specific time
+- You have kicked off some work that you need to check on in a few minutes, for example:
+  - You created a pull request - you'll need to check it for CI failures
+
+Note that you only need to use a cron schedule for truly "recurring" tasks. You will be nudged periodically for in progress tasks, so need to build in polling explicitly.
 
 **Creating a task:**
 
