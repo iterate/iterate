@@ -4,159 +4,127 @@ Markdown-file-based task queue for scheduled agent work.
 
 ## Design
 
-**One dumb cron, smart tasks**: A single scheduler runs every N minutes (env var `CRON_TASK_INTERVAL_MS`, default 15 min in prod). It scans a folder for pending tasks, processes any that are due.
+**One dumb cron, smart tasks**: A single scheduler runs every N minutes (env var `CRON_TASK_INTERVAL_MS`, default 1 min). It scans a folder for pending tasks, processes any that are due.
 
 **Tasks are markdown files** with YAML frontmatter. Human-readable, git-trackable, easy to debug.
 
 ## Task Lifecycle
 
 ```
-pending -> in_progress -> completed (moved to completed/)
-                       -> pending (on failure, with note appended)
+pending -> in_progress -> completed (archived/ for one-off, stays in tasks/ for recurring)
+                       -> abandoned (moved to archived/)
+                       -> pending (on failure or reopen)
 ```
 
 ## Frontmatter Schema
 
 ```yaml
 ---
-state: pending # pending | in_progress | completed
+state: pending # pending | in_progress | completed | abandoned
 due: 2026-01-28T09:00Z # ISO timestamp - task runs after this time
 schedule: "0 9 * * *" # optional cron expression for recurring tasks
-lockedBy: cron-abc123 # agent slug when in_progress (derived createdAt = lockedAt)
+lockedBy: cron-abc123 # agent slug when in_progress
+lockedAt: 2026-01-28T09:01Z # when the agent started working
 priority: normal # low | normal | high (processing order)
 ---
 ```
 
-Note: `workingDirectory` and `harnessType` are derived from environment (customer repo path, opencode harness).
-
 ## File Structure
 
 ```
-apps/daemon/
-  cron-tasks/
-    pending/
-      daily-report.md
-      send-reminder.md
-    completed/
-      2026-01-28-daily-report.md
+iterate/tasks/
+  daily-report.md       # active task (pending or in_progress)
+  send-reminder.md
+  archived/
+    2026-01-28-one-off-task.md  # completed/abandoned tasks
 ```
 
-Using folders for state (not frontmatter) because:
-
-- Cleaner working directory
-- Easy to see what's pending at a glance
-- Git history preserved in completed/
+Tasks live directly in `tasks/`. Only one-off completed tasks and abandoned tasks move to `archived/`.
 
 ## Agent Model
 
-Each task execution creates a **cron agent** (not a slack/email agent). The cron agent:
+Each task execution creates a **cron agent**. The cron agent:
 
 1. Reads the task markdown as its initial prompt
-2. Does the work (may send messages to other channels)
-3. Reports completion
-
-If the task triggers a user reply (e.g., sends a Slack message), that becomes a _separate_ agent naturally via webhooks.
+2. Does the work (may send messages, write code, etc.)
+3. Marks the task complete with a note
 
 ## Recurring Tasks
 
-Tasks with `schedule` in frontmatter self-replicate:
+Tasks with `schedule` in frontmatter stay in the main folder:
 
-1. Cron agent completes the task
-2. Before archiving, check if `schedule` exists
-3. Calculate next due date from cron expression
-4. Create new pending task with updated `due`
-5. Move original to completed/
+1. Agent completes the task with `iterate task complete --slug "..." --note "..."`
+2. Task resets to `pending` with next due date calculated from schedule
+3. Task stays in `tasks/` (not archived)
 
-The task prompt should include instructions about modifying/nulling the schedule if needed.
+To stop a recurring task, remove the `schedule` field before completing, or abandon it.
 
 ## Failure Handling
 
-On failure:
+**On agent/system failure** (exception during task processing):
 
-1. Append failure note to task body (timestamp, error summary)
-2. Set state back to `pending`
-3. Keep original due date (retry on next cron run)
-4. After N failures, could move to `failed/` folder (future enhancement)
+- Failure note appended to task body
+- State reset to `pending`
+- Task retries on next scheduler run
 
-## Watchdog (Future)
+**If the agent can't complete the task right now** but might later:
 
-Separate cron to check on long-running tasks:
+- Use `iterate task reopen --slug "..." --note "..."` to reset to pending
+- This works for both `in_progress` and archived tasks
 
-- Query agents table for `lockedBy` agent slugs
-- Check activity on those agents
-- Send nudge message: "Task X has been in_progress for 2 hours. Are you stuck?"
+**If the task should not be retried**:
 
-## Example Task
+- Use `iterate task abandon --slug "..." --note "..."` to move to archived
 
-```markdown
----
-state: pending
-due: 2026-01-28T09:00:00Z
-schedule: "0 9 * * *"
-priority: normal
----
+## Watchdog
 
-# Daily US Box Office Report
+A stale task watchdog runs alongside the scheduler (env var `STALE_TASK_INTERVAL_MS`, `STALE_TASK_THRESHOLD_MS`).
 
-Send a summary of yesterday's US box office numbers to #movie-club on Slack.
+It checks for `in_progress` tasks locked longer than the threshold and sends a nudge message to the agent:
 
-Include:
+- "Are you done? Run `iterate task complete`"
+- "Still working? Reply with status"
+- "Stuck? Run `iterate task abandon`"
 
-- Top 5 films by gross
-- Notable changes from previous week
-- Any new releases
-
-After completing, this task will auto-recreate for tomorrow at 9am.
-If this report is no longer needed, update the schedule to null before completing.
-```
+The nudge updates `lockedAt` to avoid spamming. If the task was already completed (file deleted), the watchdog skips gracefully.
 
 ## CLI Commands
 
-Manage tasks via the CLI:
-
 ```bash
-# List pending tasks
+# List all commands
+iterate task --help
+
+# List active tasks
 iterate task list
 
-# List completed tasks
-iterate task list --state completed
-
 # Get a specific task
-iterate task get --filename daily-report.md
+iterate task get --slug daily-report
 
 # Add a new task (due in 24 hours)
 iterate task add \
-  --filename daily-report.md \
+  --slug daily-report \
   --due "24h" \
   --schedule "0 9 * * *" \
   --priority normal \
   --body "# Daily Report\n\nSend summary to Slack."
 
-# Add a task for tomorrow morning
-iterate task add \
-  --filename reminder.md \
-  --due "1 day" \
-  --body "Send the weekly report to #general"
+# Mark complete (required note)
+iterate task complete --slug daily-report --note "Done. Posted to #general"
+
+# Abandon (required note)
+iterate task abandon --slug daily-report --note "User asked to stop"
+
+# Reopen from archive or reset in_progress to pending
+iterate task reopen --slug daily-report --note "User wants another attempt"
+
+# Manually trigger processing
+iterate task processPending
 ```
 
 ## Implementation
 
-See `scheduler.ts` for the cron implementation.
+- Scheduler: `scheduler.ts`
+- Pure parsing functions: `task-parser.ts`
+- CLI router: `apps/cli/procedures/tasks.ts`
 
-## TODOs / Open Questions
-
-1. **Agent completion detection**: Currently agents run async via OpenCode SDK. Need a callback mechanism when agent completes to:
-   - Call `markTaskCompleted()`
-   - Handle recurring task recreation
-   - Move to completed/ folder
-
-   Options:
-   - Poll agent status periodically
-   - Add completion webhook/callback to agent harness
-   - Have the agent itself call a completion endpoint
-
-2. **Cron expression parsing**: Currently `createNextRecurrence` just adds 24 hours. Need proper cron parsing (e.g., `cron-parser` npm package).
-
-3. **Max retries**: Add `maxRetries` frontmatter field and move to `failed/` folder after N failures.
-
-4. **Watchdog**: Implement the separate cron to check on long-running tasks using `lockedBy` agent slug.
+If something is broken, the agent can read these files to understand and fix the issue.
