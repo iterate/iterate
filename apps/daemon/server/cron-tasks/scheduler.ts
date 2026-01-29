@@ -299,6 +299,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
     <what you did, any message IDs for follow-up>"
     \`\`\`
 
+    If the task is complete, mark it as completed.
     If you're still working, that's fine - just let me know your status.
     If you got stuck, describe the issue and I can help.
   `;
