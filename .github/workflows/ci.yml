@@ -8,6 +8,10 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    paths:
+      - apps/os/sandbox/daytona.test.ts
+      - apps/os/sandbox/daytona-bootstrap.test.ts
   workflow_dispatch:
     inputs:
       stage:
@@ -46,8 +50,7 @@ jobs:
   daytona-test:
     needs:
       - variables
-      - deploy
-    if: needs.variables.outputs.stage == 'prd'
+    if: needs.variables.outputs.stage == 'prd' || github.event_name == 'pull_request'
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout code
