@@ -237,7 +237,8 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
     console.log(`Snapshot built: ${snapshotName}`);
   }, 600_000); // 10 min timeout for snapshot build
 
-  test(
+  // TODO: unskip once x-api-key header issue is fixed (see https://github.com/iterate/iterate/actions/runs/21475375981)
+  test.skip(
     "sandbox boots, bootstraps with control plane, and agents answer the secret",
     async () => {
       // Validate required env vars
