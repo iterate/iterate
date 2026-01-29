@@ -7,34 +7,36 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import dedent from "dedent";
-import { parseDocument } from "yaml";
-import { z } from "zod/v4";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
 import { createAgent, appendToAgent, getAgent } from "../services/agent-manager.ts";
+import {
+  type ParsedTask,
+  parseTaskFile,
+  serializeTask,
+  slugToFilename,
+  getPriorityOrder,
+} from "./task-parser.ts";
+
+// Re-export types and pure functions for backwards compatibility
+export {
+  ActiveTaskState,
+  ArchivedTaskState,
+  TaskState,
+  TaskPriority,
+  TaskFrontmatter,
+  type ParsedTask,
+  parseTaskFile,
+  serializeTask,
+  slugToFilename,
+  filenameToSlug,
+} from "./task-parser.ts";
 
 // Default interval: 1 minute
 const DEFAULT_INTERVAL_MS = 1 * 60 * 1000;
 
-export const TaskState = z.enum(["pending", "in_progress", "completed"]);
-export type TaskState = z.infer<typeof TaskState>;
-
-export const TaskFrontmatter = z.object({
-  state: TaskState,
-  due: z.string(), // ISO timestamp
-  schedule: z.string().optional(), // cron expression for recurring
-  lockedBy: z.string().optional(), // agent slug when in_progress
-  lockedAt: z.string().optional(), // ISO timestamp when locked
-  priority: z.enum(["low", "normal", "high"]).optional(),
-});
-
-export type TaskFrontmatter = z.infer<typeof TaskFrontmatter>;
-
-export interface ParsedTask {
-  filename: string;
-  frontmatter: TaskFrontmatter;
-  body: string;
-  raw: string;
-}
+// ============================================================================
+// Directory Helpers
+// ============================================================================
 
 let schedulerRunning = false;
 
@@ -42,6 +44,11 @@ export const getTasksDir = async () => {
   const customerRepoPath = await getCustomerRepoPath();
   return path.join(customerRepoPath, "iterate/tasks");
 };
+
+export async function getArchivedDir(): Promise<string> {
+  const tasksDir = await getTasksDir();
+  return path.join(tasksDir, "archived");
+}
 
 /**
  * Initialize and start the cron task scheduler.
@@ -81,65 +88,6 @@ export async function startCronTaskScheduler() {
 }
 
 /**
- * Parse a task markdown file into frontmatter and body.
- */
-export function parseTaskFile(content: string, filename: string): ParsedTask | null {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!fmMatch) {
-    console.warn(`[cron-tasks] Invalid task format (no frontmatter): ${filename}`);
-    return null;
-  }
-
-  try {
-    const doc = parseDocument(fmMatch[1]);
-    const raw = doc.toJS();
-    const result = TaskFrontmatter.safeParse(raw);
-
-    if (!result.success) {
-      console.warn(
-        `[cron-tasks] Invalid task frontmatter: ${filename}`,
-        z.prettifyError(result.error),
-      );
-      return null;
-    }
-
-    return {
-      filename,
-      frontmatter: result.data,
-      body: fmMatch[2].trim(),
-      raw: content,
-    };
-  } catch (err) {
-    console.warn(`[cron-tasks] Failed to parse frontmatter: ${filename}`, err);
-    return null;
-  }
-}
-
-/**
- * Serialize a task back to markdown.
- */
-export function serializeTask(task: Omit<ParsedTask, "raw">): string {
-  const lines = ["---"];
-  lines.push(`state: ${task.frontmatter.state}`);
-  lines.push(`due: ${task.frontmatter.due}`);
-  if (task.frontmatter.schedule) {
-    lines.push(`schedule: "${task.frontmatter.schedule}"`);
-  }
-  if (task.frontmatter.lockedBy) {
-    lines.push(`lockedBy: ${task.frontmatter.lockedBy}`);
-  }
-  if (task.frontmatter.lockedAt) {
-    lines.push(`lockedAt: ${task.frontmatter.lockedAt}`);
-  }
-  lines.push(`priority: ${task.frontmatter.priority || "normal"}`);
-  lines.push("---");
-  lines.push("");
-  lines.push(task.body);
-
-  return lines.join("\n");
-}
-
-/**
  * Check if a task is due (due time has passed).
  */
 function isDue(task: ParsedTask): boolean {
@@ -148,43 +96,28 @@ function isDue(task: ParsedTask): boolean {
 }
 
 /**
- * Get priority order for sorting (high = 0, normal = 1, low = 2).
- */
-function getPriorityOrder(priority?: TaskFrontmatter["priority"]): number {
-  switch (priority) {
-    case "high":
-      return 0;
-    case "low":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-/**
- * Scan pending folder and process due tasks.
+ * Scan tasks folder and process due tasks.
  */
 export async function processPendingTasks(): Promise<void> {
   const tasksDir = await getTasksDir();
-  const pendingDir = path.join(tasksDir, "pending");
 
   // Ensure directories exist
-  await fs.mkdir(pendingDir, { recursive: true });
-  await fs.mkdir(path.join(tasksDir, "completed"), { recursive: true });
+  await fs.mkdir(tasksDir, { recursive: true });
+  await fs.mkdir(path.join(tasksDir, "archived"), { recursive: true });
 
-  const files = await fs.readdir(pendingDir);
-  const mdFiles = files.filter((f) => f.endsWith(".md"));
+  const entries = await fs.readdir(tasksDir, { withFileTypes: true });
+  const mdFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
 
   if (mdFiles.length === 0) {
     return;
   }
 
-  console.log(`[cron-tasks] Found ${mdFiles.length} pending tasks`);
+  console.log(`[cron-tasks] Found ${mdFiles.length} task files`);
 
   // Parse all tasks
   const tasks: ParsedTask[] = [];
   for (const file of mdFiles) {
-    const content = await fs.readFile(path.join(pendingDir, file), "utf-8");
+    const content = await fs.readFile(path.join(tasksDir, file), "utf-8");
     const task = parseTaskFile(content, file);
     if (task && task.frontmatter.state === "pending" && isDue(task)) {
       tasks.push(task);
@@ -207,7 +140,7 @@ export async function processPendingTasks(): Promise<void> {
 
   // Process each due task
   for (const task of tasks) {
-    await processTask(task, pendingDir);
+    await processTask(task, tasksDir);
   }
 }
 
@@ -244,20 +177,19 @@ function startStaleTaskWatchdog() {
  */
 async function nudgeStaleTasks(thresholdMs: number): Promise<void> {
   const tasksDir = await getTasksDir();
-  const pendingDir = path.join(tasksDir, "pending");
 
-  let files: string[];
+  let entries: import("node:fs").Dirent[];
   try {
-    files = await fs.readdir(pendingDir);
+    entries = await fs.readdir(tasksDir, { withFileTypes: true });
   } catch {
-    return; // No pending dir yet
+    return; // No tasks dir yet
   }
 
-  const mdFiles = files.filter((f) => f.endsWith(".md"));
+  const mdFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
   const now = Date.now();
 
   for (const file of mdFiles) {
-    const content = await fs.readFile(path.join(pendingDir, file), "utf-8");
+    const content = await fs.readFile(path.join(tasksDir, file), "utf-8");
     const task = parseTaskFile(content, file);
 
     if (!task) continue;
@@ -290,37 +222,42 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
   }
 
   const message = dedent`
-    Hey, checking in on task "${task.filename}".
+    Checking in on task "${task.slug}".
 
-    If you're done, please append your outcome to the task:
+    **If you're done**, mark it complete (include a note about what you did):
     \`\`\`bash
-    iterate task append --filename "${task.filename}" --body "## Outcome
-
-    <what you did, any message IDs for follow-up>"
+    iterate task complete --slug "${task.slug}" --note "Done. Posted to #general, thread_ts=..."
     \`\`\`
 
-    If the task is complete, mark it as completed.
-    If you're still working, that's fine - just let me know your status.
-    If you got stuck, describe the issue and I can help.
+    **If you're still working**, just reply with your status.
+    **If you're stuck or want to give up**, abandon the task:
+    \`\`\`bash
+    iterate task abandon --slug "${task.slug}" --note "Couldn't complete because..."
+    \`\`\`
   `;
 
   const workingDirectory = await getCustomerRepoPath();
   await appendToAgent(agent, message, { workingDirectory });
 
-  // Update lockedAt so we don't spam the agent
-  task.frontmatter.lockedAt = new Date().toISOString();
+  // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
-  const taskPath = path.join(tasksDir, "pending", task.filename);
-  await fs.writeFile(taskPath, serializeTask(task));
-
-  console.log(`[cron-tasks] Nudged agent ${agentSlug} for task ${task.filename}`);
+  const taskPath = path.join(tasksDir, task.filename);
+  try {
+    await fs.access(taskPath);
+    task.frontmatter.lockedAt = new Date().toISOString();
+    await fs.writeFile(taskPath, serializeTask(task));
+    console.log(`[cron-tasks] Nudged agent ${agentSlug} for task ${task.filename}`);
+  } catch {
+    // Task was completed/archived between read and write - that's fine
+    console.log(`[cron-tasks] Task ${task.filename} no longer exists, skipping lockedAt update`);
+  }
 }
 
 /**
  * Process a single task: create agent, mark in_progress, execute.
  */
-async function processTask(task: ParsedTask, pendingDir: string): Promise<void> {
-  const taskPath = path.join(pendingDir, task.filename);
+async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
+  const taskPath = path.join(tasksDir, task.filename);
   const timestamp = new Date().toISOString().replaceAll(":", "-");
   const slug = `cron-${task.filename.replace(".md", "")}-${timestamp}`;
 
@@ -361,7 +298,7 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
     // should trigger markTaskCompleted() or markTaskFailed().
   } catch (err) {
     console.error(`[cron-tasks] Failed to process task ${task.filename}:`, err);
-    await markTaskFailed(task, pendingDir, err);
+    await markTaskFailed(task, tasksDir, err);
   }
 }
 
@@ -371,7 +308,7 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
 function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
   const lines = [
     `[Agent: ${agentSlug}]`,
-    `[Task file: ${task.filename}]`,
+    `[Task: ${task.slug}]`,
     "",
     "You are executing a scheduled cron task. Here are your instructions:",
     "",
@@ -392,17 +329,19 @@ function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
 
     ## Completing This Task
 
-    When you're done, append your outcome to the task file:
-
+    When you're done, mark it complete with a note about what you did:
     \`\`\`bash
-    iterate task append --filename "${task.filename}" --body "## Outcome
-
-    <summary of what you did, any thread_ts or message IDs for follow-up>"
+    iterate task complete --slug "${task.slug}" --note "Done. <summary of what you did, thread_ts, etc>"
     \`\`\`
 
-    If you sent a Slack message or email, include the thread_ts/channel or message ID so future
-    runs can check for responses. For recurring tasks, also note any user feedback that should
-    influence how you approach the next run.
+    For recurring tasks, include any user feedback that should influence the next run.
+
+    **Notes:**
+    - If you can't close the loop quickly (e.g., waiting for user response), leave the task in progress. A watchdog will nudge you later for a status update.
+    - If you're stuck or want to give up, abandon the task:
+      \`\`\`bash
+      iterate task abandon --slug "${task.slug}" --note "Couldn't complete because..."
+      \`\`\`
   `);
 
   return lines.join("\n");
@@ -411,8 +350,8 @@ function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
 /**
  * Mark a task as failed: append error note, reset to pending.
  */
-async function markTaskFailed(task: ParsedTask, pendingDir: string, error: unknown): Promise<void> {
-  const taskPath = path.join(pendingDir, task.filename);
+async function markTaskFailed(task: ParsedTask, tasksDir: string, error: unknown): Promise<void> {
+  const taskPath = path.join(tasksDir, task.filename);
   const errorMsg = error instanceof Error ? error.message : String(error);
   const timestamp = new Date().toISOString();
 
@@ -426,41 +365,134 @@ async function markTaskFailed(task: ParsedTask, pendingDir: string, error: unkno
 }
 
 /**
- * Mark a task as completed: move to completed/ folder.
- * If recurring, create new pending task first.
- *
- * This should be called by the agent completion handler.
+ * Mark a task as completed: move to archived/ folder.
+ * If recurring, create new task first.
  */
-export async function markTaskCompleted(taskFilename: string): Promise<void> {
+export async function completeTask(
+  slug: string,
+  note: string,
+): Promise<{ success: true; archivedAs: string }> {
   const tasksDir = await getTasksDir();
-  const pendingPath = path.join(tasksDir, "pending", taskFilename);
-  const completedDir = path.join(tasksDir, "completed");
+  const filename = slugToFilename(slug);
+  const taskPath = path.join(tasksDir, filename);
+  const archivedDir = path.join(tasksDir, "archived");
 
-  const content = await fs.readFile(pendingPath, "utf-8");
-  const task = parseTaskFile(content, taskFilename);
+  await fs.mkdir(archivedDir, { recursive: true });
+
+  const content = await fs.readFile(taskPath, "utf-8");
+  const task = parseTaskFile(content, filename);
 
   if (!task) {
-    console.error(`[cron-tasks] Could not parse completed task: ${taskFilename}`);
-    return;
+    throw new Error(`Could not parse task: ${slug}`);
   }
 
-  // Handle recurring tasks
+  // Handle recurring tasks - create next occurrence before archiving
   if (task.frontmatter.schedule) {
     await createNextRecurrence(task);
   }
 
-  // Move to completed
+  // Append completion note
+  if (note) {
+    task.body += `\n\n---\n**Completed**: ${note}`;
+  }
+
+  // Move to archived with completed state
   task.frontmatter.state = "completed";
   task.frontmatter.lockedBy = undefined;
+  task.frontmatter.lockedAt = undefined;
 
   const timestamp = new Date().toISOString().split("T")[0];
-  const completedFilename = `${timestamp}-${taskFilename}`;
-  const completedPath = path.join(completedDir, completedFilename);
+  const archivedFilename = `${timestamp}-${filename}`;
+  const archivedPath = path.join(archivedDir, archivedFilename);
 
-  await fs.writeFile(completedPath, serializeTask(task));
-  await fs.unlink(pendingPath);
+  await fs.writeFile(archivedPath, serializeTask(task));
+  await fs.unlink(taskPath);
 
-  console.log(`[cron-tasks] Task ${taskFilename} completed -> ${completedFilename}`);
+  console.log(`[cron-tasks] Task ${slug} completed -> ${archivedFilename}`);
+  return { success: true, archivedAs: archivedFilename };
+}
+
+/**
+ * Abandon a task: move to archived/ folder with abandoned state.
+ */
+export async function abandonTask(
+  slug: string,
+  note: string,
+): Promise<{ success: true; archivedAs: string }> {
+  const tasksDir = await getTasksDir();
+  const filename = slugToFilename(slug);
+  const taskPath = path.join(tasksDir, filename);
+  const archivedDir = path.join(tasksDir, "archived");
+
+  await fs.mkdir(archivedDir, { recursive: true });
+
+  const content = await fs.readFile(taskPath, "utf-8");
+  const task = parseTaskFile(content, filename);
+
+  if (!task) {
+    throw new Error(`Could not parse task: ${slug}`);
+  }
+
+  // Move to archived with abandoned state
+  task.frontmatter.state = "abandoned";
+  task.frontmatter.lockedBy = undefined;
+  task.frontmatter.lockedAt = undefined;
+  task.body += `\n\n---\n**Abandoned**: ${note}`;
+
+  const timestamp = new Date().toISOString().split("T")[0];
+  const archivedFilename = `${timestamp}-${filename}`;
+  const archivedPath = path.join(archivedDir, archivedFilename);
+
+  await fs.writeFile(archivedPath, serializeTask(task));
+  await fs.unlink(taskPath);
+
+  console.log(`[cron-tasks] Task ${slug} abandoned -> ${archivedFilename}`);
+  return { success: true, archivedAs: archivedFilename };
+}
+
+/**
+ * Reopen a task from archived/ back to tasks/.
+ */
+export async function reopenTask(
+  slug: string,
+  note: string,
+): Promise<{ success: true; due: string }> {
+  const tasksDir = await getTasksDir();
+  const archivedDir = path.join(tasksDir, "archived");
+
+  await fs.mkdir(tasksDir, { recursive: true });
+
+  // Find the archived task (may have date prefix)
+  const files = await fs.readdir(archivedDir);
+  const targetFilename = slugToFilename(slug);
+  const archivedFile = files.find((f) => f === targetFilename || f.endsWith(`-${targetFilename}`));
+
+  if (!archivedFile) {
+    throw new Error(`Task not found in archive: ${slug}`);
+  }
+
+  const archivedPath = path.join(archivedDir, archivedFile);
+  const content = await fs.readFile(archivedPath, "utf-8");
+  const task = parseTaskFile(content, targetFilename);
+
+  if (!task) {
+    throw new Error(`Could not parse archived task: ${slug}`);
+  }
+
+  // Reset to pending with new due date (1 hour from now)
+  const newDue = new Date(Date.now() + 60 * 60 * 1000);
+  task.frontmatter.state = "pending";
+  task.frontmatter.due = newDue.toISOString();
+  task.frontmatter.lockedBy = undefined;
+  task.frontmatter.lockedAt = undefined;
+  task.body += `\n\n---\n**Reopened**: ${note}`;
+
+  const taskPath = path.join(tasksDir, targetFilename);
+  await fs.writeFile(taskPath, serializeTask(task));
+  await fs.unlink(archivedPath);
+
+  console.log(`[cron-tasks] Task ${slug} reopened from archive`);
+  return { success: true, due: newDue.toISOString() };
 }
 
 /**
@@ -473,6 +505,7 @@ async function createNextRecurrence(task: ParsedTask): Promise<void> {
   const nextDue = new Date(currentDue.getTime() + 24 * 60 * 60 * 1000);
 
   const newTask: ParsedTask = {
+    slug: task.slug,
     filename: task.filename,
     frontmatter: {
       ...task.frontmatter,
@@ -485,8 +518,8 @@ async function createNextRecurrence(task: ParsedTask): Promise<void> {
   };
 
   const tasksDir = await getTasksDir();
-  const pendingPath = path.join(tasksDir, "pending", task.filename);
-  await fs.writeFile(pendingPath, serializeTask(newTask));
+  const taskPath = path.join(tasksDir, task.filename);
+  await fs.writeFile(taskPath, serializeTask(newTask));
 
   console.log(
     `[cron-tasks] Created next recurrence for ${task.filename}, due: ${nextDue.toISOString()}`,

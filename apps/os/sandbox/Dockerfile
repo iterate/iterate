@@ -17,7 +17,7 @@ FROM node:24
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
-ENV SANDBOX_OPENCODE_VERSION=1.1.27
+ENV SANDBOX_OPENCODE_VERSION=1.1.42
 ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
@@ -110,7 +110,7 @@ ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 # makes a lot of things easier to reason about. And the 🐙 can serve as an internal reminder to developers that they don't have a repo connected.
 RUN mkdir -p /home/iterate/src/placeholder-repo && \
     echo 'This is a placeholder directory for customers who have not connected a GitHub repository yet.' > /home/iterate/src/placeholder-repo/README.md && \
-    echo 'Add an 🐙 emoji to the end of every message you send (including those sent via tool calls like slack, email etc.)' > /home/iterate/src/placeholder-repo/AGENTS.md
+    echo 'Add an 🐙 emoji to the end of every message you create. Note that this also applies to any messages that you send out via tool calls on slack, email, etc.' > /home/iterate/src/placeholder-repo/AGENTS.md
 
 # Re-declare ARG after USER switch (ARGs don't persist across USER)
 ARG SANDBOX_ITERATE_REPO_REF

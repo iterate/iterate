@@ -4,171 +4,163 @@ import { parse as parseMs } from "ms";
 import { z } from "zod/v4";
 import {
   getTasksDir,
+  getArchivedDir,
   parseTaskFile,
   processPendingTasks,
   serializeTask,
+  slugToFilename,
+  filenameToSlug,
+  completeTask,
+  abandonTask,
+  reopenTask,
+  TaskPriority,
   type ParsedTask,
 } from "@iterate-com/daemon/server/cron-tasks/scheduler.ts";
 import { t } from "../trpc.ts";
 
+// ============================================================================
+// Input Schemas
+// ============================================================================
+
 /**
- * Parse a duration string (e.g. "1h", "30m", "2 days") and return an ISO timestamp.
+ * Parse a duration string (e.g. "1h", "30m", "2 days") or ISO timestamp.
  */
-const Due = z.union([
-  z
-    .string()
-    .transform((val, ctx) => {
-      if (val.match(/^\d4-/)) {
-        // looks like an ISO timestamp
-        const date = new Date(val);
-        if (!Number.isFinite(date.getTime())) {
-          ctx.addIssue({
-            code: "custom",
-            message: `Invalid ISO timestamp: "${val}"`,
-          });
-          return z.NEVER;
-        }
-        return date;
-      }
-      const ms = parseMs(val);
-      if (!Number.isFinite(ms)) {
-        ctx.addIssue({
-          code: "custom",
-          message: `Invalid duration: "${val}". Use formats like "1h", "30m", "2 days", "1 week"`,
-        });
+const DueInput = z
+  .string()
+  .transform((val, ctx) => {
+    if (val.match(/^\d{4}-/)) {
+      // Looks like an ISO timestamp
+      const date = new Date(val);
+      if (!Number.isFinite(date.getTime())) {
+        ctx.addIssue({ code: "custom", message: `Invalid ISO timestamp: "${val}"` });
         return z.NEVER;
       }
-      return new Date(Date.now() + ms);
-    })
-    .describe(
-      "Either the time until the task runs (e.g. '1h', '30m', '2 days', '1 week') or an ISO timestamp (e.g. '2026-01-29T09:00:00Z' or '2026-01-29T09:00:00-07:00'). Note that you will need to know the user's timezone to use the ISO timestamp.",
-    ),
-]);
+      return date;
+    }
+    const ms = parseMs(val);
+    if (!Number.isFinite(ms)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Invalid duration: "${val}". Use formats like "1h", "30m", "2 days", "1 week"`,
+      });
+      return z.NEVER;
+    }
+    return new Date(Date.now() + ms);
+  })
+  .describe(
+    "Duration until task runs (e.g. '1h', '30m', '2 days') or ISO timestamp (e.g. '2026-01-29T09:00:00Z')",
+  );
 
-const TASKS_DIR_DESCRIPTION =
-  "Tasks are stored as markdown files in the cron-tasks directory. " +
-  "Use 'pending' for tasks waiting to run, 'completed' for archived tasks.";
+const SlugInput = z.string().describe("Task slug (e.g. 'daily-report' or 'daily-report.md')");
 
-/**
- * Get the folder path for a given state.
- */
-async function getStateFolder(state: "pending" | "completed"): Promise<string> {
-  return path.join(await getTasksDir(), state);
+const NoteInput = z
+  .string()
+  .describe("Note explaining outcome, reason, or context (e.g. 'Done. Posted to #general')");
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+async function listTasks(): Promise<Array<{ slug: string; filename: string; task: ParsedTask }>> {
+  const tasksDir = await getTasksDir();
+
+  try {
+    await fs.mkdir(tasksDir, { recursive: true });
+  } catch {
+    // ignore
+  }
+
+  const entries = await fs.readdir(tasksDir, { withFileTypes: true });
+  const mdFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
+
+  const results: Array<{ slug: string; filename: string; task: ParsedTask }> = [];
+
+  for (const file of mdFiles) {
+    const content = await fs.readFile(path.join(tasksDir, file), "utf-8");
+    const task = parseTaskFile(content, file);
+    if (task) {
+      results.push({ slug: task.slug, filename: file, task });
+    }
+  }
+
+  return results;
 }
 
+async function getTaskBySlug(slug: string): Promise<{ task: ParsedTask; filepath: string } | null> {
+  const tasksDir = await getTasksDir();
+  const filename = slugToFilename(slug);
+
+  try {
+    const filepath = path.join(tasksDir, filename);
+    const content = await fs.readFile(filepath, "utf-8");
+    const task = parseTaskFile(content, filename);
+    if (task) return { task, filepath };
+  } catch {
+    // Not found
+  }
+
+  return null;
+}
+
+// ============================================================================
+// Router
+// ============================================================================
+
 export const tasksRouter = t.router({
-  list: t.procedure
-    .meta({ description: `List tasks. ${TASKS_DIR_DESCRIPTION}` })
-    .input(
-      z.object({
-        state: z
-          .enum(["pending", "completed"])
-          .default("pending")
-          .describe("Task state folder to list from"),
-      }),
-    )
-    .query(async ({ input }) => {
-      const folder = await getStateFolder(input.state);
-
-      try {
-        await fs.mkdir(folder, { recursive: true });
-      } catch {
-        // ignore
-      }
-
-      const files = await fs.readdir(folder);
-      const mdFiles = files.filter((f) => f.endsWith(".md"));
-
-      const tasks: Array<{
-        filename: string;
-        state: string;
-        due: string;
-        schedule?: string;
-        priority?: string;
-        lockedBy?: string;
-      }> = [];
-
-      for (const file of mdFiles) {
-        const content = await fs.readFile(path.join(folder, file), "utf-8");
-        const task = parseTaskFile(content, file);
-        if (task) {
-          tasks.push({
-            filename: task.filename,
-            state: task.frontmatter.state,
-            due: task.frontmatter.due,
-            schedule: task.frontmatter.schedule,
-            priority: task.frontmatter.priority,
-            lockedBy: task.frontmatter.lockedBy,
-          });
-        }
-      }
-
-      return { tasks, folder };
-    }),
+  list: t.procedure.meta({ description: "List active tasks" }).query(async () => {
+    const tasks = await listTasks();
+    return {
+      tasks: tasks.map(({ slug, task }) => ({
+        slug,
+        state: task.frontmatter.state,
+        due: task.frontmatter.due,
+        schedule: task.frontmatter.schedule,
+        priority: task.frontmatter.priority,
+        lockedBy: task.frontmatter.lockedBy,
+      })),
+    };
+  }),
 
   get: t.procedure
-    .meta({ description: `Get a task by filename. ${TASKS_DIR_DESCRIPTION}` })
-    .input(
-      z.object({
-        filename: z.string().describe("Task filename (e.g. daily-report.md)"),
-        state: z
-          .enum(["pending", "completed"])
-          .default("pending")
-          .describe("Task state folder to look in"),
-      }),
-    )
+    .meta({ description: "Get a task by slug" })
+    .input(z.object({ slug: SlugInput }))
     .query(async ({ input }) => {
-      const folder = await getStateFolder(input.state);
-      const filepath = path.join(folder, input.filename);
-
-      try {
-        const content = await fs.readFile(filepath, "utf-8");
-        const task = parseTaskFile(content, input.filename);
-        if (!task) {
-          return { error: "Failed to parse task file", task: null };
-        }
-        return { task, filepath };
-      } catch {
-        return { error: `File not found: ${filepath}`, task: null };
+      const result = await getTaskBySlug(input.slug);
+      if (!result) {
+        return { error: `Task not found: ${input.slug}`, task: null };
       }
+      return { task: result.task, filepath: result.filepath };
     }),
 
   add: t.procedure
-    .meta({ description: `Add a new pending task. ${TASKS_DIR_DESCRIPTION}` })
+    .meta({ description: "Add a new task" })
     .input(
       z.object({
-        filename: z
-          .string()
-          .describe("Task filename (e.g. daily-report.md). Will be created in pending/"),
-        body: z.string().describe("Task body (markdown content after frontmatter)"),
-        due: Due,
-        schedule: z
-          .string()
-          .optional()
-          .describe("Cron expression for recurring tasks (e.g. '0 9 * * *')"),
-        priority: z
-          .enum(["low", "normal", "high"])
-          .optional()
-          .default("normal")
-          .describe("Task priority"),
+        slug: SlugInput.describe("Task slug (e.g. 'daily-report')"),
+        body: z.string().describe("Task body (markdown content)"),
+        due: DueInput,
+        schedule: z.string().optional().describe("Cron expression for recurring tasks"),
+        priority: TaskPriority.optional().default("normal"),
       }),
     )
     .mutation(async ({ input }) => {
-      const folder = await getStateFolder("pending");
-      await fs.mkdir(folder, { recursive: true });
+      const tasksDir = await getTasksDir();
+      await fs.mkdir(tasksDir, { recursive: true });
 
-      const filepath = path.join(folder, input.filename);
+      const filename = slugToFilename(input.slug);
+      const filepath = path.join(tasksDir, filename);
 
-      // Check if file already exists
+      // Check if already exists
       try {
         await fs.access(filepath);
-        return { error: `Task already exists: ${input.filename}`, created: false };
+        return { error: `Task already exists: ${input.slug}`, created: false };
       } catch {
-        // File doesn't exist, good to create
+        // Good, doesn't exist
       }
 
       const task: Omit<ParsedTask, "raw"> = {
-        filename: input.filename,
+        slug: filenameToSlug(filename),
+        filename,
         frontmatter: {
           state: "pending",
           due: input.due.toISOString(),
@@ -178,67 +170,35 @@ export const tasksRouter = t.router({
         body: input.body,
       };
 
-      const content = serializeTask(task);
-      await fs.writeFile(filepath, content);
-
-      return { created: true, filepath, task: task.frontmatter };
+      await fs.writeFile(filepath, serializeTask(task));
+      return { created: true, slug: task.slug, filepath };
     }),
 
-  append: t.procedure
-    .meta({ description: `Append to a task. ${TASKS_DIR_DESCRIPTION}` })
-    .input(
-      z.object({
-        state: z
-          .enum(["pending", "in_progress", "completed"])
-          .default("pending")
-          .describe("Task state folder to look in"),
-        filename: z.string().describe("Task filename (e.g. daily-report.md)"),
-        body: z.string().describe("Task body (markdown content after frontmatter)"),
-      }),
-    )
+  complete: t.procedure
+    .meta({ description: "Mark a task as completed and move to archive" })
+    .input(z.object({ slug: SlugInput, note: NoteInput }))
     .mutation(async ({ input }) => {
-      const folder = await getStateFolder("pending");
-      const filepath = path.join(folder, input.filename);
-      const content = await fs.readFile(filepath, "utf-8");
-      const task = parseTaskFile(content, input.filename);
-      if (!task) {
-        return { error: "Failed to parse task file", task: null };
-      }
-      task.body = [task.body.trim(), input.body.trim()].join("\n\n");
-      const updated = serializeTask(task);
-      await fs.writeFile(filepath, updated);
-      return { task: task.frontmatter };
+      return await completeTask(input.slug, input.note);
     }),
 
-  update: t.procedure
-    .meta({ description: `Replace the entire body of a task. ${TASKS_DIR_DESCRIPTION}` })
-    .input(
-      z.object({
-        state: z
-          .enum(["pending", "in_progress", "completed"])
-          .default("pending")
-          .describe("Task state folder to look in"),
-        filename: z.string().describe("Task filename (e.g. daily-report.md)"),
-        body: z.string().describe("Replacement task body (markdown content after frontmatter)"),
-      }),
-    )
+  abandon: t.procedure
+    .meta({ description: "Abandon a task and move to archive" })
+    .input(z.object({ slug: SlugInput, note: NoteInput }))
     .mutation(async ({ input }) => {
-      const folder = await getStateFolder("pending");
-      const filepath = path.join(folder, input.filename);
-      const content = await fs.readFile(filepath, "utf-8");
-      const task = parseTaskFile(content, input.filename);
-      if (!task) {
-        return { error: "Failed to parse task file", task: null };
-      }
-      task.body = input.body;
-      const updated = serializeTask(task);
-      await fs.writeFile(filepath, updated);
-      return { task: task.frontmatter };
+      return await abandonTask(input.slug, input.note);
+    }),
+
+  reopen: t.procedure
+    .meta({ description: "Reopen a task from archive" })
+    .input(z.object({ slug: SlugInput, note: NoteInput }))
+    .mutation(async ({ input }) => {
+      return await reopenTask(input.slug, input.note);
     }),
 
   processPending: t.procedure
-    .meta({ description: `Process pending tasks. ${TASKS_DIR_DESCRIPTION}` })
+    .meta({ description: "Process tasks that are due" })
     .mutation(async () => {
       await processPendingTasks();
+      return { success: true };
     }),
 });

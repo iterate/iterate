@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTaskFile, serializeTask } from "./scheduler.ts";
+import { parseTaskFile, serializeTask } from "./task-parser.ts";
 
 describe("parseTaskFile", () => {
   it("parses valid task with all fields", () => {
@@ -82,6 +82,7 @@ Send a summary to Slack.`;
 
   it("handles task without optional fields", () => {
     const task = {
+      slug: "simple",
       filename: "simple.md",
       frontmatter: {
         state: "pending" as const,
