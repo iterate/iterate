@@ -486,11 +486,16 @@ export async function reopenTask(
     const content = await fs.readFile(taskPath, "utf-8");
     task = parseTaskFile(content, targetFilename);
     sourcePath = taskPath;
-  } else if (existsSync(path.join(archivedDir, targetFilename))) {
-    sourcePath = path.join(archivedDir, targetFilename);
-    const content = await fs.readFile(sourcePath, "utf-8");
-    task = parseTaskFile(content, targetFilename);
-    fromArchive = true;
+  } else {
+    for await (const filename of fs.glob(`*-${targetFilename}`, { cwd: archivedDir })) {
+      if (filename.replace(/^\d{4}-\d{2}-\d{2}-/, "") === targetFilename) {
+        sourcePath = path.join(archivedDir, filename);
+        const content = await fs.readFile(sourcePath, "utf-8");
+        task = parseTaskFile(content, targetFilename);
+        fromArchive = true;
+        break;
+      }
+    }
   }
 
   if (!task || !sourcePath) {
