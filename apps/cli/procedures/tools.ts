@@ -5,12 +5,11 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
-function getSlackClient() {
+// add debug logging by default so that agents always see the message_ts info etc. when they send messages
+function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
   const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
   if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
-  return new WebClient(token, {
-    logLevel: LogLevel.DEBUG,
-  });
+  return new WebClient(token, { logLevel });
 }
 
 function getResendClient() {
