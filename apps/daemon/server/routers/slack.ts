@@ -12,7 +12,7 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -85,6 +85,92 @@ interface ParsedReaction {
   channel: string;
 }
 
+/**
+ * Associate a Slack thread with an agent.
+ * Used by cron agents to claim threads they've posted to,
+ * so replies route back to them instead of creating a new agent.
+ */
+export async function associateSlackThread(params: {
+  agentSlug: string;
+  channel: string;
+  threadTs: string;
+}): Promise<{ success: true; id: string; agentSlug: string; channel: string; threadTs: string }> {
+  const { agentSlug, channel, threadTs } = params;
+  const id = `ast_${nanoid(12)}`;
+
+  await db
+    .insert(schema.agentSlackThreads)
+    .values({ id, agentSlug, channel, threadTs })
+    .onConflictDoUpdate({
+      target: [schema.agentSlackThreads.channel, schema.agentSlackThreads.threadTs],
+      set: { agentSlug },
+    });
+
+  console.log(`[daemon/slack] Associated thread ${channel}/${threadTs} with agent ${agentSlug}`);
+  return { success: true, id, agentSlug, channel, threadTs };
+}
+
+/**
+ * Look up which agent is associated with a Slack thread.
+ */
+export async function getSlackThreadAssociation(params: {
+  channel: string;
+  threadTs: string;
+}): Promise<{ found: false } | { found: true; agentSlug: string }> {
+  const { channel, threadTs } = params;
+
+  const association = await db
+    .select()
+    .from(schema.agentSlackThreads)
+    .where(
+      and(
+        eq(schema.agentSlackThreads.channel, channel),
+        eq(schema.agentSlackThreads.threadTs, threadTs),
+      ),
+    )
+    .limit(1);
+
+  if (!association[0]) {
+    return { found: false };
+  }
+
+  return { found: true, agentSlug: association[0].agentSlug };
+}
+
+// HTTP endpoints (kept for backward compat / debugging)
+slackRouter.post("/associate", async (c) => {
+  const body = await c.req.json();
+  const { agentSlug, channel, threadTs } = body as {
+    agentSlug: string;
+    channel: string;
+    threadTs: string;
+  };
+
+  if (!agentSlug || !channel || !threadTs) {
+    return c.json({ error: "Missing required fields: agentSlug, channel, threadTs" }, 400);
+  }
+
+  try {
+    const result = await associateSlackThread({ agentSlug, channel, threadTs });
+    return c.json(result);
+  } catch (error) {
+    console.error("[daemon/slack] Failed to associate thread:", error);
+    return c.json({ error: "Failed to associate thread" }, 500);
+  }
+});
+
+slackRouter.get("/association", async (c) => {
+  const channel = c.req.query("channel");
+  const threadTs = c.req.query("threadTs");
+
+  if (!channel || !threadTs) {
+    return c.json({ error: "Missing required query params: channel, threadTs" }, 400);
+  }
+
+  const result = await getSlackThreadAssociation({ channel, threadTs });
+  return c.json(result);
+});
+
 slackRouter.post("/webhook", async (c) => {
   const payload = (await c.req.json()) as SlackWebhookPayload;
 
@@ -113,9 +199,11 @@ slackRouter.post("/webhook", async (c) => {
         });
       }
 
-      const threadId = sanitizeThreadId(threadTs);
-      const agentSlug = `slack-${threadId}`;
-      const existingAgent = await getAgent(agentSlug);
+      // Check for associated agent first, then fall back to slack-{thread_ts}
+      const { agent: existingAgent, agentSlug } = await findAgentForThread(
+        parsed.channel,
+        threadTs,
+      );
 
       if (!existingAgent) {
         return c.json({
@@ -138,17 +226,17 @@ slackRouter.post("/webhook", async (c) => {
 
   // From here on, parsed is a ParsedMessage (not a reaction)
   const { event, threadTs } = parsed as ParsedMessage;
-  const threadId = sanitizeThreadId(threadTs);
-  const agentSlug = `slack-${threadId}`;
+  const channel = event.channel || "";
 
   try {
-    const existingAgent = await getAgent(agentSlug);
+    // Check for associated agent first, then fall back to slack-{thread_ts}
+    const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {
       if (existingAgent) {
-        // Rare: agent already exists for what we think is a new thread
-        const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+        // Agent exists (either via association or slack-{thread_ts})
+        const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
         await appendToAgent(existingAgent, message, {
           workingDirectory: await getCustomerRepoPath(),
         });
@@ -161,17 +249,20 @@ slackRouter.post("/webhook", async (c) => {
         });
       }
 
+      // No existing agent - create new slack-{thread_ts} agent
+      const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
       const agent = await createAgent({
-        slug: agentSlug,
+        slug: newAgentSlug,
         harnessType: "opencode",
         workingDirectory: await getCustomerRepoPath(),
+        initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
       });
 
-      const message = formatNewThreadMentionMessage(event, threadTs, eventId);
+      const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
       await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
-        agentSlug,
+        agentSlug: newAgentSlug,
         created: true,
         case: "new_thread_mention",
         eventId,
@@ -182,21 +273,24 @@ slackRouter.post("/webhook", async (c) => {
     if (parsed.case === "mid_thread_mention") {
       let agent = existingAgent;
       let wasCreated = false;
+      let finalAgentSlug = agentSlug;
 
       if (!agent) {
+        finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
         agent = await createAgent({
-          slug: agentSlug,
+          slug: finalAgentSlug,
           harnessType: "opencode",
           workingDirectory: await getCustomerRepoPath(),
+          initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
         });
         wasCreated = true;
       }
 
-      const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+      const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
       await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
-        agentSlug,
+        agentSlug: finalAgentSlug,
         created: wasCreated,
         case: "mid_thread_mention",
         eventId,
@@ -319,6 +413,39 @@ function sanitizeThreadId(ts: string): string {
 }
 
 /**
+ * Find the agent associated with a Slack thread.
+ * First checks for explicit associations (from cron agents posting to slack),
+ * then falls back to the slack-{thread_ts} naming convention.
+ */
+async function findAgentForThread(
+  channel: string,
+  threadTs: string,
+): Promise<{ agent: Awaited<ReturnType<typeof getAgent>>; agentSlug: string }> {
+  // Check for explicit association first
+  const association = await db
+    .select()
+    .from(schema.agentSlackThreads)
+    .where(
+      and(
+        eq(schema.agentSlackThreads.channel, channel),
+        eq(schema.agentSlackThreads.threadTs, threadTs),
+      ),
+    )
+    .limit(1);
+
+  if (association[0]) {
+    const agent = await getAgent(association[0].agentSlug);
+    return { agent, agentSlug: association[0].agentSlug };
+  }
+
+  // Fall back to slack-{thread_ts} convention
+  const threadId = sanitizeThreadId(threadTs);
+  const agentSlug = `slack-${threadId}`;
+  const agent = await getAgent(agentSlug);
+  return { agent, agentSlug };
+}
+
+/**
  * Store the raw webhook event in SQLite for later inspection.
  * Uses Slack's event_id for deduplication - if already stored, returns existing ID.
  */
@@ -354,11 +481,11 @@ function formatNewThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
-  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
   return [
     `[Agent: ${agentSlug}] New Slack thread started.`,
@@ -379,12 +506,12 @@ function formatMidThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
-  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
   const lines = [
     `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,

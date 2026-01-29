@@ -360,6 +360,9 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      dedent:
+        specifier: ^1.7.0
+        version: 1.7.0
       drizzle-kit:
         specifier: ^0.31.8
         version: 0.31.8

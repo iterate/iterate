@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import dedent from "dedent";
 import { parseDocument } from "yaml";
 import { z } from "zod/v4";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
@@ -220,7 +221,7 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
     await fs.writeFile(taskPath, serializeTask(task));
 
     // Build prompt from task body
-    const prompt = buildPromptFromTask(task);
+    const prompt = buildPromptFromTask(task, slug);
 
     // Create cron agent
     const workingDirectory = await getCustomerRepoPath();
@@ -228,7 +229,7 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
       slug,
       harnessType: "opencode",
       workingDirectory,
-      initialPrompt: prompt,
+      initialPrompt: `[Agent slug: ${slug}]\n[Source: cron]\n[Task: ${task.filename}]`,
     });
 
     console.log(`[cron-tasks] Created agent ${agent.slug} for task ${task.filename}`);
@@ -254,8 +255,11 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
 /**
  * Build the agent prompt from task content.
  */
-function buildPromptFromTask(task: ParsedTask): string {
+function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
   const lines = [
+    `[Agent: ${agentSlug}]`,
+    `[Task file: ${task.filename}]`,
+    "",
     "You are executing a scheduled cron task. Here are your instructions:",
     "",
     "---",
@@ -270,6 +274,22 @@ function buildPromptFromTask(task: ParsedTask): string {
     lines.push(`This is a recurring task with schedule: ${task.frontmatter.schedule}`);
     lines.push("If this task should no longer recur, mention that the schedule should be removed.");
   }
+
+  // Add Slack association instructions
+  lines.push(dedent`
+
+    ## Slack Thread Association
+
+    If you start a new slack thread as part of this task, associate the thread with this agent
+    so that replies in that thread are routed back to you:
+
+    \`\`\`bash
+    iterate tool slack associate --agentSlug "${agentSlug}" --channel <CHANNEL_ID> --threadTs <THREAD_TS>
+    \`\`\`
+
+    The channel and thread_ts are returned when you post a message via \`iterate tool slack ...\`.
+    For recurring tasks, user feedback in those threads can inform how you approach the next run.
+  `);
 
   return lines.join("\n");
 }

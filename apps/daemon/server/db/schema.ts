@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const agentTypes = ["claude-code", "opencode", "pi"] as const;
@@ -34,3 +34,24 @@ export const agents = sqliteTable("agents", {
 
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
+
+/**
+ * Links agents to Slack threads they've created or are associated with.
+ * Allows cron agents (or any agent) to "claim" a thread so that
+ * replies in that thread route back to the originating agent
+ * rather than creating a new slack-{thread_ts} agent.
+ */
+export const agentSlackThreads = sqliteTable(
+  "agent_slack_threads",
+  {
+    id: text().primaryKey(),
+    agentSlug: text("agent_slug").notNull(),
+    channel: text().notNull(),
+    threadTs: text("thread_ts").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+  },
+  (table) => [uniqueIndex("unique_channel_thread").on(table.channel, table.threadTs)],
+);
+
+export type AgentSlackThread = typeof agentSlackThreads.$inferSelect;
+export type NewAgentSlackThread = typeof agentSlackThreads.$inferInsert;

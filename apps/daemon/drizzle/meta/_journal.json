@@ -15,6 +15,13 @@
       "when": 1768853328375,
       "tag": "0001_cute_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1769645221905,
+      "tag": "0002_lucky_black_queen",
+      "breakpoints": true
     }
   ]
 }
