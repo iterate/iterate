@@ -257,6 +257,7 @@ export const projectEnvVar = pgTable(
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     value: t.text().notNull(), // Plain text - secrets go in the secret table
+    description: t.text(), // Optional description for agents (shown as # comment in .env)
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),

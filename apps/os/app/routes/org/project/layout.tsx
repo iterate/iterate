@@ -8,15 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useMemo } from "react";
-import {
-  GitBranch,
-  Home,
-  Plug,
-  Server,
-  Settings,
-  ShieldCheck,
-  SlidersHorizontal,
-} from "lucide-react";
+import { GitBranch, Home, Server, Settings, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
@@ -193,8 +185,8 @@ function ProjectLayout() {
   const navItems = [
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/connectors" as const,
-      label: "Connectors",
-      icon: Plug,
+      label: "Env vars & secrets",
+      icon: SlidersHorizontal,
     },
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
@@ -205,11 +197,6 @@ function ProjectLayout() {
       to: "/orgs/$organizationSlug/projects/$projectSlug/repo" as const,
       label: "Repo",
       icon: GitBranch,
-    },
-    {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/env-vars" as const,
-      label: "Env vars",
-      icon: SlidersHorizontal,
     },
     {
       to: "/orgs/$organizationSlug/projects/$projectSlug/approvals" as const,

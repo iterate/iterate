@@ -658,6 +658,24 @@ export const projectRouter = router({
       return updated;
     }),
 
+  listSecrets: projectProtectedProcedure.query(async ({ ctx }) => {
+    const secrets = await ctx.db.query.secret.findMany({
+      where: eq(schema.secret.projectId, ctx.project.id),
+      orderBy: (s, { desc }) => [desc(s.createdAt)],
+    });
+
+    return secrets.map((s) => ({
+      id: s.id,
+      key: s.key,
+      scope: s.userId ? ("user" as const) : ("project" as const),
+      userEmail: s.userId === ctx.user.id ? ctx.user.email : null,
+      lastSuccessAt: s.lastSuccessAt,
+      lastFailedAt: s.lastFailedAt,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    }));
+  }),
+
   summarizeEgressApproval: projectProtectedMutation
     .input(z.object({ approvalId: z.string() }))
     .mutation(async ({ ctx, input }) => {

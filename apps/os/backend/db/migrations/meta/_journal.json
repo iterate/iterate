@@ -71,6 +71,13 @@
       "when": 1769531893885,
       "tag": "0009_hot_sleeper",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1769710890253,
+      "tag": "0010_thin_kree",
+      "breakpoints": true
     }
   ]
 }

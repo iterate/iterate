@@ -32,6 +32,7 @@ export const envVarRouter = router({
         machineId: v.machineId,
         type: v.type,
         value: v.value,
+        description: v.description,
         createdAt: v.createdAt,
         updatedAt: v.updatedAt,
       }));
@@ -49,6 +50,7 @@ export const envVarRouter = router({
               "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
           }),
         value: z.string(),
+        description: z.string().optional(),
         machineId: z.string().optional(),
       }),
     )
@@ -64,7 +66,7 @@ export const envVarRouter = router({
       if (existing) {
         const [updated] = await ctx.db
           .update(projectEnvVar)
-          .set({ value: input.value })
+          .set({ value: input.value, description: input.description })
           .where(eq(projectEnvVar.id, existing.id))
           .returning();
 
@@ -81,6 +83,7 @@ export const envVarRouter = router({
           key: updated.key,
           machineId: updated.machineId,
           value: updated.value,
+          description: updated.description,
           createdAt: updated.createdAt,
           updatedAt: updated.updatedAt,
         };
@@ -93,6 +96,7 @@ export const envVarRouter = router({
           machineId: input.machineId,
           key: input.key,
           value: input.value,
+          description: input.description,
         })
         .returning();
 
@@ -116,6 +120,7 @@ export const envVarRouter = router({
         key: created.key,
         machineId: created.machineId,
         value: created.value,
+        description: created.description,
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
       };
