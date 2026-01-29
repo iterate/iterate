@@ -1,6 +1,14 @@
 import { execSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,10 +33,17 @@ const dockerfilePath = join(tempDir, "Dockerfile");
 try {
   const commitSha = getCommitSha();
   console.log(`Bundling repo at ${commitSha}`);
-  execSync(`git bundle create ${join(tempDir, "iterate.bundle")} HEAD`, {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
+  const cacheRoot = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+  const bundleDir = join(cacheRoot, "iterate", "bundles");
+  const bundlePath = join(bundleDir, `${commitSha}.bundle`);
+  mkdirSync(bundleDir, { recursive: true });
+  if (!existsSync(bundlePath)) {
+    execSync(`git bundle create ${bundlePath} HEAD`, {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+  }
+  copyFileSync(bundlePath, join(tempDir, "iterate.bundle"));
 
   const entryPath = join(tempDir, "apps/os/sandbox");
   mkdirSync(entryPath, { recursive: true });
