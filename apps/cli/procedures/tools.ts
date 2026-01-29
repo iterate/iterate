@@ -1,14 +1,15 @@
 import { createRequire } from "node:module";
 import dedent from "dedent";
-import { WebClient } from "@slack/web-api";
+import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
-function getSlackClient() {
+// add debug logging by default so that agents always see the message_ts info etc. when they send messages
+function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
   const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
   if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
-  return new WebClient(token);
+  return new WebClient(token, { logLevel });
 }
 
 function getResendClient() {
@@ -19,6 +20,7 @@ function getResendClient() {
 
 export const toolsRouter = t.router({
   slack: t.procedure
+    .meta({ description: "Run arbitrary Slack API code" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`

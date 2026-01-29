@@ -45,6 +45,8 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
 
   const envVars = [
     "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    // Set customer repo path for daemon's getServerCwd endpoint
+    `ITERATE_CUSTOMER_REPO_PATH=${CONTAINER_REPO_PATH}`,
   ];
 
   if (process.env.ANTHROPIC_API_KEY) {

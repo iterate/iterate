@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { simpleGit } from "simple-git";
-
+import { fetchBootstrapData } from "../bootstrap-refresh.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
 // Store for platform-injected env vars
@@ -206,9 +206,14 @@ export function cloneRepos(repos: RepoInfo[]): void {
  * Note: This only returns customer repos (from projectRepo table).
  * The iterate/iterate repo is baked into the Docker image and not tracked here.
  */
-export function getCustomerRepoPath(): string | null {
-  const values = Array.from(clonedReposStatus.values());
-  return values.find((info) => info.status === "cloned" && info.path)?.path || null;
+export async function getCustomerRepoPath(): Promise<string> {
+  if (!process.env.ITERATE_CUSTOMER_REPO_PATH) {
+    await fetchBootstrapData();
+  }
+  if (!process.env.ITERATE_CUSTOMER_REPO_PATH) {
+    throw new Error("ITERATE_CUSTOMER_REPO_PATH is not set");
+  }
+  return process.env.ITERATE_CUSTOMER_REPO_PATH;
 }
 
 /**
