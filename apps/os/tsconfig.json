@@ -32,6 +32,6 @@
       "@/*": ["app/*"]
     }
   },
-  "include": ["./**/*"],
+  "include": ["./**/*", "../daemon/server/routers/agents/sdk-types.d.ts"],
   "exclude": ["node_modules", "dist", "build", "sandbox/pidnap.config.ts"]
 }
