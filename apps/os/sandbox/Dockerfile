@@ -91,7 +91,9 @@ ENV GOPATH="/home/iterate/go"
 
 # Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
 # Uses mmkal's fork with --access-token support for headless/proxy environments
-RUN git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
+# Note: go build -o creates parent dirs automatically, but mkdir for clarity
+RUN mkdir -p /home/iterate/.local/bin && \
+    git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
     cd /tmp/gogcli && \
     git checkout ${SANDBOX_GOGCLI_REF} && \
     go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
