@@ -7,7 +7,7 @@ import {
   useParams,
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import {
   GitBranch,
   Home,
@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
+import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../../hooks/use-posthog-identity.tsx";
@@ -38,8 +39,8 @@ import { HeaderActionsProvider } from "../../../components/header-actions.tsx";
 import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
+  // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
-    // Ensure org exists
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
         organizationSlug: params.organizationSlug,
@@ -59,6 +60,25 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
       });
     }
   },
+
+  // loader: Prefetch data (non-blocking, shows spinner if not ready)
+  loader: ({ context, params }) => {
+    context.queryClient.prefetchQuery(
+      trpc.project.bySlug.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      }),
+    );
+    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+    context.queryClient.prefetchQuery(
+      trpc.machine.list.queryOptions({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      }),
+    );
+  },
+
   component: ProjectLayout,
 });
 
@@ -266,10 +286,21 @@ function ProjectLayout() {
         />
         <main className="w-full max-w-3xl flex-1 overflow-auto">
           <HeaderActionsProvider onActionsChange={setHeaderActions}>
-            <Outlet />
+            <Suspense fallback={<ContentSpinner />}>
+              <Outlet />
+            </Suspense>
           </HeaderActionsProvider>
         </main>
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+/** Content area loading spinner for child routes */
+function ContentSpinner() {
+  return (
+    <div className="flex h-full min-h-[200px] items-center justify-center p-4">
+      <Spinner className="size-6" />
+    </div>
   );
 }

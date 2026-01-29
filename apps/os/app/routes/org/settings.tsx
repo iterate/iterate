@@ -8,6 +8,12 @@ import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/fie
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/settings")({
+  loader: ({ context, params }) => {
+    // Non-blocking prefetch - speeds up perceived load time
+    context.queryClient.prefetchQuery(
+      trpc.organization.bySlug.queryOptions({ organizationSlug: params.organizationSlug }),
+    );
+  },
   component: OrgSettingsPage,
 });
 
