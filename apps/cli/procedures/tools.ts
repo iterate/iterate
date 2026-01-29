@@ -3,7 +3,6 @@ import dedent from "dedent";
 import { WebClient } from "@slack/web-api";
 import { Resend } from "resend";
 import { z } from "zod/v4";
-import { associateSlackThread } from "@iterate-com/daemon/server/routers/slack.ts";
 import { t } from "../trpc.ts";
 
 function getSlackClient() {
@@ -19,50 +18,33 @@ function getResendClient() {
 }
 
 export const toolsRouter = t.router({
-  slack: t.router({
-    run: t.procedure
-      .meta({ description: "Run arbitrary Slack API code" })
-      .input(
-        z.object({
-          code: z.string().meta({ positional: true }).describe(dedent`
-            An JavaScript script that uses a slack client named \`slack\`. For example:
+  slack: t.procedure
+    .meta({ description: "Run arbitrary Slack API code" })
+    .input(
+      z.object({
+        code: z.string().meta({ positional: true }).describe(dedent`
+          An JavaScript script that uses a slack client named \`slack\`. For example:
 
-            await slack.chat.postMessage({
-              channel: "C1234567890",
-              text: "Hello, world!",
-            });
+          await slack.chat.postMessage({
+            channel: "C1234567890",
+            text: "Hello, world!",
+          });
 
-            await slack.reactions.add({
-              channel: "C1234567890",
-              timestamp: "1234567890.123456",
-              name: "thumbsup",
-            });
-          `),
-        }),
-      )
-      .mutation(async ({ input }) => {
-        const require = createRequire(import.meta.url);
-        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-        const _execute = new AsyncFunction("slack", "require", input.code);
-        const result = await _execute(getSlackClient(), require);
-        return result;
+          await slack.reactions.add({
+            channel: "C1234567890",
+            timestamp: "1234567890.123456",
+            name: "thumbsup",
+          });
+        `),
       }),
-    associate: t.procedure
-      .meta({
-        description:
-          "Associate a Slack thread with this agent. Use this after posting a message to claim the thread for receiving replies.",
-      })
-      .input(
-        z.object({
-          agentSlug: z.string().describe("Agent slug to associate with the thread"),
-          channel: z.string().describe("Slack channel ID (e.g. C1234567890)"),
-          threadTs: z.string().describe("Thread timestamp from the posted message"),
-        }),
-      )
-      .mutation(async ({ input }) => {
-        return await associateSlackThread(input);
-      }),
-  }),
+    )
+    .mutation(async ({ input }) => {
+      const require = createRequire(import.meta.url);
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const _execute = new AsyncFunction("slack", "require", input.code);
+      const result = await _execute(getSlackClient(), require);
+      return result;
+    }),
   sendSlackMessage: t.procedure
     .meta({ description: "Send a message to Slack" })
     .input(

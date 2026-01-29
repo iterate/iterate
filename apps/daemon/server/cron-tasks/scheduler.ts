@@ -10,7 +10,7 @@ import dedent from "dedent";
 import { parseDocument } from "yaml";
 import { z } from "zod/v4";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { createAgent, appendToAgent } from "../services/agent-manager.ts";
+import { createAgent, appendToAgent, getAgent } from "../services/agent-manager.ts";
 
 // Default interval: 1 minute
 const DEFAULT_INTERVAL_MS = 1 * 60 * 1000;
@@ -23,6 +23,7 @@ export const TaskFrontmatter = z.object({
   due: z.string(), // ISO timestamp
   schedule: z.string().optional(), // cron expression for recurring
   lockedBy: z.string().optional(), // agent slug when in_progress
+  lockedAt: z.string().optional(), // ISO timestamp when locked
   priority: z.enum(["low", "normal", "high"]).optional(),
 });
 
@@ -74,6 +75,9 @@ export async function startCronTaskScheduler() {
     console.error("[cron-tasks] Error on initial task processing:", err);
   });
   scheduleNext();
+
+  // Start watchdog for stale tasks
+  startStaleTaskWatchdog();
 }
 
 /**
@@ -123,6 +127,9 @@ export function serializeTask(task: Omit<ParsedTask, "raw">): string {
   }
   if (task.frontmatter.lockedBy) {
     lines.push(`lockedBy: ${task.frontmatter.lockedBy}`);
+  }
+  if (task.frontmatter.lockedAt) {
+    lines.push(`lockedAt: ${task.frontmatter.lockedAt}`);
   }
   lines.push(`priority: ${task.frontmatter.priority || "normal"}`);
   lines.push("---");
@@ -204,6 +211,110 @@ export async function processPendingTasks(): Promise<void> {
   }
 }
 
+// Default stale threshold: 1 minute
+const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
+
+/**
+ * Start the stale task watchdog.
+ * Checks for in_progress tasks that have been locked for too long and nudges the agent.
+ */
+function startStaleTaskWatchdog() {
+  const intervalMs = parseInt(process.env.STALE_TASK_INTERVAL_MS || "", 10) || DEFAULT_INTERVAL_MS;
+  const thresholdMs =
+    parseInt(process.env.STALE_TASK_THRESHOLD_MS || "", 10) || DEFAULT_STALE_THRESHOLD_MS;
+
+  console.log(
+    `[cron-tasks] Starting stale task watchdog, interval: ${intervalMs / 1000}s, threshold: ${thresholdMs / 1000}s`,
+  );
+
+  const checkStale = async () => {
+    try {
+      await nudgeStaleTasks(thresholdMs);
+    } catch (err) {
+      console.error("[cron-tasks] Error in stale task watchdog:", err);
+    }
+  };
+
+  // Check periodically
+  setInterval(checkStale, intervalMs);
+}
+
+/**
+ * Find in_progress tasks that have been locked longer than threshold and nudge their agents.
+ */
+async function nudgeStaleTasks(thresholdMs: number): Promise<void> {
+  const tasksDir = await getTasksDir();
+  const pendingDir = path.join(tasksDir, "pending");
+
+  let files: string[];
+  try {
+    files = await fs.readdir(pendingDir);
+  } catch {
+    return; // No pending dir yet
+  }
+
+  const mdFiles = files.filter((f) => f.endsWith(".md"));
+  const now = Date.now();
+
+  for (const file of mdFiles) {
+    const content = await fs.readFile(path.join(pendingDir, file), "utf-8");
+    const task = parseTaskFile(content, file);
+
+    if (!task) continue;
+    if (task.frontmatter.state !== "in_progress") continue;
+    if (!task.frontmatter.lockedBy || !task.frontmatter.lockedAt) continue;
+
+    const lockedAt = new Date(task.frontmatter.lockedAt).getTime();
+    const staleDuration = now - lockedAt;
+
+    if (staleDuration > thresholdMs) {
+      console.log(
+        `[cron-tasks] Task ${file} is stale (locked ${Math.round(staleDuration / 1000)}s ago), nudging agent`,
+      );
+      await nudgeAgent(task);
+    }
+  }
+}
+
+/**
+ * Send a "u ok?" message to the agent working on a stale task.
+ */
+async function nudgeAgent(task: ParsedTask): Promise<void> {
+  const agentSlug = task.frontmatter.lockedBy;
+  if (!agentSlug) return;
+
+  const agent = await getAgent(agentSlug);
+  if (!agent) {
+    console.warn(`[cron-tasks] Agent ${agentSlug} not found for stale task ${task.filename}`);
+    return;
+  }
+
+  const message = dedent`
+    Hey, checking in on task "${task.filename}".
+
+    If you're done, please append your outcome to the task:
+    \`\`\`bash
+    iterate task append --filename "${task.filename}" --body "## Outcome
+
+    <what you did, any message IDs for follow-up>"
+    \`\`\`
+
+    If you're still working, that's fine - just let me know your status.
+    If you got stuck, describe the issue and I can help.
+  `;
+
+  const workingDirectory = await getCustomerRepoPath();
+  await appendToAgent(agent, message, { workingDirectory });
+
+  // Update lockedAt so we don't spam the agent
+  task.frontmatter.lockedAt = new Date().toISOString();
+  const tasksDir = await getTasksDir();
+  const taskPath = path.join(tasksDir, "pending", task.filename);
+  await fs.writeFile(taskPath, serializeTask(task));
+
+  console.log(`[cron-tasks] Nudged agent ${agentSlug} for task ${task.filename}`);
+}
+
 /**
  * Process a single task: create agent, mark in_progress, execute.
  */
@@ -215,9 +326,10 @@ async function processTask(task: ParsedTask, pendingDir: string): Promise<void> 
   console.log(`[cron-tasks] Processing task: ${task.filename} -> agent: ${slug}`);
 
   try {
-    // Mark as in_progress with lockedBy
+    // Mark as in_progress with lockedBy and lockedAt
     task.frontmatter.state = "in_progress";
     task.frontmatter.lockedBy = slug;
+    task.frontmatter.lockedAt = new Date().toISOString();
     await fs.writeFile(taskPath, serializeTask(task));
 
     // Build prompt from task body
@@ -275,20 +387,21 @@ function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
     lines.push("If this task should no longer recur, mention that the schedule should be removed.");
   }
 
-  // Add Slack association instructions
   lines.push(dedent`
 
-    ## Slack Thread Association
+    ## Completing This Task
 
-    If you start a new slack thread as part of this task, associate the thread with this agent
-    so that replies in that thread are routed back to you:
+    When you're done, append your outcome to the task file:
 
     \`\`\`bash
-    iterate tool slack associate --agentSlug "${agentSlug}" --channel <CHANNEL_ID> --threadTs <THREAD_TS>
+    iterate task append --filename "${task.filename}" --body "## Outcome
+
+    <summary of what you did, any thread_ts or message IDs for follow-up>"
     \`\`\`
 
-    The channel and thread_ts are returned when you post a message via \`iterate tool slack ...\`.
-    For recurring tasks, user feedback in those threads can inform how you approach the next run.
+    If you sent a Slack message or email, include the thread_ts/channel or message ID so future
+    runs can check for responses. For recurring tasks, also note any user feedback that should
+    influence how you approach the next run.
   `);
 
   return lines.join("\n");

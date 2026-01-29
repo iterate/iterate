@@ -184,6 +184,58 @@ export const tasksRouter = t.router({
       return { created: true, filepath, task: task.frontmatter };
     }),
 
+  append: t.procedure
+    .meta({ description: `Append to a task. ${TASKS_DIR_DESCRIPTION}` })
+    .input(
+      z.object({
+        state: z
+          .enum(["pending", "in_progress", "completed"])
+          .default("pending")
+          .describe("Task state folder to look in"),
+        filename: z.string().describe("Task filename (e.g. daily-report.md)"),
+        body: z.string().describe("Task body (markdown content after frontmatter)"),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const folder = await getStateFolder("pending");
+      const filepath = path.join(folder, input.filename);
+      const content = await fs.readFile(filepath, "utf-8");
+      const task = parseTaskFile(content, input.filename);
+      if (!task) {
+        return { error: "Failed to parse task file", task: null };
+      }
+      task.body = [task.body.trim(), input.body.trim()].join("\n\n");
+      const updated = serializeTask(task);
+      await fs.writeFile(filepath, updated);
+      return { task: task.frontmatter };
+    }),
+
+  update: t.procedure
+    .meta({ description: `Replace the entire body of a task. ${TASKS_DIR_DESCRIPTION}` })
+    .input(
+      z.object({
+        state: z
+          .enum(["pending", "in_progress", "completed"])
+          .default("pending")
+          .describe("Task state folder to look in"),
+        filename: z.string().describe("Task filename (e.g. daily-report.md)"),
+        body: z.string().describe("Replacement task body (markdown content after frontmatter)"),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const folder = await getStateFolder("pending");
+      const filepath = path.join(folder, input.filename);
+      const content = await fs.readFile(filepath, "utf-8");
+      const task = parseTaskFile(content, input.filename);
+      if (!task) {
+        return { error: "Failed to parse task file", task: null };
+      }
+      task.body = input.body;
+      const updated = serializeTask(task);
+      await fs.writeFile(filepath, updated);
+      return { task: task.frontmatter };
+    }),
+
   processPending: t.procedure
     .meta({ description: `Process pending tasks. ${TASKS_DIR_DESCRIPTION}` })
     .mutation(async () => {

@@ -12,7 +12,7 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -84,92 +84,6 @@ interface ParsedReaction {
   itemTs: string;
   channel: string;
 }
-
-/**
- * Associate a Slack thread with an agent.
- * Used by cron agents to claim threads they've posted to,
- * so replies route back to them instead of creating a new agent.
- */
-export async function associateSlackThread(params: {
-  agentSlug: string;
-  channel: string;
-  threadTs: string;
-}): Promise<{ success: true; id: string; agentSlug: string; channel: string; threadTs: string }> {
-  const { agentSlug, channel, threadTs } = params;
-  const id = `ast_${nanoid(12)}`;
-
-  await db
-    .insert(schema.agentSlackThreads)
-    .values({ id, agentSlug, channel, threadTs })
-    .onConflictDoUpdate({
-      target: [schema.agentSlackThreads.channel, schema.agentSlackThreads.threadTs],
-      set: { agentSlug },
-    });
-
-  console.log(`[daemon/slack] Associated thread ${channel}/${threadTs} with agent ${agentSlug}`);
-  return { success: true, id, agentSlug, channel, threadTs };
-}
-
-/**
- * Look up which agent is associated with a Slack thread.
- */
-export async function getSlackThreadAssociation(params: {
-  channel: string;
-  threadTs: string;
-}): Promise<{ found: false } | { found: true; agentSlug: string }> {
-  const { channel, threadTs } = params;
-
-  const association = await db
-    .select()
-    .from(schema.agentSlackThreads)
-    .where(
-      and(
-        eq(schema.agentSlackThreads.channel, channel),
-        eq(schema.agentSlackThreads.threadTs, threadTs),
-      ),
-    )
-    .limit(1);
-
-  if (!association[0]) {
-    return { found: false };
-  }
-
-  return { found: true, agentSlug: association[0].agentSlug };
-}
-
-// HTTP endpoints (kept for backward compat / debugging)
-slackRouter.post("/associate", async (c) => {
-  const body = await c.req.json();
-  const { agentSlug, channel, threadTs } = body as {
-    agentSlug: string;
-    channel: string;
-    threadTs: string;
-  };
-
-  if (!agentSlug || !channel || !threadTs) {
-    return c.json({ error: "Missing required fields: agentSlug, channel, threadTs" }, 400);
-  }
-
-  try {
-    const result = await associateSlackThread({ agentSlug, channel, threadTs });
-    return c.json(result);
-  } catch (error) {
-    console.error("[daemon/slack] Failed to associate thread:", error);
-    return c.json({ error: "Failed to associate thread" }, 500);
-  }
-});
-
-slackRouter.get("/association", async (c) => {
-  const channel = c.req.query("channel");
-  const threadTs = c.req.query("threadTs");
-
-  if (!channel || !threadTs) {
-    return c.json({ error: "Missing required query params: channel, threadTs" }, 400);
-  }
-
-  const result = await getSlackThreadAssociation({ channel, threadTs });
-  return c.json(result);
-});
 
 slackRouter.post("/webhook", async (c) => {
   const payload = (await c.req.json()) as SlackWebhookPayload;
@@ -413,32 +327,12 @@ function sanitizeThreadId(ts: string): string {
 }
 
 /**
- * Find the agent associated with a Slack thread.
- * First checks for explicit associations (from cron agents posting to slack),
- * then falls back to the slack-{thread_ts} naming convention.
+ * Find the agent for a Slack thread using the slack-{thread_ts} naming convention.
  */
 async function findAgentForThread(
-  channel: string,
+  _channel: string,
   threadTs: string,
 ): Promise<{ agent: Awaited<ReturnType<typeof getAgent>>; agentSlug: string }> {
-  // Check for explicit association first
-  const association = await db
-    .select()
-    .from(schema.agentSlackThreads)
-    .where(
-      and(
-        eq(schema.agentSlackThreads.channel, channel),
-        eq(schema.agentSlackThreads.threadTs, threadTs),
-      ),
-    )
-    .limit(1);
-
-  if (association[0]) {
-    const agent = await getAgent(association[0].agentSlug);
-    return { agent, agentSlug: association[0].agentSlug };
-  }
-
-  // Fall back to slack-{thread_ts} convention
   const threadId = sanitizeThreadId(threadTs);
   const agentSlug = `slack-${threadId}`;
   const agent = await getAgent(agentSlug);

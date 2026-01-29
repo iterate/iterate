@@ -39,12 +39,12 @@ You will receive one of three message types:
 
 ## Sending Replies
 
-Use the `iterate tool slack run` CLI command to interact with Slack. This gives you access to the full Slack Web API via a `slack` client object.
+Use the `iterate tool slack` CLI command to interact with Slack. This gives you access to the full Slack Web API via a `slack` client object.
 
 **Reply to a message:**
 
 ```bash
-iterate tool slack run 'await slack.chat.postMessage({
+iterate tool slack 'await slack.chat.postMessage({
   channel: "CHANNEL_ID",
   thread_ts: "THREAD_TS",
   text: "Your response here",
@@ -54,7 +54,7 @@ iterate tool slack run 'await slack.chat.postMessage({
 **Add a reaction:**
 
 ```bash
-iterate tool slack run 'await slack.reactions.add({
+iterate tool slack 'await slack.reactions.add({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "eyes",
@@ -64,7 +64,7 @@ iterate tool slack run 'await slack.reactions.add({
 **Remove a reaction:**
 
 ```bash
-iterate tool slack run 'await slack.reactions.remove({
+iterate tool slack 'await slack.reactions.remove({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "eyes",
@@ -74,7 +74,7 @@ iterate tool slack run 'await slack.reactions.remove({
 **Get thread history (for mid-thread context):**
 
 ```bash
-iterate tool slack run 'await slack.conversations.replies({
+iterate tool slack 'await slack.conversations.replies({
   channel: "CHANNEL_ID",
   ts: "THREAD_TS",
 })'
@@ -85,7 +85,7 @@ iterate tool slack run 'await slack.conversations.replies({
 When you think you'll need to perform some long running work, or when you're struggling with a task/it's taking a few extra attempts, update the thread status first so the slack user knows you're working on it:
 
 ```bash
-iterate tool slack run 'await slack.assistant.threads.setStatus({
+iterate tool slack 'await slack.assistant.threads.setStatus({
   channel_id: "CHANNEL_ID",
   thread_ts: "THREAD_TS",
   status: "Parsing the file with foobar_tool...",
@@ -93,19 +93,6 @@ iterate tool slack run 'await slack.assistant.threads.setStatus({
 ```
 
 You can use any method from the Slack Web API. The `slack` object is an instance of `@slack/web-api` WebClient.
-
-## Thread Association (for Cron Agents)
-
-If you're a cron agent that sends Slack messages, you can associate the thread with your agent so that replies route back to you:
-
-```bash
-iterate tool slack associate \
-  --agentSlug "YOUR_AGENT_SLUG" \
-  --channel "CHANNEL_ID" \
-  --threadTs "THREAD_TS"
-```
-
-This is useful for recurring tasks where user feedback should influence future runs.
 
 ## Inspecting Raw Events
 
