@@ -23,7 +23,6 @@ export const agents = sqliteTable("agents", {
   slug: text().notNull().unique(),
   harnessType: text("harness_type", { enum: agentTypes }).notNull(),
   harnessSessionId: text("harness_session_id"),
-  tmuxSession: text("tmux_session"),
   workingDirectory: text("working_directory").notNull(),
   status: text({ enum: agentStatuses }).notNull().default("stopped"),
   initialPrompt: text("initial_prompt"),

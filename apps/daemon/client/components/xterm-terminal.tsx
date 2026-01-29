@@ -10,7 +10,6 @@ import { LigaturesAddon } from "@xterm/addon-ligatures";
 
 interface XtermTerminalProps {
   wsBase?: string;
-  tmuxSessionName?: string;
   initialCommand?: {
     command?: string;
     autorun?: boolean;
@@ -36,7 +35,7 @@ const READY_STATE_MAP = {
 } as Record<number, string>;
 
 export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>(
-  function XtermTerminal({ wsBase, tmuxSessionName, initialCommand, ptyId, onParamsChange }, ref) {
+  function XtermTerminal({ wsBase, initialCommand, ptyId, onParamsChange }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -47,7 +46,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
       const base = wsBase || `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
       const params = new URLSearchParams();
-      if (tmuxSessionName) params.set("tmuxSession", tmuxSessionName);
       if (ptyId) params.set("ptyId", ptyId);
       if (initialCommand?.command && !ptyId) {
         params.set("command", initialCommand.command);
@@ -55,7 +53,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       }
       const query = params.toString();
       return `${base}/api/pty/ws${query ? `?${query}` : ""}`;
-    }, [wsBase, tmuxSessionName, ptyId, initialCommand]);
+    }, [wsBase, ptyId, initialCommand]);
 
     const socket = useWebSocket(wsUrl, undefined, {
       maxRetries: MAX_RECONNECTION_ATTEMPTS,
@@ -135,14 +133,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         sendResize();
       });
 
-      if (!tmuxSessionName) {
-        terminal.attachCustomKeyEventHandler((event) => {
-          if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
-            return false;
-          }
-          return true;
-        });
-      }
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
+          return false;
+        }
+        return true;
+      });
 
       const handleOpen = () => {
         terminal.reset();
@@ -234,7 +230,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         termRef.current = null;
         container.innerHTML = "";
       };
-    }, [socket, tmuxSessionName, onParamsChange]);
+    }, [socket, onParamsChange]);
 
     return (
       <div className="absolute inset-0 bg-[#1e1e1e] p-4">
@@ -246,7 +242,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
-            data-tmux-session={tmuxSessionName}
             className="absolute inset-0"
             onClick={() => termRef.current?.focus()}
           />
