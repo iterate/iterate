@@ -3,6 +3,10 @@ FROM node:24
 # Build cache buster: 2026-01-26T11:00
 # (change this comment to force Daytona to rebuild when cache is stale)
 
+# === Build Args ===
+# SANDBOX_LOCAL_DEV: true for local docker (repo mounted), false for Daytona (git clone)
+ARG SANDBOX_LOCAL_DEV=false
+
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
 # Exposed as ENV vars for visibility inside container
@@ -17,7 +21,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop build-essential fd-find gh git inotify-tools make python3-pip rsync s6 sqlite3 sudo tini tmux && \
+    apt-get install -y btop build-essential fd-find gh git inotify-tools make python3-pip s6 sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
@@ -88,38 +92,40 @@ ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
-# Build arg is intentionally declared late to keep earlier layers cacheable across commits.
-# SANDBOX_ITERATE_REPO_REF: git commit SHA required for build.
+# For Daytona: clone from GitHub at specific commit
+# For local dev: skip (repo is mounted via docker-compose)
 ARG SANDBOX_ITERATE_REPO_REF
 ARG SANDBOX_ITERATE_BRANCH
-RUN if [ -z "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    echo "ERROR: SANDBOX_ITERATE_REPO_REF is required"; \
-    exit 1; \
-  fi
 
-# Bundle-based clone (commit SHA required)
-COPY iterate.bundle /tmp/iterate.bundle
-RUN git clone /tmp/iterate.bundle $ITERATE_REPO && \
-    cd $ITERATE_REPO && \
-    if [ -n "$SANDBOX_ITERATE_BRANCH" ]; then \
-      git checkout -B "$SANDBOX_ITERATE_BRANCH" "$SANDBOX_ITERATE_REPO_REF"; \
+RUN if [ "$SANDBOX_LOCAL_DEV" = "true" ]; then \
+      echo "Local dev mode: repo will be mounted at $ITERATE_REPO"; \
+      mkdir -p $ITERATE_REPO/node_modules; \
     else \
-      git checkout "$SANDBOX_ITERATE_REPO_REF"; \
+      if [ -z "$SANDBOX_ITERATE_REPO_REF" ]; then \
+        echo "ERROR: SANDBOX_ITERATE_REPO_REF is required for Daytona builds"; \
+        exit 1; \
+      fi && \
+      echo "Daytona mode: cloning iterate repo at $SANDBOX_ITERATE_REPO_REF" && \
+      git clone --depth 1 https://github.com/iterate-ai/iterate.git $ITERATE_REPO && \
+      cd $ITERATE_REPO && \
+      git fetch --depth 1 origin $SANDBOX_ITERATE_REPO_REF && \
+      if [ -n "$SANDBOX_ITERATE_BRANCH" ]; then \
+        git checkout -B "$SANDBOX_ITERATE_BRANCH" $SANDBOX_ITERATE_REPO_REF; \
+      else \
+        git checkout $SANDBOX_ITERATE_REPO_REF; \
+      fi && \
+      echo "$SANDBOX_ITERATE_REPO_REF" > /tmp/.iterate-git-ref && \
+      pnpm install && \
+      cd apps/daemon && npx vite build; \
     fi
-
-# Install deps and build daemon
-# If Daytona ever supports BuildKit, consider adding:
-#   RUN --mount=type=cache,id=pnpm-store,target=/home/iterate/.local/share/pnpm/store \
-#     cd $ITERATE_REPO && pnpm install
-RUN echo "$SANDBOX_ITERATE_REPO_REF" > /tmp/.iterate-git-ref && \
-    cd $ITERATE_REPO && pnpm install
-RUN cd $ITERATE_REPO/apps/daemon && npx vite build
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
 RUN mkdir -p ~/.iterate && \
     echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
 
-# Setup home directory
-RUN bash $ITERATE_REPO/apps/os/sandbox/setup-home.sh
+# Setup home directory (only for Daytona - local dev does this in entry.sh)
+RUN if [ "$SANDBOX_LOCAL_DEV" != "true" ]; then \
+      bash $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
+    fi
 
 ENTRYPOINT [ "/app/entry.sh" ]

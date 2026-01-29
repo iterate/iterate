@@ -1,6 +1,7 @@
-import { execSync, spawn, spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
+import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
@@ -40,8 +41,6 @@ const isPreview =
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
-const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
-
 /**
  * Get the current git branch name for dev mode.
  * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
@@ -55,66 +54,18 @@ function getCurrentGitRef(): string | undefined {
   }
 }
 
-function ensureLocalDockerImage() {
-  // Check if Docker is available
-  const result = spawnSync("docker", ["version"], { encoding: "utf-8" });
-  if (result.status !== 0) {
-    console.log("Docker not available, skipping local sandbox image build");
-    return;
-  }
-
-  let commitSha = "";
-  try {
-    commitSha = execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: repoRoot }).trim();
-  } catch {
-    console.error("[docker] Failed to resolve commit SHA, skipping local image build");
-    return;
-  }
-  if (!/^[0-9a-f]{40}$/i.test(commitSha)) {
-    console.error(`[docker] Invalid commit SHA: ${commitSha}`);
-    return;
-  }
-
-  // Always run local snapshot build in background so Docker cache can do its work.
-  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
-  console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${commitSha}`);
-
-  const buildProcess = spawn("pnpm", ["--filter", "os", "snapshot:local-docker"], {
-    cwd: repoRoot,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      SANDBOX_ITERATE_REPO_REF: commitSha,
-      LOCAL_DOCKER_IMAGE_NAME: LOCAL_DOCKER_IMAGE_NAME,
-    },
-  });
-
-  // Stream output with prefix so it's clear what's happening
-  buildProcess.stdout?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.stderr?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.on("exit", (code) => {
-    if (code === 0) {
-      console.log(`[docker] Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
-    } else {
-      console.error(`[docker] Failed to build ${LOCAL_DOCKER_IMAGE_NAME} (exit code ${code})`);
-    }
-  });
-
-  buildProcess.on("error", (err) => {
-    console.error(`[docker] Build process error: ${err.message}`);
-  });
+/**
+ * Compute docker compose project name for local development.
+ * Format: iterate-{folderName}-{shortHash}
+ * e.g., "iterate-better-docker-a1b2"
+ *
+ * This enables multiple worktrees to have isolated containers and volumes.
+ */
+function getComposeProjectName(): string {
+  const cwd = process.cwd();
+  const folderName = basename(cwd);
+  const hash = crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 4);
+  return `iterate-${folderName}-${hash}`;
 }
 
 /**
@@ -503,9 +454,13 @@ if (process.env.GITHUB_OUTPUT) {
 await verifyDopplerEnvironment();
 
 if (isDevelopment) {
-  ensureLocalDockerImage();
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
+
+  // Set COMPOSE_PROJECT_NAME for docker compose (enables multi-worktree isolation)
+  const composeProjectName = getComposeProjectName();
+  process.env.COMPOSE_PROJECT_NAME = composeProjectName;
+  console.log(`Docker compose project: ${composeProjectName}`);
 }
 
 // Setup database and env first

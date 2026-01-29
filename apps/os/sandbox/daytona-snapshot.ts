@@ -1,3 +1,9 @@
+/**
+ * Create a Daytona snapshot for the iterate sandbox.
+ *
+ * The Dockerfile clones the iterate repo directly (no git bundle).
+ * We just need to provide entry.sh in the build context.
+ */
 import { execSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,14 +78,8 @@ const tempDir = mkdtempSync(join(tmpdir(), "iterate-sandbox-context-"));
 const dockerfileTargetPath = join(tempDir, "Dockerfile");
 
 try {
-  // Create git bundle from committed state (works with worktrees)
-  console.log(`Bundling repo at ${commitSha}`);
-  execSync(`git bundle create ${join(tempDir, "iterate.bundle")} HEAD`, {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-
   // Materialize entry.sh from committed state into build context
+  // (Dockerfile does COPY apps/os/sandbox/entry.sh /app/entry.sh)
   const entryPath = join(tempDir, "apps/os/sandbox");
   mkdirSync(entryPath, { recursive: true });
   const entryContent = execSync("git show HEAD:apps/os/sandbox/entry.sh", {
@@ -90,6 +90,8 @@ try {
   writeFileSync(entryFile, entryContent);
   chmodSync(entryFile, 0o755);
 
+  // Materialize Dockerfile with build args injected
+  // (Dockerfile clones the repo directly via git, no bundle needed)
   const dockerfileContent = execSync("git show HEAD:apps/os/sandbox/Dockerfile", {
     cwd: repoRoot,
     encoding: "utf-8",

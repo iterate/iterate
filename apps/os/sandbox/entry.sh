@@ -5,36 +5,22 @@ set -euo pipefail
 # which runs our daemon and the opencode server under supervision.
 #
 # Two modes:
-#   - Local Docker: /local-iterate-repo mount exists → rsync, pnpm install, build
-#   - Daytona/CI: image has everything pre-baked → just starts pidnap
-#
-# Why rsync in local mode?
-#   The docker image already contains the repo, but may be stale. Restarting the container
-#   syncs the latest source from the host mount. This means in local dev you can
-#   restart a container and any changes to the daemon/home-skeleton
-#   that you made locally will be reflected in the container.
+#   - Local Docker (ITERATE_DEV=true): repo mounted, run pnpm install + build
+#   - Daytona: image has everything pre-baked → just starts pidnap
 
 ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
-ITERATE_REPO_LOCAL_DOCKER_MOUNT="/local-iterate-repo"
 SANDBOX_DIR="$ITERATE_REPO/apps/os/sandbox"
 
 echo "=== iterate sandbox ==="
 
-# --- Local Docker: sync host repo into container ---
-if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
-  echo "Local mode: syncing host repo (restart container to pick up changes)"
-
-  # Sync using .gitignore patterns (excludes build artifacts, node_modules, etc.)
-  # But do include .git so that `git status` inside the container shows the same thing as outside
-  rsync -a --delete \
-    --filter=':- .gitignore' \
-    "$ITERATE_REPO_LOCAL_DOCKER_MOUNT/" "$ITERATE_REPO/"
+# --- Local Docker: install deps and build ---
+if [[ "${ITERATE_DEV:-}" == "true" ]]; then
+  echo "Local dev mode: repo mounted at $ITERATE_REPO"
+  echo ""
 
   echo "Git status:"
-  (cd "$ITERATE_REPO" && git status --verbose)
-
-  # NOTE: Do NOT delete $ITERATE_REPO_LOCAL_DOCKER_MOUNT - it's a mount point and rm would fail or
-  # worse, delete host files if mounted read-write. The mount is isolated anyway.
+  (cd "$ITERATE_REPO" && git status --short || echo "(not a git repo)")
+  echo ""
 
   echo "Installing dependencies..."
   (cd "$ITERATE_REPO" && pnpm install --no-frozen-lockfile)
@@ -43,10 +29,13 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
   (cd "$ITERATE_REPO/apps/daemon" && npx vite build)
 
   # Setup home directory (agent configs from home-skeleton)
-  bash "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
+  bash "$SANDBOX_DIR/setup-home.sh"
+else
+  echo "Daytona mode: using pre-baked image"
 fi
 
 # --- Start pidnap process manager ---
+echo ""
 echo "Starting pidnap..."
 echo ""
 echo "Reminder - logs will be in /var/log/pidnap/"

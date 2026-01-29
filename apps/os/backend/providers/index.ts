@@ -46,16 +46,7 @@ export async function createMachineProvider(
         throw new Error("local-docker provider only available in development");
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
-      return createLocalDockerProvider({
-        imageName: "iterate-sandbox:local",
-        externalId,
-        metadata: metadata as {
-          containerId?: string;
-          port?: number;
-          ports?: Record<string, number>;
-        },
-        buildProxyUrl,
-      });
+      return createLocalDockerProvider();
     }
 
     case "local": {
