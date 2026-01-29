@@ -5,6 +5,7 @@
  */
 
 import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk/v2";
+import { getConfig } from "../config-loader.ts";
 import type {
   AgentHarness,
   AgentEvent,
@@ -87,11 +88,14 @@ export const opencodeHarness: AgentHarness = {
     }
 
     const client = createClient({ directory: params.workingDirectory });
+    const config = getConfig();
 
     // Send message via SDK using session.prompt()
     await client.session.prompt({
       sessionID: harnessSessionId,
       parts: [{ type: "text", text: event.content }],
+      // Use default model from config if available
+      ...(config.defaultModel && { model: config.defaultModel }),
     });
   },
 
