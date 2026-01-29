@@ -104,7 +104,7 @@ pnpm snapshot:daytona
 If you want to force a specific Doppler config while staying in `apps/os`:
 
 ```bash
-doppler run --config stg -- pnpm snapshot:daytona
+doppler run --config dev -- pnpm snapshot:daytona
 ```
 
 This will:

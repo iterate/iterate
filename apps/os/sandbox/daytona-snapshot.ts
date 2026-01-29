@@ -20,18 +20,46 @@ function getCommitSha(): string {
   return sha;
 }
 
-function injectCommitSha(dockerfileContent: string, commitSha: string): string {
-  const next = dockerfileContent.replaceAll(
+function getBranchName(): string | null {
+  try {
+    const branch = execSync("git symbolic-ref --short -q HEAD", {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    }).trim();
+    if (!branch) return null;
+    execSync(`git check-ref-format --branch ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+    return branch;
+  } catch {
+    return null;
+  }
+}
+
+function injectBuildArgs(
+  dockerfileContent: string,
+  commitSha: string,
+  branchName: string | null,
+): string {
+  let next = dockerfileContent.replaceAll(
     "ARG SANDBOX_ITERATE_REPO_REF",
     `ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`,
   );
   if (!next.includes(`ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`)) {
     throw new Error("Failed to inject SANDBOX_ITERATE_REPO_REF into Dockerfile");
   }
+  if (branchName) {
+    next = next.replaceAll(
+      "ARG SANDBOX_ITERATE_BRANCH",
+      `ARG SANDBOX_ITERATE_BRANCH="${branchName}"`,
+    );
+    if (!next.includes(`ARG SANDBOX_ITERATE_BRANCH="${branchName}"`)) {
+      throw new Error("Failed to inject SANDBOX_ITERATE_BRANCH into Dockerfile");
+    }
+  }
   return next;
 }
 
 const commitSha = getCommitSha();
+const branchName = getBranchName();
 const snapshotName = `iterate-sandbox-${commitSha}`;
 
 console.log(`Creating snapshot: ${snapshotName}`);
@@ -66,7 +94,7 @@ try {
     cwd: repoRoot,
     encoding: "utf-8",
   });
-  writeFileSync(dockerfileTargetPath, injectCommitSha(dockerfileContent, commitSha));
+  writeFileSync(dockerfileTargetPath, injectBuildArgs(dockerfileContent, commitSha, branchName));
 
   const image = Image.fromDockerfile(dockerfileTargetPath);
 

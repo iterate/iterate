@@ -58,10 +58,10 @@ pnpm snapshot:local-docker:test
 
 ```bash
 # Build snapshot from current commit
-SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona:prd
+SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona
 
 # Build snapshot from specific commit SHA
-SANDBOX_ITERATE_REPO_REF=<sha> pnpm snapshot:daytona:prd
+SANDBOX_ITERATE_REPO_REF=<sha> pnpm snapshot:daytona
 
 # Run tests (auto-builds snapshot from current branch if not specified)
 pnpm snapshot:daytona:test

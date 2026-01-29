@@ -25,6 +25,20 @@ function getCommitSha(): string {
   return sha;
 }
 
+function getBranchName(): string | null {
+  try {
+    const branch = execSync("git symbolic-ref --short -q HEAD", {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    }).trim();
+    if (!branch) return null;
+    execSync(`git check-ref-format --branch ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+    return branch;
+  } catch {
+    return null;
+  }
+}
+
 console.log(`Building local docker snapshot: ${imageName}`);
 
 const tempDir = mkdtempSync(join(tmpdir(), "iterate-sandbox-context-"));
@@ -32,6 +46,7 @@ const dockerfilePath = join(tempDir, "Dockerfile");
 
 try {
   const commitSha = getCommitSha();
+  const branchName = getBranchName();
   console.log(`Bundling repo at ${commitSha}`);
   const cacheRoot = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
   const bundleDir = join(cacheRoot, "iterate", "bundles");
@@ -65,6 +80,7 @@ try {
     process.argv.includes("--no-cache") ? "--no-cache" : "",
     "--build-arg",
     `SANDBOX_ITERATE_REPO_REF=${commitSha}`,
+    branchName ? `--build-arg SANDBOX_ITERATE_BRANCH=${branchName}` : "",
   ]
     .filter(Boolean)
     .join(" ");

@@ -91,6 +91,7 @@ ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 # Build arg is intentionally declared late to keep earlier layers cacheable across commits.
 # SANDBOX_ITERATE_REPO_REF: git commit SHA required for build.
 ARG SANDBOX_ITERATE_REPO_REF
+ARG SANDBOX_ITERATE_BRANCH
 RUN if [ -z "$SANDBOX_ITERATE_REPO_REF" ]; then \
     echo "ERROR: SANDBOX_ITERATE_REPO_REF is required"; \
     exit 1; \
@@ -99,7 +100,12 @@ RUN if [ -z "$SANDBOX_ITERATE_REPO_REF" ]; then \
 # Bundle-based clone (commit SHA required)
 COPY iterate.bundle /tmp/iterate.bundle
 RUN git clone /tmp/iterate.bundle $ITERATE_REPO && \
-    cd $ITERATE_REPO && git checkout "$SANDBOX_ITERATE_REPO_REF"
+    cd $ITERATE_REPO && \
+    if [ -n "$SANDBOX_ITERATE_BRANCH" ]; then \
+      git checkout -B "$SANDBOX_ITERATE_BRANCH" "$SANDBOX_ITERATE_REPO_REF"; \
+    else \
+      git checkout "$SANDBOX_ITERATE_REPO_REF"; \
+    fi
 
 # Install deps and build daemon
 # If Daytona ever supports BuildKit, consider adding:
