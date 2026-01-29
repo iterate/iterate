@@ -486,20 +486,11 @@ export async function reopenTask(
     const content = await fs.readFile(taskPath, "utf-8");
     task = parseTaskFile(content, targetFilename);
     sourcePath = taskPath;
-  }
-
-  // Not in main folder, check archive
-  if (!task && existsSync(archivedDir)) {
-    const files = await fs.readdir(archivedDir);
-    const archivedFile = files.find(
-      (f) => f === targetFilename || f.endsWith(`-${targetFilename}`),
-    );
-    if (archivedFile) {
-      sourcePath = path.join(archivedDir, archivedFile);
-      const content = await fs.readFile(sourcePath, "utf-8");
-      task = parseTaskFile(content, targetFilename);
-      fromArchive = true;
-    }
+  } else if (existsSync(path.join(archivedDir, targetFilename))) {
+    sourcePath = path.join(archivedDir, targetFilename);
+    const content = await fs.readFile(sourcePath, "utf-8");
+    task = parseTaskFile(content, targetFilename);
+    fromArchive = true;
   }
 
   if (!task || !sourcePath) {

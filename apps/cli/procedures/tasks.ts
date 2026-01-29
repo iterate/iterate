@@ -48,10 +48,10 @@ const DueInput = z
     return new Date(Date.now() + ms);
   })
   .describe(
-    "Duration until task runs (e.g. '1h', '30m', '2 days') or ISO timestamp (e.g. '2026-01-29T09:00:00Z')",
+    "Duration until task runs (e.g. '1h', '30m', '2 days') or ISO timestamp (e.g. '2026-01-29T09:00:00Z' or '2026-01-29T09:00:00-07:00'). Note that ISO timestamps will be converted to UTC - but you will need to know the user's home timezone to set a correct due date in their local time.",
   );
 
-const SlugInput = z.string().describe("Task slug (e.g. 'daily-report' or 'daily-report.md')");
+const SlugInput = z.string().describe("Task slug (e.g. 'daily-report')");
 
 const NoteInput = z
   .string()
@@ -64,11 +64,7 @@ const NoteInput = z
 async function listTasks(): Promise<Array<{ slug: string; filename: string; task: ParsedTask }>> {
   const tasksDir = await getTasksDir();
 
-  try {
-    await fs.mkdir(tasksDir, { recursive: true });
-  } catch {
-    // ignore
-  }
+  await fs.mkdir(tasksDir, { recursive: true });
 
   const entries = await fs.readdir(tasksDir, { withFileTypes: true });
   const mdFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
@@ -86,7 +82,7 @@ async function listTasks(): Promise<Array<{ slug: string; filename: string; task
   return results;
 }
 
-async function getTaskBySlug(slug: string): Promise<{ task: ParsedTask; filepath: string } | null> {
+async function getTaskBySlug(slug: string) {
   const tasksDir = await getTasksDir();
   const filename = slugToFilename(slug);
 
@@ -108,28 +104,14 @@ async function getTaskBySlug(slug: string): Promise<{ task: ParsedTask; filepath
 
 export const tasksRouter = t.router({
   list: t.procedure.meta({ description: "List active tasks" }).query(async () => {
-    const tasks = await listTasks();
-    return {
-      tasks: tasks.map(({ slug, task }) => ({
-        slug,
-        state: task.frontmatter.state,
-        due: task.frontmatter.due,
-        schedule: task.frontmatter.schedule,
-        priority: task.frontmatter.priority,
-        lockedBy: task.frontmatter.lockedBy,
-      })),
-    };
+    return listTasks();
   }),
 
   get: t.procedure
     .meta({ description: "Get a task by slug" })
     .input(z.object({ slug: SlugInput }))
     .query(async ({ input }) => {
-      const result = await getTaskBySlug(input.slug);
-      if (!result) {
-        return { error: `Task not found: ${input.slug}`, task: null };
-      }
-      return { task: result.task, filepath: result.filepath };
+      return getTaskBySlug(input.slug);
     }),
 
   add: t.procedure
@@ -139,8 +121,11 @@ export const tasksRouter = t.router({
         slug: SlugInput.describe("Task slug (e.g. 'daily-report')"),
         body: z.string().describe("Task body (markdown content)"),
         due: DueInput,
-        schedule: z.string().optional().describe("Cron expression for recurring tasks"),
-        priority: TaskPriority.optional().default("normal"),
+        schedule: z
+          .string()
+          .optional()
+          .describe("Cron expression, use if this is a recurring task"),
+        priority: TaskPriority.default("normal"),
       }),
     )
     .mutation(async ({ input }) => {
@@ -153,13 +138,14 @@ export const tasksRouter = t.router({
       // Check if already exists
       try {
         await fs.access(filepath);
-        return { error: `Task already exists: ${input.slug}`, created: false };
+        return { created: false, error: `Task already exists: ${input.slug}` };
       } catch {
         // Good, doesn't exist
       }
 
-      const task: Omit<ParsedTask, "raw"> = {
-        slug: filenameToSlug(filename),
+      const slug = filenameToSlug(filename);
+      const taskContent = serializeTask({
+        slug,
         filename,
         frontmatter: {
           state: "pending",
@@ -168,10 +154,9 @@ export const tasksRouter = t.router({
           priority: input.priority,
         },
         body: input.body,
-      };
-
-      await fs.writeFile(filepath, serializeTask(task));
-      return { created: true, slug: task.slug, filepath };
+      });
+      await fs.writeFile(filepath, taskContent);
+      return { created: true, slug, filepath };
     }),
 
   complete: t.procedure
