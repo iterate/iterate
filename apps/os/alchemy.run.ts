@@ -11,6 +11,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { getLocalDockerGitInfo } from "./sandbox/local-docker-utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -52,20 +53,6 @@ function getCurrentGitRef(): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/**
- * Compute docker compose project name for local development.
- * Format: iterate-{folderName}-{shortHash}
- * e.g., "iterate-better-docker-a1b2"
- *
- * This enables multiple worktrees to have isolated containers and volumes.
- */
-function getComposeProjectName(): string {
-  const cwd = process.cwd();
-  const folderName = basename(cwd);
-  const hash = crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 4);
-  return `iterate-${folderName}-${hash}`;
 }
 
 /**
@@ -457,10 +444,25 @@ if (isDevelopment) {
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
 
-  // Set COMPOSE_PROJECT_NAME for docker compose (enables multi-worktree isolation)
-  const composeProjectName = getComposeProjectName();
+  // Docker compose project name - used as prefix for containers and volumes (e.g., iterate-better-docker-a1b2_postgres_1)
+  const cwd = process.cwd();
+  const composeProjectName = `iterate-${basename(cwd)}-${crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 4)}`;
   process.env.COMPOSE_PROJECT_NAME = composeProjectName;
   console.log(`Docker compose project: ${composeProjectName}`);
+
+  // Local Docker git info - used by docker-compose.yml to clone repo in container
+  // Handles worktrees by resolving to main .git directory
+  const localDockerGitInfo = getLocalDockerGitInfo(repoRoot);
+  if (localDockerGitInfo) {
+    process.env.LOCAL_DOCKER_GIT_DIR = localDockerGitInfo.gitDir;
+    process.env.LOCAL_DOCKER_GIT_COMMIT = localDockerGitInfo.commit;
+    if (localDockerGitInfo.branch) {
+      process.env.LOCAL_DOCKER_GIT_BRANCH = localDockerGitInfo.branch;
+    }
+    console.log(
+      `Local Docker git: ${localDockerGitInfo.gitDir} @ ${localDockerGitInfo.branch || localDockerGitInfo.commit}`,
+    );
+  }
 }
 
 // Setup database and env first

@@ -2,7 +2,7 @@
  * Local Docker + pidnap Integration Tests
  *
  * Verifies sandbox container setup with pidnap process supervision.
- * Image built via docker compose, each test group gets its own container.
+ * Uses docker-compose for container management - each test group gets isolated via --project-name.
  *
  * RUN WITH:
  *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts
@@ -14,112 +14,116 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, execInContainer } from "./test-helpers.ts";
+import { execInContainer } from "./test-helpers.ts";
+import { getLocalDockerGitInfo } from "./local-docker-utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
 
-const IMAGE_NAME = "iterate-sandbox-test";
 const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
-// ============ Container Helpers ============
+// ============ Docker Compose Helpers ============
 
-interface ContainerInfo {
-  id: string;
-  port?: number;
+/**
+ * Get environment variables needed for docker-compose
+ */
+function getComposeEnv(): Record<string, string> {
+  const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+  if (!gitInfo) throw new Error("Failed to get git info for local Docker tests");
+  return {
+    ...process.env,
+    LOCAL_DOCKER_GIT_DIR: gitInfo.gitDir,
+    LOCAL_DOCKER_GIT_COMMIT: gitInfo.commit,
+    ...(gitInfo.branch ? { LOCAL_DOCKER_GIT_BRANCH: gitInfo.branch } : {}),
+  } as Record<string, string>;
 }
 
-function createContainerName(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+interface ComposeProject {
+  projectName: string;
+  containerId: string;
+  port3000?: number;
 }
 
-function getRandomPort(): number {
-  return 13000 + Math.floor(Math.random() * 2000);
+function createProjectName(): string {
+  return `sandbox-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function createContainer(options?: { exposePort?: boolean }): Promise<ContainerInfo> {
-  const containerName = createContainerName("sandbox-test");
-  const port = options?.exposePort ? getRandomPort() : undefined;
-
-  const envVars = [
-    "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    // Enable local dev mode (matches docker-compose)
-    "ITERATE_DEV=true",
-  ];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    envVars.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
-  }
-  if (process.env.OPENAI_API_KEY) {
-    envVars.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
-  }
-
-  const config: Record<string, unknown> = {
-    Image: IMAGE_NAME,
-    name: containerName,
-    Env: envVars,
-    Tty: false,
-    HostConfig: {
-      AutoRemove: false,
-      // Mount local repo at the correct path (matches docker-compose)
-      Binds: [`${REPO_ROOT}:${CONTAINER_REPO_PATH}`],
-      // Anonymous volume for node_modules (Linux binaries, inherits ownership from image)
-      Mounts: [
-        {
-          Type: "volume",
-          Target: `${CONTAINER_REPO_PATH}/node_modules`,
-        },
-      ],
-      // Map host.docker.internal to the host machine (needed on Linux, automatic on Mac Docker Desktop)
-      ExtraHosts: ["host.docker.internal:host-gateway"],
-    },
-  };
-
-  if (port) {
-    config.ExposedPorts = { "3000/tcp": {} };
-    (config.HostConfig as Record<string, unknown>).PortBindings = {
-      "3000/tcp": [{ HostPort: String(port) }],
-    };
-  }
-
-  const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", config);
-  await dockerApi("POST", `/containers/${createResponse.Id}/start`, {});
-
-  return { id: createResponse.Id, port };
+/**
+ * Start sandbox via docker-compose with unique project name for isolation
+ */
+function composeUp(projectName: string): void {
+  execSync(`docker compose --project-name ${projectName} up -d sandbox`, {
+    cwd: REPO_ROOT,
+    env: getComposeEnv(),
+    stdio: "inherit",
+  });
 }
 
-async function destroyContainer(containerId: string): Promise<void> {
+/**
+ * Stop and remove containers/volumes for a project
+ */
+function composeDown(projectName: string): void {
   try {
-    await dockerApi("POST", `/containers/${containerId}/stop?t=5`, {});
+    execSync(`docker compose --project-name ${projectName} down -v --remove-orphans`, {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
+      stdio: "inherit",
+    });
   } catch {
-    // might already be stopped
+    // Best effort cleanup
   }
-  await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
 }
 
+/**
+ * Get container ID for the sandbox service
+ */
+function getContainerId(projectName: string): string {
+  return execSync(`docker compose --project-name ${projectName} ps -q sandbox`, {
+    cwd: REPO_ROOT,
+    env: getComposeEnv(),
+    encoding: "utf-8",
+  }).trim();
+}
+
+/**
+ * Get allocated host port for a container port
+ */
+function getPort(projectName: string, containerPort: number): number {
+  const output = execSync(
+    `docker compose --project-name ${projectName} port sandbox ${containerPort}`,
+    {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
+      encoding: "utf-8",
+    },
+  ).trim();
+  // Output is like "0.0.0.0:54321" - extract port
+  const match = output.match(/:(\d+)$/);
+  if (!match) throw new Error(`Failed to parse port from: ${output}`);
+  return parseInt(match[1], 10);
+}
+
+/**
+ * Create and start a sandbox container via docker-compose
+ */
+function createProject(): ComposeProject {
+  const projectName = createProjectName();
+  composeUp(projectName);
+  const containerId = getContainerId(projectName);
+  const port3000 = getPort(projectName, 3000);
+  return { projectName, containerId, port3000 };
+}
+
+/**
+ * Wait for container setup to complete (ready file created by entry.sh)
+ */
 async function waitForContainerReady(containerId: string, timeoutMs = 180000): Promise<void> {
   const start = Date.now();
 
-  // First wait for container to be running
   while (Date.now() - start < timeoutMs) {
     try {
-      const info = await dockerApi<{ State: { Running: boolean } }>(
-        "GET",
-        `/containers/${containerId}/json`,
-      );
-      if (info.State.Running) break;
-    } catch {
-      // Container not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  // Then wait for entry.sh to complete setup (creates ready file after setup-home.sh)
-  while (Date.now() - start < timeoutMs) {
-    try {
-      // Use sh -c with && echo to get output only on success
       const result = await execInContainer(containerId, [
         "sh",
         "-c",
@@ -158,43 +162,42 @@ function createDaemonTrpcClient(port: number) {
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   beforeAll(async () => {
-    console.log("Building sandbox image via pnpm snapshot:local-docker...");
-    // Use the existing script - builds without SANDBOX_ITERATE_REPO_REF (local dev mode)
-    execSync(`pnpm snapshot:local-docker`, {
-      cwd: join(REPO_ROOT, "apps/os"),
+    console.log("Building sandbox image via docker compose build...");
+    execSync(`docker compose build sandbox`, {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
       stdio: "inherit",
-      env: { ...process.env, LOCAL_DOCKER_IMAGE_NAME: IMAGE_NAME },
     });
   }, 300000);
 
   // ============ Container Setup ============
-  describe.concurrent("Container Setup", () => {
-    let container: ContainerInfo;
+  describe("Container Setup", () => {
+    let project: ComposeProject;
 
     beforeAll(async () => {
-      container = await createContainer();
-      await waitForContainerReady(container.id);
+      project = createProject();
+      await waitForContainerReady(project.containerId);
     }, 300000);
 
-    afterAll(async () => {
-      if (container?.id) await destroyContainer(container.id);
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
     test("agent CLIs installed", async () => {
-      const opencode = await execInContainer(container.id, ["opencode", "--version"]);
+      const opencode = await execInContainer(project.containerId, ["opencode", "--version"]);
       expect(opencode).toMatch(/\d+\.\d+\.\d+/);
 
-      const claude = await execInContainer(container.id, ["claude", "--version"]);
+      const claude = await execInContainer(project.containerId, ["claude", "--version"]);
       expect(claude).toMatch(/\d+\.\d+\.\d+/);
 
-      const pi = await execInContainer(container.id, ["pi", "--version"]);
+      const pi = await execInContainer(project.containerId, ["pi", "--version"]);
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
     test.runIf(process.env.OPENAI_API_KEY)(
       "opencode answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "opencode",
           "run",
           "what messaging app are you built to help with?",
@@ -207,7 +210,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "claude answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "claude",
           "-p",
           "what messaging app are you built to help with?",
@@ -220,7 +223,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "pi answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "pi",
           "-p",
           "what messaging app are you built to help with?",
@@ -232,28 +235,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     test("container setup correct", async () => {
       // tmux installed
-      const tmux = await execInContainer(container.id, ["which", "tmux"]);
+      const tmux = await execInContainer(project.containerId, ["which", "tmux"]);
       expect(tmux.trim()).toBe("/usr/bin/tmux");
 
-      // repo mounted
-      const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
+      // repo cloned
+      const ls = await execInContainer(project.containerId, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
-
-      // has bind mount for repo
-      const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
-        "GET",
-        `/containers/${container.id}/json`,
-      );
-      expect(inspect.HostConfig?.Binds).toHaveLength(1);
-      expect(inspect.HostConfig?.Binds?.[0]).toContain(CONTAINER_REPO_PATH);
     });
 
     test("git operations work", async () => {
-      const init = await execInContainer(container.id, ["git", "init", "/tmp/test-repo"]);
+      const init = await execInContainer(project.containerId, ["git", "init", "/tmp/test-repo"]);
       expect(init).toContain("Initialized");
 
-      const config = await execInContainer(container.id, [
+      const config = await execInContainer(project.containerId, [
         "git",
         "-C",
         "/tmp/test-repo",
@@ -262,10 +257,14 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       ]);
       expect(config).toContain("@");
 
-      await execInContainer(container.id, ["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
-      await execInContainer(container.id, ["git", "-C", "/tmp/test-repo", "add", "."]);
+      await execInContainer(project.containerId, [
+        "sh",
+        "-c",
+        "echo 'hello' > /tmp/test-repo/test.txt",
+      ]);
+      await execInContainer(project.containerId, ["git", "-C", "/tmp/test-repo", "add", "."]);
 
-      const commit = await execInContainer(container.id, [
+      const commit = await execInContainer(project.containerId, [
         "git",
         "-C",
         "/tmp/test-repo",
@@ -277,44 +276,42 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     });
 
     test("git status works in iterate repo", async () => {
-      const status = await execInContainer(container.id, [
+      const status = await execInContainer(project.containerId, [
         "git",
         "-C",
         CONTAINER_REPO_PATH,
         "status",
       ]);
-      // CI checks out PR merge commits in detached HEAD state, which is fine.
-      // For worktrees mounted from host, the .git file contains absolute paths
-      // that don't exist in the container - this is expected and fine for local dev.
-      expect(status).toMatch(/On branch|HEAD detached|not a git repository/);
+      // CI: detached HEAD from PR merge commits
+      // Regular clone: normal branch
+      expect(status).toMatch(/On branch|HEAD detached/);
     });
   });
 
   // ============ Daemon ============
-  describe.concurrent("Daemon", () => {
-    let container: ContainerInfo;
+  describe("Daemon", () => {
+    let project: ComposeProject;
 
     beforeAll(async () => {
-      container = await createContainer({ exposePort: true });
-      await waitForContainerReady(container.id);
+      project = createProject();
+      await waitForContainerReady(project.containerId);
     }, 300000);
 
-    afterAll(async () => {
-      if (container?.id) await destroyContainer(container.id);
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
     test("daemon accessible", async () => {
-      // Wait for daemon to be ready (entry.sh does pnpm install + vite build)
-      await waitForDaemonReady(container.port!);
+      await waitForDaemonReady(project.port3000!);
 
       // Verify health endpoint from host
-      const healthResponse = await fetch(`http://localhost:${container.port}/api/health`);
+      const healthResponse = await fetch(`http://localhost:${project.port3000}/api/health`);
       expect(healthResponse.ok).toBe(true);
       const healthText = await healthResponse.text();
       expect(healthText.includes("ok") || healthText.includes("healthy")).toBe(true);
 
       // Verify health from inside container
-      const internalHealth = await execInContainer(container.id, [
+      const internalHealth = await execInContainer(project.containerId, [
         "curl",
         "-s",
         "http://localhost:3000/api/health",
@@ -323,16 +320,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("tmux and PTY work", async () => {
-      await waitForDaemonReady(container.port!);
+      await waitForDaemonReady(project.port3000!);
 
       // PTY endpoint exists
       const ptyResponse = await fetch(
-        `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
+        `http://localhost:${project.port3000}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
 
       // tmux via tRPC
-      const trpc = createDaemonTrpcClient(container.port!);
+      const trpc = createDaemonTrpcClient(project.port3000!);
       const sessionName = `test-${Date.now()}`;
       const createResult = await trpc.ensureTmuxSession.mutate({
         sessionName,
@@ -345,9 +342,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
-      await waitForDaemonReady(container.port!);
-      const baseUrl = `http://localhost:${container.port}`;
-      const trpc = createDaemonTrpcClient(container.port!);
+      await waitForDaemonReady(project.port3000!);
+      const baseUrl = `http://localhost:${project.port3000}`;
+      const trpc = createDaemonTrpcClient(project.port3000!);
 
       // index.html
       const root = await fetch(`${baseUrl}/`);

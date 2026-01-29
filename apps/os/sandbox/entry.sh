@@ -1,35 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-# Sandbox entrypoint: sets up agent environment and starts pidnap process manager,
-# which runs our daemon and the opencode server under supervision.
+# Sandbox entrypoint: sets up agent environment and starts pidnap process manager.
+# This script is universal (Daytona and local Docker).
 #
-# Two modes:
-#   - Local Docker (ITERATE_DEV=true): repo mounted, run pnpm install + build
-#   - Daytona: image has everything pre-baked → just starts pidnap
+# Local Docker dev setup (pnpm install, vite build) is handled by docker-compose.yml
+# command section BEFORE this entrypoint runs.
 
 ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
 SANDBOX_DIR="$ITERATE_REPO/apps/os/sandbox"
 
 echo "=== iterate sandbox ==="
 
-# --- Local Docker: install deps and build ---
 if [[ "${ITERATE_DEV:-}" == "true" ]]; then
-  echo "Local dev mode: repo mounted at $ITERATE_REPO"
-  echo ""
-
-  echo "Git status:"
-  (cd "$ITERATE_REPO" && git status --short || echo "(not a git repo)")
-  echo ""
-
-  echo "Installing dependencies..."
-  (cd "$ITERATE_REPO" && pnpm install --no-frozen-lockfile)
-
-  echo "Building daemon..."
-  (cd "$ITERATE_REPO/apps/daemon" && npx vite build)
-
-  # Setup home directory (agent configs from home-skeleton)
-  bash "$SANDBOX_DIR/setup-home.sh"
+  echo "Local dev mode"
 else
   echo "Daytona mode: using pre-baked image"
 fi
