@@ -12,6 +12,9 @@ export default {
     push: {
       branches: ["main"],
     },
+    pull_request: {
+      paths: ["apps/os/sandbox/daytona.test.ts", "apps/os/sandbox/daytona-bootstrap.test.ts"],
+    },
     workflow_dispatch: {
       inputs: {
         stage: {
@@ -77,8 +80,8 @@ export default {
       },
     },
     "daytona-test": {
-      needs: ["variables", "deploy"],
-      if: "needs.variables.outputs.stage == 'prd'",
+      needs: ["variables"],
+      if: "needs.variables.outputs.stage == 'prd' || github.event_name == 'pull_request'",
       ...utils.runsOn,
       steps: [
         ...utils.setupRepo,
