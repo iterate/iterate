@@ -28,7 +28,7 @@ To get your agent session link, first get your session ID using the `get-current
 node -p '
   const { ITERATE_CUSTOMER_REPO_PATH: repoPath, ITERATE_OS_BASE_URL: baseUrl, ITERATE_ORG_SLUG: orgSlug, ITERATE_PROJECT_SLUG: projectSlug, ITERATE_MACHINE_ID: machineId } = process.env;
   const command = `opencode attach 'http://localhost:4096' --session ses_xxxxx --dir ${repoPath}`;
-  const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy`;
+  const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy/3000`;
   `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
 '
 ```
