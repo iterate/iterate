@@ -1,8 +1,8 @@
 import { execSync, spawn } from "node:child_process";
 import { Hono } from "hono";
-import type { IterateEvent } from "../../types/events.ts";
-import { isPromptEvent } from "../../types/events.ts";
-import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
+import type { IterateEvent } from "../types/events.ts";
+import { isPromptEvent } from "../types/events.ts";
+import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 
 export const codexRouter = new Hono();
 
@@ -20,6 +20,14 @@ interface CodexJsonEvent {
   session_id?: string;
   thread_id?: string;
   // Other fields vary by event type
+}
+
+/** Concatenate all prompt events into a single message */
+function concatenatePrompts(events: IterateEvent[]): string {
+  return events
+    .filter(isPromptEvent)
+    .map((e) => e.message)
+    .join("\n\n");
 }
 
 /**
@@ -123,19 +131,14 @@ async function createCodexSession(
   return sessionId;
 }
 
-async function sendEventsToSession(sessionId: string, events: IterateEvent[]): Promise<void> {
+async function sendPromptToSession(sessionId: string, prompt: string): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) {
     throw new Error(`Session ${sessionId} not found`);
   }
 
-  for (const event of events) {
-    if (!isPromptEvent(event)) continue;
-
-    const args = ["exec", "resume", sessionId, "--json", event.message];
-
-    await runCodexCli(args, session.workingDirectory);
-  }
+  const args = ["exec", "resume", sessionId, "--json", prompt];
+  await runCodexCli(args, session.workingDirectory);
 }
 
 codexRouter.post("/new", async (c) => {
@@ -145,20 +148,17 @@ codexRouter.post("/new", async (c) => {
   };
 
   const workingDirectory = getAgentWorkingDirectory();
-
-  // Get initial prompt from events if available
   const eventList = Array.isArray(events) ? events : [];
-  const initialPromptEvent = eventList.find(isPromptEvent);
-  const initialPrompt = initialPromptEvent?.message;
+
+  // Concatenate all events into one prompt
+  const combinedPrompt = concatenatePrompts(eventList);
 
   try {
-    const sessionId = await createCodexSession(agentPath, workingDirectory, initialPrompt);
-
-    // Send remaining events (skip the first if it was used as initial prompt)
-    const remainingEvents = initialPrompt ? eventList.slice(1) : eventList;
-    if (remainingEvents.length > 0) {
-      await sendEventsToSession(sessionId, remainingEvents);
-    }
+    const sessionId = await createCodexSession(
+      agentPath,
+      workingDirectory,
+      combinedPrompt || undefined,
+    );
 
     return c.json({
       route: `/codex/sessions/${sessionId}`,
@@ -177,8 +177,15 @@ codexRouter.post("/sessions/:sessionId", async (c) => {
   const payload = await c.req.json();
   const events: IterateEvent[] = Array.isArray(payload) ? payload : [payload];
 
+  // Concatenate all events into one prompt
+  const combinedPrompt = concatenatePrompts(events);
+
+  if (!combinedPrompt) {
+    return c.json({ success: true, sessionId });
+  }
+
   try {
-    await sendEventsToSession(sessionId, events);
+    await sendPromptToSession(sessionId, combinedPrompt);
     return c.json({ success: true, sessionId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

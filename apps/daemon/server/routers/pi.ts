@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import type { IterateEvent } from "../../types/events.ts";
-import { isPromptEvent } from "../../types/events.ts";
-import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
+import type { IterateEvent } from "../types/events.ts";
+import { isPromptEvent } from "../types/events.ts";
+import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 
 export const piRouter = new Hono();
 
@@ -15,8 +15,16 @@ async function getPiCodingAgent() {
 }
 
 // Store active sessions by ID for the API
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 const activeSessions = new Map<string, any>();
+
+/** Concatenate all prompt events into a single message */
+function concatenatePrompts(events: IterateEvent[]): string {
+  return events
+    .filter(isPromptEvent)
+    .map((e) => e.message)
+    .join("\n\n");
+}
 
 piRouter.post("/new", async (c) => {
   const { agentPath: _agentPath, events } = (await c.req.json()) as {
@@ -40,11 +48,11 @@ piRouter.post("/new", async (c) => {
   // Store session for API access
   activeSessions.set(sessionId, { session, workingDirectory });
 
-  // Process initial events if provided
+  // Concatenate all events into one prompt and send
   const eventList = Array.isArray(events) ? events : [];
-  for (const event of eventList) {
-    if (!isPromptEvent(event)) continue;
-    await session.prompt(event.message);
+  const combinedPrompt = concatenatePrompts(eventList);
+  if (combinedPrompt) {
+    await session.prompt(combinedPrompt);
   }
 
   return c.json({
@@ -59,6 +67,9 @@ piRouter.post("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
   const payload = await c.req.json();
   const events: IterateEvent[] = Array.isArray(payload) ? payload : [payload];
+
+  // Concatenate all events into one prompt
+  const combinedPrompt = concatenatePrompts(events);
 
   const stored = activeSessions.get(sessionId);
   if (!stored) {
@@ -80,9 +91,8 @@ piRouter.post("/sessions/:sessionId", async (c) => {
 
       activeSessions.set(sessionId, { session, workingDirectory });
 
-      for (const event of events) {
-        if (!isPromptEvent(event)) continue;
-        await session.prompt(event.message);
+      if (combinedPrompt) {
+        await session.prompt(combinedPrompt);
       }
 
       return c.json({ success: true, sessionId });
@@ -93,9 +103,8 @@ piRouter.post("/sessions/:sessionId", async (c) => {
 
   const { session } = stored;
 
-  for (const event of events) {
-    if (!isPromptEvent(event)) continue;
-    await session.prompt(event.message);
+  if (combinedPrompt) {
+    await session.prompt(combinedPrompt);
   }
 
   return c.json({ success: true, sessionId });

@@ -15,7 +15,6 @@ import { Route as LayoutLessTerminalRouteImport } from './routes/_layout-less/te
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents/index'
 import { Route as AppAgentsNewRouteImport } from './routes/_app/agents/new'
 import { Route as AppAgentsSlugRouteImport } from './routes/_app/agents/$slug'
-import { Route as AppAgentNewRouteImport } from './routes/_app/agent/new'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -46,16 +45,10 @@ const AppAgentsSlugRoute = AppAgentsSlugRouteImport.update({
   path: '/agents/$slug',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAgentNewRoute = AppAgentNewRouteImport.update({
-  id: '/agent/new',
-  path: '/agent/new',
-  getParentRoute: () => AppRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
-  '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
   '/agents': typeof AppAgentsIndexRoute
@@ -63,7 +56,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/terminal': typeof LayoutLessTerminalRoute
   '/': typeof AppIndexRoute
-  '/agent/new': typeof AppAgentNewRoute
   '/agents/$slug': typeof AppAgentsSlugRoute
   '/agents/new': typeof AppAgentsNewRoute
   '/agents': typeof AppAgentsIndexRoute
@@ -73,34 +65,20 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_layout-less/terminal': typeof LayoutLessTerminalRoute
   '/_app/': typeof AppIndexRoute
-  '/_app/agent/new': typeof AppAgentNewRoute
   '/_app/agents/$slug': typeof AppAgentsSlugRoute
   '/_app/agents/new': typeof AppAgentsNewRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/terminal'
-    | '/'
-    | '/agent/new'
-    | '/agents/$slug'
-    | '/agents/new'
-    | '/agents'
+  fullPaths: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/terminal'
-    | '/'
-    | '/agent/new'
-    | '/agents/$slug'
-    | '/agents/new'
-    | '/agents'
+  to: '/terminal' | '/' | '/agents/$slug' | '/agents/new' | '/agents'
   id:
     | '__root__'
     | '/_app'
     | '/_layout-less/terminal'
     | '/_app/'
-    | '/_app/agent/new'
     | '/_app/agents/$slug'
     | '/_app/agents/new'
     | '/_app/agents/'
@@ -155,19 +133,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsSlugRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/agent/new': {
-      id: '/_app/agent/new'
-      path: '/agent/new'
-      fullPath: '/agent/new'
-      preLoaderRoute: typeof AppAgentNewRouteImport
-      parentRoute: typeof AppRoute
-    }
   }
 }
 
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
-  AppAgentNewRoute: typeof AppAgentNewRoute
   AppAgentsSlugRoute: typeof AppAgentsSlugRoute
   AppAgentsNewRoute: typeof AppAgentsNewRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
@@ -175,7 +145,6 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
-  AppAgentNewRoute: AppAgentNewRoute,
   AppAgentsSlugRoute: AppAgentsSlugRoute,
   AppAgentsNewRoute: AppAgentsNewRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,

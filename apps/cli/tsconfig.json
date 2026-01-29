@@ -13,6 +13,6 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["./**/*.ts", "../daemon/server/routers/agents/sdk-types.d.ts"],
+  "include": ["./**/*.ts"],
   "exclude": ["node_modules", "dist", "effect.ignoreme"]
 }

@@ -67,7 +67,6 @@ async function waitForActiveRoute(agentPath: string): Promise<AgentRoute | null>
   return null;
 }
 
-
 export const trpcRouter = createTRPCRouter({
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),

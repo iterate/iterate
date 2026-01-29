@@ -5,7 +5,6 @@ import type { SerializedAgent } from "@server/trpc/router.ts";
 import { cn } from "@/lib/utils.ts";
 import { Separator } from "@/components/ui/separator.tsx";
 import { SidebarTrigger } from "@/components/ui/sidebar.tsx";
-import { Button } from "@/components/ui/button.tsx";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -21,7 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
-import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { HEADER_ACTIONS_ID } from "@/components/header-actions-constants.ts";
 
 interface AppHeaderProps {
@@ -31,7 +29,6 @@ interface AppHeaderProps {
 
 export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const location = useLocation();
-  const trpc = useTRPC();
 
   const isAgentRoute = location.pathname.startsWith("/agents/");
   const isNewAgentRoute = location.pathname === "/agents/new";

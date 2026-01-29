@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
 import { Hono } from "hono";
 import { createOpencodeClient } from "@opencode-ai/sdk";
-import type { IterateEvent } from "../../types/events.ts";
-import { isPromptEvent } from "../../types/events.ts";
-import { getAgentWorkingDirectory } from "../../utils/agent-working-directory.ts";
+import type { IterateEvent } from "../types/events.ts";
+import { isPromptEvent } from "../types/events.ts";
+import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
 function getOpencodeWorkingDirectory(): string {
@@ -19,21 +19,25 @@ const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:409
 
 export const opencodeRouter = new Hono();
 
-async function sendEventsToSession(
+/** Concatenate all prompt events into a single message */
+function concatenatePrompts(events: IterateEvent[]): string {
+  return events
+    .filter(isPromptEvent)
+    .map((e) => e.message)
+    .join("\n\n");
+}
+
+async function sendPromptToSession(
   sessionId: string,
-  events: IterateEvent[],
+  prompt: string,
   workingDirectory: string,
 ): Promise<void> {
   const client = createOpencodeClient({ baseUrl: OPENCODE_BASE_URL });
-
-  for (const event of events) {
-    if (!isPromptEvent(event)) continue;
-    await client.session.prompt({
-      path: { id: sessionId },
-      query: { directory: workingDirectory },
-      body: { parts: [{ type: "text", text: event.message }] },
-    });
-  }
+  await client.session.prompt({
+    path: { id: sessionId },
+    query: { directory: workingDirectory },
+    body: { parts: [{ type: "text", text: prompt }] },
+  });
 }
 
 opencodeRouter.post("/new", async (c) => {
@@ -54,10 +58,12 @@ opencodeRouter.post("/new", async (c) => {
   }
 
   const sessionId = response.data.id;
-
   const eventList = Array.isArray(events) ? events : [];
-  if (eventList.length > 0) {
-    await sendEventsToSession(sessionId, eventList, workingDirectory);
+
+  // Concatenate all events into one prompt
+  const combinedPrompt = concatenatePrompts(eventList);
+  if (combinedPrompt) {
+    await sendPromptToSession(sessionId, combinedPrompt, workingDirectory);
   }
 
   return c.json({
@@ -73,7 +79,11 @@ opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const payload = await c.req.json();
   const events: IterateEvent[] = Array.isArray(payload) ? payload : [payload];
 
-  await sendEventsToSession(sessionId, events, getOpencodeWorkingDirectory());
+  // Concatenate all events into one prompt
+  const combinedPrompt = concatenatePrompts(events);
+  if (combinedPrompt) {
+    await sendPromptToSession(sessionId, combinedPrompt, getOpencodeWorkingDirectory());
+  }
 
   return c.json({ success: true, sessionId });
 });

@@ -11,7 +11,10 @@ import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 import { emailRouter } from "./routers/email.ts";
 import { agentsRouter } from "./routers/agents.ts";
-import { opencodeRouter, piRouter, claudeRouter, codexRouter } from "./routers/agents/index.ts";
+import { opencodeRouter } from "./routers/opencode.ts";
+import { piRouter } from "./routers/pi.ts";
+import { claudeRouter } from "./routers/claude.ts";
+import { codexRouter } from "./routers/codex.ts";
 
 const app = baseApp.use(
   logger(),
