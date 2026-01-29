@@ -352,14 +352,6 @@ const getRaceImpl = (method: OverrideableMethod) => {
     }
 
     if (race.outcome === "spinner-hidden") {
-      const debounceMs = 250;
-      await new Promise((resolve) => setTimeout(resolve, debounceMs));
-
-      if (await spinnerLocator.isVisible()) {
-        settings.log(`spinner reappeared during debounce, continuing to wait`);
-        return await this[method](...args);
-      }
-
       return await callOriginal(args).catch((e) => {
         adjustError(e as Error, [
           `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
