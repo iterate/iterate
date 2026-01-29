@@ -23,7 +23,7 @@ curl http://127.0.0.1:2375/version
 
 ### Local Docker Snapshots
 
-When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background from the repo root using `apps/os/sandbox/Dockerfile`. Docker's layer caching ensures this is fast (~2s) if nothing changed, while still picking up Dockerfile changes without manual rebuilds.
+When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background using `apps/os/sandbox/Dockerfile`. Images are always built from the current commit SHA.
 
 To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
 
@@ -111,7 +111,7 @@ This will:
 
 1. Construct the stage from `ITERATE_USER` (dev) or `APP_STAGE` (stg/prd)
 2. Generate a timestamp-based snapshot name
-3. Build the Docker image from the repo root using `apps/os/sandbox/Dockerfile`
+3. Build the Docker image using `apps/os/sandbox/Dockerfile`
 4. Push the snapshot to Daytona
 
 ### Dynamic Snapshot Resolution

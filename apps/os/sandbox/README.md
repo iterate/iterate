@@ -4,7 +4,7 @@ The sandbox container runs agents in isolated Docker environments.
 
 ## How It Works
 
-The Docker **build context** determines what version of iterate is bundled in the image. The entire repo (including `.git`) is COPYed into the container at build time.
+The Docker **build context** contains a git bundle of the current commit. Images are always built from a specific commit SHA.
 
 ### Deployment Scenarios
 
@@ -18,7 +18,7 @@ The Docker **build context** determines what version of iterate is bundled in th
 
 | File                       | Purpose                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------ |
-| `Dockerfile`               | Image definition; COPY repo from build context                                       |
+| `Dockerfile`               | Image definition (commit SHA required)                                               |
 | `entry.sh`                 | Container entrypoint; rsync in local mode, then start pidnap                         |
 | `pidnap.config.ts`         | Process manager configuration (services, tasks, env watching)                        |
 | `egress-proxy-addon.py`    | mitmproxy addon for routing traffic through iterate egress worker                    |
@@ -40,14 +40,14 @@ Agent versions are `ENV` vars at the top of the Dockerfile (prefix `SANDBOX_`):
 | `SANDBOX_PI_CODING_AGENT_VERSION` | npm version for Pi          |
 | `SANDBOX_BUN_VERSION`             | Bun version                 |
 
-To update: edit `ENV` values in `Dockerfile`, rebuild image.
+To update: edit `ENV` values in the Dockerfile, rebuild image.
 
 ## Building & Testing
 
 ### Local Docker
 
 ```bash
-# Build local image (uses your working directory)
+# Build local image (uses current commit SHA)
 pnpm snapshot:local-docker
 
 # Run tests against local Docker
@@ -57,17 +57,17 @@ pnpm snapshot:local-docker:test
 ### Daytona
 
 ```bash
-# Build snapshot from current branch
-SANDBOX_ITERATE_REPO_REF=$(git branch --show-current) pnpm snapshot:daytona:prd
+# Build snapshot from current commit
+SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona:prd
 
-# Build snapshot from specific branch/SHA
-SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:prd
+# Build snapshot from specific commit SHA
+SANDBOX_ITERATE_REPO_REF=<sha> pnpm snapshot:daytona:prd
 
 # Run tests (auto-builds snapshot from current branch if not specified)
 pnpm snapshot:daytona:test
 
-# Run tests with specific branch
-SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:test
+# Run tests with specific commit SHA
+SANDBOX_ITERATE_REPO_REF=<sha> pnpm snapshot:daytona:test
 
 # Run tests with existing snapshot (skips build)
 DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
@@ -76,7 +76,11 @@ DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
 ### Direct Docker Build
 
 ```bash
-docker build -t iterate-sandbox:local -f apps/os/sandbox/Dockerfile .
+docker build \
+  --build-arg SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) \
+  -t iterate-sandbox:local \
+  -f apps/os/sandbox/Dockerfile \
+  .
 ```
 
 ## Entry Script Flow

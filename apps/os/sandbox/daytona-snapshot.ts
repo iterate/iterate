@@ -1,34 +1,37 @@
 import { execSync } from "node:child_process";
-import {
-  existsSync,
-  copyFileSync,
-  chmodSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
-// Daytona snapshots require a commit SHA - ensures reproducible builds
-const commitSha = process.env.SANDBOX_ITERATE_REPO_REF;
-if (!commitSha || !/^[0-9a-f]{40}$/i.test(commitSha)) {
-  console.error("ERROR: SANDBOX_ITERATE_REPO_REF must be a 40-char commit SHA.");
-  console.error("");
-  console.error("Usage: SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm snapshot:daytona");
-  console.error("");
-  if (commitSha) {
-    console.error(`Got: ${commitSha}`);
+const repoRoot = join(import.meta.dirname, "..", "..", "..");
+
+function getCommitSha(): string {
+  const envSha = process.env.SANDBOX_ITERATE_REPO_REF;
+  const sha = envSha ?? execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+  if (!/^[0-9a-f]{40}$/i.test(sha)) {
+    console.error("ERROR: Could not resolve a 40-char commit SHA.");
+    console.error("");
+    console.error("Usage: git rev-parse HEAD (or set SANDBOX_ITERATE_REPO_REF to a SHA)");
+    console.error("");
+    console.error(`Got: ${sha}`);
+    process.exit(1);
   }
-  process.exit(1);
+  return sha;
 }
 
+function injectCommitSha(dockerfileContent: string, commitSha: string): string {
+  const next = dockerfileContent.replaceAll(
+    "ARG SANDBOX_ITERATE_REPO_REF",
+    `ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`,
+  );
+  if (!next.includes(`ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`)) {
+    throw new Error("Failed to inject SANDBOX_ITERATE_REPO_REF into Dockerfile");
+  }
+  return next;
+}
+
+const commitSha = getCommitSha();
 const snapshotName = `iterate-sandbox-${commitSha}`;
 
 console.log(`Creating snapshot: ${snapshotName}`);
@@ -37,83 +40,60 @@ const daytona = new Daytona({
   apiKey: process.env.DAYTONA_API_KEY,
 });
 
-const repoRoot = join(import.meta.dirname, "..", "..", "..");
-const dockerfileSourcePath = join(import.meta.dirname, "Dockerfile");
 const tempDir = mkdtempSync(join(tmpdir(), "iterate-sandbox-context-"));
 const dockerfileTargetPath = join(tempDir, "Dockerfile");
 
-const trackedFiles = execSync("git ls-files -z", { cwd: repoRoot })
-  .toString("utf-8")
-  .split("\u0000")
-  .filter(Boolean);
-const untrackedFiles = execSync("git ls-files -z --others --exclude-standard", { cwd: repoRoot })
-  .toString("utf-8")
-  .split("\u0000")
-  .filter(Boolean);
-const files = new Set([...trackedFiles, ...untrackedFiles]);
+try {
+  // Create git bundle from committed state (works with worktrees)
+  console.log(`Bundling repo at ${commitSha}`);
+  execSync(`git bundle create ${join(tempDir, "iterate.bundle")} HEAD`, {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
 
-for (const relativePath of files) {
-  const sourcePath = join(repoRoot, relativePath);
-  const targetPath = join(tempDir, relativePath);
-  const parentDir = dirname(targetPath);
-  if (!existsSync(sourcePath)) {
-    continue;
-  }
-  const stats = lstatSync(sourcePath);
+  // Materialize entry.sh from committed state into build context
+  const entryPath = join(tempDir, "apps/os/sandbox");
+  mkdirSync(entryPath, { recursive: true });
+  const entryContent = execSync("git show HEAD:apps/os/sandbox/entry.sh", {
+    cwd: repoRoot,
+    encoding: "utf-8",
+  });
+  const entryFile = join(entryPath, "entry.sh");
+  writeFileSync(entryFile, entryContent);
+  chmodSync(entryFile, 0o755);
 
-  mkdirSync(parentDir, { recursive: true });
+  const dockerfileContent = execSync("git show HEAD:apps/os/sandbox/Dockerfile", {
+    cwd: repoRoot,
+    encoding: "utf-8",
+  });
+  writeFileSync(dockerfileTargetPath, injectCommitSha(dockerfileContent, commitSha));
 
-  if (stats.isSymbolicLink()) {
-    symlinkSync(readlinkSync(sourcePath), targetPath);
-    continue;
-  }
+  const image = Image.fromDockerfile(dockerfileTargetPath);
 
-  if (stats.isDirectory()) {
-    mkdirSync(targetPath, { recursive: true });
-    chmodSync(targetPath, stats.mode);
-    continue;
-  }
-
-  copyFileSync(sourcePath, targetPath);
-  // Mask out setuid/setgid bits (04000/02000) to prevent privilege escalation
-  chmodSync(targetPath, stats.mode & 0o777);
-}
-
-// Read Dockerfile and inject the git ref into ALL ARG declarations
-// Docker ARG values don't persist across USER switches, so both declarations need the value
-let dockerfileContent = readFileSync(dockerfileSourcePath, "utf-8");
-
-console.log(`Using SANDBOX_ITERATE_REPO_REF=${commitSha}`);
-// Replace all ARG SANDBOX_ITERATE_REPO_REF declarations (with or without default value)
-dockerfileContent = dockerfileContent.replace(
-  /^ARG SANDBOX_ITERATE_REPO_REF(=.*)?$/gm,
-  `ARG SANDBOX_ITERATE_REPO_REF="${commitSha}"`,
-);
-
-writeFileSync(dockerfileTargetPath, dockerfileContent);
-
-const image = Image.fromDockerfile(dockerfileTargetPath);
-
-const snapshot = await (async () => {
-  try {
-    return await daytona.snapshot.create(
-      {
-        name: snapshotName,
-        image,
-        resources: { cpu: 2, memory: 4, disk: 10 },
-      },
-      { onLogs: console.log },
-    );
-  } catch (error) {
-    // Handle "already exists" as success (409 conflict) - snapshots are idempotent by commit SHA
-    if (error instanceof Error && "statusCode" in error && error.statusCode === 409) {
-      console.log(`Snapshot ${snapshotName} already exists, skipping creation`);
-      return { name: snapshotName, alreadyExisted: true };
+  const snapshot = await (async () => {
+    try {
+      return await daytona.snapshot.create(
+        {
+          name: snapshotName,
+          image,
+          resources: { cpu: 2, memory: 4, disk: 10 },
+        },
+        { onLogs: console.log },
+      );
+    } catch (error) {
+      // Handle "already exists" as success (409 conflict) - snapshots are idempotent by commit SHA
+      if (error instanceof Error && "statusCode" in error && error.statusCode === 409) {
+        console.log(`Snapshot ${snapshotName} already exists, skipping creation`);
+        return { name: snapshotName, alreadyExisted: true };
+      }
+      throw error;
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
-    throw error;
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-})();
+  })();
 
-console.log("Snapshot created successfully:", snapshot);
+  console.log("Snapshot created successfully:", snapshot);
+} catch (error) {
+  rmSync(tempDir, { recursive: true, force: true });
+  throw error;
+}

@@ -32,7 +32,9 @@ ITERATE_EGRESS_PROXY_URL="${ITERATE_EGRESS_PROXY_URL:-https://dev-nick-os.dev.it
 ITERATE_OS_API_KEY="${ITERATE_OS_API_KEY:-test-dev-key}"
 
 log "Building Docker image..."
-docker build -t iterate-sandbox-test -f "$SCRIPT_DIR/Dockerfile" "$REPO_ROOT"
+COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+LOCAL_DOCKER_IMAGE_NAME="iterate-sandbox-test" SANDBOX_ITERATE_REPO_REF="$COMMIT_SHA" \
+  pnpm --filter os snapshot:local-docker
 
 log ""
 log "Running egress proxy test in container..."

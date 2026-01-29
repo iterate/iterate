@@ -11,10 +11,6 @@ ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
 
-# === Build Args ===
-# SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
-ARG SANDBOX_ITERATE_REPO_REF=""
-
 # === System packages (as root) ===
 
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -89,44 +85,35 @@ ENV PATH="/home/iterate/.local/bin:$PATH"
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
 # === Iterate repo ===
-# Two modes based on SANDBOX_ITERATE_REPO_REF:
-#   - Set: git clone the specified ref (CI/Daytona - fast cached builds)
-#   - Empty: create placeholder, entry.sh syncs from local mount at runtime
 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
-# Re-declare ARG after USER switch (ARGs don't persist across USER)
+# Build arg is intentionally declared late to keep earlier layers cacheable across commits.
+# SANDBOX_ITERATE_REPO_REF: git commit SHA required for build.
 ARG SANDBOX_ITERATE_REPO_REF
+RUN if [ -z "$SANDBOX_ITERATE_REPO_REF" ]; then \
+    echo "ERROR: SANDBOX_ITERATE_REPO_REF is required"; \
+    exit 1; \
+  fi
 
-# If ref provided, clone from git; otherwise create placeholder for local mount
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
-    cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
-    else \
-    mkdir -p $ITERATE_REPO/apps/os/sandbox; \
-    fi
+# Bundle-based clone (commit SHA required)
+COPY iterate.bundle /tmp/iterate.bundle
+RUN git clone /tmp/iterate.bundle $ITERATE_REPO && \
+    cd $ITERATE_REPO && git checkout "$SANDBOX_ITERATE_REPO_REF"
 
-# Make scripts executable (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
-    fi
-
-# Install deps and build daemon (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO && pnpm install; \
-    fi
-
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO/apps/daemon && npx vite build; \
-    fi
+# Install deps and build daemon
+# If Daytona ever supports BuildKit, consider adding:
+#   RUN --mount=type=cache,id=pnpm-store,target=/home/iterate/.local/share/pnpm/store \
+#     cd $ITERATE_REPO && pnpm install
+RUN echo "$SANDBOX_ITERATE_REPO_REF" > /tmp/.iterate-git-ref && \
+    cd $ITERATE_REPO && pnpm install
+RUN cd $ITERATE_REPO/apps/daemon && npx vite build
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
 RUN mkdir -p ~/.iterate && \
     echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
 
-# Setup home directory (only if repo was cloned; entry.sh handles local mode)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
-    fi
+# Setup home directory
+RUN bash $ITERATE_REPO/apps/os/sandbox/setup-home.sh
 
 ENTRYPOINT [ "/app/entry.sh" ]

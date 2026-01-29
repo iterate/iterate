@@ -36,9 +36,6 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
   # NOTE: Do NOT delete $ITERATE_REPO_LOCAL_DOCKER_MOUNT - it's a mount point and rm would fail or
   # worse, delete host files if mounted read-write. The mount is isolated anyway.
 
-  # Make scripts executable (rsync preserves permissions but host may not have +x)
-  chmod +x "$ITERATE_REPO/apps/os/sandbox/"*.sh
-
   echo "Installing dependencies..."
   (cd "$ITERATE_REPO" && pnpm install --no-frozen-lockfile)
 
@@ -46,7 +43,7 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
   (cd "$ITERATE_REPO/apps/daemon" && npx vite build)
 
   # Setup home directory (agent configs from home-skeleton)
-  "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
+  bash "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
 fi
 
 # --- Start pidnap process manager ---

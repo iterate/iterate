@@ -63,28 +63,31 @@ function ensureLocalDockerImage() {
     return;
   }
 
-  // Always run docker build in background - let Docker's cache decide if rebuild is needed
-  // This ensures we pick up Dockerfile changes without blocking dev server startup
-  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
-
-  // Build args from env vars (only SANDBOX_ITERATE_REPO_REF is a build arg - other versions are ENV in Dockerfile)
-  const buildArgs: string[] = [];
-  if (process.env.SANDBOX_ITERATE_REPO_REF) {
-    buildArgs.push(
-      "--build-arg",
-      `SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`,
-    );
-    console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
+  let commitSha = "";
+  try {
+    commitSha = execSync("git rev-parse HEAD", { encoding: "utf-8", cwd: repoRoot }).trim();
+  } catch {
+    console.error("[docker] Failed to resolve commit SHA, skipping local image build");
+    return;
+  }
+  if (!/^[0-9a-f]{40}$/i.test(commitSha)) {
+    console.error(`[docker] Invalid commit SHA: ${commitSha}`);
+    return;
   }
 
-  const buildProcess = spawn(
-    "docker",
-    ["build", ...buildArgs, "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os/sandbox/Dockerfile", "."],
-    {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "pipe"],
+  // Always run local snapshot build in background so Docker cache can do its work.
+  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
+  console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${commitSha}`);
+
+  const buildProcess = spawn("pnpm", ["--filter", "os", "snapshot:local-docker"], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      SANDBOX_ITERATE_REPO_REF: commitSha,
+      LOCAL_DOCKER_IMAGE_NAME: LOCAL_DOCKER_IMAGE_NAME,
     },
-  );
+  });
 
   // Stream output with prefix so it's clear what's happening
   buildProcess.stdout?.on("data", (data: Buffer) => {
