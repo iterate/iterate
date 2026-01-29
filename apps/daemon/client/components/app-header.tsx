@@ -7,10 +7,10 @@ import {
   SquareIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import type { SerializedAgent, SerializedTmuxSession } from "@server/trpc/router.ts";
+import type { SerializedAgent } from "@server/trpc/router.ts";
 import { cn } from "@/lib/utils.ts";
 import { Separator } from "@/components/ui/separator.tsx";
 import { SidebarTrigger } from "@/components/ui/sidebar.tsx";
@@ -28,7 +28,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
@@ -48,16 +47,6 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
   const isAgentRoute = location.pathname.startsWith("/agents/");
   const isNewAgentRoute = location.pathname === "/agents/new";
   const isTerminalRoute = location.pathname === "/terminal";
-  const isBtopRoute = location.pathname === "/btop";
-
-  const { data: tmuxSessions = [] } = useQuery({
-    ...trpc.listTmuxSessions.queryOptions(),
-    enabled: isTerminalRoute,
-  });
-
-  const sendTerminalCommand = (command: string) => {
-    window.dispatchEvent(new CustomEvent("terminal:send", { detail: command + "\n" }));
-  };
 
   const resetAgent = useMutation({
     mutationFn: () => trpcClient.resetAgent.mutate({ slug: agent!.slug }),
@@ -100,11 +89,9 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
       ? "New Agent"
       : isTerminalRoute
         ? "Terminal"
-        : isBtopRoute
-          ? "System"
-          : isAgentRoute
-            ? "Agents"
-            : "Home";
+        : isAgentRoute
+          ? "Agents"
+          : "Home";
 
   return (
     <header
@@ -120,7 +107,7 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
           {/* Mobile navigation - back button and current location */}
           <div className="flex items-center gap-2 md:hidden">
             {/* Only show back button when not on the agents list (home) */}
-            {(agent || isNewAgentRoute || isTerminalRoute || isBtopRoute) && (
+            {(agent || isNewAgentRoute || isTerminalRoute) && (
               <Link
                 to="/agents"
                 className="flex items-center text-muted-foreground hover:text-foreground transition-colors rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -176,26 +163,12 @@ export function AppHeader({ agent, agents = [] }: AppHeaderProps) {
                   </BreadcrumbItem>
                 </>
               )}
-              {isBtopRoute && (
-                <>
-                  <BreadcrumbSeparator />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>System Utilisation</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </>
-              )}
             </BreadcrumbList>
           </Breadcrumb>
         </div>
 
         {/* Right side - actions without max-width, pushed to far right */}
         <div id={HEADER_ACTIONS_ID} className="flex items-center gap-2">
-          {isTerminalRoute && (
-            <TerminalShortcutsDropdown
-              tmuxSessions={tmuxSessions}
-              onCommand={sendTerminalCommand}
-            />
-          )}
           {agent && (
             <div className="flex items-center gap-1">
               <Tooltip>
@@ -314,101 +287,5 @@ function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdo
         </DropdownMenuContent>
       </DropdownMenu>
     </BreadcrumbItem>
-  );
-}
-
-interface TerminalShortcut {
-  command: string;
-  description: string;
-  placeholders?: Array<{ name: string; label: string }>;
-}
-
-const TERMINAL_SHORTCUTS: TerminalShortcut[] = [
-  {
-    command: "tmux list-sessions",
-    description: "List all active tmux sessions",
-  },
-  {
-    command: "tmux attach -t {session}",
-    description: "Attach to a tmux session by name",
-    placeholders: [{ name: "session", label: "Session name" }],
-  },
-  {
-    command: "tmux new-session -s {name}",
-    description: "Create a new tmux session",
-    placeholders: [{ name: "name", label: "New session name" }],
-  },
-  {
-    command: "tmux kill-session -t {session}",
-    description: "Kill a tmux session",
-    placeholders: [{ name: "session", label: "Session name to kill" }],
-  },
-];
-
-interface TerminalShortcutsDropdownProps {
-  tmuxSessions: SerializedTmuxSession[];
-  onCommand: (command: string) => void;
-}
-
-function TerminalShortcutsDropdown({ tmuxSessions, onCommand }: TerminalShortcutsDropdownProps) {
-  const executeShortcut = (shortcut: TerminalShortcut) => {
-    let command = shortcut.command;
-
-    if (shortcut.placeholders) {
-      for (const placeholder of shortcut.placeholders) {
-        const value = window.prompt(placeholder.label);
-        if (value === null) return;
-        command = command.replace(`{${placeholder.name}}`, value);
-      }
-    }
-
-    onCommand(command);
-  };
-
-  const executeSessionAttach = (sessionName: string) => {
-    onCommand(`tmux attach -t ${sessionName}`);
-  };
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
-          Shortcuts
-          <ChevronDownIcon className="ml-1 size-3" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Commands</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {TERMINAL_SHORTCUTS.map((shortcut) => (
-          <DropdownMenuItem
-            key={shortcut.command}
-            onClick={() => executeShortcut(shortcut)}
-            className="flex flex-col items-start gap-0.5 py-2"
-          >
-            <code className="font-mono text-xs">{shortcut.command}</code>
-            <span className="text-xs text-muted-foreground">{shortcut.description}</span>
-          </DropdownMenuItem>
-        ))}
-        {tmuxSessions.length > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Active Sessions</DropdownMenuLabel>
-            {tmuxSessions.map((session) => (
-              <DropdownMenuItem
-                key={session.name}
-                onClick={() => executeSessionAttach(session.name)}
-                className="flex flex-col items-start gap-0.5 py-2"
-              >
-                <code className="font-mono text-xs">tmux attach -t {session.name}</code>
-                <span className="text-xs text-muted-foreground">
-                  Attach to session ({session.windows} window{session.windows !== 1 ? "s" : ""})
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

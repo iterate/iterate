@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, redirect, useMatch, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
+import { Spinner } from "../../components/ui/spinner.tsx";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
@@ -13,6 +14,7 @@ import { HeaderActionsProvider } from "../../components/header-actions.tsx";
 import { useHeaderActions } from "../../hooks/use-header-actions.ts";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
+  // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
@@ -24,6 +26,12 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
       throw redirect({ to: "/" });
     }
   },
+
+  // loader: Prefetch data (non-blocking, shows spinner if not ready)
+  loader: ({ context }) => {
+    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+  },
+
   component: OrgLayout,
 });
 
@@ -124,10 +132,21 @@ function OrgLayout() {
         />
         <main className="w-full max-w-3xl flex-1 overflow-auto">
           <HeaderActionsProvider onActionsChange={setHeaderActions}>
-            <Outlet />
+            <Suspense fallback={<ContentSpinner />}>
+              <Outlet />
+            </Suspense>
           </HeaderActionsProvider>
         </main>
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+/** Content area loading spinner for child routes */
+function ContentSpinner() {
+  return (
+    <div className="flex h-full min-h-[200px] items-center justify-center p-4">
+      <Spinner className="size-6" />
+    </div>
   );
 }

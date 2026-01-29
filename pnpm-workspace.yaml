@@ -6,6 +6,7 @@ packages:
   - apps/os/sandbox
   - packages/*
   - packages/pidnap/docker
+  - repo-templates/*
   - .github/ts-workflows
 
 minimumReleaseAge: 1440

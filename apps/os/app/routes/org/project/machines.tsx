@@ -65,8 +65,8 @@ const Search = z.object({
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
-  component: ProjectMachinesPage,
   validateSearch: Search,
+  component: ProjectMachinesPage,
 });
 
 function ProjectMachinesPage() {

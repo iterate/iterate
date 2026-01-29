@@ -3,6 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    "./config/index.ts": "./config/index.ts",
+    "./server/start.ts": "./server/start.ts",
+    "./server/trpc/router.ts": "./server/trpc/router.ts"
+  },
   "scripts": {
     "dev": "pnpm --filter @iterate-com/daemon --reporter-hide-prefix --color --parallel /dev:/",
     "dev:client": "doppler run -- vite",

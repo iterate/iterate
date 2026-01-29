@@ -15,6 +15,7 @@ const baseConfig = {
 
 const agentConfig = {
   "*": [
+    ...(baseConfig["*"] || []),
     // using a function which ignores args (filepaths) means *don't* append the filepaths to the command
     () => "pnpm typecheck",
     // if tests prove slow, we could do smart dependency tracking to only run tests for changed files

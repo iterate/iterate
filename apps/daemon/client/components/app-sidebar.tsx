@@ -1,6 +1,6 @@
 import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, ActivityIcon } from "lucide-react";
+import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon } from "lucide-react";
 
 import type { SerializedAgent } from "@server/trpc/router.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
@@ -128,14 +128,6 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
                   <Link to="/terminal">
                     <TerminalIcon className="size-4" />
                     <span>Terminal</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={currentPath === "/btop"}>
-                  <Link to="/btop">
-                    <ActivityIcon className="size-4" />
-                    <span>System Utilisation (btop)</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

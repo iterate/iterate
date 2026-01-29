@@ -1,11 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { quote } from "shell-quote";
 import { simpleGit } from "simple-git";
-
-import { x } from "tinyexec";
-import { getTmuxSocketPath } from "../tmux-control.ts";
 import { fetchBootstrapData } from "../bootstrap-refresh.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
@@ -25,11 +21,10 @@ const clonedReposStatus: Map<
 > = new Map();
 
 /**
- * Apply environment variables to the daemon process and tmux sessions.
+ * Apply environment variables to the daemon process.
  * This function:
  * 1. Replaces vars in memory and process.env (removes stale keys)
  * 2. Writes them to ~/.iterate/.env file in dotenv format for pidnap
- * 3. Sends inline export commands to tmux sessions (bash-escaped)
  */
 export async function applyEnvVars(vars: Record<string, string>): Promise<{
   injectedCount: number;
@@ -121,31 +116,6 @@ NODE_USE_ENV_PROXY=1
     console.log("[platform] Env vars unchanged, skipping write");
   }
 
-  // Refresh tmux sessions with new env vars by sending inline export commands.
-  // We use single-quoted strings with '\'' to escape single quotes, which is safe
-  // for any value (no shell interpretation). This is separate from the dotenv file
-  // format above because bash and dotenv have incompatible escaping rules.
-  const tmuxSocket = getTmuxSocketPath();
-  const listResult = await x("tmux", ["-S", tmuxSocket, "list-sessions", "-F", "#{session_name}"]);
-  const sessions = listResult.stdout.trim().split("\n").filter(Boolean);
-
-  if (sessions.length > 0) {
-    // Build export commands with proper shell escaping via shell-quote
-    const exportCommands = Object.entries(vars)
-      .map(([key, value]) => `export ${key}=${quote([value])}`)
-      .join("; ");
-
-    // Send export commands to each session in parallel
-    await Promise.all(
-      sessions.map((session) =>
-        x("tmux", ["-S", tmuxSocket, "send-keys", "-t", session, exportCommands, "Enter"], {
-          throwOnError: true,
-        }),
-      ),
-    );
-    console.log(`[platform] Refreshed env vars in ${sessions.length} tmux sessions`);
-  }
-
   return {
     injectedCount: Object.keys(vars).length,
     removedCount: keysToRemove.length,
@@ -183,17 +153,6 @@ export async function clearGitHubCredentials(): Promise<void> {
     }
   } catch {
     // Ignore errors reading config
-  }
-
-  // Clear gh CLI auth status (best-effort - uses env vars GH_TOKEN/GITHUB_TOKEN now)
-  // Note: We don't need to logout since we're using env var auth, but we clear
-  // any stale stored credentials to avoid conflicts
-  try {
-    // gh auth token returns 0 if logged in, non-zero otherwise - just check status
-    await x("gh", ["auth", "status", "-h", "github.com"], { throwOnError: true });
-    console.log("[platform] gh CLI has stored credentials (will use env var instead)");
-  } catch {
-    // Not logged in - that's fine, we use env vars
   }
 }
 

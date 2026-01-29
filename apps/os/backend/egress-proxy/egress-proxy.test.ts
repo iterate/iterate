@@ -14,7 +14,8 @@ import {
   getFullReauthUrl,
   CONNECTORS,
 } from "../services/connectors.ts";
-import { parseMagicString, MAGIC_STRING_PATTERN, matchesEgressRule } from "./egress-proxy.ts";
+import { parseMagicString, MAGIC_STRING_PATTERN } from "./egress-proxy.ts";
+import { matchesEgressRule } from "./egress-rules.ts";
 
 // Test the magic string parsing and secret lookup logic
 // We test these as pure functions without DB/worker dependencies

@@ -1034,6 +1034,16 @@ importers:
         specifier: 7.2.4
         version: 7.2.4(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
+  repo-templates/default:
+    dependencies:
+      '@iterate-com/daemon':
+        specifier: workspace:*
+        version: link:../../apps/daemon
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
 packages:
 
   '@acemir/cssom@0.9.30':
