@@ -20,8 +20,8 @@ let loadedConfig: IterateConfig | null = null;
  */
 function getDefaultConfigPath(): string {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  // Navigate from apps/daemon/server to repo root, then into repo-templates/default
-  const repoRoot = path.resolve(currentDir, "..", "..", "..", "..");
+  // Navigate from apps/daemon/server to repo root (3 levels up), then into repo-templates/default
+  const repoRoot = path.resolve(currentDir, "..", "..", "..");
   return path.join(repoRoot, "repo-templates", "default", CONFIG_FILENAME);
 }
 
