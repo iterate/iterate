@@ -326,7 +326,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
           {
             url: "https://github.com/iterate/iterate.git",
             branch: "main",
-            path: "/root/iterate",
+            path: "/home/iterate/src/github.com/iterate/iterate",
             owner: "iterate",
             name: "iterate",
             expectedSha: iterateRepoSha,
