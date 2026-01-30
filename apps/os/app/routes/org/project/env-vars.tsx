@@ -102,12 +102,7 @@ function ProjectEnvVarsPage() {
 
   // Derive connected providers from env vars with connection source
   const connectedProviders = new Set(
-    envVars
-      .filter(
-        (v): v is EnvVar & { source: { type: "connection"; provider: string } } =>
-          v.source.type === "connection",
-      )
-      .map((v) => v.source.provider),
+    envVars.flatMap((v) => (v.source.type === "connection" ? [v.source.provider] : [])),
   );
 
   const missingConnectors = [
