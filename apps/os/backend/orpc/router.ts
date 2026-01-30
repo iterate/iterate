@@ -323,6 +323,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       source: v.source,
     })),
     repos,
+    iterateRepoSha: env.ITERATE_REPO_SHA,
   };
 });
 
