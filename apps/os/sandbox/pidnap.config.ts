@@ -22,7 +22,6 @@ export default defineConfig({
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    ITERATE_REPO_LOCAL_DOCKER_MOUNT: "/local-iterate-repo",
     // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,

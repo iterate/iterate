@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm -r --parallel --filter='!@iterate-com/daemon' dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -21,9 +21,12 @@
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
-    "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down",
-    "docker:clean": "docker compose down -v",
+    "docker:build": "./scripts/docker-compose-env.sh docker compose build",
+    "docker:up": "./scripts/docker-compose-env.sh docker compose up -d --build --wait",
+    "docker:down": "./scripts/docker-compose-env.sh docker compose down",
+    "docker:restart": "./scripts/docker-compose-env.sh docker compose restart sandbox",
+    "docker:clean": "./scripts/docker-compose-env.sh docker compose down -v",
+    "docker:logs": "./scripts/docker-compose-env.sh docker compose logs -f",
     "snapshot:daytona": "pnpm os snapshot:daytona",
     "snapshot:local-docker": "pnpm os snapshot:local-docker",
     "db:migrate": "pnpm os db:migrate",
@@ -68,7 +71,9 @@
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {
-      "baseline-browser-mapping": "^2.9.14"
+      "baseline-browser-mapping": "^2.9.14",
+      "@babel/parser": "^7.28.5",
+      "esbuild": "0.27.2"
     }
   }
 }

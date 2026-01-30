@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
 import type { RestartingProcess } from "../restarting-process.ts";
@@ -8,6 +9,7 @@ import {
   type CronProcessInfo,
   type TaskEntryInfo,
   type ManagerStatus,
+  type WaitHealthyResponse,
 } from "./contract.ts";
 
 const os = implement(api).$context<{ manager: Manager }>();
@@ -277,6 +279,71 @@ const removeTask = os.tasks.remove.handler(async ({ input, context }): Promise<T
   return result;
 });
 
+// Helper to read log file
+function readLogFile(path: string): string[] {
+  try {
+    return readFileSync(path, "utf-8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Helper for async sleep
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Terminal failure states that should fail fast
+const TERMINAL_STATES = ["crash-loop-backoff", "max-restarts-reached", "stopped"];
+
+// Services handlers
+const waitHealthy = os.services.waitHealthy.handler(
+  async ({ input, context }): Promise<WaitHealthyResponse> => {
+    const startTime = Date.now();
+    const timeoutMs = input.timeoutMs ?? 30000;
+
+    // Get process
+    const proc = context.manager.getProcessByTarget(input.service);
+    if (!proc) {
+      throw new ORPCError("NOT_FOUND", { message: `Service not found: ${input.service}` });
+    }
+
+    const logPath = context.manager.getProcessLogPath(input.service);
+
+    // Poll until running, timeout, or terminal failure
+    while (Date.now() - startTime < timeoutMs) {
+      if (proc.state === "running") {
+        const logs = readLogFile(logPath);
+        return { healthy: true, state: "running", logs, elapsedMs: Date.now() - startTime };
+      }
+
+      // Terminal failure states - fail fast
+      if (TERMINAL_STATES.includes(proc.state)) {
+        const logs = readLogFile(logPath);
+        return {
+          healthy: false,
+          state: proc.state,
+          logs,
+          elapsedMs: Date.now() - startTime,
+          error: "terminal_state",
+        };
+      }
+
+      await sleep(200);
+    }
+
+    // Timeout - read logs once at end
+    const logs = readLogFile(logPath);
+    return {
+      healthy: false,
+      state: proc.state,
+      logs,
+      elapsedMs: Date.now() - startTime,
+      error: "timeout",
+    };
+  },
+);
+
 export const router = os.router({
   manager: {
     status: managerStatus,
@@ -303,5 +370,8 @@ export const router = os.router({
     list: listTasks,
     add: addTask,
     remove: removeTask,
+  },
+  services: {
+    waitHealthy,
   },
 });

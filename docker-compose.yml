@@ -1,7 +1,13 @@
+# Local development docker-compose
+#
+# Usage: pnpm docker:up  (handles worktrees automatically)
+#    or: ./scripts/docker-compose-env.sh docker compose up
+#
+# Uses dynamic ports - query with: docker compose port sandbox 3000
+
 services:
   postgres:
     image: postgres:17
-    container_name: postgres-iterate
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -9,7 +15,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d os"]
@@ -20,12 +26,44 @@ services:
   neon-proxy:
     image: ghcr.io/timowilhelm/local-neon-http-proxy:main
     environment:
-      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres-iterate:5432/os
+      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres:5432/os
     ports:
       - "4444:4444"
     depends_on:
       postgres:
         condition: service_healthy
 
+  sandbox:
+    build:
+      context: apps/os/sandbox
+      dockerfile: Dockerfile
+      args:
+        - SANDBOX_LOCAL_DEV=true
+    ports:
+      # Dynamic ports - Docker allocates random host ports
+      # Query allocated port: docker compose port sandbox 3000
+      - "3000"
+      - "4096"
+    volumes:
+      # Mount host's .git directory (read-only) - container clones from this
+      # Defaults to ./.git; alchemy.run.ts resolves worktrees to main .git dir
+      - ${LOCAL_DOCKER_GIT_DIR:-./.git}:/home/iterate/.host-git:ro
+      # Shared pnpm store - packages downloaded once, reused across all containers/worktrees
+      - cross-container-cache:/home/iterate/.cross-container-cache
+    environment:
+      - ITERATE_CUSTOMER_REPO_PATH=/home/iterate/src/github.com/iterate/iterate
+      # Git info for cloning (defaults to HEAD, alchemy.run.ts can override)
+      - LOCAL_DOCKER_GIT_COMMIT=${LOCAL_DOCKER_GIT_COMMIT:-HEAD}
+      - LOCAL_DOCKER_GIT_BRANCH=${LOCAL_DOCKER_GIT_BRANCH:-}
+      # API keys for agent CLI tests (optional, passed from host via SANDBOX_* prefix)
+      - ANTHROPIC_API_KEY=${SANDBOX_ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${SANDBOX_OPENAI_API_KEY:-}
+    # Override Dockerfile ENTRYPOINT to use local-docker-compose-entrypoint.sh
+    # This script clones from mounted .git, runs after-git-clone.sh, then execs entry.sh
+    entrypoint: ["/app/local-docker-compose-entrypoint.sh"]
+
 volumes:
-  postgres_data:
+  postgres-data:
+  cross-container-cache:
+    external: true
+    name: iterate-cross-container-cache

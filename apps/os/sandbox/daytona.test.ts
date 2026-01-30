@@ -342,25 +342,26 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         );
         console.log("");
 
-        // 6. Wait for sandbox ready file (tail logs while waiting)
-        console.log("[test] Waiting for sandbox to be ready (/tmp/.iterate-sandbox-ready)...");
+        // 6. Wait for sandbox services to be healthy via pidnap API
+        console.log("[test] Waiting for sandbox services to be healthy (via pidnap API)...");
 
-        // Poll for ready file (also print daemon logs periodically)
+        // Poll pidnap's services.waitHealthy endpoint
         await waitForCondition(
           async () => {
             try {
               const result = await sandbox!.process.executeCommand(
-                "test -f /tmp/.iterate-sandbox-ready && echo ready",
+                `curl -sf http://localhost:9876/rpc/services.waitHealthy -H "Content-Type: application/json" -d '{"service":"iterate-daemon","timeoutMs":5000}'`,
               );
-              return result.result?.includes("ready") ?? false;
+              const response = JSON.parse(result.result ?? "{}");
+              return response.healthy === true;
             } catch {
               return false;
             }
           },
           SANDBOX_READY_TIMEOUT_MS,
-          2000,
+          5000,
         );
-        console.log("[test] Sandbox ready file detected");
+        console.log("[test] Sandbox services healthy");
 
         // 7. Comprehensive diagnostics - show everything useful for debugging
         const printSection = (title: string) => {

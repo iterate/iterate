@@ -1,23 +1,47 @@
+/**
+ * Build local docker sandbox image for testing.
+ *
+ * Uses docker compose to build the sandbox service, which:
+ * - Sets SANDBOX_LOCAL_DEV=true (repo mounted, not cloned)
+ * - Installs all dependencies and tools
+ *
+ * The built image can then be used for integration tests.
+ */
 import { execSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..");
-const dockerfilePath = join(scriptDir, "Dockerfile");
 const imageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
 
-const buildArgs: string[] = [];
-if (process.env.SANDBOX_ITERATE_REPO_REF) {
-  console.log(`Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
-  buildArgs.push(`--build-arg SANDBOX_ITERATE_REPO_REF="${process.env.SANDBOX_ITERATE_REPO_REF}"`);
-}
-if (process.argv.includes("--no-cache")) {
-  buildArgs.push("--no-cache");
-}
+// Docker compose uses directory name as project name (lowercased, special chars removed)
+const projectName = basename(repoRoot)
+  .toLowerCase()
+  .replace(/[^a-z0-9-]/g, "");
 
-console.log(`Building local docker snapshot: ${imageName}`);
-execSync(`docker build ${buildArgs.join(" ")} -t ${imageName} -f ${dockerfilePath} ${repoRoot}`, {
+console.log(`Building local docker sandbox: ${imageName}`);
+
+const buildArgs = process.argv.includes("--no-cache") ? "--no-cache" : "";
+
+// Build the sandbox service using docker compose
+// Explicitly set COMPOSE_PROJECT_NAME to ensure consistent image naming
+// (overrides any inherited value from parent shell)
+execSync(`docker compose build ${buildArgs} sandbox`, {
+  cwd: repoRoot,
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    COMPOSE_PROJECT_NAME: projectName,
+    DOCKER_BUILDKIT: "1",
+    BUILDKIT_PROGRESS: "plain",
+  },
+});
+
+// Tag the built image with the expected name for tests
+execSync(`docker tag ${projectName}-sandbox ${imageName}`, {
+  cwd: repoRoot,
   stdio: "inherit",
 });
-console.log(`Local docker snapshot ready: ${imageName}`);
+
+console.log(`Local docker sandbox ready: ${imageName}`);

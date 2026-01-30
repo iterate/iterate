@@ -26,6 +26,10 @@ const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
+function getCommitSha(): string {
+  return execSync("git rev-parse HEAD", { cwd: REPO_ROOT, encoding: "utf-8" }).trim();
+}
+
 // ============ Helpers ============
 
 function createContainerName(): string {
@@ -61,10 +65,15 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
 
   beforeAll(async () => {
     console.log("Building sandbox image...");
+    const commitSha = getCommitSha();
     execSync(`pnpm snapshot:local-docker`, {
       cwd: join(REPO_ROOT, "apps/os"),
       stdio: "inherit",
-      env: { ...process.env, LOCAL_DOCKER_IMAGE_NAME: IMAGE_NAME },
+      env: {
+        ...process.env,
+        LOCAL_DOCKER_IMAGE_NAME: IMAGE_NAME,
+        SANDBOX_ITERATE_REPO_REF: commitSha,
+      },
     });
 
     console.log("Creating container...");
@@ -72,6 +81,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
       "PATH=/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     ];
 
+    // Repo is baked into the image at build time via SANDBOX_ITERATE_REPO_REF
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
       Image: IMAGE_NAME,
       name: createContainerName(),
@@ -79,7 +89,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Egress Proxy", () => {
       Tty: false,
       HostConfig: {
         AutoRemove: false,
-        Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
         ExtraHosts: ["host.docker.internal:host-gateway"],
       },
     });

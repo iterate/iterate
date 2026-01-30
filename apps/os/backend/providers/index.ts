@@ -45,17 +45,10 @@ export async function createMachineProvider(
       if (!import.meta.env.DEV) {
         throw new Error("local-docker provider only available in development");
       }
+      // Cast env to access dev-only binding
+      const devEnv = env as CloudflareEnv & { LOCAL_DOCKER_COMPOSE_PROJECT_NAME?: string };
       const { createLocalDockerProvider } = await import("./local-docker.ts");
-      return createLocalDockerProvider({
-        imageName: "iterate-sandbox:local",
-        externalId,
-        metadata: metadata as {
-          containerId?: string;
-          port?: number;
-          ports?: Record<string, number>;
-        },
-        buildProxyUrl,
-      });
+      return await createLocalDockerProvider(devEnv.LOCAL_DOCKER_COMPOSE_PROJECT_NAME);
     }
 
     case "local": {

@@ -1,13 +1,8 @@
-FROM node:24 AS pidnap-builder
-WORKDIR /app
-RUN corepack enable
-COPY packages/pidnap/package.json ./
-RUN pnpm install
-COPY packages/pidnap/src ./src
-COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
-RUN pnpm build && pnpm pack && mv *.tgz pidnap.tgz
-
 FROM node:24
+
+# === Build Args ===
+# SANDBOX_LOCAL_DEV: true for local docker (repo mounted), false for Daytona (git clone)
+ARG SANDBOX_LOCAL_DEV=false
 
 # === Version Configuration ===
 # Edit these to update versions (requires image rebuild)
@@ -20,10 +15,6 @@ ENV SANDBOX_GO_VERSION=1.23.4
 
 # gogcli fork: mmkal:mmkal/26/01/28/--access-token
 ENV SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
-
-# === Build Args ===
-# SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
-ARG SANDBOX_ITERATE_REPO_REF=""
 
 # === System packages (as root) ===
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -58,6 +49,9 @@ USER iterate
 WORKDIR /home/iterate
 
 ENV PATH="/home/iterate/.local/bin:$PATH"
+
+# Configure pnpm store location (inside cross-container cache volume)
+RUN pnpm config --global set store-dir /home/iterate/.cross-container-cache/pnpm-store
 
 # Git config for iterate user
 RUN git config --global user.name "iterate" && \
@@ -112,7 +106,7 @@ RUN mv ~/.local/bin/claude ~/.local/bin/claude.original && \
 # === Iterate repo ===
 # Two modes based on SANDBOX_ITERATE_REPO_REF:
 #   - Set: git clone the specified ref (CI/Daytona - fast cached builds)
-#   - Empty: create placeholder, a pidnap task syncs from local mount at runtime
+#   - Empty: create placeholder, local-docker-compose-entrypoint.sh clones at container start
 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
@@ -124,47 +118,33 @@ RUN mkdir -p /home/iterate/src/placeholder-repo && \
 
 # Re-declare ARG after USER switch (ARGs don't persist across USER)
 ARG SANDBOX_ITERATE_REPO_REF
+ARG SANDBOX_ITERATE_BRANCH
 
-COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
-RUN npm install -g /app/pidnap.tgz
+# Copy scripts that will be needed
+# Paths relative to Dockerfile directory for Daytona SDK compatibility
+# (docker build from repo root uses -f flag which handles this correctly)
+COPY entry.sh /app/entry.sh
+COPY after-git-clone.sh /app/after-git-clone.sh
+COPY local-docker-compose-entrypoint.sh /app/local-docker-compose-entrypoint.sh
+RUN sudo chmod +x /app/*.sh
 
-# If ref provided, clone from git; otherwise create placeholder for local mount
+# If ref provided, clone from git and checkout branch; otherwise create placeholder for local mount
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
-    cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
+    cd $ITERATE_REPO && \
+    git fetch origin $SANDBOX_ITERATE_REPO_REF && \
+    if [ -n "$SANDBOX_ITERATE_BRANCH" ]; then \
+      git checkout -B "$SANDBOX_ITERATE_BRANCH" $SANDBOX_ITERATE_REPO_REF; \
+    else \
+      git checkout $SANDBOX_ITERATE_REPO_REF; \
+    fi; \
     else \
     mkdir -p $ITERATE_REPO/apps/os/sandbox; \
     fi
 
-# Patch package.json to use the built tgz (if repo was cloned)
+# Run common post-clone setup (only for remote deployment - local dev runs at container start)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    sed -i 's|workspace:|file:/app/pidnap.tgz|g' $ITERATE_REPO/apps/os/sandbox/package.json; \
+      bash /app/after-git-clone.sh; \
     fi
-
-# Make scripts executable (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
-    fi
-
-# Install deps and build daemon (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO && pnpm install; \
-    fi
-
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO/apps/daemon && pnpm vite build; \
-    fi
-
-# Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
-RUN mkdir -p ~/.iterate && \
-    echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
-
-# Setup home directory (only if repo was cloned; entry.sh handles local mode)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
-    fi
-
-COPY apps/os/sandbox/entry.sh /app/entry.sh
-RUN sudo chmod +x /app/entry.sh
 
 ENTRYPOINT [ "/app/entry.sh" ]

@@ -26,10 +26,9 @@ describe("Manager - Reload & Remove", () => {
       await manager.start();
 
       // Wait for initial process to complete
-      await wait(400);
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc).toBeDefined();
-      expect(proc?.state).toBe("stopped");
+      await expect.poll(() => proc?.state, { timeout: 5000 }).toBe("stopped");
 
       // Reload with long-running process
       await manager.reloadProcessByTarget("test-proc", longRunningProcess);
@@ -59,7 +58,12 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
+
+      // Wait for both processes to complete
+      const proc1 = manager.getProcessByTarget(0);
+      const proc2 = manager.getProcessByTarget(1);
+      await expect.poll(() => proc1?.state, { timeout: 5000 }).toBe("stopped");
+      await expect.poll(() => proc2?.state, { timeout: 5000 }).toBe("stopped");
 
       // Reload second process (index 1)
       await manager.reloadProcessByTarget(1, longRunningProcess);
@@ -87,7 +91,10 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
+
+      // Wait for initial process to complete
+      const initialProc = manager.getProcessByTarget("test-proc");
+      await expect.poll(() => initialProc?.state, { timeout: 5000 }).toBe("stopped");
 
       // Reload with definition that has its own env
       const newDefinition = {
@@ -147,10 +154,9 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
 
       const proc = manager.getProcessByTarget("test-proc");
-      expect(proc?.state).toBe("stopped");
+      await expect.poll(() => proc?.state, { timeout: 5000 }).toBe("stopped");
       expect(proc?.restarts).toBe(0);
 
       // Reload with new policy and short-lived process

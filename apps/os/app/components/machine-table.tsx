@@ -32,6 +32,7 @@ interface Machine {
   metadata: {
     snapshotName?: string;
     containerId?: string;
+    containerName?: string;
     port?: number;
     ports?: Record<string, number>;
     host?: string;
@@ -194,6 +195,14 @@ export function MachineTable({
                 />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
+                {machine.metadata?.containerName && (
+                  <>
+                    <span className="hidden sm:inline">·</span>
+                    <span className="hidden sm:inline font-mono text-xs text-orange-600">
+                      {machine.metadata.containerName}
+                    </span>
+                  </>
+                )}
                 {machine.metadata?.snapshotName && (
                   <>
                     <span className="hidden sm:inline">·</span>

@@ -352,8 +352,12 @@ function ProjectMachinesPage() {
     );
   }
 
+  // Check if any machine is local-docker and get the shared container name
+  const localDockerMachine = machines.find((m) => m.type === "local-docker");
+  const sharedContainerName = localDockerMachine?.metadata?.containerName as string | undefined;
+
   return (
-    <div className="p-4">
+    <div className="p-4 space-y-4">
       <HeaderActions>
         <Button asChild size="sm">
           <Link to={Route.fullPath} params={params} search={{ create: true }}>
@@ -363,6 +367,22 @@ function ProjectMachinesPage() {
         </Button>
       </HeaderActions>
       {createSheet}
+
+      {/* Local Docker shared container banner */}
+      {localDockerMachine && (
+        <div className="p-3 bg-orange-50 dark:bg-orange-950/20 rounded-lg border border-orange-200 dark:border-orange-800 text-sm">
+          <span className="font-medium text-orange-800 dark:text-orange-200">Dev Mode:</span>
+          <span className="text-orange-700 dark:text-orange-300 ml-1">
+            All Local Docker machines share container
+          </span>
+          {sharedContainerName && (
+            <span className="ml-1 font-mono font-semibold text-orange-600 dark:text-orange-400">
+              {sharedContainerName}
+            </span>
+          )}
+        </div>
+      )}
+
       <MachineTable
         machines={machines}
         organizationSlug={params.organizationSlug}

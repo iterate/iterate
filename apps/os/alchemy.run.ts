@@ -1,6 +1,7 @@
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
@@ -40,78 +41,14 @@ const isPreview =
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
-const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
-
 /**
- * Get the current git branch name for dev mode.
- * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
+ * Get the Docker Compose project name for local development.
+ * Uses same logic as scripts/docker-compose-env.sh to generate unique name per worktree.
  */
-function getCurrentGitRef(): string | undefined {
-  if (!isDevelopment) return undefined;
-  try {
-    return execSync("git branch --show-current", { encoding: "utf-8", cwd: repoRoot }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function ensureLocalDockerImage() {
-  // Check if Docker is available
-  const result = spawnSync("docker", ["version"], { encoding: "utf-8" });
-  if (result.status !== 0) {
-    console.log("Docker not available, skipping local sandbox image build");
-    return;
-  }
-
-  // Always run docker build in background - let Docker's cache decide if rebuild is needed
-  // This ensures we pick up Dockerfile changes without blocking dev server startup
-  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
-
-  // Build args from env vars (only SANDBOX_ITERATE_REPO_REF is a build arg - other versions are ENV in Dockerfile)
-  const buildArgs: string[] = [];
-  if (process.env.SANDBOX_ITERATE_REPO_REF) {
-    buildArgs.push(
-      "--build-arg",
-      `SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`,
-    );
-    console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
-  }
-
-  const buildProcess = spawn(
-    "docker",
-    ["build", ...buildArgs, "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os/sandbox/Dockerfile", "."],
-    {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  // Stream output with prefix so it's clear what's happening
-  buildProcess.stdout?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.stderr?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.on("exit", (code) => {
-    if (code === 0) {
-      console.log(`[docker] Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
-    } else {
-      console.error(`[docker] Failed to build ${LOCAL_DOCKER_IMAGE_NAME} (exit code ${code})`);
-    }
-  });
-
-  buildProcess.on("error", (err) => {
-    console.error(`[docker] Build process error: ${err.message}`);
-  });
+function getLocalDockerComposeProjectName(): string {
+  const dirHash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 4);
+  const dirName = basename(repoRoot);
+  return `iterate-${dirName}-${dirHash}`;
 }
 
 /**
@@ -468,9 +405,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     sqlite: true,
   });
 
-  const devGitRef = getCurrentGitRef();
-  console.log(`Current git branch: ${devGitRef}`);
-
   const worker = await TanStackStart("os", {
     bindings: {
       ...dbConfig,
@@ -479,8 +413,10 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
-      // In dev, pass the current git branch for Daytona sandboxes
-      ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
+      // In dev, pass the compose project name for local-docker provider
+      ...(isDevelopment
+        ? { LOCAL_DOCKER_COMPOSE_PROJECT_NAME: getLocalDockerComposeProjectName() }
+        : {}),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
@@ -515,9 +451,17 @@ if (process.env.GITHUB_OUTPUT) {
 await verifyDopplerEnvironment();
 
 if (isDevelopment) {
-  ensureLocalDockerImage();
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
+
+  // Start Docker containers (postgres, neon-proxy) before migrations
+  // docker-compose-env.sh handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars
+  // --wait flag ensures postgres healthcheck passes before returning
+  console.log("Starting Docker containers...");
+  execSync("pnpm docker:up", {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
 }
 
 // Setup database and env first
