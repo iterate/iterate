@@ -121,8 +121,8 @@ export const toolsRouter = t.router({
         };
       }),
   }),
-  listSecrets: t.procedure
-    .meta({ description: "List available secrets from ~/.iterate/.env" })
+  printenv: t.procedure
+    .meta({ description: "List environment variables from ~/.iterate/.env" })
     .input(z.object({}).optional())
     .query(() => {
       const envFilePath = join(homedir(), ".iterate/.env");
@@ -133,58 +133,50 @@ export const toolsRouter = t.router({
         return {
           success: false,
           error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
-          secrets: [],
+          activeEnvVars: [],
+          recommendedEnvVars: [],
         };
       }
 
       const lines = content.split("\n");
-      const secrets: Array<{
-        envVarName: string;
-        description?: string;
-        isRecommended: boolean;
-      }> = [];
+      type EnvVar = { name: string; description?: string };
+      const activeEnvVars: EnvVar[] = [];
+      const recommendedEnvVars: EnvVar[] = [];
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        // Skip empty lines
         if (!line) continue;
+
+        // Look for description in previous line (comment)
+        const getDescription = (): string | undefined => {
+          if (i > 0) {
+            const prevLine = lines[i - 1]?.trim();
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
+              return prevLine.replace(/^#\s*/, "");
+            }
+          }
+          return undefined;
+        };
 
         // Match recommended env vars: #[recommended] FOO_BAR="..."
         const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
         if (recommendedMatch) {
-          const [, envVarName] = recommendedMatch;
-          // Look for description in previous line (comment)
-          let description: string | undefined;
-          if (i > 0) {
-            const prevLine = lines[i - 1]?.trim();
-            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
-              description = prevLine.replace(/^#\s*/, "");
-            }
-          }
-          secrets.push({ envVarName, description, isRecommended: true });
+          recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
           continue;
         }
 
         // Match active env vars: FOO_BAR="..." (not commented)
         const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
         if (activeMatch) {
-          const [, envVarName] = activeMatch;
-          // Look for description in previous line (comment)
-          let description: string | undefined;
-          if (i > 0) {
-            const prevLine = lines[i - 1]?.trim();
-            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
-              description = prevLine.replace(/^#\s*/, "");
-            }
-          }
-          secrets.push({ envVarName, description, isRecommended: false });
+          activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
           continue;
         }
       }
 
       return {
         success: true,
-        secrets,
+        activeEnvVars,
+        recommendedEnvVars,
         envFilePath,
       };
     }),
