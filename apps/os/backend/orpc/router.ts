@@ -323,7 +323,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       source: v.source,
     })),
     repos,
-    iterateRepoSha: machine.type === "daytona" ? (env.ITERATE_REPO_SHA ?? null) : null,
+    iterateRepoSha: env.ITERATE_REPO_SHA,
   };
 });
 

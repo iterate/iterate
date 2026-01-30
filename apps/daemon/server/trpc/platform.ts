@@ -394,11 +394,18 @@ export async function syncIterateRepo(expectedSha: string): Promise<void> {
     return;
   }
 
-  console.log(
-    `[platform] Syncing iterate repo: ${currentSha.slice(0, 7)} -> ${expectedSha.slice(0, 7)}`,
-  );
+  console.log(`[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha}`);
+
+  const status = await git.status(["--porcelain"]);
+  if (!status.isClean()) {
+    console.log(`[platform] Iterate repo is dirty, stashing`);
+    const stash = await git.stash();
+    console.log(`[platform] Stashed changes: ${stash}`);
+    await git.checkout(["main"]);
+  }
+
   await git.fetch("origin", "main");
-  await git.reset(["--hard", `origin/main`]);
+  await git.merge([expectedSha]);
   lastSyncedIterateSha = expectedSha;
 }
 
