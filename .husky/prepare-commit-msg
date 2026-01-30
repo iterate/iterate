@@ -37,7 +37,9 @@ if [ "$AGENT" = "1" ] || [ "$OPENCODE" = "1" ] || [ -n "$OPENCODE_SESSION" ] || 
     echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
     exit 1
   fi
-  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+  # Use git rev-parse to handle worktrees correctly (where .git is a file, not a dir)
+  git_dir=$(git rev-parse --git-dir 2>/dev/null)
+  if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ]; then
     echo "ERROR: AI agents are not allowed to rebase (rewrites history)"
     echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
     exit 1
