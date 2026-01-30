@@ -138,7 +138,7 @@ NODE_USE_ENV_PROXY=1
     const recommendedLines = recommendedVars.map((v) => {
       const escapedValue = v.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const userEmail = v.source.type === "recommended" ? v.source.userEmail : "";
-      return `# ${v.description || `Scoped to ${userEmail}`}\n# ${v.key}="${escapedValue}"`;
+      return `# ${v.description || `Scoped to ${userEmail}`}\n#[recommended] ${v.key}="${escapedValue}"`;
     });
     recommendedSection = `
 # =====================================

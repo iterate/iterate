@@ -73,7 +73,7 @@ Would get you the calendar info for the user `test@example.com`.
 
 Note, this email is the email we store in OUR system, not the one for the downstream service. If a user connected a google account xyz@gmail.com but signed up with test@example.com, then you should use test@example.com.
 
-To discover available secrets and their recommended env var names, use `iterate tool listSecrets`. This parses `~/.iterate/.env` and shows all configured secrets with descriptions. Note that .env contains magic strings like `getIterateSecret(...)`, not actual secret values - the egress proxy resolves these at runtime.
+To discover available secrets and their recommended env var names, use `iterate tool listSecrets`. This parses `~/.iterate/.env` and shows all configured secrets with descriptions.
 
 ## Cloudflare Tunnels
 

@@ -140,7 +140,6 @@ export const toolsRouter = t.router({
       const lines = content.split("\n");
       const secrets: Array<{
         envVarName: string;
-        secretKey: string;
         description?: string;
         isRecommended: boolean;
       }> = [];
@@ -150,43 +149,36 @@ export const toolsRouter = t.router({
         // Skip empty lines
         if (!line) continue;
 
-        // Match active env vars: OPENAI_API_KEY="getIterateSecret({secretKey: 'iterate.openai_api_key'})"
-        const activeMatch = line.match(
-          /^([A-Z][A-Z0-9_]*)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
-        );
-        if (activeMatch) {
-          const [, envVarName, secretKey] = activeMatch;
+        // Match recommended env vars: #[recommended] FOO_BAR="..."
+        const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
+        if (recommendedMatch) {
+          const [, envVarName] = recommendedMatch;
           // Look for description in previous line (comment)
           let description: string | undefined;
           if (i > 0) {
             const prevLine = lines[i - 1]?.trim();
-            if (prevLine?.startsWith("#") && !prevLine.startsWith("# =")) {
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
               description = prevLine.replace(/^#\s*/, "");
             }
           }
-          secrets.push({ envVarName, secretKey, description, isRecommended: false });
+          secrets.push({ envVarName, description, isRecommended: true });
           continue;
         }
 
-        // Match recommended (commented out) env vars: # GOOGLE_ACCESS_TOKEN="getIterateSecret(...)"
-        const recommendedMatch = line.match(
-          /^#\s*([A-Z][A-Z0-9_]*)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
-        );
-        if (recommendedMatch) {
-          const [, envVarName, secretKey] = recommendedMatch;
+        // Match active env vars: FOO_BAR="..." (not commented)
+        const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
+        if (activeMatch) {
+          const [, envVarName] = activeMatch;
           // Look for description in previous line (comment)
           let description: string | undefined;
           if (i > 0) {
             const prevLine = lines[i - 1]?.trim();
-            if (
-              prevLine?.startsWith("#") &&
-              !prevLine.startsWith("# =") &&
-              !prevLine.includes("=")
-            ) {
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
               description = prevLine.replace(/^#\s*/, "");
             }
           }
-          secrets.push({ envVarName, secretKey, description, isRecommended: true });
+          secrets.push({ envVarName, description, isRecommended: false });
+          continue;
         }
       }
 
