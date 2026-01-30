@@ -3,7 +3,7 @@
  *
  * These tests verify the daemon's integration with the control plane:
  * - Fetching env vars from getEnv endpoint
- * - Applying env vars to tmux sessions
+ * - Applying env vars to the daemon process
  *
  * REQUIREMENTS:
  * - Docker with TCP API enabled on port 2375 (OrbStack has this by default)

@@ -1,31 +1,61 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "pidnap";
 
 const home = homedir();
-const iterateRepo = process.env.ITERATE_REPO ?? `${home}/src/github.com/iterate/iterate`;
-const sandboxDir = `${iterateRepo}/apps/os/sandbox`;
-const envFile = `${home}/.iterate/.env`;
-const mitmproxyDir = `${home}/.mitmproxy`;
-const caCert = `${mitmproxyDir}/mitmproxy-ca-cert.pem`;
+const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
+const sandboxDir = join(iterateRepo, "apps/os/sandbox");
+const envFile = join(home, ".iterate/.env");
+const mitmproxyDir = join(home, ".mitmproxy");
+const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
+const proxyPort = "8888";
+const githubMagicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
+
+const bash = (command: string) => ({
+  command: "bash",
+  args: ["-c", command.trim()],
+});
 
 export default defineConfig({
-  http: {
-    host: "0.0.0.0",
-    port: 9000,
-  },
   logDir: "/var/log/pidnap",
-  envFiles: {
-    global: envFile,
+  envFile,
+  env: {
+    ITERATE_REPO: iterateRepo,
+    SANDBOX_DIR: sandboxDir,
+    ITERATE_REPO_LOCAL_DOCKER_MOUNT: "/local-iterate-repo",
+    // Proxy Env
+    PROXY_PORT: proxyPort,
+    MITMPROXY_DIR: mitmproxyDir,
+    CA_CERT_PATH: caCert,
+    HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+    HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+    http_proxy: `http://127.0.0.1:${proxyPort}`,
+    https_proxy: `http://127.0.0.1:${proxyPort}`,
+    NO_PROXY: "localhost,127.0.0.1",
+    no_proxy: "localhost,127.0.0.1",
+    SSL_CERT_FILE: caCert,
+    SSL_CERT_DIR: mitmproxyDir,
+    REQUESTS_CA_BUNDLE: caCert,
+    CURL_CA_BUNDLE: caCert,
+    NODE_EXTRA_CA_CERTS: caCert,
+    GIT_SSL_CAINFO: caCert,
+    // Github Stuff
+    GITHUB_MAGIC_TOKEN: githubMagicToken,
   },
   tasks: [
-    // Generate mitmproxy CA cert if missing
     {
-      name: "generate-ca",
-      definition: {
-        command: "sh",
-        args: [
-          "-c",
-          `
+      name: "task-git-config",
+      definition: bash(
+        `
+          git config --global "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "https://github.com/"
+          git config --global --add "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "git@github.com:"
+        `,
+      ),
+    },
+    {
+      name: "task-generate-ca",
+      definition: bash(
+        `
           if [ ! -f "${caCert}" ]; then
             echo "Generating CA certificate..."
             mkdir -p "${mitmproxyDir}"
@@ -37,29 +67,22 @@ export default defineConfig({
             echo "CA certificate already exists"
           fi
           `,
-        ],
-      },
+      ),
     },
-    // Install CA cert to system trust store
     {
-      name: "install-ca",
-      definition: {
-        command: "sh",
-        args: [
-          "-c",
-          `
+      name: "task-install-ca",
+      definition: bash(
+        `
           if [ -f "${caCert}" ]; then
             sudo mkdir -p /usr/local/share/ca-certificates/iterate
             sudo cp "${caCert}" /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt
             sudo update-ca-certificates
           fi
-          `,
-        ],
-      },
+        `,
+      ),
     },
-    // Run database migrations for daemon
     {
-      name: "db-migrate",
+      name: "task-db-migrate",
       definition: {
         command: "pnpm",
         args: ["db:migrate"],
@@ -82,7 +105,9 @@ export default defineConfig({
           "--ssl-insecure",
         ],
       },
-      envReloadDelay: false,
+      envOptions: {
+        reloadDelay: false,
+      },
       options: {
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
@@ -103,6 +128,9 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      envOptions: {
+        inheritGlobalEnv: false,
+      },
     },
     {
       name: "opencode",
@@ -111,8 +139,9 @@ export default defineConfig({
         command: "opencode",
         args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
       },
-      port: 4096,
-      envReloadDelay: 500,
+      envOptions: {
+        reloadDelay: 500,
+      },
       options: {
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },

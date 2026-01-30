@@ -19,7 +19,7 @@ export function useQueryInvalidation(organizationId: string | undefined) {
 
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${protocol}//${window.location.host}/api/ws/invalidate?organizationId=${organizationId}`;
+      const url = `${protocol}//${window.location.host}/api/ws/realtime?organizationId=${organizationId}`;
 
       log("Connecting to", url);
       const ws = new WebSocket(url);

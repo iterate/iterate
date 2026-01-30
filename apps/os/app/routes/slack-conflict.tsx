@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
@@ -20,27 +19,11 @@ const Search = z.object({
 });
 
 export const Route = createFileRoute("/_auth/slack-conflict")({
-  component: SlackConflictPage,
   validateSearch: Search,
+  component: SlackConflictPage,
 });
 
 function SlackConflictPage() {
-  return (
-    <Suspense
-      fallback={
-        <CenteredLayout>
-          <div className="flex items-center justify-center">
-            <Spinner />
-          </div>
-        </CenteredLayout>
-      }
-    >
-      <SlackConflictContent />
-    </Suspense>
-  );
-}
-
-function SlackConflictContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const search = useSearch({ from: "/_auth/slack-conflict" });

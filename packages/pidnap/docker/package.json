@@ -1,0 +1,7 @@
+{
+  "name": "pidnap",
+  "type": "module",
+  "dependencies": {
+    "pidnap": "link:../"
+  }
+}

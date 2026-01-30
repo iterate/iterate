@@ -1,4 +1,4 @@
-import { useState, Suspense, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { SlidersHorizontal, Trash2, Globe, Server } from "lucide-react";
@@ -31,27 +31,12 @@ import {
   TableHeader,
   TableRow,
 } from "../../../components/ui/table.tsx";
-import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
 )({
-  component: ProjectEnvVarsRoute,
+  component: ProjectEnvVarsPage,
 });
-
-function ProjectEnvVarsRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
-      <ProjectEnvVarsPage />
-    </Suspense>
-  );
-}
 
 function ProjectEnvVarsPage() {
   const params = useParams({

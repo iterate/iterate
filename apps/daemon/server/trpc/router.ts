@@ -5,12 +5,6 @@ import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { type Agent, agentTypes } from "../db/schema.ts";
 import { getOrCreateAgent, resetAgent as resetAgentService } from "../services/agent-manager.ts";
-import {
-  createTmuxSession,
-  hasTmuxSession,
-  listTmuxSessions,
-  type TmuxSession,
-} from "../tmux-control.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 import { platformRouter, getCustomerRepoPath } from "./platform.ts";
 
@@ -32,50 +26,17 @@ function serializeAgent(agent: Agent): SerializedAgent {
   };
 }
 
-/** Serialized tmux session with ISO date string */
-type SerializedTmuxSession = Omit<TmuxSession, "created"> & {
-  created: string;
-};
-
-function serializeTmuxSession(session: TmuxSession): SerializedTmuxSession {
-  return {
-    ...session,
-    created: session.created.toISOString(),
-  };
-}
-
 export const trpcRouter = createTRPCRouter({
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
 
-  getServerCwd: publicProcedure.query(() => {
+  getServerCwd: publicProcedure.query(async () => {
     return {
       cwd: process.cwd(),
       homeDir: homedir(),
-      customerRepoPath: getCustomerRepoPath(),
+      customerRepoPath: await getCustomerRepoPath(),
     };
   }),
-
-  // ============ Utility tmux sessions (for btop, logs, etc - NOT agents) ============
-
-  listTmuxSessions: publicProcedure.query((): SerializedTmuxSession[] => {
-    return listTmuxSessions().map(serializeTmuxSession);
-  }),
-
-  ensureTmuxSession: publicProcedure
-    .input(
-      z.object({
-        sessionName: z.string(),
-        command: z.string(),
-      }),
-    )
-    .mutation(({ input }): { created: boolean } => {
-      if (hasTmuxSession(input.sessionName)) {
-        return { created: false };
-      }
-      createTmuxSession(input.sessionName, input.command);
-      return { created: true };
-    }),
 
   // ============ Agent CRUD ============
 
@@ -105,7 +66,7 @@ export const trpcRouter = createTRPCRouter({
 
   /**
    * Create an agent using the harness system.
-   * For opencode agents, this creates an SDK session - no tmux.
+   * For opencode agents, this creates an SDK session.
    */
   createAgent: publicProcedure
     .input(
@@ -288,4 +249,4 @@ export const trpcRouter = createTRPCRouter({
 
 export type TRPCRouter = typeof trpcRouter;
 
-export type { SerializedAgent, SerializedTmuxSession };
+export type { SerializedAgent };

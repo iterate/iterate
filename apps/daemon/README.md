@@ -76,11 +76,10 @@ All application data is accessed via tRPC procedures.
 
 PTY terminal WebSocket endpoint for interactive terminal sessions.
 
-| Query Param   | Description                          |
-| ------------- | ------------------------------------ |
-| `cols`        | Terminal columns (default: 80)       |
-| `rows`        | Terminal rows (default: 24)          |
-| `tmuxSession` | Optional tmux session name to attach |
+| Query Param | Description                    |
+| ----------- | ------------------------------ |
+| `cols`      | Terminal columns (default: 80) |
+| `rows`      | Terminal rows (default: 24)    |
 
 ### Health Check
 
@@ -91,4 +90,3 @@ PTY terminal WebSocket endpoint for interactive terminal sessions.
 ## Data Storage
 
 - SQLite database at `./db.sqlite`
-- Tmux socket at `./.iterate/tmux.sock`

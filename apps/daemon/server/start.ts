@@ -3,8 +3,13 @@ import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
 import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-refresh.ts";
+import { startCronTaskScheduler } from "./cron-tasks/scheduler.ts";
+import { loadConfig } from "./config-loader.ts";
 
 export const startServer = async (params: { port: number; hostname: string }) => {
+  // Load iterate.config.ts from CWD (or default) before starting server
+  await loadConfig();
+
   return new Promise<ServerType>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, ...params }, () => {
       console.log(`\n[daemon] Server running at http://${params.hostname}:${params.port}`);
@@ -45,6 +50,7 @@ async function bootstrapWithControlPlane(): Promise<void> {
   await reportStatusToPlatform();
   await fetchBootstrapData();
   startBootstrapRefreshScheduler();
+  await startCronTaskScheduler();
 }
 
 /**

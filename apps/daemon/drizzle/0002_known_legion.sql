@@ -1,0 +1,1 @@
+ALTER TABLE `agents` DROP COLUMN `tmux_session`;

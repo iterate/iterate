@@ -34,6 +34,7 @@ export default defineConfig({
         };
       },
     },
+    // @ts-expect-error - version mismatch
     vitePublicUrl(),
     devtools({
       eventBusConfig: {

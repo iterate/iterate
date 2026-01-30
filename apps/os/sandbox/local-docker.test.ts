@@ -234,10 +234,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     );
 
     test("container setup correct", async () => {
-      // tmux installed
-      const tmux = await execInContainer(project.containerId, ["which", "tmux"]);
-      expect(tmux.trim()).toBe("/usr/bin/tmux");
-
       // repo cloned
       const ls = await execInContainer(project.containerId, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
@@ -319,7 +315,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
     }, 210000);
 
-    test("tmux and PTY work", async () => {
+    test("PTY endpoint works", async () => {
       await waitForDaemonReady(project.port3000!);
 
       // PTY endpoint exists
@@ -327,18 +323,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         `http://localhost:${project.port3000}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
-
-      // tmux via tRPC
-      const trpc = createDaemonTrpcClient(project.port3000!);
-      const sessionName = `test-${Date.now()}`;
-      const createResult = await trpc.ensureTmuxSession.mutate({
-        sessionName,
-        command: "bash",
-      });
-      expect(createResult.created).toBe(true);
-
-      const sessions = await trpc.listTmuxSessions.query();
-      expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {

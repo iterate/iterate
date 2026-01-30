@@ -9,39 +9,7 @@ import { eq, isNull, and } from "drizzle-orm";
 import { db as defaultDb } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentType } from "../db/schema.ts";
-import {
-  createTmuxSession as defaultCreateTmuxSession,
-  hasTmuxSession as defaultHasTmuxSession,
-  sendKeys as defaultSendKeys,
-  isSessionProcessRunning as defaultIsSessionProcessRunning,
-} from "../tmux-control.ts";
 import { getHarness as defaultGetHarness, type AgentHarness } from "../agents/index.ts";
-
-export interface EnsureAgentRunningParams {
-  slug: string;
-  harnessType: AgentType;
-  workingDirectory: string;
-  initialPrompt?: string;
-}
-
-export interface EnsureAgentRunningResult {
-  agent: Agent;
-  wasCreated: boolean;
-  tmuxSession: string;
-}
-
-export interface AgentManagerDeps {
-  db: typeof defaultDb;
-  hasTmuxSession: typeof defaultHasTmuxSession;
-  createTmuxSession: typeof defaultCreateTmuxSession;
-  sendKeys: typeof defaultSendKeys;
-  isSessionProcessRunning: typeof defaultIsSessionProcessRunning;
-  getHarness: typeof defaultGetHarness;
-}
-
-// ============================================================================
-// New Harness-Based API (uses SDK for OpenCode, preserves terminal UI)
-// ============================================================================
 
 export interface GetOrCreateAgentParams {
   slug: string;
@@ -105,7 +73,7 @@ export async function createAgent(
     sessionName: `agent-${id.slice(0, 8)}`,
   });
 
-  // Insert agent into database with both session IDs
+  // Insert agent into database
   const [newAgent] = await db
     .insert(schema.agents)
     .values({
@@ -113,7 +81,6 @@ export async function createAgent(
       slug,
       harnessType,
       harnessSessionId: result.harnessSessionId,
-      tmuxSession: result.tmuxSession,
       workingDirectory,
       initialPrompt,
       status: "running",

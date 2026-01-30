@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from "react";
+import { useEffect } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Mail, MessageSquare, ExternalLink } from "lucide-react";
@@ -25,25 +25,11 @@ const Search = z.object({
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors",
 )({
-  component: ProjectConnectorsPage,
   validateSearch: Search,
+  component: ProjectConnectorsPage,
 });
 
 function ProjectConnectorsPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
-      <ProjectConnectorsContent />
-    </Suspense>
-  );
-}
-
-function ProjectConnectorsContent() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/connectors",
   });

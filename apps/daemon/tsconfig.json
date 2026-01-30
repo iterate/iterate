@@ -24,6 +24,6 @@
       "@server/*": ["server/*"]
     }
   },
-  "include": ["client/**/*", "server/**/*", "./server.ts"],
+  "include": ["client/**/*", "server/**/*", "config/**/*", "./server.ts"],
   "exclude": ["node_modules"]
 }

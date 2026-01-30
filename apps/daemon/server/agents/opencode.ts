@@ -2,10 +2,10 @@
  * OpenCode Agent Harness
  *
  * Uses @opencode-ai/sdk to manage sessions and send messages.
- * No tmux sessions - uses SDK API directly for all operations.
  */
 
 import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk/v2";
+import { getConfig } from "../config-loader.ts";
 import type {
   AgentHarness,
   AgentEvent,
@@ -79,10 +79,7 @@ export const opencodeHarness: AgentHarness = {
     // Wait for session to be ready
     await waitForSessionReady(client, harnessSessionId);
 
-    // No tmux session - use opencode SDK streaming API for terminal UI
-    return {
-      harnessSessionId,
-    };
+    return { harnessSessionId };
   },
 
   async append(harnessSessionId: string, event: AgentEvent, params): Promise<void> {
@@ -91,11 +88,14 @@ export const opencodeHarness: AgentHarness = {
     }
 
     const client = createClient({ directory: params.workingDirectory });
+    const config = getConfig();
 
     // Send message via SDK using session.prompt()
     await client.session.prompt({
       sessionID: harnessSessionId,
       parts: [{ type: "text", text: event.content }],
+      // Use default model from config if available
+      ...(config.defaultModel && { model: config.defaultModel }),
     });
   },
 

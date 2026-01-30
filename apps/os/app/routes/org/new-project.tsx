@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -9,11 +9,11 @@ import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
-  loader: async ({ context, params }) => {
-    const org = await context.queryClient.ensureQueryData(
+  loader: ({ context, params }) => {
+    // Non-blocking prefetch - component will suspend if data not ready
+    context.queryClient.prefetchQuery(
       trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
     );
-    return { defaultName: org?.projects?.length ? "" : "main" };
   },
 });
 
@@ -21,9 +21,16 @@ function NewProjectPage() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/new-project",
   });
-  const { defaultName } = Route.useLoaderData();
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
+
+  // Suspends if data not ready → shows ContentSpinner from parent layout
+  const { data: org } = useSuspenseQuery(
+    trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
+  );
+
+  // Compute default name in component
+  const defaultName = org?.projects?.length ? "" : "main";
   const [name, setName] = useState(defaultName);
 
   const createProject = useMutation({
