@@ -96,6 +96,9 @@ RUN mkdir -p /home/iterate/.local/bin && \
 # === Agent packages (npm, userspace) ===
 RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
 
+# Install Replicate CLI (Go-based)
+RUN go install github.com/replicate/cli@latest
+
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}

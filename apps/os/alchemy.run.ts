@@ -274,6 +274,7 @@ const Env = z.object({
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
   ANTHROPIC_API_KEY: Required,
+  REPLICATE_API_TOKEN: Required,
   SLACK_CLIENT_ID: Required,
   SLACK_CLIENT_SECRET: Required,
   SLACK_SIGNING_SECRET: Required,

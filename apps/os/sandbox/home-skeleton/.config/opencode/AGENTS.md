@@ -216,3 +216,51 @@ iterate task get --filename my-task.md
 - `--priority`: `low` | `normal` | `high` (optional, default: normal)
 
 **Important:** The task body should contain ALL context needed. The cron agent that runs the task won't have access to the current conversation - include user names, channel IDs, specific instructions, etc.
+
+## Replicate (AI Model API)
+
+Replicate provides API access to thousands of AI models for image generation, video creation, audio synthesis, and more. The `REPLICATE_API_TOKEN` env var is available globally.
+
+**CLI Usage:**
+
+```bash
+# Run a model (returns output URLs)
+replicate run stability-ai/sdxl prompt="a studio photo of a rainbow colored corgi"
+
+# Stream LLM output
+replicate run meta/llama-2-70b-chat --stream prompt="Tell me a joke"
+
+# Chain predictions (generate image then upscale)
+replicate run stability-ai/sdxl prompt="a rainbow corgi" | \
+replicate run nightmareai/real-esrgan image={{.output[0]}}
+
+# Upload local file (use @ prefix)
+replicate run nightmareai/real-esrgan image=@path/to/image.png
+
+# View model schema (inputs/outputs)
+replicate model schema suno-ai/bark
+
+# Open result in browser
+replicate run stability-ai/sdxl --web prompt="hello world"
+```
+
+**Recommended Models by Task:**
+
+| Task                    | Model                                | Notes                    |
+| ----------------------- | ------------------------------------ | ------------------------ |
+| **Image Generation**    | `black-forest-labs/flux-2-pro`       | Best overall quality     |
+| **Fast Images**         | `black-forest-labs/flux-schnell`     | Sub-second generation    |
+| **Images with Text**    | `ideogram-ai/ideogram-v2`            | Excellent text rendering |
+| **Video Generation**    | `google/veo-3-fast`                  | Best text-to-video       |
+| **Image-to-Video**      | `kwaivgi/kling-v2.5-turbo-pro`       | Accurate physics         |
+| **Audio Transcription** | `vaibhavs10/incredibly-fast-whisper` | Fast whisper-large-v3    |
+| **Text-to-Speech**      | `qwen/qwen3-tts`                     | Multiple voice modes     |
+| **Upscaling**           | `nightmareai/real-esrgan`            | Image upscaling          |
+
+**Key Points:**
+
+- Models are pay-per-second with no idle charges
+- Output is typically URLs to generated files (download if you need to persist)
+- Use `--stream` for LLMs to stream tokens
+- Use `@path/to/file` to upload local files as input
+- Check `replicate model schema <model>` for available inputs
