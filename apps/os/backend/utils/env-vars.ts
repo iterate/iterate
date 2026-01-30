@@ -26,6 +26,13 @@ export type UnifiedEnvVar = {
   createdAt: Date | null;
 };
 
+export type RecommendedEnvVar = {
+  key: string;
+  value: string;
+  description: string;
+  provider: "google";
+};
+
 /**
  * Derive env var names from a secret key.
  * - Global (iterate.*): OPENAI_API_KEY from iterate.openai_api_key
@@ -200,6 +207,54 @@ export function buildEnvVarsRecord(envVars: UnifiedEnvVar[]): Record<string, str
   // Apply in order - later values override earlier ones
   for (const envVar of envVars) {
     result[envVar.key] = envVar.value;
+  }
+
+  return result;
+}
+
+/**
+ * Get recommended env vars for user-scoped secrets (e.g., Google OAuth).
+ * These are secrets that exist but aren't automatically added as env vars
+ * because they're user-scoped. The user can choose to add them explicitly.
+ */
+export async function getRecommendedEnvVars(
+  db: DB,
+  projectId: string,
+  existingEnvVarKeys: Set<string>,
+): Promise<RecommendedEnvVar[]> {
+  // Get secrets for this project with user info
+  const secrets = await db.query.secret.findMany({
+    columns: { key: true, userId: true },
+    where: eq(schema.secret.projectId, projectId),
+    with: {
+      user: { columns: { email: true } },
+    },
+  });
+
+  const result: RecommendedEnvVar[] = [];
+
+  for (const secret of secrets) {
+    // Only user-scoped secrets (have userId and user relation)
+    if (!secret.userId || !secret.user) continue;
+
+    const envVarNames = secretKeyToEnvVarNames(secret.key);
+    for (const envVarName of envVarNames) {
+      // Skip if already exists as an env var
+      if (existingEnvVarKeys.has(envVarName)) continue;
+
+      let provider: "google" | undefined;
+      if (secret.key.startsWith("google.")) {
+        provider = "google";
+      }
+      if (!provider) continue; // Only support known providers
+
+      result.push({
+        key: envVarName,
+        value: `getIterateSecret({secretKey: '${secret.key}'})`,
+        description: `Scoped to ${secret.user.email}`,
+        provider,
+      });
+    }
   }
 
   return result;

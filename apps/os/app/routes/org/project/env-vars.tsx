@@ -99,16 +99,25 @@ function ProjectEnvVarsPage() {
   });
 
   const { data } = useSuspenseQuery(envVarListOptions);
-  const { envVars, connectedProviders } = data;
+  const { envVars, recommendedEnvVars } = data;
+
+  // Derive which connectors are connected from env var sources
+  const connectedProviders = new Set(
+    envVars.flatMap((v) => (v.source.type === "connection" ? [v.source.provider] : [])),
+  );
+  // Also count recommended env vars as "connected" (user has the connection, just hasn't added env var)
+  for (const rec of recommendedEnvVars) {
+    connectedProviders.add(rec.provider);
+  }
 
   const missingConnectors = [
-    !connectedProviders.includes("github") && { provider: "github", label: "GitHub", icon: Github },
-    !connectedProviders.includes("slack") && {
+    !connectedProviders.has("github") && { provider: "github", label: "GitHub", icon: Github },
+    !connectedProviders.has("slack") && {
       provider: "slack",
       label: "Slack",
       icon: MessageSquare,
     },
-    !connectedProviders.includes("google") && { provider: "google", label: "Google", icon: Mail },
+    !connectedProviders.has("google") && { provider: "google", label: "Google", icon: Mail },
   ].filter(Boolean) as Array<{
     provider: string;
     label: string;
@@ -600,6 +609,54 @@ function ProjectEnvVarsPage() {
           );
         })}
       </div>
+
+      {/* Recommended env vars (user-scoped secrets like Google) */}
+      {recommendedEnvVars.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-medium mb-2">Recommended</h3>
+          <p className="text-sm text-muted-foreground mb-3">
+            These env vars are available from your connected accounts. Add them to make them
+            accessible to your machines.
+          </p>
+          <div className="border rounded-lg divide-y">
+            {recommendedEnvVars.map((rec) => (
+              <div key={rec.key} className="flex items-center px-4 py-3 gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-4">
+                    <span className="w-56 shrink-0 font-mono text-sm truncate" title={rec.key}>
+                      {rec.key}
+                    </span>
+                    <span
+                      className="flex-1 min-w-0 font-mono text-sm text-muted-foreground truncate"
+                      title={rec.value}
+                    >
+                      {rec.value}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 mt-0.5">
+                    <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
+                      <Lock className="h-3 w-3" />
+                      <span>{rec.provider.charAt(0).toUpperCase() + rec.provider.slice(1)}</span>
+                    </div>
+                    <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+                      {rec.description}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEnvVar.mutate({ key: rec.key, value: rec.value })}
+                  disabled={setEnvVar.isPending}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

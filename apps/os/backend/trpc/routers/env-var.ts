@@ -2,31 +2,25 @@ import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
-import { projectEnvVar, secret, projectConnection } from "../../db/schema.ts";
+import { projectEnvVar, secret } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
-import { getUnifiedEnvVars } from "../../utils/env-vars.ts";
+import { getUnifiedEnvVars, getRecommendedEnvVars } from "../../utils/env-vars.ts";
 import { parseMagicString } from "../../egress-proxy/egress-proxy.ts";
 
 export const envVarRouter = router({
   /**
    * List all environment variables for a project.
    * Returns a unified list including global vars, connection vars, and user-defined vars.
+   * Also returns recommended env vars for user-scoped secrets (e.g., Google OAuth).
    */
   list: projectProtectedProcedure.query(async ({ ctx }) => {
-    const [envVars, connections] = await Promise.all([
-      getUnifiedEnvVars(ctx.db, ctx.project.id),
-      ctx.db.query.projectConnection.findMany({
-        where: eq(projectConnection.projectId, ctx.project.id),
-        columns: { provider: true },
-      }),
-    ]);
+    const envVars = await getUnifiedEnvVars(ctx.db, ctx.project.id);
 
-    // Map provider names to consistent format (github-app -> github)
-    const connectedProviders = connections.map((c) =>
-      c.provider === "github-app" ? "github" : c.provider,
-    );
+    // Get recommended env vars (user-scoped secrets like Google OAuth)
+    const existingKeys = new Set(envVars.map((v) => v.key));
+    const recommendedEnvVars = await getRecommendedEnvVars(ctx.db, ctx.project.id, existingKeys);
 
     return {
       envVars: envVars.map((v) => ({
@@ -38,7 +32,7 @@ export const envVarRouter = router({
         source: v.source,
         createdAt: v.createdAt,
       })),
-      connectedProviders,
+      recommendedEnvVars,
     };
   }),
 
