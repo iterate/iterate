@@ -108,6 +108,12 @@ ARG SANDBOX_ITERATE_BRANCH
 COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
 RUN npm install -g /app/pidnap.tgz
 
+# Copy scripts that will be needed
+COPY apps/os/sandbox/entry.sh /app/entry.sh
+COPY apps/os/sandbox/after-git-clone.sh /app/after-git-clone.sh
+COPY apps/os/sandbox/local-docker-compose-entrypoint.sh /app/local-docker-compose-entrypoint.sh
+RUN sudo chmod +x /app/*.sh
+
 # If ref provided, clone from git and checkout branch; otherwise create placeholder for local mount
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
@@ -122,35 +128,19 @@ RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     mkdir -p $ITERATE_REPO/apps/os/sandbox; \
     fi
 
-# Patch package.json to use the built tgz (if repo was cloned)
+# Run common post-clone setup (only for remote deployment - local dev runs at container start)
+# Skip setup-home here; it runs after this in a separate step for build cache efficiency
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    sed -i 's|workspace:|file:/app/pidnap.tgz|g' $ITERATE_REPO/apps/os/sandbox/package.json; \
-    fi
-
-# Make scripts executable (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
-    fi
-
-# Install deps and build daemon (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO && pnpm install; \
-    fi
-
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO/apps/daemon && pnpm vite build; \
+      bash /app/after-git-clone.sh --skip-setup-home; \
     fi
 
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
 RUN mkdir -p ~/.iterate && \
     echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
 
-# Setup home directory (only for Daytona - local dev does this in entry.sh)
+# Setup home directory (only for Daytona - local dev does this via local-docker-compose-entrypoint.sh)
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
       bash $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
     fi
-
-COPY apps/os/sandbox/entry.sh /app/entry.sh
-RUN sudo chmod +x /app/entry.sh
 
 ENTRYPOINT [ "/app/entry.sh" ]

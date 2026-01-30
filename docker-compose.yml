@@ -53,63 +53,9 @@ services:
       # Git info for cloning (defaults to HEAD, alchemy.run.ts can override)
       - LOCAL_DOCKER_GIT_COMMIT=${LOCAL_DOCKER_GIT_COMMIT:-HEAD}
       - LOCAL_DOCKER_GIT_BRANCH=${LOCAL_DOCKER_GIT_BRANCH:-}
-    # Override Dockerfile ENTRYPOINT so command runs directly
-    entrypoint: []
-    # Local dev setup: clone repo from mounted .git, install deps, then run entrypoint
-    command:
-      - /bin/bash
-      - -c
-      - |
-        set -e
-        ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
-
-        echo "=== Local Docker dev setup ==="
-
-        # Clone from mounted host .git directory
-        # This gives container its own copy with full git history
-        # Remove placeholder dir created by Dockerfile
-        rm -rf "$$ITERATE_REPO"
-
-        # Check if .host-git is a worktree gitdir file (not a real .git dir)
-        if [ -f /home/iterate/.host-git ] && grep -q "^gitdir:" /home/iterate/.host-git 2>/dev/null; then
-          echo "ERROR: Detected git worktree. The mounted .git is a file, not a directory."
-          echo ""
-          echo "For worktrees, set LOCAL_DOCKER_GIT_DIR to the main repo's .git directory:"
-          echo "  LOCAL_DOCKER_GIT_DIR=/path/to/main/repo/.git docker compose up"
-          echo ""
-          echo "Or use alchemy.run.ts which handles this automatically."
-          exit 1
-        fi
-
-        echo "Cloning from host .git directory..."
-        git clone file:///home/iterate/.host-git "$$ITERATE_REPO"
-
-        # Checkout the correct branch/commit
-        cd "$$ITERATE_REPO"
-        if [ -n "$${LOCAL_DOCKER_GIT_BRANCH:-}" ]; then
-          echo "Checking out branch: $$LOCAL_DOCKER_GIT_BRANCH"
-          git checkout "$$LOCAL_DOCKER_GIT_BRANCH"
-        else
-          echo "Checking out commit: $$LOCAL_DOCKER_GIT_COMMIT"
-          git checkout "$$LOCAL_DOCKER_GIT_COMMIT"
-        fi
-
-        echo ""
-        echo "Git status:"
-        git status --short
-        echo ""
-
-        echo "Installing dependencies..."
-        pnpm install --no-frozen-lockfile
-
-        echo "Building daemon..."
-        (cd apps/daemon && npx vite build)
-
-        # Setup home directory (agent configs from home-skeleton)
-        bash "$$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
-
-        # Hand off to universal entrypoint (proxy config, pidnap)
-        exec /app/entry.sh
+    # Override Dockerfile ENTRYPOINT to use local-docker-compose-entrypoint.sh
+    # This script clones from mounted .git, runs after-git-clone.sh, then execs entry.sh
+    entrypoint: ["/app/local-docker-compose-entrypoint.sh"]
 
 volumes:
   postgres-data:
