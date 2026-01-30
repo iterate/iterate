@@ -97,3 +97,50 @@ export async function pokeRunningMachinesToRefresh(
 
   await Promise.all(runningMachines.map((machine) => pokeMachineToRefresh(machine, env)));
 }
+
+type PokeResult = { machineId: string; success: boolean; error?: string };
+
+/**
+ * Poke a machine's daemon to pull the iterate repo.
+ * Called after a prod deploy to update daemon code on all running machines.
+ */
+async function pokeMachineToPullIterateRepo(
+  machine: typeof schema.machine.$inferSelect,
+  env: CloudflareEnv,
+): Promise<PokeResult> {
+  const daemonBaseUrl = await buildDaemonBaseUrl(machine, env);
+  if (!daemonBaseUrl) {
+    return { machineId: machine.id, success: false, error: "Could not build daemon URL" };
+  }
+
+  const client = createDaemonTrpcClient(daemonBaseUrl);
+
+  try {
+    await client.platform.pullIterateRepo.mutate();
+    logger.info("[poke-machines] Poked machine to pull iterate repo", { machineId: machine.id });
+    return { machineId: machine.id, success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.error("[poke-machines] Failed to poke machine for iterate repo pull", {
+      machineId: machine.id,
+      error: errorMsg,
+    });
+    return { machineId: machine.id, success: false, error: errorMsg };
+  }
+}
+
+/**
+ * Poke all provided machines to pull the iterate repo.
+ * Called by the service endpoint after a prod deploy.
+ */
+export async function pokeAllMachinesToPullIterateRepo(
+  _db: DB,
+  machines: (typeof schema.machine.$inferSelect)[],
+  env: CloudflareEnv,
+): Promise<PokeResult[]> {
+  logger.info("[poke-machines] Poking all machines to pull iterate repo", {
+    machineCount: machines.length,
+  });
+
+  return Promise.all(machines.map((machine) => pokeMachineToPullIterateRepo(machine, env)));
+}

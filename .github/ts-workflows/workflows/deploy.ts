@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
@@ -64,6 +65,24 @@ export default {
           },
           run: "pnpm run deploy",
           "working-directory": "apps/iterate-com",
+        },
+      ],
+    },
+    "poke-machines-pull": {
+      "runs-on": "ubuntu-24.04",
+      needs: "deploy-os",
+      if: "inputs.stage == 'prd'",
+      steps: [
+        {
+          name: "Poke machines to pull iterate repo",
+          env: {
+            SERVICE_AUTH_TOKEN: "${{ secrets.SERVICE_AUTH_TOKEN }}",
+          },
+          run: dedent`
+            curl -sf -X POST https://os.iterate.com/api/service/poke-machines-pull \\
+              -H "Authorization: Bearer $SERVICE_AUTH_TOKEN" \\
+              -H "Content-Type: application/json"
+          `,
         },
       ],
     },

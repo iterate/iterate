@@ -369,6 +369,32 @@ async function cloneRepoInternal(url: string, targetPath: string, branch: string
   }
 }
 
+/**
+ * Pull the latest changes from the iterate repo.
+ * The iterate repo is baked into the Docker image at /root/iterate.
+ */
+async function pullIterateRepo(): Promise<{ success: boolean; message: string }> {
+  const iterateRepoPath = "/root/iterate";
+
+  if (!existsSync(join(iterateRepoPath, ".git"))) {
+    return { success: false, message: "Iterate repo not found at /root/iterate" };
+  }
+
+  const git = simpleGit(iterateRepoPath);
+
+  try {
+    // Fetch and reset to origin/main to get latest changes
+    await git.fetch("origin", "main");
+    await git.reset(["--hard", "origin/main"]);
+    console.log("[platform] Pulled latest iterate repo changes");
+    return { success: true, message: "Pulled latest changes" };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error("[platform] Failed to pull iterate repo:", errorMsg);
+    return { success: false, message: errorMsg };
+  }
+}
+
 export const platformRouter = createTRPCRouter({
   /**
    * Trigger an immediate refresh of bootstrap data from the control plane.
@@ -385,6 +411,14 @@ export const platformRouter = createTRPCRouter({
       console.error("[platform] Failed to refresh env:", err);
       return { success: false };
     }
+  }),
+
+  /**
+   * Pull the latest changes from the iterate repo.
+   * Called by the control plane after a prod deploy to update daemon code.
+   */
+  pullIterateRepo: publicProcedure.mutation(async () => {
+    return pullIterateRepo();
   }),
 });
 

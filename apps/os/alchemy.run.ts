@@ -289,7 +289,7 @@ const Env = z.object({
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
-  // SERVICE_AUTH_TOKEN: Required,
+  SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
