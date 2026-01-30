@@ -139,16 +139,18 @@ async function waitForServiceHealthy(
       const result = await execInContainer(containerId, [
         "curl",
         "-sf",
-        "http://localhost:9876/rpc/services.waitHealthy",
+        "http://localhost:9876/rpc/services/waitHealthy",
         "-H",
         "Content-Type: application/json",
         "-d",
-        JSON.stringify({ service, timeoutMs: Math.min(30000, remainingMs) }),
+        JSON.stringify({ json: { service, timeoutMs: Math.min(30000, remainingMs) } }),
       ]);
       const response = JSON.parse(result);
-      if (response.healthy) return;
-      if (response.error === "terminal_state") {
-        throw new Error(`Service ${service} in terminal state: ${response.state}`);
+      // ORPC wraps response in { json: ... }
+      const data = response.json ?? response;
+      if (data.healthy) return;
+      if (data.error === "terminal_state") {
+        throw new Error(`Service ${service} in terminal state: ${data.state}`);
       }
     } catch (e) {
       // Connection refused (pidnap not up yet) or service not ready - retry
@@ -425,14 +427,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const output = await execInContainer(project.containerId, [
         "curl",
         "-sf",
-        "http://localhost:9876/rpc/services.waitHealthy",
+        "http://localhost:9876/rpc/services/waitHealthy",
         "-H",
         "Content-Type: application/json",
         "-d",
-        '{"service":"iterate-daemon","timeoutMs":5000}',
+        '{"json":{"service":"iterate-daemon","timeoutMs":5000}}',
       ]);
 
-      const result = JSON.parse(output);
+      const parsed = JSON.parse(output);
+      // ORPC wraps response in { json: ... }
+      const result = parsed.json ?? parsed;
       expect(result.healthy).toBe(true);
       expect(result.state).toBe("running");
       expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
@@ -456,7 +460,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const output = await execInContainer(project.containerId, [
         "sh",
         "-c",
-        'curl -s http://localhost:9876/rpc/services.waitHealthy -H "Content-Type: application/json" -d \'{"service":"nonexistent","timeoutMs":1000}\' || echo "CURL_FAILED"',
+        'curl -s http://localhost:9876/rpc/services/waitHealthy -H "Content-Type: application/json" -d \'{"json":{"service":"nonexistent","timeoutMs":1000}}\' || echo "CURL_FAILED"',
       ]);
 
       // Should contain error info (either in response or curl failure)
