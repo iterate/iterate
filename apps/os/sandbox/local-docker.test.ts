@@ -283,9 +283,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         CONTAINER_REPO_PATH,
         "status",
       ]);
-      // CI: detached HEAD from PR merge commits (may show "HEAD detached" or "Not currently on any branch")
-      // Regular clone: normal branch
-      expect(status).toMatch(/On branch|HEAD detached|Not currently on any branch/);
+      // Should always be on a branch (local-docker-compose-entrypoint.sh creates one if needed)
+      expect(status).toMatch(/On branch/);
     });
   });
 

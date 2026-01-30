@@ -52,8 +52,9 @@ if [ -n "${LOCAL_DOCKER_GIT_BRANCH:-}" ]; then
   echo "Checking out branch: $LOCAL_DOCKER_GIT_BRANCH"
   git checkout "$LOCAL_DOCKER_GIT_BRANCH"
 else
-  echo "Checking out commit: ${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
-  git checkout "${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
+  # No branch name (e.g., CI detached HEAD state) - create a local branch
+  echo "Creating branch 'local-dev' at commit ${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
+  git checkout -b local-dev "${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
 fi
 
 echo ""
