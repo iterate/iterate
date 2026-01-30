@@ -67,10 +67,9 @@ export const workerContract = oc.router({
             path: z.string(),
             owner: z.string(),
             name: z.string(),
-            // If set, daemon should ensure local repo is at this sha
-            expectedSha: z.string().optional(),
           }),
         ),
+        iterateRepoSha: z.string().nullable(),
       }),
     ),
   }),

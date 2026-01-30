@@ -17,7 +17,6 @@ const clonedReposStatus: Map<
     status: "pending" | "cloning" | "cloned" | "error";
     error?: string;
     path?: string;
-    lastAttemptedSha?: string; // Track last expectedSha we tried to sync to
   }
 > = new Map();
 
@@ -222,7 +221,6 @@ export type RepoInfo = {
   path: string;
   owner: string;
   name: string;
-  expectedSha?: string;
 };
 
 /**
@@ -237,35 +235,23 @@ export function cloneRepos(repos: RepoInfo[]): void {
 
     // Skip if already cloning to prevent concurrent git operations
     if (existing?.status === "cloning") {
+      console.log(`[platform] Skipping ${repoKey} - already cloning`);
       continue;
     }
 
-    // Skip if we already attempted this expectedSha (avoid retrying forever if sha unreachable)
-    if (repo.expectedSha && existing?.lastAttemptedSha === repo.expectedSha) {
-      continue;
-    }
-
-    clonedReposStatus.set(repoKey, {
-      status: "cloning",
-      path: expandedPath,
-      lastAttemptedSha: repo.expectedSha,
-    });
+    clonedReposStatus.set(repoKey, { status: "cloning", path: expandedPath });
 
     // Clone in background
-    cloneRepo(repo.url, expandedPath, repo.branch, repo.expectedSha)
+    cloneRepo(repo.url, expandedPath, repo.branch)
       .then(() => {
-        clonedReposStatus.set(repoKey, {
-          status: "cloned",
-          path: expandedPath,
-          lastAttemptedSha: repo.expectedSha,
-        });
+        clonedReposStatus.set(repoKey, { status: "cloned", path: expandedPath });
+        console.log(`[platform] Cloned ${repoKey} to ${expandedPath}`);
       })
       .catch((err) => {
         clonedReposStatus.set(repoKey, {
           status: "error",
           error: err instanceof Error ? err.message : String(err),
           path: expandedPath,
-          lastAttemptedSha: repo.expectedSha,
         });
         console.error(`[platform] Failed to clone ${repoKey}:`, err);
       });
@@ -313,14 +299,13 @@ async function cloneRepo(
   url: string,
   targetPath: string,
   branch: string,
-  expectedSha?: string,
   retryCount = 0,
 ): Promise<void> {
   const MAX_RETRIES = 5;
   const RETRY_DELAY_MS = 2000; // 2 seconds between retries
 
   try {
-    await cloneRepoInternal(url, targetPath, branch, expectedSha);
+    await cloneRepoInternal(url, targetPath, branch);
   } catch (err) {
     // Retry on proxy connection failures (mitmproxy may not be ready yet)
     if (isProxyConnectionError(err) && retryCount < MAX_RETRIES) {
@@ -328,7 +313,7 @@ async function cloneRepo(
         `[platform] Proxy not ready, retrying clone in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
       );
       await sleep(RETRY_DELAY_MS);
-      return cloneRepo(url, targetPath, branch, expectedSha, retryCount + 1);
+      return cloneRepo(url, targetPath, branch, retryCount + 1);
     }
     throw err;
   }
@@ -337,30 +322,17 @@ async function cloneRepo(
 /**
  * Internal clone implementation (no retry logic)
  */
-async function cloneRepoInternal(
-  url: string,
-  targetPath: string,
-  branch: string,
-  expectedSha?: string,
-): Promise<void> {
+async function cloneRepoInternal(url: string, targetPath: string, branch: string): Promise<void> {
   // Create parent directory if needed
   const parentDir = dirname(targetPath);
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
   }
 
-  // If directory exists and has .git, check if update needed
+  // If directory exists and has .git, update remote URL (fresh token) then fetch + reset
   if (existsSync(join(targetPath, ".git"))) {
+    console.log(`[platform] Repo already exists at ${targetPath}, updating...`);
     const git = simpleGit(targetPath);
-
-    // If expectedSha set, skip if already at that sha
-    if (expectedSha) {
-      const currentSha = (await git.revparse(["HEAD"])).trim();
-      if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
-        return;
-      }
-    }
-
     // Update remote URL to use fresh token (GitHub tokens expire after 1 hour)
     await git.remote(["set-url", "origin", url]);
     await git.fetch("origin", branch);
@@ -395,6 +367,39 @@ async function cloneRepoInternal(
       throw fallbackErr;
     }
   }
+}
+
+let lastSyncedIterateSha: string | null = null;
+
+/**
+ * Sync the iterate repo to the expected sha if needed.
+ */
+export async function syncIterateRepo(expectedSha: string): Promise<void> {
+  // Skip if we already synced to this sha
+  if (lastSyncedIterateSha === expectedSha) {
+    return;
+  }
+
+  const iterateRepoPath = process.env.ITERATE_REPO;
+  if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+    return;
+  }
+
+  const git = simpleGit(iterateRepoPath);
+  const currentSha = (await git.revparse(["HEAD"])).trim();
+
+  // Skip if already at expected sha
+  if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
+    lastSyncedIterateSha = expectedSha;
+    return;
+  }
+
+  console.log(
+    `[platform] Syncing iterate repo: ${currentSha.slice(0, 7)} -> ${expectedSha.slice(0, 7)}`,
+  );
+  await git.fetch("origin", "main");
+  await git.reset(["--hard", `origin/main`]);
+  lastSyncedIterateSha = expectedSha;
 }
 
 export const platformRouter = createTRPCRouter({

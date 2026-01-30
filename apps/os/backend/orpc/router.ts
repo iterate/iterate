@@ -313,28 +313,6 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     repoCount: repos.length,
   });
 
-  // For daytona machines, add iterate repo with expectedSha so daemon keeps it up to date
-  // (local-docker machines don't have the iterate repo baked in)
-  const snapshotName = env.DAYTONA_SNAPSHOT_NAME as string | undefined;
-  const iterateRepoSha = snapshotName?.match(/iterate-sandbox-([a-f0-9]+)/)?.[1];
-  const isDaytona = machine.type === "daytona";
-
-  const allRepos = [
-    ...repos,
-    ...(isDaytona && iterateRepoSha
-      ? [
-          {
-            url: "https://github.com/iterate/iterate.git",
-            branch: "main",
-            path: "/home/iterate/src/github.com/iterate/iterate",
-            owner: "iterate",
-            name: "iterate",
-            expectedSha: iterateRepoSha,
-          },
-        ]
-      : []),
-  ];
-
   // Return the unified list - daemon will handle formatting for .env file
   return {
     envVars: daemonEnvVars.map((v) => ({
@@ -344,7 +322,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       description: v.description,
       source: v.source,
     })),
-    repos: allRepos,
+    repos,
+    iterateRepoSha: machine.type === "daytona" ? (env.ITERATE_REPO_SHA ?? null) : null,
   };
 });
 
