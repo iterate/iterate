@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
-import { projectEnvVar } from "../../db/schema.ts";
+import { projectEnvVar, secret } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
@@ -145,6 +145,20 @@ export const envVarRouter = router({
       }
 
       await ctx.db.delete(projectEnvVar).where(eq(projectEnvVar.id, existing.id));
+
+      // If this was a secret env var (env.KEY), also delete the orphaned secret
+      const secretKeyMatch = existing.value.match(
+        /getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
+      );
+      if (secretKeyMatch) {
+        const secretKey = secretKeyMatch[1];
+        // Only delete env.* secrets (user-created), not connector/global secrets
+        if (secretKey.startsWith("env.")) {
+          await ctx.db
+            .delete(secret)
+            .where(and(eq(secret.projectId, ctx.project.id), eq(secret.key, secretKey)));
+        }
+      }
 
       // Poke running machines to refresh their env vars
       waitUntil(

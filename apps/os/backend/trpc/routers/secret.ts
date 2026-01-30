@@ -8,14 +8,7 @@ import { encryptWithSecret } from "../../utils/encryption-core.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
-
-/**
- * Convert secret key to SHOUTING_SNAKE_CASE env var name
- * Example: "google.access_token" → "ITERATE_PROXY_SECRET_GOOGLE_ACCESS_TOKEN"
- */
-function secretKeyToEnvVar(key: string): string {
-  return `ITERATE_PROXY_SECRET_${key.replace(/\./g, "_").toUpperCase()}`;
-}
+import { secretKeyToEnvVar } from "../../utils/env-vars.ts";
 
 export const secretRouter = router({
   listProjectSecrets: projectProtectedProcedure.query(async ({ ctx }) => {

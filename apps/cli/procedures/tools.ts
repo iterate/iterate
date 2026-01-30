@@ -149,9 +149,9 @@ export const toolsRouter = t.router({
         // Skip empty lines and comment-only lines
         if (!line || line.startsWith("#")) continue;
 
-        // Match lines like: ITERATE_PROXY_SECRET_*="getIterateSecret({secretKey: 'key.name'})"
+        // Match lines like: OPENAI_API_KEY="getIterateSecret({secretKey: 'iterate.openai_api_key'})"
         const match = line.match(
-          /^(ITERATE_PROXY_SECRET_[A-Z_]+)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
+          /^([A-Z][A-Z0-9_]*)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
         );
         if (match) {
           const [, envVarName, secretKey] = match;

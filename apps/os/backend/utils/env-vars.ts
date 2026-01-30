@@ -43,9 +43,13 @@ function secretKeyToEnvVarNames(secretKey: string): string[] {
   }
   if (secretKey.startsWith("github.")) {
     // GitHub: github.access_token -> GITHUB_ACCESS_TOKEN, GH_TOKEN
+    // GH_TOKEN is required by GitHub CLI and many tools
     const base = secretKey.replace(".", "_").toUpperCase();
-    const gh = secretKey.replace("github.", "GH_").replace(".access_token", "_TOKEN").toUpperCase();
-    return [...new Set([base, gh])];
+    const names = [base];
+    if (secretKey === "github.access_token") {
+      names.push("GH_TOKEN");
+    }
+    return [...new Set(names)];
   }
   if (secretKey.startsWith("slack.") || secretKey.startsWith("resend.")) {
     // Slack and Resend are specifically for our bots to send replies to users - worth including "ITERATE_" prefix for clarity.
@@ -66,12 +70,7 @@ function secretKeyToEnvVarNames(secretKey: string): string[] {
  */
 function getSecretSource(secretKey: string, isGlobal: boolean): EnvVarSource | null {
   if (isGlobal && secretKey.startsWith("iterate.")) {
-    const descriptions: Record<string, string> = {
-      "iterate.openai_api_key": "Iterate-provided OpenAI API key",
-      "iterate.anthropic_api_key": "Iterate-provided Anthropic API key",
-      "iterate.resend_api_key": "Iterate-provided Resend API key for email",
-    };
-    return { type: "global", description: descriptions[secretKey] ?? "Iterate-provided secret" };
+    return { type: "global", description: "Iterate-provided secret" };
   }
   if (secretKey.startsWith("github.")) {
     return { type: "connection", provider: "github" };
