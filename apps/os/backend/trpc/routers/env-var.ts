@@ -7,6 +7,7 @@ import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 import { getUnifiedEnvVars } from "../../utils/env-vars.ts";
+import { parseMagicString } from "../../egress-proxy/egress-proxy.ts";
 
 export const envVarRouter = router({
   /**
@@ -147,11 +148,9 @@ export const envVarRouter = router({
       await ctx.db.delete(projectEnvVar).where(eq(projectEnvVar.id, existing.id));
 
       // If this was a secret env var (env.KEY), also delete the orphaned secret
-      const secretKeyMatch = existing.value.match(
-        /getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
-      );
-      if (secretKeyMatch) {
-        const secretKey = secretKeyMatch[1];
+      const parsed = parseMagicString(existing.value);
+      if (parsed) {
+        const { secretKey } = parsed;
         // Only delete env.* secrets (user-created), not connector/global secrets
         if (secretKey.startsWith("env.")) {
           await ctx.db

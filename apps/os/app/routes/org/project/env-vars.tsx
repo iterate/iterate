@@ -1,7 +1,17 @@
 import { useState, type FormEvent } from "react";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { SlidersHorizontal, Plus, MoreHorizontal, Pencil, Trash2, Lock } from "lucide-react";
+import {
+  SlidersHorizontal,
+  Plus,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  Lock,
+  Github,
+  MessageSquare,
+  Mail,
+} from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -89,6 +99,36 @@ function ProjectEnvVarsPage() {
   });
 
   const { data: envVars } = useSuspenseQuery(envVarListOptions);
+
+  // Check which connectors are set up
+  const { data: githubConnection } = useSuspenseQuery(
+    trpc.project.getGithubConnection.queryOptions({
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+    }),
+  );
+  const { data: slackConnection } = useSuspenseQuery(
+    trpc.project.getSlackConnection.queryOptions({
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+    }),
+  );
+  const { data: googleConnection } = useSuspenseQuery(
+    trpc.project.getGoogleConnection.queryOptions({
+      organizationSlug: params.organizationSlug,
+      projectSlug: params.projectSlug,
+    }),
+  );
+
+  const missingConnectors = [
+    !githubConnection.connected && { provider: "github", label: "GitHub", icon: Github },
+    !slackConnection.connected && { provider: "slack", label: "Slack", icon: MessageSquare },
+    !googleConnection.connected && { provider: "google", label: "Google", icon: Mail },
+  ].filter(Boolean) as Array<{
+    provider: string;
+    label: string;
+    icon: typeof Github;
+  }>;
 
   // Find which keys are overridden (appear multiple times, later one wins)
   const overriddenKeys = new Set<string>();
@@ -468,6 +508,27 @@ function ProjectEnvVarsPage() {
         <code className="text-xs bg-muted px-1 rounded">getIterateSecret(...)</code> which the
         egress proxy resolves at request time, so secrets are not visible to our agent.
       </p>
+
+      {/* Missing connectors */}
+      {missingConnectors.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {missingConnectors.map(({ provider, label, icon: Icon }) => (
+            <Link
+              key={provider}
+              to="/orgs/$organizationSlug/projects/$projectSlug/connectors"
+              params={{
+                organizationSlug: params.organizationSlug,
+                projectSlug: params.projectSlug,
+              }}
+            >
+              <Button variant="outline" size="sm">
+                <Icon className="h-4 w-4" />
+                Add {label} Access
+              </Button>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* Table-like layout */}
       <div className="border rounded-lg divide-y">
