@@ -22,7 +22,6 @@ import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
-import { serviceApp } from "./routes/service.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
@@ -127,7 +126,6 @@ app.route("/api/integrations/resend", resendApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
 app.route("/api", egressApprovalsApp);
-app.route("/api/service", serviceApp);
 
 // Mount egress proxy (for sandbox outbound traffic)
 app.route("", egressProxyApp);

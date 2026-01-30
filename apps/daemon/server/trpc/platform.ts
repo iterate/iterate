@@ -221,11 +221,13 @@ export type RepoInfo = {
   path: string;
   owner: string;
   name: string;
+  expectedSha?: string;
 };
 
 /**
  * Clone repositories. Called directly by bootstrap-refresh.ts.
  * Cloning happens asynchronously in the background.
+ * If expectedSha is set, ensures repo is at that sha (pulls if needed).
  */
 export function cloneRepos(repos: RepoInfo[]): void {
   for (const repo of repos) {
@@ -241,11 +243,11 @@ export function cloneRepos(repos: RepoInfo[]): void {
 
     clonedReposStatus.set(repoKey, { status: "cloning", path: expandedPath });
 
-    // Clone in background
-    cloneRepo(repo.url, expandedPath, repo.branch)
+    // Clone/update in background
+    cloneOrUpdateRepo(repo.url, expandedPath, repo.branch, repo.expectedSha)
       .then(() => {
         clonedReposStatus.set(repoKey, { status: "cloned", path: expandedPath });
-        console.log(`[platform] Cloned ${repoKey} to ${expandedPath}`);
+        console.log(`[platform] Cloned/updated ${repoKey} to ${expandedPath}`);
       })
       .catch((err) => {
         clonedReposStatus.set(repoKey, {
@@ -253,7 +255,7 @@ export function cloneRepos(repos: RepoInfo[]): void {
           error: err instanceof Error ? err.message : String(err),
           path: expandedPath,
         });
-        console.error(`[platform] Failed to clone ${repoKey}:`, err);
+        console.error(`[platform] Failed to clone/update ${repoKey}:`, err);
       });
   }
 }
@@ -291,49 +293,67 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Clone a repository to the specified path.
- * Uses simple-git to avoid shell injection vulnerabilities.
+ * Clone or update a repository to the specified path.
+ * If expectedSha is set and repo exists, checks if update needed.
  * Retries on proxy connection failures (mitmproxy may not be ready on startup).
  */
-async function cloneRepo(
+async function cloneOrUpdateRepo(
   url: string,
   targetPath: string,
   branch: string,
+  expectedSha?: string,
   retryCount = 0,
 ): Promise<void> {
   const MAX_RETRIES = 5;
-  const RETRY_DELAY_MS = 2000; // 2 seconds between retries
+  const RETRY_DELAY_MS = 2000;
 
   try {
-    await cloneRepoInternal(url, targetPath, branch);
+    await cloneOrUpdateRepoInternal(url, targetPath, branch, expectedSha);
   } catch (err) {
-    // Retry on proxy connection failures (mitmproxy may not be ready yet)
     if (isProxyConnectionError(err) && retryCount < MAX_RETRIES) {
       console.log(
-        `[platform] Proxy not ready, retrying clone in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
+        `[platform] Proxy not ready, retrying in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
       );
       await sleep(RETRY_DELAY_MS);
-      return cloneRepo(url, targetPath, branch, retryCount + 1);
+      return cloneOrUpdateRepo(url, targetPath, branch, expectedSha, retryCount + 1);
     }
     throw err;
   }
 }
 
 /**
- * Internal clone implementation (no retry logic)
+ * Internal clone/update implementation (no retry logic)
  */
-async function cloneRepoInternal(url: string, targetPath: string, branch: string): Promise<void> {
-  // Create parent directory if needed
+async function cloneOrUpdateRepoInternal(
+  url: string,
+  targetPath: string,
+  branch: string,
+  expectedSha?: string,
+): Promise<void> {
   const parentDir = dirname(targetPath);
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
   }
 
-  // If directory exists and has .git, update remote URL (fresh token) then fetch + reset
+  // If directory exists and has .git, check if update needed
   if (existsSync(join(targetPath, ".git"))) {
-    console.log(`[platform] Repo already exists at ${targetPath}, updating...`);
     const git = simpleGit(targetPath);
-    // Update remote URL to use fresh token (GitHub tokens expire after 1 hour)
+
+    // If expectedSha set, check if we're already at that sha
+    if (expectedSha) {
+      const currentSha = (await git.revparse(["HEAD"])).trim();
+      if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
+        console.log(
+          `[platform] Repo at ${targetPath} already at expected sha ${expectedSha.slice(0, 7)}`,
+        );
+        return;
+      }
+      console.log(
+        `[platform] Repo at ${targetPath} needs update (${currentSha.slice(0, 7)} -> ${expectedSha.slice(0, 7)})`,
+      );
+    }
+
+    // Update remote URL (tokens expire) then fetch + reset
     await git.remote(["set-url", "origin", url]);
     await git.fetch("origin", branch);
     await git.reset(["--hard", `origin/${branch}`]);
@@ -345,53 +365,23 @@ async function cloneRepoInternal(url: string, targetPath: string, branch: string
     rmSync(targetPath, { recursive: true, force: true });
   }
 
-  // Clone the repo - try with branch first, fall back to default branch for empty repos
+  // Clone the repo
   const git = simpleGit();
   try {
     await git.clone(url, targetPath, ["--branch", branch, "--single-branch"]);
   } catch {
-    // Clean up any partial clone before retry
     if (existsSync(targetPath)) {
       rmSync(targetPath, { recursive: true, force: true });
     }
-
-    // If branch clone failed, try without --branch (handles empty repos or missing branches)
     console.log(`[platform] Branch clone failed, trying without --branch flag...`);
     try {
       await git.clone(url, targetPath);
     } catch (fallbackErr) {
-      // Clean up partial state from failed fallback clone to prevent corrupt retry state
       if (existsSync(targetPath)) {
         rmSync(targetPath, { recursive: true, force: true });
       }
       throw fallbackErr;
     }
-  }
-}
-
-/**
- * Pull the latest changes from the iterate repo.
- * The iterate repo is baked into the Docker image at /root/iterate.
- */
-async function pullIterateRepo(): Promise<{ success: boolean; message: string }> {
-  const iterateRepoPath = "/root/iterate";
-
-  if (!existsSync(join(iterateRepoPath, ".git"))) {
-    return { success: false, message: "Iterate repo not found at /root/iterate" };
-  }
-
-  const git = simpleGit(iterateRepoPath);
-
-  try {
-    // Fetch and reset to origin/main to get latest changes
-    await git.fetch("origin", "main");
-    await git.reset(["--hard", "origin/main"]);
-    console.log("[platform] Pulled latest iterate repo changes");
-    return { success: true, message: "Pulled latest changes" };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error("[platform] Failed to pull iterate repo:", errorMsg);
-    return { success: false, message: errorMsg };
   }
 }
 
@@ -411,14 +401,6 @@ export const platformRouter = createTRPCRouter({
       console.error("[platform] Failed to refresh env:", err);
       return { success: false };
     }
-  }),
-
-  /**
-   * Pull the latest changes from the iterate repo.
-   * Called by the control plane after a prod deploy to update daemon code.
-   */
-  pullIterateRepo: publicProcedure.mutation(async () => {
-    return pullIterateRepo();
   }),
 });
 
