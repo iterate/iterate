@@ -46,8 +46,8 @@ WORKDIR /home/iterate
 
 ENV PATH="/home/iterate/.local/bin:$PATH"
 
-# Configure pnpm store location (enables sharing via Docker volume)
-RUN pnpm config --global set store-dir /home/iterate/.local/share/pnpm/store
+# Configure pnpm store location (inside cross-container cache volume)
+RUN pnpm config --global set store-dir /home/iterate/.cross-container-cache/pnpm-store
 
 # Git config for iterate user
 RUN git config --global user.name "iterate" && \

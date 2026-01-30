@@ -10,8 +10,9 @@
 
 set -euo pipefail
 
-# Ensure shared pnpm store volume exists (idempotent)
-docker volume create iterate-pnpm-store >/dev/null 2>&1 || true
+# Ensure cross-container cache volume exists (idempotent)
+# Contains: pnpm-store/ and node-modules/<hash>/ directories
+docker volume create iterate-cross-container-cache >/dev/null 2>&1 || true
 
 # Find repo root (directory containing this script's parent)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +46,8 @@ COMPOSE_PROJECT_NAME="iterate-${DIR_NAME}-${DIR_HASH}"
 export LOCAL_DOCKER_GIT_DIR="$MAIN_GIT_DIR"
 export LOCAL_DOCKER_GIT_COMMIT="$GIT_COMMIT"
 export COMPOSE_PROJECT_NAME
+# Also export with LOCAL_DOCKER_ prefix for consistency with other vars
+export LOCAL_DOCKER_COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"
 
 if [ -n "$GIT_BRANCH" ]; then
   export LOCAL_DOCKER_GIT_BRANCH="$GIT_BRANCH"
@@ -61,6 +64,7 @@ if [ $# -eq 0 ]; then
   echo "LOCAL_DOCKER_GIT_COMMIT=$LOCAL_DOCKER_GIT_COMMIT"
   [ -n "${LOCAL_DOCKER_GIT_BRANCH:-}" ] && echo "LOCAL_DOCKER_GIT_BRANCH=$LOCAL_DOCKER_GIT_BRANCH"
   echo "COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"
+  echo "LOCAL_DOCKER_COMPOSE_PROJECT_NAME=$LOCAL_DOCKER_COMPOSE_PROJECT_NAME"
   exit 0
 fi
 

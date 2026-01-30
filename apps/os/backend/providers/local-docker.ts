@@ -1,15 +1,18 @@
 /**
  * Local Docker Provider
  *
- * Minimal provider for local Docker development. Just provides URLs - no management plane calls.
- * Container is managed externally via docker-compose.
+ * Provider for local Docker development using docker-compose.
+ * All local-docker machines share the same container (one per worktree).
+ *
+ * Requires LOCAL_DOCKER_COMPOSE_PROJECT_NAME env var to be set.
+ * Uses Docker API to discover dynamically assigned host ports.
  *
  * Limitation: One sandbox container per worktree. Use Daytona for multiple sandboxes.
  */
 
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
-// Fixed ports for local docker (matches docker-compose.yml)
+// Container-internal ports (matches Dockerfile EXPOSE)
 const DAEMON_PORT = 3000;
 const OPENCODE_PORT = 4096;
 
@@ -111,6 +114,78 @@ export async function dockerApi<T>(
 }
 
 // ============================================================================
+// Local Docker Container Discovery
+// ============================================================================
+
+/**
+ * Get the sandbox container name from compose project name.
+ * Throws if project name is not provided - this is required for local-docker to work.
+ */
+function getLocalDockerContainerName(composeProjectName: string | undefined): string {
+  if (!composeProjectName) {
+    throw new Error(
+      "LOCAL_DOCKER_COMPOSE_PROJECT_NAME is required for local-docker provider. " +
+        "Run 'pnpm docker:up' to start containers with correct env vars.",
+    );
+  }
+  // Docker Compose naming convention: {project}-{service}-{instance}
+  return `${composeProjectName}-sandbox-1`;
+}
+
+/** Docker container inspect response (partial) */
+interface DockerContainerInspect {
+  Id: string;
+  Name: string;
+  NetworkSettings: {
+    Ports: Record<string, Array<{ HostIp: string; HostPort: string }> | null>;
+  };
+}
+
+/** Container info with resolved host ports */
+interface ContainerInfo {
+  containerName: string;
+  containerId: string;
+  ports: { daemon: number; opencode: number };
+}
+
+/**
+ * Get container info including dynamically assigned host ports.
+ * Queries Docker API once to inspect the container.
+ */
+async function getLocalDockerContainerInfo(
+  composeProjectName: string | undefined,
+): Promise<ContainerInfo> {
+  const containerName = getLocalDockerContainerName(composeProjectName);
+
+  // Inspect container directly by name
+  const container = await dockerApi<DockerContainerInspect>(
+    "GET",
+    `/containers/${containerName}/json`,
+  ).catch(() => {
+    throw new Error(`Container ${containerName} not found. Run 'pnpm docker:up' first.`);
+  });
+
+  // Extract NetworkSettings.Ports to get host port mappings
+  // Format: { "3000/tcp": [{ HostIp: "0.0.0.0", HostPort: "54321" }] }
+  const portBindings = container.NetworkSettings.Ports;
+  const daemonBinding = portBindings["3000/tcp"]?.[0];
+  const opencodeBinding = portBindings["4096/tcp"]?.[0];
+
+  if (!daemonBinding?.HostPort) {
+    throw new Error("Daemon port 3000 not exposed. Is the container running?");
+  }
+
+  return {
+    containerName,
+    containerId: container.Id,
+    ports: {
+      daemon: parseInt(daemonBinding.HostPort, 10),
+      opencode: opencodeBinding?.HostPort ? parseInt(opencodeBinding.HostPort, 10) : 0,
+    },
+  };
+}
+
+// ============================================================================
 // Local Provider - reference to an already-running daemon on the host
 // ============================================================================
 
@@ -167,39 +242,79 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
 }
 
 // ============================================================================
-// Local Docker Provider - minimal, just provides URLs
-// Container is managed externally via docker-compose
+// Local Docker Provider
+// All local-docker machines share the same container (managed via docker-compose)
 // ============================================================================
 
-export function createLocalDockerProvider(): MachineProvider {
-  const getUrl = (port: number): string => `http://localhost:${port}`;
+/**
+ * Create a Local Docker provider.
+ * Fetches container info ONCE at creation time - all methods use cached info.
+ *
+ * @param composeProjectName - The LOCAL_DOCKER_COMPOSE_PROJECT_NAME from worker bindings
+ */
+export async function createLocalDockerProvider(
+  composeProjectName: string | undefined,
+): Promise<MachineProvider> {
+  // Fetch container info ONCE when provider is created
+  const containerInfo = await getLocalDockerContainerInfo(composeProjectName);
+  const { containerName, containerId, ports } = containerInfo;
+
+  // Map container-internal port to actual host port
+  const getUrl = (port: number): string => {
+    if (port === DAEMON_PORT) return `http://localhost:${ports.daemon}`;
+    if (port === OPENCODE_PORT) return `http://localhost:${ports.opencode}`;
+    // For unknown ports, assume same port (won't work with dynamic mapping)
+    return `http://localhost:${port}`;
+  };
 
   return {
     type: "local-docker",
 
-    // No management plane calls - just return metadata
     async create(_machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       return {
-        externalId: "local-docker",
+        externalId: containerName, // Use container name as external ID
         metadata: {
-          ports: { "iterate-daemon": DAEMON_PORT, opencode: OPENCODE_PORT },
+          containerName,
+          containerId,
+          ports: { "iterate-daemon": ports.daemon, opencode: ports.opencode },
+          daemonStatus: "ready",
+          daemonReadyAt: new Date().toISOString(),
         },
       };
     },
 
-    // All no-ops - container managed externally via docker-compose
-    async start(): Promise<void> {},
-    async stop(): Promise<void> {},
-    async restart(): Promise<void> {},
+    // Lifecycle methods use cached containerName
+    async start(): Promise<void> {
+      await dockerApi("POST", `/containers/${containerName}/start`);
+    },
+
+    async stop(): Promise<void> {
+      await dockerApi("POST", `/containers/${containerName}/stop`);
+    },
+
+    async restart(): Promise<void> {
+      await dockerApi("POST", `/containers/${containerName}/restart`);
+    },
+
+    // No-op: container is shared across all local-docker machines
     async archive(): Promise<void> {},
+
+    // No-op: container is shared, managed externally via docker-compose
     async delete(): Promise<void> {},
 
     getPreviewUrl: getUrl,
     previewUrl: getUrl(DAEMON_PORT),
 
     displayInfo: {
-      label: "Local Docker",
+      label: `Local Docker (${containerName})`,
       isDevOnly: true,
+    },
+
+    // Runtime metadata - always current, merged with stored metadata
+    runtimeMetadata: {
+      containerName,
+      containerId,
+      ports: { "iterate-daemon": ports.daemon, opencode: ports.opencode },
     },
 
     commands: [],

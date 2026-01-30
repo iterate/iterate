@@ -133,9 +133,27 @@ export const crons = {
   stop: oc.input(v.object({ target: ResourceTarget })).output(CronProcessInfoSchema),
 };
 
+// Wait for service health response
+export const WaitHealthyResponseSchema = v.object({
+  healthy: v.boolean(),
+  state: v.string(),
+  logs: v.array(v.string()),
+  elapsedMs: v.number(),
+  error: v.optional(v.string()),
+});
+
+export type WaitHealthyResponse = v.InferOutput<typeof WaitHealthyResponseSchema>;
+
+export const services = {
+  waitHealthy: oc
+    .input(v.object({ service: v.string(), timeoutMs: v.optional(v.number()) }))
+    .output(WaitHealthyResponseSchema),
+};
+
 export const api = {
   manager,
   processes,
   tasks,
   crons,
+  services,
 };

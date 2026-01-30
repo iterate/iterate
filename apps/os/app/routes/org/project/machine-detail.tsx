@@ -56,6 +56,7 @@ function MachineDetailPage() {
     port?: number;
     ports?: Record<string, number>;
     containerId?: string;
+    containerName?: string;
     snapshotName?: string;
     daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
@@ -211,6 +212,25 @@ function MachineDetailPage() {
         </Button>
       </HeaderActions>
 
+      {/* Local Docker shared container banner */}
+      {machine.type === "local-docker" && (
+        <div className="p-3 bg-orange-50 dark:bg-orange-950/20 rounded-lg border border-orange-200 dark:border-orange-800 text-sm">
+          <span className="font-medium text-orange-800 dark:text-orange-200">Dev Mode:</span>
+          <span className="text-orange-700 dark:text-orange-300 ml-1">
+            All Local Docker machines share container
+          </span>
+          {metadata.containerName && (
+            <button
+              onClick={() => copyToClipboard(metadata.containerName!)}
+              className="ml-1 font-mono text-orange-600 dark:text-orange-400 hover:underline inline-flex items-center gap-1"
+            >
+              <span className="font-semibold">{metadata.containerName}</span>
+              <Copy className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Machine Info Grid */}
       <div className="grid grid-cols-3 gap-4 text-sm">
         <div>
@@ -240,9 +260,23 @@ function MachineDetailPage() {
             {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
           </dd>
         </div>
-        {metadata.containerId && (
+        {metadata.containerName && (
           <div>
             <dt className="text-muted-foreground text-xs">Container</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.containerName!)}
+                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
+              >
+                {metadata.containerName}
+                <Copy className="h-3 w-3 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
+        {metadata.containerId && !metadata.containerName && (
+          <div>
+            <dt className="text-muted-foreground text-xs">Container ID</dt>
             <dd className="mt-1">
               <button
                 onClick={() => copyToClipboard(metadata.containerId!)}

@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
@@ -39,6 +40,16 @@ const isPreview =
   app.stage === "dev" ||
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
+
+/**
+ * Get the Docker Compose project name for local development.
+ * Uses same logic as scripts/docker-compose-env.sh to generate unique name per worktree.
+ */
+function getLocalDockerComposeProjectName(): string {
+  const dirHash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 4);
+  const dirName = basename(repoRoot);
+  return `iterate-${dirName}-${dirHash}`;
+}
 
 /**
  * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
@@ -402,6 +413,10 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
+      // In dev, pass the compose project name for local-docker provider
+      ...(isDevelopment
+        ? { LOCAL_DOCKER_COMPOSE_PROJECT_NAME: getLocalDockerComposeProjectName() }
+        : {}),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {

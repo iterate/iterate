@@ -72,8 +72,15 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     };
   });
 
+  // Merge runtime metadata from provider (e.g., containerName for local-docker)
+  const mergedMetadata = {
+    ...metadata,
+    ...(provider.runtimeMetadata ?? {}),
+  };
+
   return {
     ...machine,
+    metadata: mergedMetadata,
     displayInfo: provider.displayInfo,
     commands: provider.commands,
     terminalOptions: provider.terminalOptions,

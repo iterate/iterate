@@ -122,39 +122,41 @@ function createProject(): ComposeProject {
 }
 
 /**
- * Wait for container setup to complete (ready file created by entry.sh)
+ * Wait for a pidnap-managed service to become healthy.
+ * Polls pidnap's services.waitHealthy API endpoint until the service is running.
+ * Handles connection failures gracefully (pidnap may not be up yet).
  */
-async function waitForContainerReady(containerId: string, timeoutMs = 180000): Promise<void> {
+async function waitForServiceHealthy(
+  containerId: string,
+  service: string,
+  timeoutMs = 180000,
+): Promise<void> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
     try {
+      const remainingMs = timeoutMs - (Date.now() - start);
       const result = await execInContainer(containerId, [
-        "sh",
-        "-c",
-        "test -f /tmp/.iterate-sandbox-ready && echo ready",
+        "curl",
+        "-sf",
+        "http://localhost:9876/rpc/services.waitHealthy",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        JSON.stringify({ service, timeoutMs: Math.min(30000, remainingMs) }),
       ]);
-      if (result.trim() === "ready") return;
-    } catch {
-      // File doesn't exist yet or container not ready
+      const response = JSON.parse(result);
+      if (response.healthy) return;
+      if (response.error === "terminal_state") {
+        throw new Error(`Service ${service} in terminal state: ${response.state}`);
+      }
+    } catch (e) {
+      // Connection refused (pidnap not up yet) or service not ready - retry
+      if (e instanceof Error && e.message.includes("terminal state")) throw e;
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error("Timeout waiting for container setup to complete");
-}
-
-async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const response = await fetch(`http://localhost:${port}/api/health`);
-      if (response.ok) return;
-    } catch {
-      // not ready
-    }
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw new Error("Timeout waiting for daemon to be ready");
+  throw new Error(`Timeout waiting for service ${service} to become healthy`);
 }
 
 function createDaemonTrpcClient(port: number) {
@@ -181,7 +183,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       project = createProject();
-      await waitForContainerReady(project.containerId);
+      await waitForServiceHealthy(project.containerId, "iterate-daemon");
     }, 300000);
 
     afterAll(() => {
@@ -331,7 +333,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       project = createProject();
-      await waitForContainerReady(project.containerId);
+      await waitForServiceHealthy(project.containerId, "iterate-daemon");
     }, 300000);
 
     afterAll(() => {
@@ -339,8 +341,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 30000);
 
     test("daemon accessible", async () => {
-      await waitForDaemonReady(project.port3000!);
-
       // Verify health endpoint from host
       const healthResponse = await fetch(`http://localhost:${project.port3000}/api/health`);
       expect(healthResponse.ok).toBe(true);
@@ -357,8 +357,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("PTY endpoint works", async () => {
-      await waitForDaemonReady(project.port3000!);
-
       // PTY endpoint exists
       const ptyResponse = await fetch(
         `http://localhost:${project.port3000}/api/pty/ws?cols=80&rows=24`,
@@ -367,7 +365,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
-      await waitForDaemonReady(project.port3000!);
       const baseUrl = `http://localhost:${project.port3000}`;
       const trpc = createDaemonTrpcClient(project.port3000!);
 
@@ -407,5 +404,63 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
     }, 210000);
+  });
+
+  // ============ Pidnap ============
+  describe("Pidnap", () => {
+    let project: ComposeProject;
+
+    beforeAll(async () => {
+      project = createProject();
+      await waitForServiceHealthy(project.containerId, "iterate-daemon");
+    }, 300000);
+
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
+    }, 30000);
+
+    test("services.waitHealthy returns success for running service with logs", async () => {
+      // iterate-daemon is already running (waited in beforeAll)
+      // Call pidnap's waitHealthy endpoint for iterate-daemon (should already be running)
+      const output = await execInContainer(project.containerId, [
+        "curl",
+        "-sf",
+        "http://localhost:9876/rpc/services.waitHealthy",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        '{"service":"iterate-daemon","timeoutMs":5000}',
+      ]);
+
+      const result = JSON.parse(output);
+      expect(result.healthy).toBe(true);
+      expect(result.state).toBe("running");
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(result.elapsedMs).toBeLessThan(5000);
+
+      // Logs should be an array of strings with actual content
+      expect(Array.isArray(result.logs)).toBe(true);
+      expect(result.logs.length).toBeGreaterThan(0);
+      expect(result.logs.every((line: unknown) => typeof line === "string")).toBe(true);
+
+      // Daemon logs should contain timestamp patterns (pidnap log format: [HH:MM:SS.mmm])
+      const logsJoined = result.logs.join("\n");
+      expect(logsJoined).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/);
+
+      // Should contain some daemon-related output (INFO/DEBUG level or server startup)
+      expect(logsJoined).toMatch(/INFO|DEBUG|listening|started|server/i);
+    }, 210000);
+
+    test("services.waitHealthy returns failure for non-existent service", async () => {
+      // Call pidnap's waitHealthy endpoint for a service that doesn't exist
+      const output = await execInContainer(project.containerId, [
+        "sh",
+        "-c",
+        'curl -s http://localhost:9876/rpc/services.waitHealthy -H "Content-Type: application/json" -d \'{"service":"nonexistent","timeoutMs":1000}\' || echo "CURL_FAILED"',
+      ]);
+
+      // Should contain error info (either in response or curl failure)
+      expect(output.toLowerCase()).toMatch(/not.?found|error|curl_failed/i);
+    }, 30000);
   });
 });
