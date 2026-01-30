@@ -48,7 +48,7 @@ services:
       # Mount host's .git directory (read-only) - container clones from this
       # Defaults to ./.git; alchemy.run.ts resolves worktrees to main .git dir
       - ${LOCAL_DOCKER_GIT_DIR:-./.git}:/home/iterate/.host-git:ro
-      # Cross-container cache: pnpm store + hashed node_modules (created by docker-compose-env.sh)
+      # Shared pnpm store - packages downloaded once, reused across all containers/worktrees
       - cross-container-cache:/home/iterate/.cross-container-cache
     environment:
       - ITERATE_CUSTOMER_REPO_PATH=/home/iterate/src/github.com/iterate/iterate

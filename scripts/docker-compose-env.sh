@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-# Ensure cross-container cache volume exists (idempotent)
-# Contains: pnpm-store/ and node-modules/<hash>/ directories
+# Ensure shared pnpm store volume exists (idempotent)
+# Packages are downloaded once and reused across all containers/worktrees
 docker volume create iterate-cross-container-cache >/dev/null 2>&1 || true
 
 # Find repo root (directory containing this script's parent)

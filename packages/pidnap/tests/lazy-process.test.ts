@@ -32,7 +32,7 @@ describe("LazyProcess", () => {
       expect(proc.state).toBe("running");
 
       // Wait for process to complete
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
       expect(proc.state).toBe("stopped");
     });
 
@@ -46,7 +46,7 @@ describe("LazyProcess", () => {
       await proc.start();
 
       // Wait for process to complete and output to be logged
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
 
       // Logger now uses withPrefix("OUT") for stdout
       expect(mockLogger.withPrefix).toHaveBeenCalled();
@@ -77,7 +77,7 @@ describe("LazyProcess", () => {
       await proc.start();
 
       // Wait for process to exit
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
 
       expect(proc.state).toBe("error");
       // Logger now uses withPrefix, so check the child logger was called
@@ -157,7 +157,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
       expect(proc.state).toBe("stopped");
 
       await proc.reset();
@@ -177,7 +177,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
       expect(proc.state).toBe("error");
 
       await proc.reset();
@@ -198,7 +198,7 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
       expect(proc.state).toBe("stopped");
     });
 
