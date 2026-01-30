@@ -16,6 +16,10 @@ ENV SANDBOX_OPENCODE_VERSION=1.1.41
 ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
+ENV SANDBOX_GO_VERSION=1.23.4
+
+# gogcli fork: mmkal:mmkal/26/01/28/--access-token
+ENV SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
 
 # === Build Args ===
 # SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
@@ -71,6 +75,23 @@ ENV PATH="/home/iterate/.npm-global/bin:$PATH"
 # Install bun (installs to ~/.bun)
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${SANDBOX_BUN_VERSION}"
 ENV PATH="/home/iterate/.bun/bin:$PATH"
+
+# Install Go (detect architecture at build time)
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then GO_ARCH="arm64"; else GO_ARCH="amd64"; fi && \
+    curl -fsSL "https://go.dev/dl/go${SANDBOX_GO_VERSION}.linux-${GO_ARCH}.tar.gz" | sudo tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:/home/iterate/go/bin:$PATH"
+ENV GOPATH="/home/iterate/go"
+
+# Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
+# Uses mmkal's fork with --access-token support for headless/proxy environments
+# Note: go build -o creates parent dirs automatically, but mkdir for clarity
+RUN mkdir -p /home/iterate/.local/bin && \
+    git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
+    cd /tmp/gogcli && \
+    git checkout ${SANDBOX_GOGCLI_REF} && \
+    go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
+    rm -rf /tmp/gogcli
 
 # === Agent packages (npm, userspace) ===
 RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}

@@ -13,10 +13,12 @@ const isAgent =
   !!process.env.OPENCODE_SESSION ||
   !!process.env.CLAUDE_CODE;
 
+/** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["prettier --write --ignore-unknown"],
 };
 
+/** @type {import('lint-staged').Configuration} */
 const agentConfig = {
   "*": [
     ...(baseConfig["*"] || []),
