@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import dedent from "dedent";
 import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
@@ -118,4 +121,56 @@ export const toolsRouter = t.router({
         };
       }),
   }),
+  listSecrets: t.procedure
+    .meta({ description: "List available secrets from ~/.iterate/.env" })
+    .input(z.object({}).optional())
+    .query(() => {
+      const envFilePath = join(homedir(), ".iterate/.env");
+      let content: string;
+      try {
+        content = readFileSync(envFilePath, "utf-8");
+      } catch (error) {
+        return {
+          success: false,
+          error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
+          secrets: [],
+        };
+      }
+
+      const lines = content.split("\n");
+      const secrets: Array<{
+        envVarName: string;
+        secretKey: string;
+        description?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        // Skip empty lines and comment-only lines
+        if (!line || line.startsWith("#")) continue;
+
+        // Match lines like: ITERATE_PROXY_SECRET_*="getIterateSecret({secretKey: 'key.name'})"
+        const match = line.match(
+          /^(ITERATE_PROXY_SECRET_[A-Z_]+)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
+        );
+        if (match) {
+          const [, envVarName, secretKey] = match;
+          // Look for description in previous line (comment)
+          let description: string | undefined;
+          if (i > 0) {
+            const prevLine = lines[i - 1]?.trim();
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("# =")) {
+              description = prevLine.replace(/^#\s*/, "");
+            }
+          }
+          secrets.push({ envVarName, secretKey, description });
+        }
+      }
+
+      return {
+        success: true,
+        secrets,
+        envFilePath,
+      };
+    }),
 });

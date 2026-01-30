@@ -32,6 +32,7 @@ export const workerContract = oc.router({
     getEnv: oc.input(z.object({ machineId: z.string() })).output(
       z.object({
         envVars: z.record(z.string(), z.string()),
+        envVarDescriptions: z.record(z.string(), z.string()).optional(), // Optional descriptions for env vars (used as comments in .env)
         repos: z.array(
           z.object({
             url: z.string(),

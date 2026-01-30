@@ -1,41 +1,32 @@
 import { z } from "zod/v4";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectEnvVar } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
+import { getUnifiedEnvVars } from "../../utils/env-vars.ts";
 
 export const envVarRouter = router({
-  list: projectProtectedProcedure
-    .input(
-      z.object({
-        machineId: z.string().optional(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const envVars = await ctx.db.query.projectEnvVar.findMany({
-        where: input.machineId
-          ? and(
-              eq(projectEnvVar.projectId, ctx.project.id),
-              eq(projectEnvVar.machineId, input.machineId),
-            )
-          : eq(projectEnvVar.projectId, ctx.project.id),
-        orderBy: (vars, { asc }) => [asc(vars.key)],
-      });
+  /**
+   * List all environment variables for a project.
+   * Returns a unified list including global vars, connection vars, and user-defined vars.
+   */
+  list: projectProtectedProcedure.query(async ({ ctx }) => {
+    const envVars = await getUnifiedEnvVars(ctx.db, ctx.project.id);
 
-      // Note: env vars are stored plain-text now. Secrets go in the secret table.
-      return envVars.map((v) => ({
-        id: v.id,
-        key: v.key,
-        machineId: v.machineId,
-        type: v.type,
-        value: v.value,
-        createdAt: v.createdAt,
-        updatedAt: v.updatedAt,
-      }));
-    }),
+    // Transform to frontend format
+    return envVars.map((v) => ({
+      key: v.key,
+      value: v.value,
+      isSecret: v.isSecret,
+      description: v.description,
+      egressProxyRule: v.egressProxyRule,
+      source: v.source,
+      createdAt: v.createdAt,
+    }));
+  }),
 
   set: projectProtectedMutation
     .input(
@@ -49,15 +40,17 @@ export const envVarRouter = router({
               "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
           }),
         value: z.string(),
+        // TODO: remove machineId - we're no longer supporting machine-specific env vars
         machineId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // TODO: remove machineId support entirely
       const existing = await ctx.db.query.projectEnvVar.findFirst({
         where: and(
           eq(projectEnvVar.projectId, ctx.project.id),
           eq(projectEnvVar.key, input.key),
-          input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
+          isNull(projectEnvVar.machineId),
         ),
       });
 
@@ -79,7 +72,6 @@ export const envVarRouter = router({
         return {
           id: updated.id,
           key: updated.key,
-          machineId: updated.machineId,
           value: updated.value,
           createdAt: updated.createdAt,
           updatedAt: updated.updatedAt,
@@ -90,7 +82,7 @@ export const envVarRouter = router({
         .insert(projectEnvVar)
         .values({
           projectId: ctx.project.id,
-          machineId: input.machineId,
+          machineId: null, // Always project-level now
           key: input.key,
           value: input.value,
         })
@@ -114,7 +106,6 @@ export const envVarRouter = router({
       return {
         id: created.id,
         key: created.key,
-        machineId: created.machineId,
         value: created.value,
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
@@ -125,15 +116,17 @@ export const envVarRouter = router({
     .input(
       z.object({
         key: z.string(),
+        // TODO: remove machineId - we're no longer supporting machine-specific env vars
         machineId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // TODO: remove machineId support entirely
       const existing = await ctx.db.query.projectEnvVar.findFirst({
         where: and(
           eq(projectEnvVar.projectId, ctx.project.id),
           eq(projectEnvVar.key, input.key),
-          input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
+          isNull(projectEnvVar.machineId),
         ),
       });
 
@@ -151,14 +144,7 @@ export const envVarRouter = router({
         });
       }
 
-      await ctx.db
-        .delete(projectEnvVar)
-        .where(
-          and(
-            eq(projectEnvVar.id, existing.id),
-            input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
-          ),
-        );
+      await ctx.db.delete(projectEnvVar).where(eq(projectEnvVar.id, existing.id));
 
       // Poke running machines to refresh their env vars
       waitUntil(

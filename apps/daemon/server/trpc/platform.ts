@@ -26,7 +26,10 @@ const clonedReposStatus: Map<
  * 1. Replaces vars in memory and process.env (removes stale keys)
  * 2. Writes them to ~/.iterate/.env file in dotenv format for pidnap
  */
-export async function applyEnvVars(vars: Record<string, string>): Promise<{
+export async function applyEnvVars(
+  vars: Record<string, string>,
+  descriptions?: Record<string, string>,
+): Promise<{
   injectedCount: number;
   removedCount: number;
   envFilePath: string;
@@ -89,7 +92,15 @@ NODE_USE_ENV_PROXY=1
     envFileHeader +
     Object.entries(platformEnvVars)
       // Double-quoted values in dotenv format. Escape backslashes and double quotes.
-      .map(([key, value]) => `${key}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
+      .map(([key, value]) => {
+        const escapedValue = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        const line = `${key}="${escapedValue}"`;
+        // Add description as comment before env var if available
+        if (descriptions?.[key]) {
+          return `# ${descriptions[key]}\n${line}`;
+        }
+        return line;
+      })
       .join("\n");
 
   // Check if content changed before writing

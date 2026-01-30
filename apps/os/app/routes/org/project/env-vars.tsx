@@ -1,302 +1,605 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
-import { SlidersHorizontal, Trash2, Globe, Server } from "lucide-react";
+import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { SlidersHorizontal, Plus, MoreHorizontal, Pencil, Trash2, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
-import { Badge } from "../../../components/ui/badge.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-  FieldDescription,
-} from "../../../components/ui/field.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { Textarea } from "../../../components/ui/textarea.tsx";
+import { Checkbox } from "../../../components/ui/checkbox.tsx";
+import { Label } from "../../../components/ui/label.tsx";
+import { HeaderActions } from "../../../components/header-actions.tsx";
+import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../../components/ui/select.tsx";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "../../../components/ui/sheet.tsx";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "../../../components/ui/table.tsx";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../../components/ui/dialog.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu.tsx";
+import { Alert, AlertDescription } from "../../../components/ui/alert.tsx";
+import { getSecretHint } from "../../../lib/secret-hint.ts";
+
+const Search = z.object({
+  add: z.boolean().optional(),
+});
 
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
 )({
+  validateSearch: Search,
   component: ProjectEnvVarsPage,
 });
+
+type EnvVarSource =
+  | { type: "global"; description: string }
+  | { type: "connection"; provider: "github" | "slack" | "google" }
+  | { type: "user"; envVarId: string };
+
+type EnvVar = {
+  key: string;
+  value: string;
+  isSecret: boolean;
+  description: string | null;
+  egressProxyRule: string | null;
+  source: EnvVarSource;
+  createdAt: Date | null;
+};
 
 function ProjectEnvVarsPage() {
   const params = useParams({
     from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
   });
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [selectedMachineId, setSelectedMachineId] = useState<string | undefined>(undefined);
+  const queryClient = useQueryClient();
 
-  const { data: envVars } = useSuspenseQuery(
-    trpc.envVar.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
-  );
+  // Sheet state
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
+  const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
+  const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
 
-  const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
-    }),
-  );
+  // Info dialogs for non-editable sources
+  const [infoDialogEnvVar, setInfoDialogEnvVar] = useState<EnvVar | null>(null);
 
-  const globalEnvVars = envVars.filter((v) => !v.machineId);
-  const machineEnvVarsMap = new Map<string, typeof envVars>();
-  for (const v of envVars) {
-    if (v.machineId) {
-      const existing = machineEnvVarsMap.get(v.machineId) ?? [];
-      existing.push(v);
-      machineEnvVarsMap.set(v.machineId, existing);
+  // Form state
+  const [formKey, setFormKey] = useState("");
+  const [formValue, setFormValue] = useState("");
+  const [formIsSecret, setFormIsSecret] = useState(false);
+  const [secretHintDismissed, setSecretHintDismissed] = useState(false);
+
+  const envVarListOptions = trpc.envVar.list.queryOptions({
+    organizationSlug: params.organizationSlug,
+    projectSlug: params.projectSlug,
+  });
+
+  const { data: envVars } = useSuspenseQuery(envVarListOptions);
+
+  // Find which keys are overridden (appear multiple times, later one wins)
+  const overriddenKeys = new Set<string>();
+  const seenKeys = new Map<string, number>();
+  envVars.forEach((v, idx) => {
+    if (seenKeys.has(v.key)) {
+      overriddenKeys.add(v.key);
     }
-  }
+    seenKeys.set(v.key, idx);
+  });
 
-  const getMachineName = (machineId: string) => {
-    const machine = machines.find((m) => m.id === machineId);
-    return machine?.name ?? machineId;
+  // Which specific entries are overridden (not the overriding ones)
+  const isOverridden = (envVar: EnvVar, idx: number) => {
+    if (!overriddenKeys.has(envVar.key)) return false;
+    const lastIdx = seenKeys.get(envVar.key);
+    return idx !== lastIdx;
   };
 
   const setEnvVar = useMutation({
-    mutationFn: async (input: { key: string; value: string; machineId?: string }) => {
+    mutationFn: async (input: { key: string; value: string }) => {
       return trpcClient.envVar.set.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
-        machineId: input.machineId,
       });
     },
     onSuccess: () => {
-      setKey("");
-      setValue("");
+      queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
+      resetForm();
+      setAddSheetOpen(false);
+      setEditingEnvVar(null);
       toast.success("Environment variable saved!");
     },
     onError: (error) => {
-      toast.error("Failed to save environment variable: " + error.message);
+      toast.error("Failed to save: " + error.message);
+    },
+  });
+
+  const createSecret = useMutation({
+    mutationFn: async (input: { key: string; value: string }) => {
+      return trpcClient.secret.create.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        key: input.key,
+        value: input.value,
+      });
+    },
+  });
+
+  const updateSecret = useMutation({
+    mutationFn: async (input: { key: string; value: string }) => {
+      return trpcClient.secret.updateByKey.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        key: input.key,
+        value: input.value,
+      });
     },
   });
 
   const deleteEnvVar = useMutation({
-    mutationFn: async (input: { key: string; machineId?: string | null }) => {
+    mutationFn: async (key: string) => {
       return trpcClient.envVar.delete.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
-        key: input.key,
-        machineId: input.machineId ?? undefined,
+        key,
       });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
+      setDeleteConfirmKey(null);
       toast.success("Environment variable deleted!");
     },
     onError: (error) => {
-      toast.error("Failed to delete environment variable: " + error.message);
+      toast.error("Failed to delete: " + error.message);
     },
   });
 
-  const handleSubmit = (e: FormEvent) => {
+  const resetForm = () => {
+    setFormKey("");
+    setFormValue("");
+    setFormIsSecret(false);
+    setSecretHintDismissed(false);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setEditingEnvVar(null);
+    setAddSheetOpen(true);
+  };
+
+  const handleOpenEdit = (envVar: EnvVar) => {
+    if (envVar.source.type === "global" || envVar.source.type === "connection") {
+      setInfoDialogEnvVar(envVar);
+      return;
+    }
+    // User-defined - open edit sheet
+    setFormKey(envVar.key);
+    // If it's a secret, don't show the magic string - show empty for new value entry
+    setFormValue(envVar.isSecret ? "" : envVar.value);
+    setFormIsSecret(envVar.isSecret);
+    setEditingEnvVar(envVar);
+    setAddSheetOpen(true);
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (key.trim() && value.trim()) {
-      setEnvVar.mutate({
-        key: key.trim(),
-        value: value.trim(),
-        machineId: selectedMachineId,
-      });
+    const key = formKey.trim();
+    const value = formValue.trim();
+    if (!key || !value) return;
+
+    // Check if this key will override an existing one
+    const existingNonUser = envVars.find((v) => v.key === key && v.source.type !== "user");
+    if (existingNonUser && !editingEnvVar) {
+      // Show info toast but continue
+      toast.info(
+        `This will override the ${existingNonUser.source.type === "global" ? "global" : existingNonUser.source.type === "connection" ? (existingNonUser.source as { type: "connection"; provider: string }).provider : ""} env var "${key}"`,
+      );
+    }
+
+    if (formIsSecret) {
+      // Create/update secret, then env var with magic string
+      const secretKey = `env.${key}`;
+      try {
+        if (editingEnvVar) {
+          // Update existing secret
+          await updateSecret.mutateAsync({ key: secretKey, value });
+        } else {
+          await createSecret.mutateAsync({ key: secretKey, value });
+        }
+        const magicValue = `getIterateSecret({secretKey: '${secretKey}'})`;
+        await setEnvVar.mutateAsync({ key, value: magicValue });
+      } catch (error) {
+        // If secret already exists, try updating it
+        if (error instanceof Error && error.message.includes("already exists")) {
+          try {
+            await updateSecret.mutateAsync({ key: secretKey, value });
+            const magicValue = `getIterateSecret({secretKey: '${secretKey}'})`;
+            await setEnvVar.mutateAsync({ key, value: magicValue });
+          } catch {
+            toast.error("Failed to update secret");
+          }
+        } else {
+          toast.error(
+            "Failed to create secret: " +
+              (error instanceof Error ? error.message : "Unknown error"),
+          );
+        }
+      }
+    } else {
+      setEnvVar.mutate({ key, value });
     }
   };
 
-  const hasAnyEnvVars = envVars.length > 0;
+  const getSourceLabel = (source: EnvVarSource): string => {
+    switch (source.type) {
+      case "global":
+        return "Global";
+      case "connection":
+        return `${source.provider.charAt(0).toUpperCase() + source.provider.slice(1)} connection`;
+      case "user":
+        return "Custom";
+    }
+  };
 
-  return (
-    <div className="p-4 space-y-6">
-      <form onSubmit={handleSubmit}>
-        <FieldGroup>
-          <FieldSet>
-            <Field>
-              <FieldLabel htmlFor="env-key">Key</FieldLabel>
+  const isPending = setEnvVar.isPending || createSecret.isPending;
+
+  const addSheet = (
+    <Sheet open={addSheetOpen} onOpenChange={setAddSheetOpen}>
+      <SheetContent>
+        <form onSubmit={handleSubmit} className="flex flex-col h-full">
+          <SheetHeader>
+            <SheetTitle>
+              {editingEnvVar ? "Edit Environment Variable" : "Add Environment Variable"}
+            </SheetTitle>
+            <SheetDescription>
+              {editingEnvVar
+                ? "Update this environment variable."
+                : "Add a new environment variable to your project."}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 space-y-4 p-4">
+            <div className="space-y-2">
+              <Label htmlFor="env-key">Key</Label>
               <Input
                 id="env-key"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder="API_KEY"
-                disabled={setEnvVar.isPending}
+                value={formKey}
+                onChange={(e) => setFormKey(e.target.value.toUpperCase())}
+                placeholder="MY_API_KEY"
+                disabled={isPending || !!editingEnvVar}
                 pattern="[A-Z_][A-Z0-9_]*"
-                title="Uppercase letters, numbers, and underscores only, starting with a letter or underscore"
-                autoFocus
+                title="Uppercase letters, numbers, and underscores"
+                autoFocus={!editingEnvVar}
+                autoComplete="off"
+                data-1p-ignore
               />
-              <FieldDescription>
-                Uppercase letters, numbers, and underscores only (e.g., API_KEY, DATABASE_URL)
-              </FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="env-value">Value</FieldLabel>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="env-value">Value</Label>
               <Textarea
                 id="env-value"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                placeholder="Enter the secret value"
-                disabled={setEnvVar.isPending}
-                rows={3}
+                value={formValue}
+                onChange={(e) => setFormValue(e.target.value)}
+                placeholder="Enter the value"
+                disabled={isPending}
+                rows={4}
+                className="font-mono text-sm"
+                autoFocus={!!editingEnvVar}
               />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="env-scope">Scope</FieldLabel>
-              <Select
-                value={selectedMachineId ?? "global"}
-                onValueChange={(v) => setSelectedMachineId(v === "global" ? undefined : v)}
-                disabled={setEnvVar.isPending}
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="is-secret"
+                checked={formIsSecret}
+                onCheckedChange={(checked) => setFormIsSecret(checked === true)}
+                disabled={isPending || (editingEnvVar?.isSecret ?? false)}
+              />
+              <Label
+                htmlFor="is-secret"
+                className={`text-sm font-normal ${editingEnvVar?.isSecret ? "" : "cursor-pointer"}`}
               >
-                <SelectTrigger id="env-scope" className="w-full">
-                  <SelectValue placeholder="Select scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="global">
-                    <Globe className="h-4 w-4" />
-                    Global (all machines)
-                  </SelectItem>
-                  {machines.map((machine) => (
-                    <SelectItem key={machine.id} value={machine.id}>
-                      <Server className="h-4 w-4" />
-                      {machine.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                Global variables are available to all machines. Machine-specific variables override
-                global ones.
-              </FieldDescription>
-            </Field>
-          </FieldSet>
-          <Field orientation="horizontal">
-            <Button type="submit" disabled={!key.trim() || !value.trim() || setEnvVar.isPending}>
-              {setEnvVar.isPending ? "Saving..." : "Save"}
+                Store as secret (encrypted, accessed via egress proxy)
+              </Label>
+            </div>
+            {formIsSecret ? (
+              <Alert>
+                <Lock className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  {editingEnvVar ? (
+                    "Enter a new value to update the encrypted secret."
+                  ) : (
+                    <>
+                      The value will be stored encrypted. The env var will be set to{" "}
+                      <code className="bg-muted px-1 rounded">
+                        getIterateSecret({`{secretKey: 'env.${formKey || "YOUR_KEY"}'}`})
+                      </code>
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <SecretHintAlert
+                formKey={formKey}
+                formValue={formValue}
+                dismissed={secretHintDismissed}
+                onDismiss={() => setSecretHintDismissed(true)}
+              />
+            )}
+          </div>
+          <SheetFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAddSheetOpen(false)}
+              disabled={isPending}
+            >
+              Cancel
             </Button>
-          </Field>
-        </FieldGroup>
-      </form>
+            <Button
+              type="submit"
+              disabled={
+                !formKey.trim() ||
+                !formValue.trim() ||
+                isPending ||
+                hasBlockingSecretHint(formKey, formValue, formIsSecret, secretHintDismissed)
+              }
+            >
+              {isPending ? "Saving..." : editingEnvVar ? "Update" : "Add"}
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
 
-      {hasAnyEnvVars ? (
-        <div className="space-y-8">
-          {globalEnvVars.length > 0 && (
-            <EnvVarSection
-              title="Global"
-              icon={<Globe className="h-4 w-4" />}
-              envVars={globalEnvVars}
-              onDelete={(key) => deleteEnvVar.mutate({ key, machineId: null })}
-              isDeleting={deleteEnvVar.isPending}
-            />
+  const infoDialogContent = infoDialogEnvVar && (
+    <Dialog open={!!infoDialogEnvVar} onOpenChange={() => setInfoDialogEnvVar(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {infoDialogEnvVar.source.type === "global"
+              ? "Global Environment Variable"
+              : "Connection Environment Variable"}
+          </DialogTitle>
+          <DialogDescription>
+            {infoDialogEnvVar.source.type === "global"
+              ? "This is a global env var provided by Iterate and can't be edited or removed. You can override it by adding another env var with the same name."
+              : `This env var comes from your ${(infoDialogEnvVar.source as { type: "connection"; provider: string }).provider} connection. You can remove it by disconnecting, or override it by adding another env var with the same name.`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-4">
+          <div>
+            <div className="text-sm font-medium mb-1">Name</div>
+            <code className="text-sm">{infoDialogEnvVar.key}</code>
+          </div>
+          <div>
+            <div className="text-sm font-medium mb-1">Value</div>
+            <code className="text-sm text-muted-foreground break-all">
+              {infoDialogEnvVar.value}
+            </code>
+          </div>
+          {infoDialogEnvVar.egressProxyRule && (
+            <div>
+              <div className="text-sm font-medium mb-1">Egress Proxy Rule</div>
+              <code className="text-sm text-muted-foreground">
+                {infoDialogEnvVar.egressProxyRule}
+              </code>
+            </div>
           )}
-
-          {Array.from(machineEnvVarsMap.entries()).map(([machineId, vars]) => (
-            <EnvVarSection
-              key={machineId}
-              title={getMachineName(machineId)}
-              icon={<Server className="h-4 w-4" />}
-              envVars={vars}
-              onDelete={(key) => deleteEnvVar.mutate({ key, machineId })}
-              isDeleting={deleteEnvVar.isPending}
-            />
-          ))}
         </div>
-      ) : (
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setInfoDialogEnvVar(null)}>
+            Close
+          </Button>
+          <Button
+            onClick={() => {
+              setFormKey(infoDialogEnvVar.key);
+              setFormValue("");
+              setFormIsSecret(false);
+              setEditingEnvVar(null);
+              setAddSheetOpen(true);
+              setInfoDialogEnvVar(null);
+            }}
+          >
+            Override with custom value
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
+  if (envVars.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        {addSheet}
         <EmptyState
           icon={<SlidersHorizontal className="h-12 w-12" />}
           title="No environment variables"
-          description="Store project secrets and configuration here."
+          description="Environment variables will be available to your machines."
+          action={
+            <Button onClick={handleOpenAdd}>
+              <Plus className="h-4 w-4" />
+              Add Environment Variable
+            </Button>
+          }
         />
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4">
+      <HeaderActions>
+        <Button size="sm" onClick={handleOpenAdd}>
+          <Plus className="h-4 w-4" />
+          <span className="hidden sm:inline">Add Environment Variable</span>
+        </Button>
+      </HeaderActions>
+
+      {addSheet}
+      {infoDialogContent}
+
+      <ConfirmDialog
+        open={!!deleteConfirmKey}
+        onOpenChange={(open) => !open && setDeleteConfirmKey(null)}
+        title="Delete environment variable?"
+        description={`This will permanently delete "${deleteConfirmKey}". This action cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={() => deleteConfirmKey && deleteEnvVar.mutate(deleteConfirmKey)}
+        destructive
+      />
+
+      {/* Explainer */}
+      <p className="text-sm text-muted-foreground mb-4">
+        Environment variables are available to your machines. Secret values use{" "}
+        <code className="text-xs bg-muted px-1 rounded">getIterateSecret(...)</code> which the
+        egress proxy resolves at request time, so secrets are not visible to our agent.
+      </p>
+
+      {/* Table-like layout */}
+      <div className="border rounded-lg divide-y">
+        {envVars.map((envVar, idx) => {
+          const overridden = isOverridden(envVar, idx);
+          const isUserDefined = envVar.source.type === "user";
+          const isNonEditable = !isUserDefined;
+
+          return (
+            <div
+              key={`${envVar.key}-${idx}`}
+              className={`flex items-center px-4 py-3 gap-4 ${isNonEditable ? "opacity-70" : ""}`}
+            >
+              {/* Left content */}
+              <div className="flex-1 min-w-0">
+                {/* Top row: name | value */}
+                <div className="flex items-center gap-4">
+                  {/* Name column - fixed width */}
+                  <span
+                    className={`w-56 shrink-0 font-mono text-sm truncate ${overridden ? "text-muted-foreground" : ""}`}
+                    style={overridden ? { textDecoration: "line-through" } : undefined}
+                    title={envVar.key}
+                  >
+                    {envVar.key}
+                  </span>
+
+                  {/* Value column - takes remaining space */}
+                  <span
+                    className="flex-1 min-w-0 font-mono text-sm text-muted-foreground truncate"
+                    style={overridden ? { textDecoration: "line-through" } : undefined}
+                    title={envVar.value}
+                  >
+                    {envVar.value}
+                  </span>
+                </div>
+
+                {/* Second row: source info */}
+                <div className="flex items-center gap-4 mt-0.5">
+                  <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
+                    {envVar.isSecret && <Lock className="h-3 w-3" />}
+                    <span>{getSourceLabel(envVar.source)}</span>
+                  </div>
+                  {envVar.description && (
+                    <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+                      {envVar.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Menu button - vertically centered */}
+              {isUserDefined ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleOpenEdit(envVar)}>
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => setDeleteConfirmKey(envVar.key)}
+                      className="text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0 h-8 w-8"
+                  onClick={() => handleOpenEdit(envVar)}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-function EnvVarSection({
-  title,
-  icon,
-  envVars,
-  onDelete,
-  isDeleting,
+/** Shows a hint when the value looks like it should be a secret */
+function SecretHintAlert({
+  formKey,
+  formValue,
+  dismissed,
+  onDismiss,
 }: {
-  title: string;
-  icon: React.ReactNode;
-  envVars: Array<{
-    id: string;
-    key: string;
-    type: "user" | "system" | null;
-    value: string;
-    updatedAt: Date;
-  }>;
-  onDelete: (key: string) => void;
-  isDeleting: boolean;
+  formKey: string;
+  formValue: string;
+  dismissed: boolean;
+  onDismiss: () => void;
 }) {
+  const hint = getSecretHint(formKey, formValue);
+  if (!hint.looksLikeSecret || dismissed) return null;
+
+  const messages: Record<NonNullable<typeof hint.reason>, string> = {
+    "key-name": "The key name suggests this might be a secret.",
+    "value-pattern": "The value looks like an API key or token.",
+    "high-entropy": "The value has high entropy (looks random).",
+  };
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        {icon}
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <Badge variant="secondary">{envVars.length}</Badge>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Key</TableHead>
-            <TableHead>Value</TableHead>
-            <TableHead>Last updated</TableHead>
-            <TableHead className="w-[50px]"></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {envVars.map((envVar) => (
-            <TableRow key={envVar.id}>
-              <TableCell className="font-mono">
-                <span className="flex items-center gap-2">
-                  {envVar.key}
-                  {envVar.type === "system" && (
-                    <Badge variant="outline" className="text-xs">
-                      System
-                    </Badge>
-                  )}
-                </span>
-              </TableCell>
-              <TableCell className="font-mono text-muted-foreground">{envVar.value}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {new Date(envVar.updatedAt).toLocaleDateString()}
-              </TableCell>
-              <TableCell>
-                {envVar.type !== "system" && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onDelete(envVar.key)}
-                    disabled={isDeleting}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+    <Alert variant="destructive">
+      <Lock className="h-4 w-4" />
+      <AlertDescription className="text-xs flex items-center justify-between gap-2">
+        <span>{messages[hint.reason!]} Check "Store as secret" or dismiss this warning.</span>
+        <Button variant="outline" size="sm" className="h-6 text-xs shrink-0" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </AlertDescription>
+    </Alert>
   );
+}
+
+/** Check if the secret hint warning is blocking submission */
+function hasBlockingSecretHint(
+  formKey: string,
+  formValue: string,
+  formIsSecret: boolean,
+  dismissed: boolean,
+): boolean {
+  if (formIsSecret || dismissed) return false;
+  const hint = getSecretHint(formKey, formValue);
+  return hint.looksLikeSecret;
 }

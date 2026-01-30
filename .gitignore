@@ -53,3 +53,5 @@ playwriter-screenshot-*
 
 # PR video recordings
 pr-videos/
+*.log
+*.log
