@@ -14,7 +14,8 @@ import {
   getFullReauthUrl,
   CONNECTORS,
 } from "../services/connectors.ts";
-import { parseMagicString, MAGIC_STRING_PATTERN, matchesEgressRule } from "./egress-proxy.ts";
+import { parseMagicString, MAGIC_STRING_PATTERN } from "./egress-proxy.ts";
+import { matchesEgressRule } from "./egress-rules.ts";
 
 // Test the magic string parsing and secret lookup logic
 // We test these as pure functions without DB/worker dependencies
@@ -23,30 +24,38 @@ describe("Egress Proxy - Magic String Parsing", () => {
   test("parses basic magic string", () => {
     const input = 'getIterateSecret({secretKey: "openai_api_key"})';
     const result = parseMagicString(input);
-    expect(result).toEqual({ secretKey: "openai_api_key" });
+    expect(result).toMatchObject({ secretKey: "openai_api_key", secretScope: "openai_api_key" });
   });
 
   test("parses magic string with userId", () => {
     const input = 'getIterateSecret({secretKey: "gmail.access_token", userId: "usr_123"})';
     const result = parseMagicString(input);
-    expect(result).toEqual({ secretKey: "gmail.access_token", userId: "usr_123" });
+    expect(result).toMatchObject({
+      secretKey: "gmail.access_token",
+      userId: "usr_123",
+      secretScope: "gmail",
+    });
   });
 
   test("parses magic string with all params", () => {
     const input =
       'getIterateSecret({secretKey: "github.token", machineId: "mach_abc", userId: "usr_456"})';
     const result = parseMagicString(input);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       secretKey: "github.token",
       machineId: "mach_abc",
       userId: "usr_456",
+      secretScope: "github",
     });
   });
 
   test("handles single quotes", () => {
     const input = "getIterateSecret({secretKey: 'anthropic_api_key'})";
     const result = parseMagicString(input);
-    expect(result).toEqual({ secretKey: "anthropic_api_key" });
+    expect(result).toMatchObject({
+      secretKey: "anthropic_api_key",
+      secretScope: "anthropic_api_key",
+    });
   });
 
   test("requires quotes around values (JSON5 allows unquoted keys, not values)", () => {
@@ -62,8 +71,15 @@ describe("Egress Proxy - Magic String Parsing", () => {
       'Bearer getIterateSecret({secretKey: "key1"}) and also getIterateSecret({secretKey: "key2", userId: "usr_1"})';
     const matches = [...input.matchAll(MAGIC_STRING_PATTERN)];
     expect(matches).toHaveLength(2);
-    expect(parseMagicString(matches[0][0])).toEqual({ secretKey: "key1" });
-    expect(parseMagicString(matches[1][0])).toEqual({ secretKey: "key2", userId: "usr_1" });
+    expect(parseMagicString(matches[0][0])).toMatchObject({
+      secretKey: "key1",
+      secretScope: "key1",
+    });
+    expect(parseMagicString(matches[1][0])).toMatchObject({
+      secretKey: "key2",
+      userId: "usr_1",
+      secretScope: "key2",
+    });
   });
 
   test("returns null for invalid format", () => {

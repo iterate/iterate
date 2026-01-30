@@ -1,0 +1,1 @@
+../.config/opencode/EMAIL.md

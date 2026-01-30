@@ -1,4 +1,4 @@
-import { useState, Suspense, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { KeyRound, Copy, CheckCheck } from "lucide-react";
@@ -24,27 +24,11 @@ import {
   CardHeader,
   CardTitle,
 } from "../../../components/ui/card.tsx";
-import { Spinner } from "../../../components/ui/spinner.tsx";
-
 export const Route = createFileRoute(
   "/_auth/orgs/$organizationSlug/projects/$projectSlug/access-tokens",
 )({
-  component: ProjectAccessTokensRoute,
+  component: ProjectAccessTokensPage,
 });
-
-function ProjectAccessTokensRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
-      <ProjectAccessTokensPage />
-    </Suspense>
-  );
-}
 
 function ProjectAccessTokensPage() {
   const params = useParams({

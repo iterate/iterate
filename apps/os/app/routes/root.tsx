@@ -1,5 +1,4 @@
 import {
-  Suspense,
   useEffect,
   Component,
   type PropsWithChildren,
@@ -170,18 +169,13 @@ export const Route = createRootRouteWithContext<TanstackRouterContext>()({
 function RootComponent() {
   useRealtimePusher();
 
+  // Note: wrapInSuspense: true handles Suspense boundary at the route level,
+  // so we don't need a manual Suspense wrapper here. The router's
+  // defaultPendingComponent handles loading states during route transitions.
   return (
     <RootDocument>
       <PostHogErrorBoundary fallback={<AppErrorFallback />}>
-        <Suspense
-          fallback={
-            <div className="flex min-h-screen items-center justify-center">
-              <div className="text-muted-foreground">Loading...</div>
-            </div>
-          }
-        >
-          <Outlet />
-        </Suspense>
+        <Outlet />
       </PostHogErrorBoundary>
     </RootDocument>
   );

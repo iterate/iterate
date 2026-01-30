@@ -1,4 +1,4 @@
-import { useState, type FormEvent, Suspense } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -32,18 +32,8 @@ import {
 } from "../../components/ui/dialog.tsx";
 
 export const Route = createFileRoute("/_auth/user/settings")({
-  component: UserSettingsRoute,
+  component: UserSettingsPage,
 });
-
-function UserSettingsRoute() {
-  return (
-    <CenteredLayout>
-      <Suspense fallback={<div className="text-muted-foreground">Loading...</div>}>
-        <UserSettingsPage />
-      </Suspense>
-    </CenteredLayout>
-  );
-}
 
 function UserSettingsPage() {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
@@ -91,70 +81,76 @@ function UserSettingsPage() {
   });
 
   if (!user) {
-    return <div className="text-muted-foreground">User not found</div>;
+    return (
+      <CenteredLayout>
+        <div className="text-muted-foreground">User not found</div>
+      </CenteredLayout>
+    );
   }
 
   return (
-    <div className="w-full max-w-md space-y-8">
-      <UserSettingsForm
-        key={user.id}
-        user={{ id: user.id, name: user.name, email: user.email }}
-        isSaving={updateUser.isPending}
-        onSubmit={(name) => updateUser.mutate(name)}
-      />
+    <CenteredLayout>
+      <div className="w-full max-w-md space-y-8">
+        <UserSettingsForm
+          key={user.id}
+          user={{ id: user.id, name: user.name, email: user.email }}
+          isSaving={updateUser.isPending}
+          onSubmit={(name) => updateUser.mutate(name)}
+        />
 
-      {pendingInvites && pendingInvites.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Pending invites</h2>
-          <div className="space-y-3">
-            {pendingInvites.map((invite) => (
-              <div
-                key={invite.id}
-                className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <Mail className="h-5 w-5 text-muted-foreground shrink-0" />
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{invite.organization.name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      Invited by {invite.invitedBy.name} as {invite.role}
+        {pendingInvites && pendingInvites.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Pending invites</h2>
+            <div className="space-y-3">
+              {pendingInvites.map((invite) => (
+                <div
+                  key={invite.id}
+                  className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-card"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Mail className="h-5 w-5 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{invite.organization.name}</div>
+                      <div className="text-sm text-muted-foreground">
+                        Invited by {invite.invitedBy.name} as {invite.role}
+                      </div>
                     </div>
                   </div>
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      onClick={() => acceptInvite.mutate(invite.id)}
+                      disabled={acceptInvite.isPending || declineInvite.isPending}
+                    >
+                      <Check className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => declineInvite.mutate(invite.id)}
+                      disabled={acceptInvite.isPending || declineInvite.isPending}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    onClick={() => acceptInvite.mutate(invite.id)}
-                    disabled={acceptInvite.isPending || declineInvite.isPending}
-                  >
-                    <Check className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => declineInvite.mutate(invite.id)}
-                    disabled={acceptInvite.isPending || declineInvite.isPending}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {memberships && memberships.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">Organizations</h2>
-          <div className="space-y-3">
-            {memberships.map((membership) => (
-              <OrgMembershipCard key={membership.id} membership={membership} />
-            ))}
+        {memberships && memberships.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Organizations</h2>
+            <div className="space-y-3">
+              {memberships.map((membership) => (
+                <OrgMembershipCard key={membership.id} membership={membership} />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </CenteredLayout>
   );
 }
 

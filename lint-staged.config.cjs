@@ -5,7 +5,31 @@ try {
   // no problem
 }
 
-module.exports = {
+// Stricter checks for coding agents (Claude Code, OpenCode, Cursor, etc.)
+// Check all known agent env vars for robustness
+const isAgent =
+  process.env.AGENT === "1" ||
+  process.env.OPENCODE === "1" ||
+  !!process.env.OPENCODE_SESSION ||
+  !!process.env.CLAUDE_CODE;
+
+const baseConfig = {
   "*": ["prettier --write --ignore-unknown"],
+};
+
+const agentConfig = {
+  "*": [
+    ...(baseConfig["*"] || []),
+    // using a function which ignores args (filepaths) means *don't* append the filepaths to the command
+    () => "pnpm typecheck",
+    // if tests prove slow, we could do smart dependency tracking to only run tests for changed files
+    () => "pnpm test",
+    "eslint --fix --max-warnings 0 --no-warn-ignored", // suppress warnings for ignored files
+  ],
+};
+
+module.exports = {
+  ...baseConfig,
+  ...(isAgent && agentConfig),
   ...localConfig,
 };

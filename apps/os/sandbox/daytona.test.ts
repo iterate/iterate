@@ -237,6 +237,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
     console.log(`Snapshot built: ${snapshotName}`);
   }, 600_000); // 10 min timeout for snapshot build
 
+  // TODO: unskip once x-api-key header issue is fixed (see https://github.com/iterate/iterate/actions/runs/21475375981)
   test(
     "sandbox boots, bootstraps with control plane, and agents answer the secret",
     async () => {
@@ -431,9 +432,11 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log('Running: opencode run "what messaging platform is this agent for"');
         console.log("");
 
+        const SOURCE_ENV_CMD = "set -a && source ~/.iterate/.env && set +a";
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && opencode run \\"what messaging platform is this agent for\\""`,
         );
+
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),
         );
@@ -468,7 +471,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log("");
 
         const claudePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && claude -p \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && claude -p \\"what messaging platform is this agent for\\""`,
         );
         const claudeTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
@@ -503,7 +506,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log("");
 
         const piPromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && pi -p \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && pi -p \\"what messaging platform is this agent for\\""`,
         );
         const piTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),

@@ -1,4 +1,13 @@
-import { pgTable, timestamp, text, uniqueIndex, unique, jsonb, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  timestamp,
+  text,
+  uniqueIndex,
+  unique,
+  jsonb,
+  index,
+  integer,
+} from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
@@ -248,6 +257,7 @@ export const projectEnvVar = pgTable(
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     value: t.text().notNull(), // Plain text - secrets go in the secret table
+    description: t.text(), // Optional description (shown as comment in .env file)
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
@@ -280,6 +290,7 @@ export const secret = pgTable(
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
     encryptedValue: t.text().notNull(),
+    description: t.text(), // Human-readable description for UI and .env comments
     egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
     metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
     lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use
@@ -309,6 +320,73 @@ export const secretRelations = relations(secret, ({ one }) => ({
   }),
   user: one(user, {
     fields: [secret.userId],
+    references: [user.id],
+  }),
+}));
+
+export const egressPolicy = pgTable(
+  "egress_policy",
+  (t) => ({
+    id: iterateId("egp"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    priority: integer().notNull().default(100),
+    urlPattern: t.text(),
+    method: t.text(),
+    headerMatch: jsonb().$type<Record<string, string>>(),
+    decision: t.text({ enum: ["allow", "deny", "human_approval"] }).notNull(),
+    reason: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.projectId, t.priority)],
+);
+
+export const egressPolicyRelations = relations(egressPolicy, ({ one }) => ({
+  project: one(project, {
+    fields: [egressPolicy.projectId],
+    references: [project.id],
+  }),
+}));
+
+export const egressApproval = pgTable(
+  "egress_approval",
+  (t) => ({
+    id: iterateId("ega"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    policyId: t.text().references(() => egressPolicy.id, { onDelete: "set null" }),
+    method: t.text().notNull(),
+    url: t.text().notNull(),
+    headers: jsonb().$type<Record<string, string>>().notNull(),
+    body: t.text(),
+    status: t
+      .text({ enum: ["pending", "approved", "rejected", "timeout"] })
+      .notNull()
+      .default("pending"),
+    decidedAt: t.timestamp(),
+    decidedBy: t.text().references(() => user.id, { onDelete: "set null" }),
+    sessionId: t.text(),
+    context: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.projectId, t.status), index().on(t.status)],
+);
+
+export const egressApprovalRelations = relations(egressApproval, ({ one }) => ({
+  project: one(project, {
+    fields: [egressApproval.projectId],
+    references: [project.id],
+  }),
+  policy: one(egressPolicy, {
+    fields: [egressApproval.policyId],
+    references: [egressPolicy.id],
+  }),
+  decidedByUser: one(user, {
+    fields: [egressApproval.decidedBy],
     references: [user.id],
   }),
 }));

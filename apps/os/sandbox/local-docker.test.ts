@@ -45,6 +45,8 @@ async function createContainer(options?: { exposePort?: boolean }): Promise<Cont
 
   const envVars = [
     "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    // Set customer repo path for daemon's getServerCwd endpoint
+    `ITERATE_CUSTOMER_REPO_PATH=${CONTAINER_REPO_PATH}`,
   ];
 
   if (process.env.ANTHROPIC_API_KEY) {
@@ -222,10 +224,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     );
 
     test("container setup correct", async () => {
-      // tmux installed
-      const tmux = await execInContainer(container.id, ["which", "tmux"]);
-      expect(tmux.trim()).toBe("/usr/bin/tmux");
-
       // repo cloned
       const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
@@ -311,7 +309,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
     }, 210000);
 
-    test("tmux and PTY work", async () => {
+    test("PTY endpoint works", async () => {
       await waitForDaemonReady(container.port!);
 
       // PTY endpoint exists
@@ -319,18 +317,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
-
-      // tmux via tRPC
-      const trpc = createDaemonTrpcClient(container.port!);
-      const sessionName = `test-${Date.now()}`;
-      const createResult = await trpc.ensureTmuxSession.mutate({
-        sessionName,
-        command: "bash",
-      });
-      expect(createResult.created).toBe(true);
-
-      const sessions = await trpc.listTmuxSessions.query();
-      expect(sessions.some((s: { name: string }) => s.name === sessionName)).toBe(true);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {

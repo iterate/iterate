@@ -27,17 +27,6 @@ import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
 
-// Fallback working directory if no customer repo is cloned
-const FALLBACK_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
-
-/**
- * Get the working directory for new agents.
- * Prefers customer repo, falls back to iterate repo.
- */
-function getAgentWorkingDirectory(): string {
-  return getCustomerRepoPath() || FALLBACK_REPO;
-}
-
 export const slackRouter = new Hono();
 
 // Middleware to log request and response bodies
@@ -124,9 +113,11 @@ slackRouter.post("/webhook", async (c) => {
         });
       }
 
-      const threadId = sanitizeThreadId(threadTs);
-      const agentSlug = `slack-${threadId}`;
-      const existingAgent = await getAgent(agentSlug);
+      // Check for associated agent first, then fall back to slack-{thread_ts}
+      const { agent: existingAgent, agentSlug } = await findAgentForThread(
+        parsed.channel,
+        threadTs,
+      );
 
       if (!existingAgent) {
         return c.json({
@@ -137,7 +128,9 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
     } catch (error) {
       logger.error("[Slack Webhook] Failed to handle reaction event", error);
@@ -147,19 +140,19 @@ slackRouter.post("/webhook", async (c) => {
 
   // From here on, parsed is a ParsedMessage (not a reaction)
   const { event, threadTs } = parsed as ParsedMessage;
-  const threadId = sanitizeThreadId(threadTs);
-  const agentSlug = `slack-${threadId}`;
+  const channel = event.channel || "";
 
   try {
-    const existingAgent = await getAgent(agentSlug);
+    // Check for associated agent first, then fall back to slack-{thread_ts}
+    const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {
       if (existingAgent) {
-        // Rare: agent already exists for what we think is a new thread
-        const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+        // Agent exists (either via association or slack-{thread_ts})
+        const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
         await appendToAgent(existingAgent, message, {
-          workingDirectory: getAgentWorkingDirectory(),
+          workingDirectory: await getCustomerRepoPath(),
         });
         return c.json({
           success: true,
@@ -170,17 +163,20 @@ slackRouter.post("/webhook", async (c) => {
         });
       }
 
+      // No existing agent - create new slack-{thread_ts} agent
+      const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
       const agent = await createAgent({
-        slug: agentSlug,
+        slug: newAgentSlug,
         harnessType: "opencode",
-        workingDirectory: getAgentWorkingDirectory(),
+        workingDirectory: await getCustomerRepoPath(),
+        initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
       });
 
-      const message = formatNewThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
+      const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
+      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
-        agentSlug,
+        agentSlug: newAgentSlug,
         created: true,
         case: "new_thread_mention",
         eventId,
@@ -191,21 +187,24 @@ slackRouter.post("/webhook", async (c) => {
     if (parsed.case === "mid_thread_mention") {
       let agent = existingAgent;
       let wasCreated = false;
+      let finalAgentSlug = agentSlug;
 
       if (!agent) {
+        finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
         agent = await createAgent({
-          slug: agentSlug,
+          slug: finalAgentSlug,
           harnessType: "opencode",
-          workingDirectory: getAgentWorkingDirectory(),
+          workingDirectory: await getCustomerRepoPath(),
+          initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
         });
         wasCreated = true;
       }
 
-      const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-      await appendToAgent(agent, message, { workingDirectory: getAgentWorkingDirectory() });
+      const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
+      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
       return c.json({
         success: true,
-        agentSlug,
+        agentSlug: finalAgentSlug,
         created: wasCreated,
         case: "mid_thread_mention",
         eventId,
@@ -223,7 +222,9 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatFyiMessage(event, threadTs, eventId);
-      await appendToAgent(existingAgent, message, { workingDirectory: getAgentWorkingDirectory() });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }
 
@@ -326,6 +327,19 @@ function sanitizeThreadId(ts: string): string {
 }
 
 /**
+ * Find the agent for a Slack thread using the slack-{thread_ts} naming convention.
+ */
+async function findAgentForThread(
+  _channel: string,
+  threadTs: string,
+): Promise<{ agent: Awaited<ReturnType<typeof getAgent>>; agentSlug: string }> {
+  const threadId = sanitizeThreadId(threadTs);
+  const agentSlug = `slack-${threadId}`;
+  const agent = await getAgent(agentSlug);
+  return { agent, agentSlug };
+}
+
+/**
  * Store the raw webhook event in SQLite for later inspection.
  * Uses Slack's event_id for deduplication - if already stored, returns existing ID.
  */
@@ -361,19 +375,20 @@ function formatNewThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
-  const messageTs = event.ts || threadTs;
 
   return [
-    `You've been mentioned to start a new conversation.`,
+    `[Agent: ${agentSlug}] New Slack thread started.`,
+    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
 }
 
@@ -385,20 +400,32 @@ function formatMidThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
+  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
 
-  return [
-    `You've been mentioned in an existing thread.`,
+  const lines = [
+    `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,
+    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts (i.e., this is a reply, not the root)
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -415,14 +442,24 @@ function formatFyiMessage(
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
 
-  return [
-    `New message in this thread (no @mention, but you're a participant).`,
+  const lines = [
+    `Another message in thread ${threadTs} (FYI, no @mention).`,
     "",
     `From: ${user}`,
     `Message: ${text}`,
     "",
-    `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -437,15 +474,29 @@ function formatReactionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const action = reactionCase === "reaction_added" ? "added" : "removed";
   const channel = event.item.type === "message" ? event.item.channel : "unknown";
+  const messageTs = event.item.type === "message" ? event.item.ts : "unknown";
 
-  return [
-    `Reaction ${action}: :${event.reaction}:`,
+  const lines = [
+    `Reaction ${action} in thread ${threadTs}: :${event.reaction}:`,
     "",
     `From: ${user}`,
-    `On message: ${event.item.type === "message" ? event.item.ts : "unknown"}`,
-    "",
-    `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
-  ].join("\n");
+  ];
+
+  // Only show message_ts if different from thread_ts
+  if (messageTs !== threadTs) {
+    lines.push(`On message: ${messageTs}`);
+  }
+
+  lines.push("");
+  if (messageTs !== threadTs) {
+    lines.push(
+      `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
+    );
+  } else {
+    lines.push(`channel=${channel} thread_ts=${threadTs} eventId=${eventId}`);
+  }
+
+  return lines.join("\n");
 }
 
 /**

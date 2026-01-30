@@ -1,0 +1,1 @@
+../.config/opencode/SLACK.md

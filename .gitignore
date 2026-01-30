@@ -26,6 +26,7 @@ dist
 .clinerules/
 
 .cache
+__pycache__/
 
 # ad-hoc ignored files/paths
 *ignoreme*
@@ -53,3 +54,4 @@ playwriter-screenshot-*
 
 # PR video recordings
 pr-videos/
+*.log
