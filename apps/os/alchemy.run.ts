@@ -41,19 +41,6 @@ const isPreview =
   app.stage.startsWith("local-");
 
 /**
- * Get the current git branch name for dev mode.
- * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
- */
-function getCurrentGitRef(): string | undefined {
-  if (!isDevelopment) return undefined;
-  try {
-    return execSync("git branch --show-current", { encoding: "utf-8", cwd: repoRoot }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
  * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
  */
@@ -407,9 +394,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     sqlite: true,
   });
 
-  const devGitRef = getCurrentGitRef();
-  console.log(`Current git branch: ${devGitRef}`);
-
   const worker = await TanStackStart("os", {
     bindings: {
       ...dbConfig,
@@ -418,8 +402,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
-      // In dev, pass the current git branch for Daytona sandboxes
-      ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {

@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# Ensure shared pnpm store volume exists (idempotent)
+docker volume create iterate-pnpm-store >/dev/null 2>&1 || true
+
 # Find repo root (directory containing this script's parent)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

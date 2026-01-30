@@ -48,8 +48,9 @@ services:
       # Mount host's .git directory (read-only) - container clones from this
       # Defaults to ./.git; alchemy.run.ts resolves worktrees to main .git dir
       - ${LOCAL_DOCKER_GIT_DIR:-./.git}:/home/iterate/.host-git:ro
+      # Shared pnpm store across all worktrees (created by docker-compose-env.sh)
+      - pnpm-store:/home/iterate/.local/share/pnpm
     environment:
-      - ITERATE_DEV=true
       - ITERATE_CUSTOMER_REPO_PATH=/home/iterate/src/github.com/iterate/iterate
       # Git info for cloning (defaults to HEAD, alchemy.run.ts can override)
       - LOCAL_DOCKER_GIT_COMMIT=${LOCAL_DOCKER_GIT_COMMIT:-HEAD}
@@ -63,3 +64,6 @@ services:
 
 volumes:
   postgres-data:
+  pnpm-store:
+    external: true
+    name: iterate-pnpm-store

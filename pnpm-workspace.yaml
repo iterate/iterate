@@ -37,3 +37,5 @@ overrides:
   'agents>viem': '-'
   'quicktype-core>readable-stream': 'npm:vite-compatible-readable-stream@3.6.1'
   'better-sqlite3': 'npm:libsql@0.5.22'
+  # Force single esbuild version to reduce postinstall scripts (drizzle-kit pulls in 3 versions)
+  'esbuild': '0.27.2'

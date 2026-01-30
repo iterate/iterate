@@ -46,6 +46,9 @@ WORKDIR /home/iterate
 
 ENV PATH="/home/iterate/.local/bin:$PATH"
 
+# Configure pnpm store location (enables sharing via Docker volume)
+RUN pnpm config --global set store-dir /home/iterate/.local/share/pnpm/store
+
 # Git config for iterate user
 RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"

@@ -45,28 +45,11 @@ The os app uses Daytona sandboxes for machine execution. Snapshots are Docker im
 
 ### Naming Convention
 
-Snapshots follow the naming pattern: `<alchemy-stage>--<timestamp>`
+Snapshots follow the naming pattern: `iterate-sandbox-{commitSha}`
 
-- **Alchemy stage name**: Matches the alchemy stage name (e.g., `dev-jonas`, `stg`, `prd`)
-- **Timestamp**: UTC time in `YYYYMMDD-HHMMSS` format
+The commit SHA is the full 40-character git commit hash. This makes snapshots idempotent - building from the same commit always produces the same snapshot name.
 
-Examples:
-
-- `dev-jonas--20260111-193045` (dev, user-specific)
-- `stg--20260111-193045`
-- `prd--20260111-193045`
-
-### Environment Configuration
-
-The snapshot prefix is derived from the stage, which is constructed from environment variables:
-
-| Environment | Doppler Config | Stage Construction         | Example Prefix |
-| ----------- | -------------- | -------------------------- | -------------- |
-| Development | `dev`          | `dev-${ITERATE_USER}`      | `dev-jonas--`  |
-| Staging     | `stg`          | `APP_STAGE` (set to `stg`) | `stg--`        |
-| Production  | `prd`          | `APP_STAGE` (set to `prd`) | `prd--`        |
-
-For local development, each developer gets their own namespace based on `ITERATE_USER`.
+Example: `iterate-sandbox-abc123def456...` (full 40-char SHA)
 
 ### Creating a New Snapshot
 
@@ -76,53 +59,29 @@ To create a new Daytona snapshot from `apps/os`:
 pnpm snapshot:daytona
 ```
 
-Or from the repo root using the filter flag:
+Or from the repo root:
 
 ```bash
 pnpm --filter os snapshot:daytona
 ```
 
-To target a specific Doppler config from the repo root:
-
-```bash
-# For development snapshots
-doppler run --config dev -- tsx apps/os/sandbox/daytona-snapshot.ts
-
-# For staging snapshots
-doppler run --config stg -- tsx apps/os/sandbox/daytona-snapshot.ts
-
-# For production snapshots
-doppler run --config prd -- tsx apps/os/sandbox/daytona-snapshot.ts
-```
-
-Or from the `apps/os` directory:
-
-```bash
-pnpm snapshot:daytona
-```
-
-If you want to force a specific Doppler config while staying in `apps/os`:
-
-```bash
-doppler run --config dev -- pnpm snapshot:daytona
-```
-
 This will:
 
-1. Construct the stage from `ITERATE_USER` (dev) or `APP_STAGE` (stg/prd)
-2. Generate a timestamp-based snapshot name
-3. Build the Docker image using `apps/os/sandbox/Dockerfile`
-4. Push the snapshot to Daytona
+1. Get the current commit SHA (or use `SANDBOX_ITERATE_REPO_REF` if set)
+2. Build the Docker image using `apps/os/sandbox/Dockerfile`
+3. Push the snapshot to Daytona as `iterate-sandbox-{commitSha}`
 
-### Dynamic Snapshot Resolution
+If the snapshot already exists (same commit SHA), the build is skipped.
 
-When a machine is created, the app automatically fetches the latest snapshot matching the configured prefix. This is done by:
+### Configuring Which Snapshot to Use
 
-1. Calling the Daytona REST API with `name=<prefix>`, `sort=createdTime`, `order=desc`
-2. Using the first (most recent) matching snapshot
-3. Caching the result for 5 minutes to reduce API calls (disabled for dev prefixes)
+The `DAYTONA_SNAPSHOT_NAME` environment variable (in Doppler) specifies which snapshot to use when creating Daytona machines. This must be set explicitly to a full snapshot name like `iterate-sandbox-abc123...`.
 
-This means new snapshots are automatically picked up quickly in dev and within 5 minutes in staging/production, without requiring code changes or redeployment.
+To deploy a new snapshot:
+
+1. Build and push: `pnpm snapshot:daytona`
+2. Note the snapshot name from the output
+3. Update `DAYTONA_SNAPSHOT_NAME` in Doppler (dev/stg/prd config)
 
 ### Snapshot Contents
 

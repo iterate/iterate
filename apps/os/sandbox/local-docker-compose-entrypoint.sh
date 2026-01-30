@@ -28,6 +28,10 @@ fi
 
 echo "=== Local Docker dev setup ==="
 
+# Fix pnpm store permissions (external volume may be owned by root)
+sudo mkdir -p /home/iterate/.local/share/pnpm
+sudo chown -R iterate:iterate /home/iterate/.local/share/pnpm
+
 # Remove placeholder dir created by Dockerfile
 rm -rf "$ITERATE_REPO"
 

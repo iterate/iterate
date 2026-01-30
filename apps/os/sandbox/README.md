@@ -70,7 +70,7 @@ pnpm snapshot:daytona:test
 SANDBOX_ITERATE_REPO_REF=<sha> pnpm snapshot:daytona:test
 
 # Run tests with existing snapshot (skips build)
-DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
+DAYTONA_SNAPSHOT_NAME=iterate-sandbox-abc123... pnpm snapshot:daytona:test
 ```
 
 ### Direct Docker Build
