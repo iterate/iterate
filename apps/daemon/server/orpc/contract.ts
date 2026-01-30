@@ -35,6 +35,15 @@ export const workerContract = oc.router({
           z.object({
             key: z.string(),
             value: z.string(),
+            secret: z
+              .object({
+                secretKey: z.string(),
+                secretScope: z.string(),
+                machineId: z.string().optional(),
+                userId: z.string().optional(),
+                userEmail: z.string().optional(),
+              })
+              .nullable(),
             description: z.string().nullable(),
             source: z.discriminatedUnion("type", [
               z.object({ type: z.literal("global"), description: z.string() }),

@@ -2,6 +2,9 @@ import { eq, and, isNull, or } from "drizzle-orm";
 import { logger } from "backend/tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
+import { parseMagicString, type ParsedSecret } from "../egress-proxy/egress-proxy.ts";
+
+export type { ParsedSecret };
 
 /**
  * Convert secret key to SHOUTING_SNAKE_CASE env var name
@@ -20,7 +23,8 @@ export type EnvVarSource =
 export type UnifiedEnvVar = {
   key: string;
   value: string;
-  isSecret: boolean;
+  /** Parsed secret info if value is a getIterateSecret() magic string, null otherwise */
+  secret: ParsedSecret | null;
   description: string | null;
   egressProxyRule: string | null;
   source: EnvVarSource;
@@ -145,10 +149,11 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
     if (!source || envVarNames.length === 0) continue;
 
     for (const envVarName of envVarNames) {
+      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
       result.push({
         key: envVarName,
-        value: `getIterateSecret({secretKey: '${secret.key}'})`,
-        isSecret: true,
+        value: magicString,
+        secret: parseMagicString(magicString),
         description: secret.description,
         egressProxyRule: secret.egressProxyRule,
         source,
@@ -171,10 +176,11 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
 
     const envVarNames = secretKeyToEnvVarNames(secret.key);
     for (const envVarName of envVarNames) {
+      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
       result.push({
         key: envVarName,
-        value: `getIterateSecret({secretKey: '${secret.key}'})`,
-        isSecret: true,
+        value: magicString,
+        secret: parseMagicString(magicString),
         description: secret.description,
         egressProxyRule: secret.egressProxyRule,
         source,
@@ -188,7 +194,7 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
     result.push({
       key: envVar.key,
       value: envVar.value,
-      isSecret: envVar.value.includes("getIterateSecret"),
+      secret: parseMagicString(envVar.value),
       description: envVar.description,
       egressProxyRule: null,
       source: { type: "user", envVarId: envVar.id },
@@ -215,10 +221,11 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       // Skip if already exists as an active env var
       if (existingKeys.has(envVarName)) continue;
 
+      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
       result.push({
         key: envVarName,
-        value: `getIterateSecret({secretKey: '${secret.key}'})`,
-        isSecret: true,
+        value: magicString,
+        secret: parseMagicString(magicString),
         description: `Scoped to ${secret.user.email}`,
         egressProxyRule: secret.egressProxyRule,
         source: { type: "recommended", provider, userEmail: secret.user.email },

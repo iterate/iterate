@@ -105,14 +105,21 @@ function makeSecretCacheKey(
   return `${secretKey}:${context.organizationId ?? ""}:${context.projectId ?? ""}:${context.userId ?? ""}:${context.userEmail ?? ""}`;
 }
 
+export type ParsedSecret = {
+  secretKey: string;
+  /** The scope/namespace of the secret (e.g., "iterate", "github", "google", "env") */
+  secretScope: string;
+  machineId?: string;
+  userId?: string;
+  userEmail?: string;
+};
+
 /**
  * Parse the magic string arguments using JSON5.
  * JSON5 allows unquoted keys and single-quoted strings.
- * Returns { secretKey, machineId?, userId?, userEmail? } or null if invalid.
+ * Returns parsed secret info or null if invalid.
  */
-export function parseMagicString(
-  match: string,
-): { secretKey: string; machineId?: string; userId?: string; userEmail?: string } | null {
+export function parseMagicString(match: string): ParsedSecret | null {
   // Extract the object part: {...}
   const objectMatch = match.match(/\{[^}]+\}/);
   if (!objectMatch) return null;
@@ -127,6 +134,7 @@ export function parseMagicString(
     if (!parsed.secretKey) return null;
     return {
       secretKey: parsed.secretKey,
+      secretScope: parsed.secretKey.split(".")[0],
       machineId: parsed.machineId,
       userId: parsed.userId,
       userEmail: parsed.userEmail,

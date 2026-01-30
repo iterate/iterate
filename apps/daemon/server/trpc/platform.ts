@@ -26,9 +26,18 @@ type EnvVarSource =
   | { type: "user"; envVarId: string }
   | { type: "recommended"; provider: "google"; userEmail: string };
 
+type ParsedSecret = {
+  secretKey: string;
+  secretScope: string;
+  machineId?: string;
+  userId?: string;
+  userEmail?: string;
+};
+
 type UnifiedEnvVar = {
   key: string;
   value: string;
+  secret: ParsedSecret | null;
   description: string | null;
   source: EnvVarSource;
 };

@@ -15,19 +15,7 @@ export const envVarRouter = router({
    * Returns a unified list including global vars, connection vars, user-defined vars,
    * and recommended vars (user-scoped secrets like Google OAuth).
    */
-  list: projectProtectedProcedure.query(async ({ ctx }) => {
-    const envVars = await getUnifiedEnvVars(ctx.db, ctx.project.id);
-
-    return envVars.map((v) => ({
-      key: v.key,
-      value: v.value,
-      isSecret: v.isSecret,
-      description: v.description,
-      egressProxyRule: v.egressProxyRule,
-      source: v.source,
-      createdAt: v.createdAt,
-    }));
-  }),
+  list: projectProtectedProcedure.query(({ ctx }) => getUnifiedEnvVars(ctx.db, ctx.project.id)),
 
   set: projectProtectedMutation
     .input(

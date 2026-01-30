@@ -64,10 +64,18 @@ type EnvVarSource =
   | { type: "user"; envVarId: string }
   | { type: "recommended"; provider: "google"; userEmail: string };
 
+type ParsedSecret = {
+  secretKey: string;
+  secretScope: string;
+  machineId?: string;
+  userId?: string;
+  userEmail?: string;
+};
+
 type EnvVar = {
   key: string;
   value: string;
-  isSecret: boolean;
+  secret: ParsedSecret | null;
   description: string | null;
   egressProxyRule: string | null;
   source: EnvVarSource;
@@ -106,26 +114,21 @@ function ProjectEnvVarsPage() {
   const envVars = allEnvVars.filter((v) => v.source.type !== "recommended");
   const recommendedEnvVars = allEnvVars.filter((v) => v.source.type === "recommended");
 
-  // Derive which connectors are connected from env var sources
+  // Derive which connectors are connected from env var sources or secret scopes
+  const connectorScopes = new Set(["google", "github", "slack"]);
   const connectedProviders = new Set(
-    allEnvVars.flatMap((v) =>
-      v.source.type === "connection" || v.source.type === "recommended" ? [v.source.provider] : [],
-    ),
+    allEnvVars.flatMap((v) => [
+      ...("provider" in v.source ? [v.source.provider] : []),
+      ...(v.secret && connectorScopes.has(v.secret.secretScope) ? [v.secret.secretScope] : []),
+    ]),
   );
 
-  const missingConnectors = [
-    !connectedProviders.has("github") && { provider: "github", label: "GitHub", icon: Github },
-    !connectedProviders.has("slack") && {
-      provider: "slack",
-      label: "Slack",
-      icon: MessageSquare,
-    },
-    !connectedProviders.has("google") && { provider: "google", label: "Google", icon: Mail },
-  ].filter(Boolean) as Array<{
-    provider: string;
-    label: string;
-    icon: typeof Github;
-  }>;
+  const connectorSuggestions = [
+    { provider: "github", label: "GitHub", icon: Github },
+    { provider: "slack", label: "Slack", icon: MessageSquare },
+    { provider: "google", label: "Google", icon: Mail },
+  ];
+  const missingConnectors = connectorSuggestions.filter((c) => !connectedProviders.has(c.provider));
 
   // Find which keys are overridden (appear multiple times, later one wins)
   const overriddenKeys = new Set<string>();
@@ -228,9 +231,9 @@ function ProjectEnvVarsPage() {
     // User-defined - open edit sheet
     setFormKey(envVar.key);
     // If it's a secret, don't show the magic string - show empty for new value entry
-    setFormValue(envVar.isSecret ? "" : envVar.value);
+    setFormValue(envVar.secret ? "" : envVar.value);
     setFormDescription(envVar.description ?? "");
-    setFormIsSecret(envVar.isSecret);
+    setFormIsSecret(!!envVar.secret);
     setEditingEnvVar(envVar);
     setAddSheetOpen(true);
   };
@@ -358,11 +361,11 @@ function ProjectEnvVarsPage() {
                 id="is-secret"
                 checked={formIsSecret}
                 onCheckedChange={(checked) => setFormIsSecret(checked === true)}
-                disabled={isPending || (editingEnvVar?.isSecret ?? false)}
+                disabled={isPending || !!editingEnvVar?.secret}
               />
               <Label
                 htmlFor="is-secret"
-                className={`text-sm font-normal ${editingEnvVar?.isSecret ? "" : "cursor-pointer"}`}
+                className={`text-sm font-normal ${editingEnvVar?.secret ? "" : "cursor-pointer"}`}
               >
                 Store as secret (encrypted, accessed via egress proxy)
               </Label>
@@ -587,7 +590,7 @@ function ProjectEnvVarsPage() {
                 {/* Second row: source info */}
                 <div className="flex items-center gap-4 mt-0.5">
                   <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
-                    {envVar.isSecret && <Lock className="h-3 w-3" />}
+                    {envVar.secret && <Lock className="h-3 w-3" />}
                     <span>{getSourceLabel(envVar.source)}</span>
                   </div>
                   {envVar.description && (
@@ -747,9 +750,5 @@ function hasBlockingSecretHint(
  * Deleting these is permanent because the secret is also deleted.
  */
 function isSecretWithCustomKey(envVar: EnvVar): boolean {
-  if (!envVar.isSecret) return false;
-  // Parse the magic string to get the secret key
-  const match = envVar.value.match(/getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/);
-  if (!match) return false;
-  return match[1].startsWith("env.");
+  return envVar.secret?.secretScope === "env";
 }
