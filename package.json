@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm -r --parallel --filter='!@iterate-com/daemon' dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -22,7 +22,7 @@
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
     "docker:build": "./scripts/docker-compose-env.sh docker compose build",
-    "docker:up": "./scripts/docker-compose-env.sh docker compose up -d --build",
+    "docker:up": "./scripts/docker-compose-env.sh docker compose up -d --build --wait",
     "docker:down": "./scripts/docker-compose-env.sh docker compose down",
     "docker:restart": "./scripts/docker-compose-env.sh docker compose restart sandbox",
     "docker:clean": "./scripts/docker-compose-env.sh docker compose down -v",
