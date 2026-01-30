@@ -304,6 +304,25 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       ).trim();
       expect(containerCommit).toBe(gitInfo!.commit);
     });
+
+    test("shell sources ~/.iterate/.env automatically", async () => {
+      // Write env var to ~/.iterate/.env
+      await execInContainer(project.containerId, [
+        "sh",
+        "-c",
+        'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
+      ]);
+
+      // Start a new login shell and check if env var is available
+      const envOutput = await execInContainer(project.containerId, [
+        "bash",
+        "-l",
+        "-c",
+        "env | grep TEST_ITERATE_ENV_VAR",
+      ]);
+
+      expect(envOutput).toContain("hello_from_env_file");
+    });
   });
 
   // ============ Daemon ============

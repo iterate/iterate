@@ -71,7 +71,8 @@
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {
-      "baseline-browser-mapping": "^2.9.14"
+      "baseline-browser-mapping": "^2.9.14",
+      "@babel/parser": "^7.28.5"
     }
   }
 }
