@@ -13,6 +13,7 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import { z } from "zod/v4";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -232,6 +233,101 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ error: "Unknown message case" }, 500);
   } catch (error) {
     logger.error("[Slack Webhook] Failed to handle webhook", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// Zod schema for slash command payload forwarded from OS backend
+const SlashCommandPayload = z.object({
+  command: z.string().optional(),
+  text: z.string().optional(),
+  channelId: z.string().optional(),
+  userId: z.string().optional(),
+  teamId: z.string().optional(),
+  threadTs: z.string().optional(),
+  responseUrl: z.string().optional(),
+});
+
+/**
+ * Slack slash commands handler
+ * Currently supports /debug command to get agent session link
+ */
+slackRouter.post("/commands", async (c) => {
+  try {
+    const body = await c.req.json();
+    const parseResult = SlashCommandPayload.safeParse(body);
+
+    if (!parseResult.success) {
+      logger.error("[daemon/slack] Invalid slash command payload", parseResult.error);
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+
+    const { command, channelId, userId, threadTs, responseUrl } = parseResult.data;
+
+    logger.log("[daemon/slack] Slash command received", { command, userId, channelId, threadTs });
+
+    if (command === "/debug") {
+      // Get the agent slug for this thread
+      let agentSlug: string | null = null;
+      let agentInfo = "No active agent for this thread";
+
+      if (threadTs && channelId) {
+        agentSlug = `slack-${threadTs.replace(".", "-")}`;
+        const agent = await getAgent(agentSlug);
+
+        if (agent) {
+          // Get session ID from the agent's current session
+          const sessionId = agent.harnessSessionId || "unknown";
+
+          // Build the opencode attach URL
+          const repoPath = await getCustomerRepoPath();
+          const baseUrl = process.env.ITERATE_OS_BASE_URL || "https://os.iterate.com";
+          const orgSlug = process.env.ITERATE_ORG_SLUG;
+          const projectSlug = process.env.ITERATE_PROJECT_SLUG;
+          const machineId = process.env.ITERATE_MACHINE_ID;
+
+          if (orgSlug && projectSlug && machineId) {
+            const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${repoPath}`;
+            const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy/3000`;
+            const terminalUrl = `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+
+            agentInfo = `🤖 *Agent:* \`${agentSlug}\`\n📝 *Session:* \`${sessionId}\`\n🔗 *Attach:* <${terminalUrl}|Open in terminal>`;
+          } else {
+            agentInfo = `🤖 *Agent:* \`${agentSlug}\`\n📝 *Session:* \`${sessionId}\`\n⚠️ Missing environment variables to build URL`;
+          }
+        }
+      }
+
+      // Send response back to Slack
+      if (responseUrl) {
+        await fetch(responseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            response_type: "ephemeral",
+            text: agentInfo,
+          }),
+        });
+      }
+
+      return c.json({ success: true });
+    }
+
+    // Unknown command
+    if (responseUrl) {
+      await fetch(responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          response_type: "ephemeral",
+          text: `Unknown command: ${command}`,
+        }),
+      });
+    }
+
+    return c.json({ success: true });
+  } catch (error) {
+    logger.error("[Slack Command] Failed to handle command", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
