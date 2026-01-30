@@ -20,11 +20,6 @@ pnpm install --no-frozen-lockfile
 echo "Building daemon..."
 (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
-# Build pidnap and symlink to PATH
-echo "Building pidnap..."
-(cd "$ITERATE_REPO/packages/pidnap" && pnpm build)
-sudo ln -sf "$ITERATE_REPO/packages/pidnap/dist/cli.mjs" /usr/local/bin/pidnap
-
 # Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
 mkdir -p ~/.iterate
 echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env

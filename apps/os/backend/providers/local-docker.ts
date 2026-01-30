@@ -13,11 +13,6 @@ import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from
 const DAEMON_PORT = 3000;
 const OPENCODE_PORT = 4096;
 
-// Common log paths in sandbox (pidnap process manager) - kept for reference/future use
-const _DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
-const _OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
-const _PIDNAP_STATUS_CMD = "pidnap status";
-
 // ============================================================================
 // Docker API helpers (used by test-helpers.ts, not by the provider itself)
 // ============================================================================

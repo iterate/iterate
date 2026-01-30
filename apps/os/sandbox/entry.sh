@@ -7,5 +7,5 @@ set -euo pipefail
 # Signal readiness for tests and stuff
 touch /tmp/.iterate-sandbox-ready
 
-# Pidnap take the wheel
-exec tini -sg -- pidnap init -c "$ITERATE_REPO/apps/os/sandbox/pidnap.config.ts"
+# Pidnap take the wheel (tsx --watch for hot-reload during development)
+exec tini -sg -- tsx --watch "$ITERATE_REPO/packages/pidnap/src/cli.ts" init -c "$ITERATE_REPO/apps/os/sandbox/pidnap.config.ts"

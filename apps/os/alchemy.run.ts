@@ -1,7 +1,6 @@
-import * as crypto from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
@@ -11,7 +10,6 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
-import { getLocalDockerGitInfo } from "./sandbox/local-docker-utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -459,25 +457,14 @@ if (isDevelopment) {
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
 
-  // Docker compose project name - used as prefix for containers and volumes (e.g., iterate-better-docker-a1b2_postgres_1)
-  const cwd = process.cwd();
-  const composeProjectName = `iterate-${basename(cwd)}-${crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 4)}`;
-  process.env.COMPOSE_PROJECT_NAME = composeProjectName;
-  console.log(`Docker compose project: ${composeProjectName}`);
-
-  // Local Docker git info - used by docker-compose.yml to clone repo in container
-  // Handles worktrees by resolving to main .git directory
-  const localDockerGitInfo = getLocalDockerGitInfo(repoRoot);
-  if (localDockerGitInfo) {
-    process.env.LOCAL_DOCKER_GIT_DIR = localDockerGitInfo.gitDir;
-    process.env.LOCAL_DOCKER_GIT_COMMIT = localDockerGitInfo.commit;
-    if (localDockerGitInfo.branch) {
-      process.env.LOCAL_DOCKER_GIT_BRANCH = localDockerGitInfo.branch;
-    }
-    console.log(
-      `Local Docker git: ${localDockerGitInfo.gitDir} @ ${localDockerGitInfo.branch || localDockerGitInfo.commit}`,
-    );
-  }
+  // Start Docker containers (postgres, neon-proxy) before migrations
+  // docker-compose-env.sh handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars
+  // --wait flag ensures postgres healthcheck passes before returning
+  console.log("Starting Docker containers...");
+  execSync("pnpm docker:up", {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
 }
 
 // Setup database and env first
