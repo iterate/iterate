@@ -25,11 +25,14 @@ console.log(`Building local docker sandbox: ${imageName}`);
 const buildArgs = process.argv.includes("--no-cache") ? "--no-cache" : "";
 
 // Build the sandbox service using docker compose
+// Explicitly set COMPOSE_PROJECT_NAME to ensure consistent image naming
+// (overrides any inherited value from parent shell)
 execSync(`docker compose build ${buildArgs} sandbox`, {
   cwd: repoRoot,
   stdio: "inherit",
   env: {
     ...process.env,
+    COMPOSE_PROJECT_NAME: projectName,
     DOCKER_BUILDKIT: "1",
     BUILDKIT_PROGRESS: "plain",
   },

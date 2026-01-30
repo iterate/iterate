@@ -35,8 +35,8 @@ services:
 
   sandbox:
     build:
-      context: .
-      dockerfile: apps/os/sandbox/Dockerfile
+      context: apps/os/sandbox
+      dockerfile: Dockerfile
       args:
         - SANDBOX_LOCAL_DEV=true
     ports:
@@ -50,7 +50,6 @@ services:
       - ${LOCAL_DOCKER_GIT_DIR:-./.git}:/home/iterate/.host-git:ro
     environment:
       - ITERATE_DEV=true
-      # For local docker, the "customer repo" is the iterate repo itself
       - ITERATE_CUSTOMER_REPO_PATH=/home/iterate/src/github.com/iterate/iterate
       # Git info for cloning (defaults to HEAD, alchemy.run.ts can override)
       - LOCAL_DOCKER_GIT_COMMIT=${LOCAL_DOCKER_GIT_COMMIT:-HEAD}

@@ -1,12 +1,3 @@
-FROM node:24 AS pidnap-builder
-WORKDIR /app
-RUN corepack enable
-COPY packages/pidnap/package.json ./
-RUN pnpm install
-COPY packages/pidnap/src ./src
-COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
-RUN pnpm build && pnpm pack && mv *.tgz pidnap.tgz
-
 FROM node:24
 
 # === Build Args ===
@@ -91,7 +82,7 @@ RUN mv ~/.local/bin/claude ~/.local/bin/claude.original && \
 # === Iterate repo ===
 # Two modes based on SANDBOX_ITERATE_REPO_REF:
 #   - Set: git clone the specified ref (CI/Daytona - fast cached builds)
-#   - Empty: create placeholder, a pidnap task syncs from local mount at runtime
+#   - Empty: create placeholder, local-docker-compose-entrypoint.sh clones at container start
 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
@@ -105,13 +96,12 @@ RUN mkdir -p /home/iterate/src/placeholder-repo && \
 ARG SANDBOX_ITERATE_REPO_REF
 ARG SANDBOX_ITERATE_BRANCH
 
-COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
-RUN npm install -g /app/pidnap.tgz
-
 # Copy scripts that will be needed
-COPY apps/os/sandbox/entry.sh /app/entry.sh
-COPY apps/os/sandbox/after-git-clone.sh /app/after-git-clone.sh
-COPY apps/os/sandbox/local-docker-compose-entrypoint.sh /app/local-docker-compose-entrypoint.sh
+# Paths relative to Dockerfile directory for Daytona SDK compatibility
+# (docker build from repo root uses -f flag which handles this correctly)
+COPY entry.sh /app/entry.sh
+COPY after-git-clone.sh /app/after-git-clone.sh
+COPY local-docker-compose-entrypoint.sh /app/local-docker-compose-entrypoint.sh
 RUN sudo chmod +x /app/*.sh
 
 # If ref provided, clone from git and checkout branch; otherwise create placeholder for local mount
@@ -129,18 +119,8 @@ RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
     fi
 
 # Run common post-clone setup (only for remote deployment - local dev runs at container start)
-# Skip setup-home here; it runs after this in a separate step for build cache efficiency
 RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      bash /app/after-git-clone.sh --skip-setup-home; \
-    fi
-
-# Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
-RUN mkdir -p ~/.iterate && \
-    echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
-
-# Setup home directory (only for Daytona - local dev does this via local-docker-compose-entrypoint.sh)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-      bash $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
+      bash /app/after-git-clone.sh; \
     fi
 
 ENTRYPOINT [ "/app/entry.sh" ]

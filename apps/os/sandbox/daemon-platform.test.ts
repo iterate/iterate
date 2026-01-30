@@ -132,9 +132,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
       },
     });
 
-    // Mount local repo at /local-iterate-repo - entry.sh will detect and copy from there
+    // Repo is baked into the image at build time via SANDBOX_ITERATE_REPO_REF
     // Pass control plane URL pointing to host machine
-    console.log("Creating container with local repo mounted and mock control plane...");
+    console.log("Creating container with mock control plane...");
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
       Image: IMAGE_NAME,
       name: CONTAINER_NAME,
@@ -148,7 +148,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Daemon Platform Functions", () => {
         PortBindings: {
           "3000/tcp": [{ HostPort: String(DAEMON_PORT) }],
         },
-        Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
       },
     });
     containerId = createResponse.Id;

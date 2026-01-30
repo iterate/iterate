@@ -24,6 +24,7 @@
     "docker:build": "./scripts/docker-compose-env.sh docker compose build",
     "docker:up": "./scripts/docker-compose-env.sh docker compose up -d --build",
     "docker:down": "./scripts/docker-compose-env.sh docker compose down",
+    "docker:restart": "./scripts/docker-compose-env.sh docker compose restart sandbox",
     "docker:clean": "./scripts/docker-compose-env.sh docker compose down -v",
     "docker:logs": "./scripts/docker-compose-env.sh docker compose logs -f",
     "snapshot:daytona": "pnpm os snapshot:daytona",

@@ -1,9 +1,11 @@
 #!/bin/bash
 # local-docker-compose-entrypoint.sh - Entrypoint for local docker-compose development
 #
-# This script is only used when building for local-docker provider (SANDBOX_ITERATE_REPO_REF not set).
-# It handles cloning the repo from the mounted host .git directory at container startup,
-# then hands off to the common after-git-clone.sh for shared setup steps.
+# This script does the same things at container start time that 
+# is normally done at docker image build time. Specifically
+#
+# 1. pull from git repo (in this case from host machine's .git directory instead of remote)
+# 2. then do whatever needs to run after via after-git-clone.sh
 #
 # The Dockerfile copies this to /app/local-docker-compose-entrypoint.sh only when
 # SANDBOX_ITERATE_REPO_REF is NOT set (i.e., local dev builds).
@@ -16,7 +18,13 @@
 
 set -e
 
-ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
+# ITERATE_REPO is set as ENV in Dockerfile
+
+# Fast path: if already set up, just run entry.sh
+if [ -d "$ITERATE_REPO/node_modules" ]; then
+  echo "=== Fast restart (repo already set up) ==="
+  exec /app/entry.sh
+fi
 
 echo "=== Local Docker dev setup ==="
 
@@ -27,10 +35,9 @@ rm -rf "$ITERATE_REPO"
 if [ -f /home/iterate/.host-git ] && grep -q "^gitdir:" /home/iterate/.host-git 2>/dev/null; then
   echo "ERROR: Detected git worktree. The mounted .git is a file, not a directory."
   echo ""
-  echo "For worktrees, set LOCAL_DOCKER_GIT_DIR to the main repo's .git directory:"
-  echo "  LOCAL_DOCKER_GIT_DIR=/path/to/main/repo/.git docker compose up"
+  echo "For worktrees, use scripts/docker-compose-env.sh which resolves to main .git:"
+  echo "  scripts/docker-compose-env.sh docker compose up"
   echo ""
-  echo "Or use alchemy.run.ts which handles this automatically."
   exit 1
 fi
 

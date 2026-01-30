@@ -13,10 +13,10 @@ import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from
 const DAEMON_PORT = 3000;
 const OPENCODE_PORT = 4096;
 
-// Common log paths in sandbox (pidnap process manager)
-const DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
-const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
-const PIDNAP_STATUS_CMD = "pidnap status";
+// Common log paths in sandbox (pidnap process manager) - kept for reference/future use
+const _DAEMON_LOG = "/var/log/pidnap/process/iterate-daemon.log";
+const _OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
+const _PIDNAP_STATUS_CMD = "pidnap status";
 
 // ============================================================================
 // Docker API helpers (used by test-helpers.ts, not by the provider itself)
@@ -187,7 +187,7 @@ export function createLocalDockerProvider(): MachineProvider {
       return {
         externalId: "local-docker",
         metadata: {
-          ports: { daemon: DAEMON_PORT, opencode: OPENCODE_PORT },
+          ports: { "iterate-daemon": DAEMON_PORT, opencode: OPENCODE_PORT },
         },
       };
     },

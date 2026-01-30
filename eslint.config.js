@@ -45,6 +45,7 @@ export default defineConfig([
     "**/db/migrations/",
     "**/*.d.ts",
     "**/node_modules/",
+    "**/.pnpm-store/",
     "**/dist/",
     "**/build/",
     "pnpm-lock.yaml",
@@ -519,7 +520,10 @@ function fixToSuggestionInIDE(builtinRule, desc = "Apply default fix") {
           if (prop === "report") {
             /** @param {Parameters<typeof context.report>[0]} params */
             return ({ fix, ...params }) => {
-              return context.report({ ...params, suggest: [{ desc, fix }] });
+              if (fix) {
+                return context.report({ ...params, suggest: [{ desc, fix }] });
+              }
+              return context.report(params);
             };
           }
           return context[prop];

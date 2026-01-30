@@ -1,16 +1,15 @@
 /**
  * Create a Daytona snapshot for the iterate sandbox.
  *
- * The Dockerfile clones the iterate repo directly (no git bundle).
- * We just need to provide entry.sh in the build context.
+ * Uses the Dockerfile directly - Daytona SDK handles the build context automatically.
  */
 import { execSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
+const dockerfilePath = join(repoRoot, "apps/os/sandbox/Dockerfile");
 
 function getCommitSha(): string {
   const envSha = process.env.SANDBOX_ITERATE_REPO_REF;
@@ -74,31 +73,16 @@ const daytona = new Daytona({
   apiKey: process.env.DAYTONA_API_KEY,
 });
 
-const tempDir = mkdtempSync(join(tmpdir(), "iterate-sandbox-context-"));
-const dockerfileTargetPath = join(tempDir, "Dockerfile");
+// Read Dockerfile, inject build args, write back temporarily
+const originalContent = readFileSync(dockerfilePath, "utf-8");
+const modifiedContent = injectBuildArgs(originalContent, commitSha, branchName);
 
 try {
-  // Materialize entry.sh from committed state into build context
-  // (Dockerfile does COPY apps/os/sandbox/entry.sh /app/entry.sh)
-  const entryPath = join(tempDir, "apps/os/sandbox");
-  mkdirSync(entryPath, { recursive: true });
-  const entryContent = execSync("git show HEAD:apps/os/sandbox/entry.sh", {
-    cwd: repoRoot,
-    encoding: "utf-8",
-  });
-  const entryFile = join(entryPath, "entry.sh");
-  writeFileSync(entryFile, entryContent);
-  chmodSync(entryFile, 0o755);
+  // Temporarily modify Dockerfile with injected build args
+  writeFileSync(dockerfilePath, modifiedContent);
 
-  // Materialize Dockerfile with build args injected
-  // (Dockerfile clones the repo directly via git, no bundle needed)
-  const dockerfileContent = execSync("git show HEAD:apps/os/sandbox/Dockerfile", {
-    cwd: repoRoot,
-    encoding: "utf-8",
-  });
-  writeFileSync(dockerfileTargetPath, injectBuildArgs(dockerfileContent, commitSha, branchName));
-
-  const image = Image.fromDockerfile(dockerfileTargetPath);
+  // Use Dockerfile directly - SDK handles build context from COPY statements
+  const image = Image.fromDockerfile(dockerfilePath);
 
   const snapshot = await (async () => {
     try {
@@ -117,13 +101,11 @@ try {
         return { name: snapshotName, alreadyExisted: true };
       }
       throw error;
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
     }
   })();
 
   console.log("Snapshot created successfully:", snapshot);
-} catch (error) {
-  rmSync(tempDir, { recursive: true, force: true });
-  throw error;
+} finally {
+  // Always restore original Dockerfile
+  writeFileSync(dockerfilePath, originalContent);
 }
