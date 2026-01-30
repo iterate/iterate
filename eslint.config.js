@@ -37,6 +37,7 @@ export default defineConfig([
     "**/.claude/",
     "**/.cursor/",
     "**/.alchemy/",
+    "**/.husky/",
     "**/components/ui/",
     "**/components/ai-elements/",
     "**/logs.json",

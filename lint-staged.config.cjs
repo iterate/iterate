@@ -6,8 +6,12 @@ try {
 }
 
 // Stricter checks for coding agents (Claude Code, OpenCode, Cursor, etc.)
-// Agents set AGENT=1 or similar env vars
-const isAgent = process.env.AGENT === "1" || process.env.OPENCODE === "1";
+// Check all known agent env vars for robustness
+const isAgent =
+  process.env.AGENT === "1" ||
+  process.env.OPENCODE === "1" ||
+  !!process.env.OPENCODE_SESSION ||
+  !!process.env.CLAUDE_CODE;
 
 const baseConfig = {
   "*": ["prettier --write --ignore-unknown"],
@@ -20,7 +24,7 @@ const agentConfig = {
     () => "pnpm typecheck",
     // if tests prove slow, we could do smart dependency tracking to only run tests for changed files
     () => "pnpm test",
-    "eslint --fix --max-warnings 0",
+    "eslint --fix --max-warnings 0 --no-warn-ignored", // suppress warnings for ignored files
   ],
 };
 
