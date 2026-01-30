@@ -17,7 +17,9 @@ ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
 ENV SANDBOX_BUN_VERSION=1.3.6
 ENV SANDBOX_GO_VERSION=1.23.4
-ENV SANDBOX_GOGCLI_REF=mmkal/26/01/28/--access-token
+
+# gogcli fork: mmkal:mmkal/26/01/28/--access-token
+ENV SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
 
 # === Build Args ===
 # SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
