@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
-import { projectEnvVar, secret } from "../../db/schema.ts";
+import { projectEnvVar, secret, projectConnection } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
@@ -15,18 +15,31 @@ export const envVarRouter = router({
    * Returns a unified list including global vars, connection vars, and user-defined vars.
    */
   list: projectProtectedProcedure.query(async ({ ctx }) => {
-    const envVars = await getUnifiedEnvVars(ctx.db, ctx.project.id);
+    const [envVars, connections] = await Promise.all([
+      getUnifiedEnvVars(ctx.db, ctx.project.id),
+      ctx.db.query.projectConnection.findMany({
+        where: eq(projectConnection.projectId, ctx.project.id),
+        columns: { provider: true },
+      }),
+    ]);
 
-    // Transform to frontend format
-    return envVars.map((v) => ({
-      key: v.key,
-      value: v.value,
-      isSecret: v.isSecret,
-      description: v.description,
-      egressProxyRule: v.egressProxyRule,
-      source: v.source,
-      createdAt: v.createdAt,
-    }));
+    // Map provider names to consistent format (github-app -> github)
+    const connectedProviders = connections.map((c) =>
+      c.provider === "github-app" ? "github" : c.provider,
+    );
+
+    return {
+      envVars: envVars.map((v) => ({
+        key: v.key,
+        value: v.value,
+        isSecret: v.isSecret,
+        description: v.description,
+        egressProxyRule: v.egressProxyRule,
+        source: v.source,
+        createdAt: v.createdAt,
+      })),
+      connectedProviders,
+    };
   }),
 
   set: projectProtectedMutation

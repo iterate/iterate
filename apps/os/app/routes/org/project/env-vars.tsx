@@ -98,17 +98,17 @@ function ProjectEnvVarsPage() {
     projectSlug: params.projectSlug,
   });
 
-  const { data: envVars } = useSuspenseQuery(envVarListOptions);
-
-  // Derive connected providers from env vars with connection source
-  const connectedProviders = new Set(
-    envVars.flatMap((v) => (v.source.type === "connection" ? [v.source.provider] : [])),
-  );
+  const { data } = useSuspenseQuery(envVarListOptions);
+  const { envVars, connectedProviders } = data;
 
   const missingConnectors = [
-    !connectedProviders.has("github") && { provider: "github", label: "GitHub", icon: Github },
-    !connectedProviders.has("slack") && { provider: "slack", label: "Slack", icon: MessageSquare },
-    !connectedProviders.has("google") && { provider: "google", label: "Google", icon: Mail },
+    !connectedProviders.includes("github") && { provider: "github", label: "GitHub", icon: Github },
+    !connectedProviders.includes("slack") && {
+      provider: "slack",
+      label: "Slack",
+      icon: MessageSquare,
+    },
+    !connectedProviders.includes("google") && { provider: "google", label: "Google", icon: Mail },
   ].filter(Boolean) as Array<{
     provider: string;
     label: string;
