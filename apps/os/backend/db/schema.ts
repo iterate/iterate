@@ -257,6 +257,7 @@ export const projectEnvVar = pgTable(
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     value: t.text().notNull(), // Plain text - secrets go in the secret table
+    description: t.text(), // Optional description (shown as comment in .env file)
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
@@ -289,6 +290,7 @@ export const secret = pgTable(
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
     encryptedValue: t.text().notNull(),
+    description: t.text(), // Human-readable description for UI and .env comments
     egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
     metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
     lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use
