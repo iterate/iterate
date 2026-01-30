@@ -51,14 +51,10 @@ cd "$ITERATE_REPO"
 if [ -n "${LOCAL_DOCKER_GIT_BRANCH:-}" ]; then
   echo "Checking out branch: $LOCAL_DOCKER_GIT_BRANCH"
   git checkout "$LOCAL_DOCKER_GIT_BRANCH"
-elif [ -n "${LOCAL_DOCKER_GIT_COMMIT:-}" ]; then
-  # Fallback: create a local branch at the specified commit
-  # This happens when GITHUB_HEAD_REF isn't available (e.g., push events)
-  echo "No branch name provided, creating 'local-dev' at commit: $LOCAL_DOCKER_GIT_COMMIT"
-  git checkout -b local-dev "$LOCAL_DOCKER_GIT_COMMIT"
 else
-  echo "ERROR: Neither LOCAL_DOCKER_GIT_BRANCH nor LOCAL_DOCKER_GIT_COMMIT set."
-  exit 1
+  # No branch - checkout commit directly (detached HEAD, same as host)
+  echo "Checking out commit: ${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
+  git checkout "${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
 fi
 
 echo ""
