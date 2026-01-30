@@ -280,7 +280,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
       expect(gitInfo).toBeDefined();
 
-      // Check branch matches
+      // Check branch - should match host branch, or be "local-dev" if no branch was available
       const containerBranch = (
         await execInContainer(project.containerId, [
           "git",
@@ -290,7 +290,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
           "--show-current",
         ])
       ).trim();
-      expect(containerBranch).toBe(gitInfo!.branch);
+      if (gitInfo!.branch) {
+        expect(containerBranch).toBe(gitInfo!.branch);
+      } else {
+        // Fallback: entrypoint creates "local-dev" when no branch name is available
+        expect(containerBranch).toBe("local-dev");
+      }
 
       // Check commit matches
       const containerCommit = (
