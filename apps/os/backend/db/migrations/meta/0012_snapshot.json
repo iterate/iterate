@@ -939,7 +939,7 @@
       "checkConstraints": {
         "organization_slug_valid": {
           "name": "organization_slug_valid",
-          "value": "\"slug\" ~ '^[a-z0-9]+$' AND \"slug\" ~ '[a-z]' AND length(\"slug\") <= 50"
+          "value": "\"slug\" ~ '^[a-z0-9-]+$' AND \"slug\" ~ '[a-z]' AND length(\"slug\") <= 50 AND \"slug\" NOT IN ('prj', 'org')"
         }
       },
       "isRLSEnabled": false
@@ -1260,7 +1260,7 @@
       "checkConstraints": {
         "project_slug_valid": {
           "name": "project_slug_valid",
-          "value": "\"slug\" ~ '^[a-z0-9]+$' AND \"slug\" ~ '[a-z]' AND length(\"slug\") <= 50"
+          "value": "\"slug\" ~ '^[a-z0-9-]+$' AND \"slug\" ~ '[a-z]' AND length(\"slug\") <= 50 AND \"slug\" NOT IN ('prj', 'org')"
         }
       },
       "isRLSEnabled": false

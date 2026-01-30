@@ -12,11 +12,11 @@ import {
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
 
-// Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars
+// Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars, not reserved
 const slugCheck = (columnName: string, constraintName: string) =>
   check(
     constraintName,
-    sql`${sql.identifier(columnName)} ~ '^[a-z0-9-]+$' AND ${sql.identifier(columnName)} ~ '[a-z]' AND length(${sql.identifier(columnName)}) <= 50`,
+    sql`${sql.identifier(columnName)} ~ '^[a-z0-9-]+$' AND ${sql.identifier(columnName)} ~ '[a-z]' AND length(${sql.identifier(columnName)}) <= 50 AND ${sql.identifier(columnName)} NOT IN ('prj', 'org')`,
   );
 import type { SlackEvent } from "@slack/web-api";
 

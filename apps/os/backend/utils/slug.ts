@@ -1,3 +1,6 @@
+// Reserved slugs that conflict with TypeID prefixes or routes
+const RESERVED_SLUGS = ["prj", "org"];
+
 export function slugify(name: string): string {
   const slug = name
     .toLowerCase()
@@ -6,8 +9,8 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, "") // trim leading/trailing hyphens
     .replace(/-+/g, "-") // collapse multiple hyphens
     .slice(0, 50);
-  // must contain at least one letter (not all numbers)
-  if (!slug || !/[a-z]/.test(slug)) {
+  // must contain at least one letter (not all numbers), and not be reserved
+  if (!slug || !/[a-z]/.test(slug) || RESERVED_SLUGS.includes(slug)) {
     return "unnamed";
   }
   return slug;
@@ -32,8 +35,13 @@ function generateRandomSuffix(length: number): string {
 }
 
 /**
- * Validate that a slug is URL-safe (alphanumeric and hyphens, contains at least one letter)
+ * Validate that a slug is URL-safe (alphanumeric and hyphens, contains at least one letter, not reserved)
  */
 export function isValidSlug(slug: string): boolean {
-  return /^[a-z0-9-]+$/.test(slug) && /[a-z]/.test(slug) && slug.length <= 50;
+  return (
+    /^[a-z0-9-]+$/.test(slug) &&
+    /[a-z]/.test(slug) &&
+    slug.length <= 50 &&
+    !RESERVED_SLUGS.includes(slug)
+  );
 }
