@@ -25,7 +25,7 @@ const getDefaultOrgName = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const user = await context.variables.trpcCaller.user.me();
-    return user.email.split("@").at(-1) ?? "";
+    return (user.email.split("@").at(-1) ?? "").replace(".com", "");
   });
 
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
