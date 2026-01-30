@@ -54,6 +54,9 @@ services:
       # Git info for cloning (defaults to HEAD, alchemy.run.ts can override)
       - LOCAL_DOCKER_GIT_COMMIT=${LOCAL_DOCKER_GIT_COMMIT:-HEAD}
       - LOCAL_DOCKER_GIT_BRANCH=${LOCAL_DOCKER_GIT_BRANCH:-}
+      # API keys for agent CLI tests (optional, passed from host via SANDBOX_* prefix)
+      - ANTHROPIC_API_KEY=${SANDBOX_ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${SANDBOX_OPENAI_API_KEY:-}
     # Override Dockerfile ENTRYPOINT to use local-docker-compose-entrypoint.sh
     # This script clones from mounted .git, runs after-git-clone.sh, then execs entry.sh
     entrypoint: ["/app/local-docker-compose-entrypoint.sh"]

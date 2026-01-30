@@ -37,6 +37,11 @@ function getComposeEnv(): Record<string, string> {
     LOCAL_DOCKER_GIT_DIR: gitInfo.gitDir,
     LOCAL_DOCKER_GIT_COMMIT: gitInfo.commit,
     ...(gitInfo.branch ? { LOCAL_DOCKER_GIT_BRANCH: gitInfo.branch } : {}),
+    // Pass API keys if available (for agent CLI tests)
+    ...(process.env.ANTHROPIC_API_KEY
+      ? { SANDBOX_ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+      : {}),
+    ...(process.env.OPENAI_API_KEY ? { SANDBOX_OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
   } as Record<string, string>;
 }
 
@@ -278,9 +283,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         CONTAINER_REPO_PATH,
         "status",
       ]);
-      // CI: detached HEAD from PR merge commits
+      // CI: detached HEAD from PR merge commits (may show "HEAD detached" or "Not currently on any branch")
       // Regular clone: normal branch
-      expect(status).toMatch(/On branch|HEAD detached/);
+      expect(status).toMatch(/On branch|HEAD detached|Not currently on any branch/);
     });
   });
 
