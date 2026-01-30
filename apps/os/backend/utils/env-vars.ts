@@ -221,7 +221,7 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       // Skip if already exists as an active env var
       if (existingKeys.has(envVarName)) continue;
 
-      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
+      const magicString = `getIterateSecret({secretKey: '${secret.key}', userEmail: '${secret.user.email}'})`;
       result.push({
         key: envVarName,
         value: magicString,
