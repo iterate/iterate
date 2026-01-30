@@ -6,34 +6,27 @@ import { projectEnvVar, secret } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
-import { getUnifiedEnvVars, getRecommendedEnvVars } from "../../utils/env-vars.ts";
+import { getUnifiedEnvVars } from "../../utils/env-vars.ts";
 import { parseMagicString } from "../../egress-proxy/egress-proxy.ts";
 
 export const envVarRouter = router({
   /**
    * List all environment variables for a project.
-   * Returns a unified list including global vars, connection vars, and user-defined vars.
-   * Also returns recommended env vars for user-scoped secrets (e.g., Google OAuth).
+   * Returns a unified list including global vars, connection vars, user-defined vars,
+   * and recommended vars (user-scoped secrets like Google OAuth).
    */
   list: projectProtectedProcedure.query(async ({ ctx }) => {
     const envVars = await getUnifiedEnvVars(ctx.db, ctx.project.id);
 
-    // Get recommended env vars (user-scoped secrets like Google OAuth)
-    const existingKeys = new Set(envVars.map((v) => v.key));
-    const recommendedEnvVars = await getRecommendedEnvVars(ctx.db, ctx.project.id, existingKeys);
-
-    return {
-      envVars: envVars.map((v) => ({
-        key: v.key,
-        value: v.value,
-        isSecret: v.isSecret,
-        description: v.description,
-        egressProxyRule: v.egressProxyRule,
-        source: v.source,
-        createdAt: v.createdAt,
-      })),
-      recommendedEnvVars,
-    };
+    return envVars.map((v) => ({
+      key: v.key,
+      value: v.value,
+      isSecret: v.isSecret,
+      description: v.description,
+      egressProxyRule: v.egressProxyRule,
+      source: v.source,
+      createdAt: v.createdAt,
+    }));
   }),
 
   set: projectProtectedMutation

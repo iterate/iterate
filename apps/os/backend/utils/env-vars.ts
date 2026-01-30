@@ -14,7 +14,8 @@ export function secretKeyToEnvVar(key: string): string {
 export type EnvVarSource =
   | { type: "global"; description: string }
   | { type: "connection"; provider: "github" | "slack" | "google" }
-  | { type: "user"; envVarId: string };
+  | { type: "user"; envVarId: string }
+  | { type: "recommended"; provider: "google"; userEmail: string };
 
 export type UnifiedEnvVar = {
   key: string;
@@ -24,13 +25,6 @@ export type UnifiedEnvVar = {
   egressProxyRule: string | null;
   source: EnvVarSource;
   createdAt: Date | null;
-};
-
-export type RecommendedEnvVar = {
-  key: string;
-  value: string;
-  description: string;
-  provider: "google";
 };
 
 /**
@@ -99,7 +93,7 @@ function getSecretSource(secretKey: string, isGlobal: boolean): EnvVarSource | n
  */
 export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<UnifiedEnvVar[]> {
   // Fetch all data in parallel
-  const [connections, projectEnvVars, secrets] = await Promise.all([
+  const [connections, projectEnvVars, secrets, userScopedSecrets] = await Promise.all([
     // Project connections
     db.query.projectConnection.findMany({
       where: eq(schema.projectConnection.projectId, projectId),
@@ -112,7 +106,7 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       ),
       orderBy: (v, { asc }) => [asc(v.createdAt)],
     }),
-    // Get all secrets for this project OR global secrets
+    // Get all secrets for this project OR global secrets (non-user-scoped)
     // ONLY key, description, egressProxyRule - NEVER encryptedValue!
     db.query.secret.findMany({
       columns: { key: true, description: true, egressProxyRule: true, projectId: true },
@@ -120,6 +114,14 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
         isNull(schema.secret.userId),
         or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
       ),
+    }),
+    // Get user-scoped secrets (e.g., Google OAuth) with user email for description
+    db.query.secret.findMany({
+      columns: { key: true, description: true, egressProxyRule: true, userId: true },
+      where: eq(schema.secret.projectId, projectId),
+      with: {
+        user: { columns: { email: true } },
+      },
     }),
   ]);
 
@@ -194,65 +196,33 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
     });
   }
 
-  return result;
-}
-
-/**
- * Build the final env vars record for a machine, applying overrides.
- * User-defined env vars override connection env vars, which override global env vars.
- */
-export function buildEnvVarsRecord(envVars: UnifiedEnvVar[]): Record<string, string> {
-  const result: Record<string, string> = {};
-
-  // Apply in order - later values override earlier ones
-  for (const envVar of envVars) {
-    result[envVar.key] = envVar.value;
-  }
-
-  return result;
-}
-
-/**
- * Get recommended env vars for user-scoped secrets (e.g., Google OAuth).
- * These are secrets that exist but aren't automatically added as env vars
- * because they're user-scoped. The user can choose to add them explicitly.
- */
-export async function getRecommendedEnvVars(
-  db: DB,
-  projectId: string,
-  existingEnvVarKeys: Set<string>,
-): Promise<RecommendedEnvVar[]> {
-  // Get secrets for this project with user info
-  const secrets = await db.query.secret.findMany({
-    columns: { key: true, userId: true },
-    where: eq(schema.secret.projectId, projectId),
-    with: {
-      user: { columns: { email: true } },
-    },
-  });
-
-  const result: RecommendedEnvVar[] = [];
-
-  for (const secret of secrets) {
+  // 4. Recommended env vars (user-scoped secrets like Google OAuth)
+  // These appear last so agents can see them as options, but they're not active
+  // unless explicitly added as user env vars
+  const existingKeys = new Set(result.map((r) => r.key));
+  for (const secret of userScopedSecrets) {
     // Only user-scoped secrets (have userId and user relation)
     if (!secret.userId || !secret.user) continue;
 
+    let provider: "google" | undefined;
+    if (secret.key.startsWith("google.")) {
+      provider = "google";
+    }
+    if (!provider) continue; // Only support known providers
+
     const envVarNames = secretKeyToEnvVarNames(secret.key);
     for (const envVarName of envVarNames) {
-      // Skip if already exists as an env var
-      if (existingEnvVarKeys.has(envVarName)) continue;
-
-      let provider: "google" | undefined;
-      if (secret.key.startsWith("google.")) {
-        provider = "google";
-      }
-      if (!provider) continue; // Only support known providers
+      // Skip if already exists as an active env var
+      if (existingKeys.has(envVarName)) continue;
 
       result.push({
         key: envVarName,
         value: `getIterateSecret({secretKey: '${secret.key}'})`,
+        isSecret: true,
         description: `Scoped to ${secret.user.email}`,
-        provider,
+        egressProxyRule: secret.egressProxyRule,
+        source: { type: "recommended", provider, userEmail: secret.user.email },
+        createdAt: null,
       });
     }
   }

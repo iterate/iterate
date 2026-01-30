@@ -11,7 +11,7 @@ import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
-import { getUnifiedEnvVars, buildEnvVarsRecord } from "../utils/env-vars.ts";
+import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
@@ -282,36 +282,47 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
         )
       : [];
 
-  // Build envVars record from unified list
-  const envVars = buildEnvVarsRecord(unifiedEnvVars);
-
-  // Add daemon-specific env vars not shown in frontend
-  envVars["ITERATE_RESEND_FROM_ADDRESS"] = `${env.VITE_APP_STAGE}@${env.RESEND_BOT_DOMAIN}`;
-
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
-  // Set customer repo path for opencode server working directory
-  if (repos.length > 0) {
-    envVars["ITERATE_CUSTOMER_REPO_PATH"] = repos[0].path;
-  } else {
-    envVars["ITERATE_CUSTOMER_REPO_PATH"] = "/home/iterate/src/placeholder-repo";
-  }
-
-  // Build descriptions from unified env vars
-  const envVarDescriptions: Record<string, string> = {};
-  for (const envVar of unifiedEnvVars) {
-    if (envVar.description) {
-      envVarDescriptions[envVar.key] = envVar.description;
-    }
-  }
+  // Add daemon-specific env vars not shown in frontend
+  const daemonEnvVars: typeof unifiedEnvVars = [
+    ...unifiedEnvVars,
+    {
+      key: "ITERATE_RESEND_FROM_ADDRESS",
+      value: `${env.VITE_APP_STAGE}@${env.RESEND_BOT_DOMAIN}`,
+      isSecret: false,
+      description: null,
+      egressProxyRule: null,
+      source: { type: "global", description: "Iterate-provided Resend from address" },
+      createdAt: null,
+    },
+    {
+      key: "ITERATE_CUSTOMER_REPO_PATH",
+      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/placeholder-repo",
+      isSecret: false,
+      description: null,
+      egressProxyRule: null,
+      source: { type: "global", description: "Customer repo path" },
+      createdAt: null,
+    },
+  ];
 
   logger.info("Returning env data for machine", {
     machineId,
-    envVarCount: Object.keys(envVars).length,
+    envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
   });
 
-  return { envVars, envVarDescriptions, repos };
+  // Return the unified list - daemon will handle formatting for .env file
+  return {
+    envVars: daemonEnvVars.map((v) => ({
+      key: v.key,
+      value: v.value,
+      description: v.description,
+      source: v.source,
+    })),
+    repos,
+  };
 });
 
 export const workerRouter = os.router({

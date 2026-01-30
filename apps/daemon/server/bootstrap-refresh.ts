@@ -73,10 +73,7 @@ export async function fetchBootstrapData(): Promise<void> {
   const result = await client.machines.getEnv({ machineId });
 
   // Apply environment variables (always call to replace/clear stale vars)
-  const { injectedCount, removedCount } = await applyEnvVars(
-    result.envVars,
-    result.envVarDescriptions,
-  );
+  const { injectedCount, removedCount } = await applyEnvVars(result.envVars);
   console.log(
     `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale`,
   );

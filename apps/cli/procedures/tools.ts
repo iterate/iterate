@@ -142,19 +142,20 @@ export const toolsRouter = t.router({
         envVarName: string;
         secretKey: string;
         description?: string;
+        isRecommended: boolean;
       }> = [];
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        // Skip empty lines and comment-only lines
-        if (!line || line.startsWith("#")) continue;
+        // Skip empty lines
+        if (!line) continue;
 
-        // Match lines like: OPENAI_API_KEY="getIterateSecret({secretKey: 'iterate.openai_api_key'})"
-        const match = line.match(
+        // Match active env vars: OPENAI_API_KEY="getIterateSecret({secretKey: 'iterate.openai_api_key'})"
+        const activeMatch = line.match(
           /^([A-Z][A-Z0-9_]*)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
         );
-        if (match) {
-          const [, envVarName, secretKey] = match;
+        if (activeMatch) {
+          const [, envVarName, secretKey] = activeMatch;
           // Look for description in previous line (comment)
           let description: string | undefined;
           if (i > 0) {
@@ -163,7 +164,29 @@ export const toolsRouter = t.router({
               description = prevLine.replace(/^#\s*/, "");
             }
           }
-          secrets.push({ envVarName, secretKey, description });
+          secrets.push({ envVarName, secretKey, description, isRecommended: false });
+          continue;
+        }
+
+        // Match recommended (commented out) env vars: # GOOGLE_ACCESS_TOKEN="getIterateSecret(...)"
+        const recommendedMatch = line.match(
+          /^#\s*([A-Z][A-Z0-9_]*)="getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/,
+        );
+        if (recommendedMatch) {
+          const [, envVarName, secretKey] = recommendedMatch;
+          // Look for description in previous line (comment)
+          let description: string | undefined;
+          if (i > 0) {
+            const prevLine = lines[i - 1]?.trim();
+            if (
+              prevLine?.startsWith("#") &&
+              !prevLine.startsWith("# =") &&
+              !prevLine.includes("=")
+            ) {
+              description = prevLine.replace(/^#\s*/, "");
+            }
+          }
+          secrets.push({ envVarName, secretKey, description, isRecommended: true });
         }
       }
 

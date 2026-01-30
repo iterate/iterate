@@ -61,7 +61,8 @@ export const Route = createFileRoute(
 type EnvVarSource =
   | { type: "global"; description: string }
   | { type: "connection"; provider: "github" | "slack" | "google" }
-  | { type: "user"; envVarId: string };
+  | { type: "user"; envVarId: string }
+  | { type: "recommended"; provider: "google"; userEmail: string };
 
 type EnvVar = {
   key: string;
@@ -98,17 +99,18 @@ function ProjectEnvVarsPage() {
     projectSlug: params.projectSlug,
   });
 
-  const { data } = useSuspenseQuery(envVarListOptions);
-  const { envVars, recommendedEnvVars } = data;
+  const { data: allEnvVars } = useSuspenseQuery(envVarListOptions);
+
+  // Split into active env vars and recommended (user-scoped secrets)
+  const envVars = allEnvVars.filter((v) => v.source.type !== "recommended");
+  const recommendedEnvVars = allEnvVars.filter((v) => v.source.type === "recommended");
 
   // Derive which connectors are connected from env var sources
   const connectedProviders = new Set(
-    envVars.flatMap((v) => (v.source.type === "connection" ? [v.source.provider] : [])),
+    allEnvVars.flatMap((v) =>
+      v.source.type === "connection" || v.source.type === "recommended" ? [v.source.provider] : [],
+    ),
   );
-  // Also count recommended env vars as "connected" (user has the connection, just hasn't added env var)
-  for (const rec of recommendedEnvVars) {
-    connectedProviders.add(rec.provider);
-  }
 
   const missingConnectors = [
     !connectedProviders.has("github") && { provider: "github", label: "GitHub", icon: Github },
@@ -286,6 +288,8 @@ function ProjectEnvVarsPage() {
         return `${source.provider.charAt(0).toUpperCase() + source.provider.slice(1)} connection`;
       case "user":
         return "Custom";
+      case "recommended":
+        return `${source.provider.charAt(0).toUpperCase() + source.provider.slice(1)} (recommended)`;
     }
   };
 
@@ -636,7 +640,11 @@ function ProjectEnvVarsPage() {
                   <div className="flex items-center gap-4 mt-0.5">
                     <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
                       <Lock className="h-3 w-3" />
-                      <span>{rec.provider.charAt(0).toUpperCase() + rec.provider.slice(1)}</span>
+                      <span>
+                        {rec.source.type === "recommended" &&
+                          rec.source.provider.charAt(0).toUpperCase() +
+                            rec.source.provider.slice(1)}
+                      </span>
                     </div>
                     <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
                       {rec.description}

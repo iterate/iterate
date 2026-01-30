@@ -20,24 +20,47 @@ const clonedReposStatus: Map<
   }
 > = new Map();
 
+type EnvVarSource =
+  | { type: "global"; description: string }
+  | { type: "connection"; provider: "github" | "slack" | "google" }
+  | { type: "user"; envVarId: string }
+  | { type: "recommended"; provider: "google"; userEmail: string };
+
+type UnifiedEnvVar = {
+  key: string;
+  value: string;
+  description: string | null;
+  source: EnvVarSource;
+};
+
 /**
  * Apply environment variables to the daemon process.
  * This function:
  * 1. Replaces vars in memory and process.env (removes stale keys)
  * 2. Writes them to ~/.iterate/.env file in dotenv format for pidnap
+ *
+ * Recommended env vars (user-scoped secrets) are written as comments so the
+ * agent can discover them and tell the user how to enable them.
  */
-export async function applyEnvVars(
-  vars: Record<string, string>,
-  descriptions?: Record<string, string>,
-): Promise<{
+export async function applyEnvVars(envVars: UnifiedEnvVar[]): Promise<{
   injectedCount: number;
   removedCount: number;
   envFilePath: string;
 }> {
   const envFilePath = join(homedir(), ".iterate/.env");
 
+  // Split into active vars and recommended vars
+  const activeVars = envVars.filter((v) => v.source.type !== "recommended");
+  const recommendedVars = envVars.filter((v) => v.source.type === "recommended");
+
+  // Build the new vars record
+  const newVars: Record<string, string> = {};
+  for (const v of activeVars) {
+    newVars[v.key] = v.value;
+  }
+
   // Find keys to remove (were in platformEnvVars but not in new vars)
-  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in vars));
+  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in newVars));
 
   // Remove stale keys from process.env and platformEnvVars
   for (const key of keysToRemove) {
@@ -49,10 +72,12 @@ export async function applyEnvVars(
   for (const key of Object.keys(platformEnvVars)) {
     delete platformEnvVars[key];
   }
-  Object.assign(platformEnvVars, vars);
-  Object.assign(process.env, vars);
+  Object.assign(platformEnvVars, newVars);
+  Object.assign(process.env, newVars);
 
-  console.log(`[platform] Applied env vars: ${Object.keys(vars)}. Removed stale: ${keysToRemove}.`);
+  console.log(
+    `[platform] Applied env vars: ${Object.keys(newVars)}. Removed stale: ${keysToRemove}.`,
+  );
 
   // Write env vars in dotenv format for pidnap to parse. This file is NOT sourced
   // by bash - pidnap reads it directly using the dotenv library and injects vars
@@ -88,20 +113,34 @@ export async function applyEnvVars(
 NODE_USE_ENV_PROXY=1
 `;
 
-  const envFileContent =
-    envFileHeader +
-    Object.entries(platformEnvVars)
-      // Double-quoted values in dotenv format. Escape backslashes and double quotes.
-      .map(([key, value]) => {
-        const escapedValue = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-        const line = `${key}="${escapedValue}"`;
-        // Add description as comment before env var if available
-        if (descriptions?.[key]) {
-          return `# ${descriptions[key]}\n${line}`;
-        }
-        return line;
-      })
-      .join("\n");
+  // Format active env vars
+  const activeLines = activeVars.map((v) => {
+    const escapedValue = v.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const line = `${v.key}="${escapedValue}"`;
+    if (v.description) {
+      return `# ${v.description}\n${line}`;
+    }
+    return line;
+  });
+
+  // Format recommended env vars as comments (so agent can discover them)
+  let recommendedSection = "";
+  if (recommendedVars.length > 0) {
+    const recommendedLines = recommendedVars.map((v) => {
+      const escapedValue = v.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const userEmail = v.source.type === "recommended" ? v.source.userEmail : "";
+      return `# ${v.description || `Scoped to ${userEmail}`}\n# ${v.key}="${escapedValue}"`;
+    });
+    recommendedSection = `
+# =====================================
+# RECOMMENDED (user-scoped secrets)
+# To enable these, add them to your project's env vars in the Iterate dashboard.
+# =====================================
+${recommendedLines.join("\n")}
+`;
+  }
+
+  const envFileContent = envFileHeader + activeLines.join("\n") + recommendedSection;
 
   // Check if content changed before writing
   mkdirSync(dirname(envFilePath), { recursive: true });
@@ -128,7 +167,7 @@ NODE_USE_ENV_PROXY=1
   }
 
   return {
-    injectedCount: Object.keys(vars).length,
+    injectedCount: activeVars.length,
     removedCount: keysToRemove.length,
     envFilePath,
   };
