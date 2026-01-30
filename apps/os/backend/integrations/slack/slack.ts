@@ -80,6 +80,41 @@ export async function forwardSlackWebhookToMachine(
   }
 }
 
+/**
+ * Forward a Slack slash command to a machine's daemon.
+ */
+export async function forwardSlackCommandToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  payload: Record<string, unknown>,
+  env: CloudflareEnv,
+): Promise<{ success: boolean; error?: string }> {
+  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/slack/commands", env);
+  if (!targetUrl) {
+    return { success: false, error: "Could not build forward URL" };
+  }
+  try {
+    const resp = await fetch(targetUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) {
+      logger.error("[Slack Command] Forward failed", {
+        machine,
+        targetUrl,
+        status: resp.status,
+        text: await resp.text(),
+      });
+      return { success: false, error: `HTTP ${resp.status}` };
+    }
+    return { success: true };
+  } catch (err) {
+    logger.error("[Slack Command] Forward error", err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export const SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
@@ -534,7 +569,7 @@ slackApp.post("/interactive", async (c) => {
 });
 
 /**
- * Slack slash commands endpoint (for future use)
+ * Slack slash commands endpoint
  */
 slackApp.post("/commands", async (c) => {
   const body = await c.req.text();
@@ -551,8 +586,85 @@ slackApp.post("/commands", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
+  // Parse slash command payload (application/x-www-form-urlencoded)
+  const params = new URLSearchParams(body);
+  const command = params.get("command");
+  const text = params.get("text") ?? "";
+  const channelId = params.get("channel_id");
+  const userId = params.get("user_id");
+  const teamId = params.get("team_id");
+  const threadTs = params.get("thread_ts") ?? undefined;
+  const responseUrl = params.get("response_url");
+
+  logger.info("[Slack Command]", { command, userId, channelId, teamId });
+
+  // Get references for background processing
+  const db = c.var.db;
+  const env = c.env;
+
+  // Return immediate acknowledgment (Slack requires <3s response)
+  waitUntil(
+    (async () => {
+      try {
+        if (!teamId) {
+          logger.warn("[Slack Command] Missing teamId");
+          return;
+        }
+
+        // Find project connection by team_id
+        const connection = await db.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
+          with: {
+            project: {
+              with: {
+                machines: {
+                  where: (m, { eq }) => eq(m.state, "active"),
+                  limit: 1,
+                },
+              },
+            },
+          },
+        });
+
+        const targetMachine = connection?.project?.machines[0] ?? null;
+
+        if (targetMachine) {
+          logger.debug("[Slack Command] Forwarding to machine", { machineId: targetMachine.id });
+          await forwardSlackCommandToMachine(
+            targetMachine,
+            {
+              command,
+              text,
+              channelId,
+              userId,
+              teamId,
+              threadTs,
+              responseUrl,
+            },
+            env,
+          );
+        } else {
+          logger.warn("[Slack Command] No active machine found", { teamId });
+          // Send error response back to user
+          if (responseUrl) {
+            await fetch(responseUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                response_type: "ephemeral",
+                text: "⚠️ No active machine found for this workspace.",
+              }),
+            });
+          }
+        }
+      } catch (err) {
+        logger.error("[Slack Command] Background error", err);
+      }
+    })(),
+  );
+
   return c.json({
     response_type: "ephemeral",
-    text: "Command received! This feature is coming soon.",
+    text: "🔍 Processing...",
   });
 });
