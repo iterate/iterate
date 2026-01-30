@@ -189,7 +189,7 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       key: envVar.key,
       value: envVar.value,
       isSecret: envVar.value.includes("getIterateSecret"),
-      description: null,
+      description: envVar.description,
       egressProxyRule: null,
       source: { type: "user", envVarId: envVar.id },
       createdAt: envVar.createdAt,

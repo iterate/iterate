@@ -91,6 +91,7 @@ function ProjectEnvVarsPage() {
   // Form state
   const [formKey, setFormKey] = useState("");
   const [formValue, setFormValue] = useState("");
+  const [formDescription, setFormDescription] = useState("");
   const [formIsSecret, setFormIsSecret] = useState(false);
   const [secretHintDismissed, setSecretHintDismissed] = useState(false);
 
@@ -144,12 +145,13 @@ function ProjectEnvVarsPage() {
   };
 
   const setEnvVar = useMutation({
-    mutationFn: async (input: { key: string; value: string }) => {
+    mutationFn: async (input: { key: string; value: string; description?: string }) => {
       return trpcClient.envVar.set.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
+        description: input.description,
       });
     },
     onSuccess: () => {
@@ -207,6 +209,7 @@ function ProjectEnvVarsPage() {
   const resetForm = () => {
     setFormKey("");
     setFormValue("");
+    setFormDescription("");
     setFormIsSecret(false);
     setSecretHintDismissed(false);
   };
@@ -226,6 +229,7 @@ function ProjectEnvVarsPage() {
     setFormKey(envVar.key);
     // If it's a secret, don't show the magic string - show empty for new value entry
     setFormValue(envVar.isSecret ? "" : envVar.value);
+    setFormDescription(envVar.description ?? "");
     setFormIsSecret(envVar.isSecret);
     setEditingEnvVar(envVar);
     setAddSheetOpen(true);
@@ -235,6 +239,7 @@ function ProjectEnvVarsPage() {
     e.preventDefault();
     const key = formKey.trim();
     const value = formValue.trim();
+    const description = formDescription.trim() || undefined;
     if (!key || !value) return;
 
     // Check if this key will override an existing one
@@ -257,14 +262,14 @@ function ProjectEnvVarsPage() {
           await createSecret.mutateAsync({ key: secretKey, value });
         }
         const magicValue = `getIterateSecret({secretKey: '${secretKey}'})`;
-        await setEnvVar.mutateAsync({ key, value: magicValue });
+        await setEnvVar.mutateAsync({ key, value: magicValue, description });
       } catch (error) {
         // If secret already exists, try updating it
         if (error instanceof Error && error.message.includes("already exists")) {
           try {
             await updateSecret.mutateAsync({ key: secretKey, value });
             const magicValue = `getIterateSecret({secretKey: '${secretKey}'})`;
-            await setEnvVar.mutateAsync({ key, value: magicValue });
+            await setEnvVar.mutateAsync({ key, value: magicValue, description });
           } catch {
             toast.error("Failed to update secret");
           }
@@ -276,7 +281,7 @@ function ProjectEnvVarsPage() {
         }
       }
     } else {
-      setEnvVar.mutate({ key, value });
+      setEnvVar.mutate({ key, value, description });
     }
   };
 
@@ -336,6 +341,16 @@ function ProjectEnvVarsPage() {
                 rows={4}
                 className="font-mono text-sm"
                 autoFocus={!!editingEnvVar}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="env-description">Description (optional)</Label>
+              <Input
+                id="env-description"
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                placeholder="What this env var is used for"
+                disabled={isPending}
               />
             </div>
             <div className="flex items-center gap-2">
@@ -660,7 +675,13 @@ function ProjectEnvVarsPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setEnvVar.mutate({ key: rec.key, value: rec.value })}
+                  onClick={() =>
+                    setEnvVar.mutate({
+                      key: rec.key,
+                      value: rec.value,
+                      description: rec.description ?? undefined,
+                    })
+                  }
                   disabled={setEnvVar.isPending}
                 >
                   <Plus className="h-4 w-4" />

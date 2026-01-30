@@ -41,6 +41,7 @@ export const envVarRouter = router({
               "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
           }),
         value: z.string(),
+        description: z.string().optional(),
         // TODO: remove machineId - we're no longer supporting machine-specific env vars
         machineId: z.string().optional(),
       }),
@@ -58,7 +59,7 @@ export const envVarRouter = router({
       if (existing) {
         const [updated] = await ctx.db
           .update(projectEnvVar)
-          .set({ value: input.value })
+          .set({ value: input.value, description: input.description ?? null })
           .where(eq(projectEnvVar.id, existing.id))
           .returning();
 
@@ -74,6 +75,7 @@ export const envVarRouter = router({
           id: updated.id,
           key: updated.key,
           value: updated.value,
+          description: updated.description,
           createdAt: updated.createdAt,
           updatedAt: updated.updatedAt,
         };
@@ -86,6 +88,7 @@ export const envVarRouter = router({
           machineId: null, // Always project-level now
           key: input.key,
           value: input.value,
+          description: input.description ?? null,
         })
         .returning();
 
@@ -108,6 +111,7 @@ export const envVarRouter = router({
         id: created.id,
         key: created.key,
         value: created.value,
+        description: created.description,
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
       };
