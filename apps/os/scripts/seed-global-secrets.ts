@@ -29,7 +29,7 @@ export const GLOBAL_SECRETS_CONFIG = [
   },
   {
     envVar: "RESEND_BOT_API_KEY",
-    key: "resend.api_key",
+    key: "iterate.resend_api_key",
     description: "Resend API key for sending transactional emails",
     // note: don't let ppl use this for reading emails or doing anything other than sending.
     // there is an additional check in the egress proxy to make sure you can always send to your own org's email addresses.
