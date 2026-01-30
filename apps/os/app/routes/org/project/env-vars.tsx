@@ -100,30 +100,20 @@ function ProjectEnvVarsPage() {
 
   const { data: envVars } = useSuspenseQuery(envVarListOptions);
 
-  // Check which connectors are set up
-  const { data: githubConnection } = useSuspenseQuery(
-    trpc.project.getGithubConnection.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
-  );
-  const { data: slackConnection } = useSuspenseQuery(
-    trpc.project.getSlackConnection.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
-  );
-  const { data: googleConnection } = useSuspenseQuery(
-    trpc.project.getGoogleConnection.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
+  // Derive connected providers from env vars with connection source
+  const connectedProviders = new Set(
+    envVars
+      .filter(
+        (v): v is EnvVar & { source: { type: "connection"; provider: string } } =>
+          v.source.type === "connection",
+      )
+      .map((v) => v.source.provider),
   );
 
   const missingConnectors = [
-    !githubConnection.connected && { provider: "github", label: "GitHub", icon: Github },
-    !slackConnection.connected && { provider: "slack", label: "Slack", icon: MessageSquare },
-    !googleConnection.connected && { provider: "google", label: "Google", icon: Mail },
+    !connectedProviders.has("github") && { provider: "github", label: "GitHub", icon: Github },
+    !connectedProviders.has("slack") && { provider: "slack", label: "Slack", icon: MessageSquare },
+    !connectedProviders.has("google") && { provider: "google", label: "Google", icon: Mail },
   ].filter(Boolean) as Array<{
     provider: string;
     label: string;
