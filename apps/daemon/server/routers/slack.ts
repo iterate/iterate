@@ -13,6 +13,7 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import { z } from "zod/v4";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -236,23 +237,32 @@ slackRouter.post("/webhook", async (c) => {
   }
 });
 
+// Zod schema for slash command payload forwarded from OS backend
+const SlashCommandPayload = z.object({
+  command: z.string().optional(),
+  text: z.string().optional(),
+  channelId: z.string().optional(),
+  userId: z.string().optional(),
+  teamId: z.string().optional(),
+  threadTs: z.string().optional(),
+  responseUrl: z.string().optional(),
+});
+
 /**
  * Slack slash commands handler
  * Currently supports /debug command to get agent session link
  */
 slackRouter.post("/commands", async (c) => {
   try {
-    const payload = (await c.req.json()) as {
-      command?: string;
-      text?: string;
-      channelId?: string;
-      userId?: string;
-      teamId?: string;
-      threadTs?: string;
-      responseUrl?: string;
-    };
+    const body = await c.req.json();
+    const parseResult = SlashCommandPayload.safeParse(body);
 
-    const { command, channelId, userId, threadTs, responseUrl } = payload;
+    if (!parseResult.success) {
+      logger.error("[daemon/slack] Invalid slash command payload", parseResult.error);
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+
+    const { command, channelId, userId, threadTs, responseUrl } = parseResult.data;
 
     logger.log("[daemon/slack] Slash command received", { command, userId, channelId, threadTs });
 

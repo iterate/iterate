@@ -586,15 +586,46 @@ slackApp.post("/commands", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  // Parse slash command payload (application/x-www-form-urlencoded)
+  // Parse and validate slash command payload (application/x-www-form-urlencoded)
   const params = new URLSearchParams(body);
-  const command = params.get("command");
-  const text = params.get("text") ?? "";
-  const channelId = params.get("channel_id");
-  const userId = params.get("user_id");
-  const teamId = params.get("team_id");
-  const threadTs = params.get("thread_ts") ?? undefined;
-  const responseUrl = params.get("response_url");
+
+  const SlashCommand = z.object({
+    command: z.string().min(1),
+    text: z.string().default(""),
+    channel_id: z.string().min(1),
+    user_id: z.string().min(1),
+    team_id: z.string().min(1),
+    thread_ts: z.string().optional(),
+    response_url: z.string().url(),
+  });
+
+  const parseResult = SlashCommand.safeParse({
+    command: params.get("command"),
+    text: params.get("text"),
+    channel_id: params.get("channel_id"),
+    user_id: params.get("user_id"),
+    team_id: params.get("team_id"),
+    thread_ts: params.get("thread_ts"),
+    response_url: params.get("response_url"),
+  });
+
+  if (!parseResult.success) {
+    logger.error("[Slack Command] Invalid payload", parseResult.error);
+    return c.json({
+      response_type: "ephemeral",
+      text: "⚠️ Invalid command payload.",
+    });
+  }
+
+  const {
+    command,
+    text,
+    channel_id: channelId,
+    user_id: userId,
+    team_id: teamId,
+    thread_ts: threadTs,
+    response_url: responseUrl,
+  } = parseResult.data;
 
   logger.info("[Slack Command]", { command, userId, channelId, teamId });
 
