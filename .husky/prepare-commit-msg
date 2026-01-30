@@ -1,0 +1,45 @@
+#!/bin/sh
+
+# Block AI agents from rewriting git history
+# See: https://git-scm.com/docs/githooks#_prepare_commit_msg
+#
+# $2 is the commit source: message, template, merge, squash, or commit
+# "commit" means -c, -C, or --amend was used. $3 is the commit SHA.
+# - git commit --amend: $3 is HEAD (rewriting history - blocked)
+# - git commit -c <sha>: $3 is <sha> (reusing message for NEW commit - allowed)
+# - git commit -C <sha>: $3 is <sha> (reusing message for NEW commit - allowed)
+#
+# Check all known agent env vars for robustness
+if [ "$AGENT" = "1" ] || [ "$OPENCODE" = "1" ] || [ -n "$OPENCODE_SESSION" ] || [ -n "$CLAUDE_CODE" ]; then
+  # Detect --amend: $2=commit && $3=HEAD (without -m), or check COMMIT_EDITMSG
+  is_amend=""
+  if [ "$2" = "commit" ] && [ "$3" = "HEAD" ]; then
+    is_amend="yes"
+  elif grep -q "^# This is a combination of" "$1" 2>/dev/null; then
+    # Squash commit during rebase
+    is_amend="yes"
+  fi
+  
+  # For --amend -m, walk up process tree looking for git commit --amend
+  pid=$$
+  while [ "$pid" != "1" ] && [ -n "$pid" ]; do
+    cmd=$(ps -o args= -p "$pid" 2>/dev/null || true)
+    if echo "$cmd" | grep -q "git.*commit.*--amend"; then
+      is_amend="yes"
+      break
+    fi
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+  
+  if [ "$is_amend" = "yes" ]; then
+    echo "ERROR: AI agents are not allowed to use --amend (rewrites history)"
+    echo "Create a new commit instead."
+    echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
+    exit 1
+  fi
+  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+    echo "ERROR: AI agents are not allowed to rebase (rewrites history)"
+    echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
+    exit 1
+  fi
+fi
