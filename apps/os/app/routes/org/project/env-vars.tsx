@@ -83,7 +83,7 @@ function ProjectEnvVarsPage() {
   // Sheet state
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
-  const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
+  const [deleteConfirmEnvVar, setDeleteConfirmEnvVar] = useState<EnvVar | null>(null);
 
   // Info dialogs for non-editable sources
   const [infoDialogEnvVar, setInfoDialogEnvVar] = useState<EnvVar | null>(null);
@@ -196,7 +196,7 @@ function ProjectEnvVarsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
-      setDeleteConfirmKey(null);
+      setDeleteConfirmEnvVar(null);
       toast.success("Environment variable deleted!");
     },
     onError: (error) => {
@@ -491,12 +491,18 @@ function ProjectEnvVarsPage() {
       {infoDialogContent}
 
       <ConfirmDialog
-        open={!!deleteConfirmKey}
-        onOpenChange={(open) => !open && setDeleteConfirmKey(null)}
+        open={!!deleteConfirmEnvVar}
+        onOpenChange={(open) => !open && setDeleteConfirmEnvVar(null)}
         title="Delete environment variable?"
-        description={`This will permanently delete "${deleteConfirmKey}". This action cannot be undone.`}
+        description={
+          deleteConfirmEnvVar
+            ? isSecretWithCustomKey(deleteConfirmEnvVar)
+              ? `This will permanently delete "${deleteConfirmEnvVar.key}" and its stored secret. This action cannot be undone.`
+              : `This will delete "${deleteConfirmEnvVar.key}".`
+            : ""
+        }
         confirmLabel="Delete"
-        onConfirm={() => deleteConfirmKey && deleteEnvVar.mutate(deleteConfirmKey)}
+        onConfirm={() => deleteConfirmEnvVar && deleteEnvVar.mutate(deleteConfirmEnvVar.key)}
         destructive
       />
 
@@ -591,7 +597,7 @@ function ProjectEnvVarsPage() {
                       Edit
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() => setDeleteConfirmKey(envVar.key)}
+                      onClick={() => setDeleteConfirmEnvVar(envVar)}
                       className="text-destructive"
                     >
                       <Trash2 className="h-4 w-4 mr-2" />
@@ -713,4 +719,16 @@ function hasBlockingSecretHint(
   if (formIsSecret || dismissed) return false;
   const hint = getSecretHint(formKey, formValue);
   return hint.looksLikeSecret;
+}
+
+/**
+ * Check if an env var is a user-created secret (env.* key).
+ * Deleting these is permanent because the secret is also deleted.
+ */
+function isSecretWithCustomKey(envVar: EnvVar): boolean {
+  if (!envVar.isSecret) return false;
+  // Parse the magic string to get the secret key
+  const match = envVar.value.match(/getIterateSecret\({secretKey:\s*['"]([^'"]+)['"]/);
+  if (!match) return false;
+  return match[1].startsWith("env.");
 }

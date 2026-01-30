@@ -93,7 +93,7 @@ function getSecretSource(secretKey: string, isGlobal: boolean): EnvVarSource | n
  */
 export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<UnifiedEnvVar[]> {
   // Fetch all data in parallel
-  const [connections, projectEnvVars, secrets, userScopedSecrets] = await Promise.all([
+  const [connections, projectEnvVars, secrets] = await Promise.all([
     // Project connections
     db.query.projectConnection.findMany({
       where: eq(schema.projectConnection.projectId, projectId),
@@ -106,28 +106,28 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       ),
       orderBy: (v, { asc }) => [asc(v.createdAt)],
     }),
-    // Get all secrets for this project OR global secrets (non-user-scoped)
+    // Get all secrets for this project OR global secrets
     // ONLY key, description, egressProxyRule - NEVER encryptedValue!
+    // Include user relation for user-scoped secrets (e.g., Google OAuth)
     db.query.secret.findMany({
-      columns: { key: true, description: true, egressProxyRule: true, projectId: true },
-      where: and(
-        isNull(schema.secret.userId),
-        or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
-      ),
-    }),
-    // Get user-scoped secrets (e.g., Google OAuth) with user email for description
-    db.query.secret.findMany({
-      columns: { key: true, description: true, egressProxyRule: true, userId: true },
-      where: eq(schema.secret.projectId, projectId),
+      columns: {
+        key: true,
+        description: true,
+        egressProxyRule: true,
+        projectId: true,
+        userId: true,
+      },
+      where: or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
       with: {
         user: { columns: { email: true } },
       },
     }),
   ]);
 
-  // Separate global vs project secrets
+  // Separate secrets by type
   const globalSecrets = secrets.filter((s) => s.projectId === null);
-  const projectSecrets = secrets.filter((s) => s.projectId !== null);
+  const projectSecrets = secrets.filter((s) => s.projectId !== null && !s.userId);
+  const userScopedSecrets = secrets.filter((s) => s.projectId !== null && s.userId);
 
   // Check which connections are active
   const hasGitHub = connections.some((c) => c.provider === "github-app");
