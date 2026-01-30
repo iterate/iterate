@@ -6,27 +6,31 @@
  *
  * Usage: doppler run --config dev -- tsx apps/os/scripts/seed-global-secrets.ts
  */
+import { and, isNull, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { typeid } from "typeid-js";
 import * as schema from "../backend/db/schema.ts";
 import { encryptWithSecret } from "../backend/utils/encryption-core.ts";
 
-// Global secrets configuration: env var name -> secret key + egress rule
+// Global secrets configuration: env var name -> secret key + egress rule + description
 export const GLOBAL_SECRETS_CONFIG = [
   {
     envVar: "OPENAI_API_KEY",
-    key: "openai_api_key",
+    key: "iterate.openai_api_key",
+    description: "OpenAI API key for AI features and language models",
     egressProxyRule: `url.hostname = 'api.openai.com'`,
   },
   {
     envVar: "ANTHROPIC_API_KEY",
-    key: "anthropic_api_key",
+    key: "iterate.anthropic_api_key",
+    description: "Anthropic API key for Claude AI models",
     egressProxyRule: `url.hostname = 'api.anthropic.com'`,
   },
   {
     envVar: "RESEND_BOT_API_KEY",
     key: "resend.api_key",
+    description: "Resend API key for sending transactional emails",
     // note: don't let ppl use this for reading emails or doing anything other than sending.
     // there is an additional check in the egress proxy to make sure you can always send to your own org's email addresses.
     egressProxyRule: `url.hostname = 'api.resend.com' and (url.pathname = '/emails' or url.pathname = '/emails/batch')`,
@@ -34,6 +38,7 @@ export const GLOBAL_SECRETS_CONFIG = [
 ] as const satisfies Array<{
   envVar: string;
   key: string;
+  description: string;
   egressProxyRule: string;
 }>;
 
@@ -64,6 +69,27 @@ async function main() {
 
   console.log("Seeding global secrets...");
 
+  // Delete old global secrets that are no longer in the config
+  const configKeys = GLOBAL_SECRETS_CONFIG.map((c) => c.key);
+  const deleted = await db
+    .delete(schema.secret)
+    .where(
+      and(
+        isNull(schema.secret.organizationId),
+        isNull(schema.secret.projectId),
+        isNull(schema.secret.userId),
+        notInArray(schema.secret.key, configKeys),
+      ),
+    )
+    .returning({ key: schema.secret.key });
+
+  if (deleted.length > 0) {
+    console.log(
+      `  🗑 Deleted ${deleted.length} old global secrets:`,
+      deleted.map((d) => d.key),
+    );
+  }
+
   for (const config of GLOBAL_SECRETS_CONFIG) {
     const value = process.env[config.envVar];
     if (!value) {
@@ -83,6 +109,7 @@ async function main() {
         userId: null,
         key: config.key,
         encryptedValue,
+        description: config.description,
         egressProxyRule: config.egressProxyRule,
       })
       .onConflictDoUpdate({
@@ -94,6 +121,7 @@ async function main() {
         ],
         set: {
           encryptedValue,
+          description: config.description,
           egressProxyRule: config.egressProxyRule,
           updatedAt: new Date(),
         },

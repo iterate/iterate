@@ -31,7 +31,35 @@ export const workerContract = oc.router({
      */
     getEnv: oc.input(z.object({ machineId: z.string() })).output(
       z.object({
-        envVars: z.record(z.string(), z.string()),
+        envVars: z.array(
+          z.object({
+            key: z.string(),
+            value: z.string(),
+            secret: z
+              .object({
+                secretKey: z.string(),
+                secretScope: z.string(),
+                machineId: z.string().optional(),
+                userId: z.string().optional(),
+                userEmail: z.string().optional(),
+              })
+              .nullable(),
+            description: z.string().nullable(),
+            source: z.discriminatedUnion("type", [
+              z.object({ type: z.literal("global"), description: z.string() }),
+              z.object({
+                type: z.literal("connection"),
+                provider: z.enum(["github", "slack", "google"]),
+              }),
+              z.object({ type: z.literal("user"), envVarId: z.string() }),
+              z.object({
+                type: z.literal("recommended"),
+                provider: z.enum(["google"]),
+                userEmail: z.string(),
+              }),
+            ]),
+          }),
+        ),
         repos: z.array(
           z.object({
             url: z.string(),

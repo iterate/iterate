@@ -73,7 +73,7 @@ Would get you the calendar info for the user `test@example.com`.
 
 Note, this email is the email we store in OUR system, not the one for the downstream service. If a user connected a google account xyz@gmail.com but signed up with test@example.com, then you should use test@example.com.
 
-To further understand how env vars are injected and formatted, you can `cat ~/.iterate/.env`. You can also read the code in the iterate repo's egress-proxy to see how it works.
+To discover available env vars, use `iterate tool printenv`. This parses `~/.iterate/.env` and shows active and recommended env vars with descriptions.
 
 ## Cloudflare Tunnels
 

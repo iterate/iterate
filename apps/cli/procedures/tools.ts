@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import dedent from "dedent";
 import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
@@ -118,4 +121,63 @@ export const toolsRouter = t.router({
         };
       }),
   }),
+  printenv: t.procedure
+    .meta({ description: "List environment variables from ~/.iterate/.env" })
+    .input(z.object({}).optional())
+    .query(() => {
+      const envFilePath = join(homedir(), ".iterate/.env");
+      let content: string;
+      try {
+        content = readFileSync(envFilePath, "utf-8");
+      } catch (error) {
+        return {
+          success: false,
+          error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
+          activeEnvVars: [],
+          recommendedEnvVars: [],
+        };
+      }
+
+      const lines = content.split("\n");
+      type EnvVar = { name: string; description?: string };
+      const activeEnvVars: EnvVar[] = [];
+      const recommendedEnvVars: EnvVar[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        // Look for description in previous line (comment)
+        const getDescription = (): string | undefined => {
+          if (i > 0) {
+            const prevLine = lines[i - 1]?.trim();
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
+              return prevLine.replace(/^#\s*/, "");
+            }
+          }
+          return undefined;
+        };
+
+        // Match recommended env vars: #[recommended] FOO_BAR="..."
+        const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
+        if (recommendedMatch) {
+          recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
+          continue;
+        }
+
+        // Match active env vars: FOO_BAR="..." (not commented)
+        const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
+        if (activeMatch) {
+          activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
+          continue;
+        }
+      }
+
+      return {
+        success: true,
+        activeEnvVars,
+        recommendedEnvVars,
+        envFilePath,
+      };
+    }),
 });
