@@ -17,6 +17,7 @@ const clonedReposStatus: Map<
     status: "pending" | "cloning" | "cloned" | "error";
     error?: string;
     path?: string;
+    lastAttemptedSha?: string; // Track last expectedSha we tried to sync to
   }
 > = new Map();
 
@@ -227,7 +228,6 @@ export type RepoInfo = {
 /**
  * Clone repositories. Called directly by bootstrap-refresh.ts.
  * Cloning happens asynchronously in the background.
- * If expectedSha is set, ensures repo is at that sha (pulls if needed).
  */
 export function cloneRepos(repos: RepoInfo[]): void {
   for (const repo of repos) {
@@ -237,25 +237,37 @@ export function cloneRepos(repos: RepoInfo[]): void {
 
     // Skip if already cloning to prevent concurrent git operations
     if (existing?.status === "cloning") {
-      console.log(`[platform] Skipping ${repoKey} - already cloning`);
       continue;
     }
 
-    clonedReposStatus.set(repoKey, { status: "cloning", path: expandedPath });
+    // Skip if we already attempted this expectedSha (avoid retrying forever if sha unreachable)
+    if (repo.expectedSha && existing?.lastAttemptedSha === repo.expectedSha) {
+      continue;
+    }
 
-    // Clone/update in background
-    cloneOrUpdateRepo(repo.url, expandedPath, repo.branch, repo.expectedSha)
+    clonedReposStatus.set(repoKey, {
+      status: "cloning",
+      path: expandedPath,
+      lastAttemptedSha: repo.expectedSha,
+    });
+
+    // Clone in background
+    cloneRepo(repo.url, expandedPath, repo.branch, repo.expectedSha)
       .then(() => {
-        clonedReposStatus.set(repoKey, { status: "cloned", path: expandedPath });
-        console.log(`[platform] Cloned/updated ${repoKey} to ${expandedPath}`);
+        clonedReposStatus.set(repoKey, {
+          status: "cloned",
+          path: expandedPath,
+          lastAttemptedSha: repo.expectedSha,
+        });
       })
       .catch((err) => {
         clonedReposStatus.set(repoKey, {
           status: "error",
           error: err instanceof Error ? err.message : String(err),
           path: expandedPath,
+          lastAttemptedSha: repo.expectedSha,
         });
-        console.error(`[platform] Failed to clone/update ${repoKey}:`, err);
+        console.error(`[platform] Failed to clone ${repoKey}:`, err);
       });
   }
 }
@@ -293,11 +305,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Clone or update a repository to the specified path.
- * If expectedSha is set and repo exists, checks if update needed.
+ * Clone a repository to the specified path.
+ * Uses simple-git to avoid shell injection vulnerabilities.
  * Retries on proxy connection failures (mitmproxy may not be ready on startup).
  */
-async function cloneOrUpdateRepo(
+async function cloneRepo(
   url: string,
   targetPath: string,
   branch: string,
@@ -305,31 +317,33 @@ async function cloneOrUpdateRepo(
   retryCount = 0,
 ): Promise<void> {
   const MAX_RETRIES = 5;
-  const RETRY_DELAY_MS = 2000;
+  const RETRY_DELAY_MS = 2000; // 2 seconds between retries
 
   try {
-    await cloneOrUpdateRepoInternal(url, targetPath, branch, expectedSha);
+    await cloneRepoInternal(url, targetPath, branch, expectedSha);
   } catch (err) {
+    // Retry on proxy connection failures (mitmproxy may not be ready yet)
     if (isProxyConnectionError(err) && retryCount < MAX_RETRIES) {
       console.log(
-        `[platform] Proxy not ready, retrying in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
+        `[platform] Proxy not ready, retrying clone in ${RETRY_DELAY_MS}ms (attempt ${retryCount + 1}/${MAX_RETRIES})...`,
       );
       await sleep(RETRY_DELAY_MS);
-      return cloneOrUpdateRepo(url, targetPath, branch, expectedSha, retryCount + 1);
+      return cloneRepo(url, targetPath, branch, expectedSha, retryCount + 1);
     }
     throw err;
   }
 }
 
 /**
- * Internal clone/update implementation (no retry logic)
+ * Internal clone implementation (no retry logic)
  */
-async function cloneOrUpdateRepoInternal(
+async function cloneRepoInternal(
   url: string,
   targetPath: string,
   branch: string,
   expectedSha?: string,
 ): Promise<void> {
+  // Create parent directory if needed
   const parentDir = dirname(targetPath);
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
@@ -339,21 +353,15 @@ async function cloneOrUpdateRepoInternal(
   if (existsSync(join(targetPath, ".git"))) {
     const git = simpleGit(targetPath);
 
-    // If expectedSha set, check if we're already at that sha
+    // If expectedSha set, skip if already at that sha
     if (expectedSha) {
       const currentSha = (await git.revparse(["HEAD"])).trim();
       if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
-        console.log(
-          `[platform] Repo at ${targetPath} already at expected sha ${expectedSha.slice(0, 7)}`,
-        );
         return;
       }
-      console.log(
-        `[platform] Repo at ${targetPath} needs update (${currentSha.slice(0, 7)} -> ${expectedSha.slice(0, 7)})`,
-      );
     }
 
-    // Update remote URL (tokens expire) then fetch + reset
+    // Update remote URL to use fresh token (GitHub tokens expire after 1 hour)
     await git.remote(["set-url", "origin", url]);
     await git.fetch("origin", branch);
     await git.reset(["--hard", `origin/${branch}`]);
@@ -365,18 +373,22 @@ async function cloneOrUpdateRepoInternal(
     rmSync(targetPath, { recursive: true, force: true });
   }
 
-  // Clone the repo
+  // Clone the repo - try with branch first, fall back to default branch for empty repos
   const git = simpleGit();
   try {
     await git.clone(url, targetPath, ["--branch", branch, "--single-branch"]);
   } catch {
+    // Clean up any partial clone before retry
     if (existsSync(targetPath)) {
       rmSync(targetPath, { recursive: true, force: true });
     }
+
+    // If branch clone failed, try without --branch (handles empty repos or missing branches)
     console.log(`[platform] Branch clone failed, trying without --branch flag...`);
     try {
       await git.clone(url, targetPath);
     } catch (fallbackErr) {
+      // Clean up partial state from failed fallback clone to prevent corrupt retry state
       if (existsSync(targetPath)) {
         rmSync(targetPath, { recursive: true, force: true });
       }

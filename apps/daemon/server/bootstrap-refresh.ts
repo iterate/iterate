@@ -82,9 +82,9 @@ export async function fetchBootstrapData(): Promise<void> {
   // (new auth is handled via GIT_CONFIG_* env vars with magic strings that egress proxy resolves)
   await clearGitHubCredentials();
 
-  // Clone/update repos if any
+  // Clone repos if any
   if (result.repos.length > 0) {
     cloneRepos(result.repos);
-    console.log(`[bootstrap-refresh] Triggered clone/update for ${result.repos.length} repos`);
+    console.log(`[bootstrap-refresh] Triggered clone for ${result.repos.length} repos`);
   }
 }
