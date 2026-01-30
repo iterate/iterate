@@ -45,10 +45,12 @@ export function getLocalDockerGitInfo(repoRoot: string): LocalDockerGitInfo | un
     }
 
     const commit = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
-    const branch = execSync("git branch --show-current", {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    }).trim();
+    // git branch --show-current returns empty in detached HEAD state (e.g., CI checkout)
+    // Fall back to GITHUB_HEAD_REF which contains the PR branch name in GitHub Actions
+    const branch =
+      execSync("git branch --show-current", { cwd: repoRoot, encoding: "utf-8" }).trim() ||
+      process.env.GITHUB_HEAD_REF ||
+      undefined;
 
     return {
       gitDir: realpathSync(mainGitDir), // Resolve symlinks for clean path

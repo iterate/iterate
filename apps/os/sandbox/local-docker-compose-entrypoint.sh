@@ -52,9 +52,9 @@ if [ -n "${LOCAL_DOCKER_GIT_BRANCH:-}" ]; then
   echo "Checking out branch: $LOCAL_DOCKER_GIT_BRANCH"
   git checkout "$LOCAL_DOCKER_GIT_BRANCH"
 else
-  # No branch name (e.g., CI detached HEAD state) - create a local branch
-  echo "Creating branch 'local-dev' at commit ${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
-  git checkout -b local-dev "${LOCAL_DOCKER_GIT_COMMIT:-HEAD}"
+  echo "ERROR: LOCAL_DOCKER_GIT_BRANCH not set. This should be set by getLocalDockerGitInfo()."
+  echo "If running in CI, ensure GITHUB_HEAD_REF is available."
+  exit 1
 fi
 
 echo ""

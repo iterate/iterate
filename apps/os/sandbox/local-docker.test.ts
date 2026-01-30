@@ -276,15 +276,33 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(commit).toContain("test");
     });
 
-    test("git status works in iterate repo", async () => {
-      const status = await execInContainer(project.containerId, [
-        "git",
-        "-C",
-        CONTAINER_REPO_PATH,
-        "status",
-      ]);
-      // Should always be on a branch (local-docker-compose-entrypoint.sh creates one if needed)
-      expect(status).toMatch(/On branch/);
+    test("git state matches host", async () => {
+      const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+      expect(gitInfo).toBeDefined();
+
+      // Check branch matches
+      const containerBranch = (
+        await execInContainer(project.containerId, [
+          "git",
+          "-C",
+          CONTAINER_REPO_PATH,
+          "branch",
+          "--show-current",
+        ])
+      ).trim();
+      expect(containerBranch).toBe(gitInfo!.branch);
+
+      // Check commit matches
+      const containerCommit = (
+        await execInContainer(project.containerId, [
+          "git",
+          "-C",
+          CONTAINER_REPO_PATH,
+          "rev-parse",
+          "HEAD",
+        ])
+      ).trim();
+      expect(containerCommit).toBe(gitInfo!.commit);
     });
   });
 
