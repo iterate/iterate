@@ -107,3 +107,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: none
   - Useful context: PostHog API key stays in env; payloads avoid storing secrets in outbox_event
 ---
+
+## 2026-02-02 17:29:59 GMT - US-012
+- Emitted OAuth token refresh success/failure outbox events and logged them via consumers
+- Files changed: apps/os/backend/services/oauth-refresh.ts, apps/os/backend/services/oauth-refresh-outbox.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/outbox/consumers.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: emit OAuth refresh audit events via outbox after DB updates
+  - Gotchas encountered: keep outbox enqueue calls outside refresh try/catch to surface enqueue failures
+  - Useful context: refresh payloads omit tokens; include connector, org/project slugs, and reauth URL
+---

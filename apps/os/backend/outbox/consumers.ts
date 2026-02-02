@@ -25,6 +25,10 @@ import {
   handlePosthogEventCaptured,
   handlePosthogExceptionCaptured,
 } from "../lib/posthog-outbox.ts";
+import {
+  handleOAuthTokenFailed,
+  handleOAuthTokenRefreshed,
+} from "../services/oauth-refresh-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -188,6 +192,22 @@ function registerOAuthConsumers() {
     on: "connection:google:created",
     handler: async ({ payload }) => {
       await handleGoogleConnectionCreated(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "logOAuthTokenRefresh",
+    on: "oauth:token:refreshed",
+    handler: async ({ payload }) => {
+      await handleOAuthTokenRefreshed(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "logOAuthTokenRefreshFailure",
+    on: "oauth:token:failed",
+    handler: async ({ payload }) => {
+      await handleOAuthTokenFailed(payload);
     },
   });
 }

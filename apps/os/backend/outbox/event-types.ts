@@ -84,6 +84,28 @@ export type OAuthConnectionEventTypes = {
   };
 };
 
+export type OAuthTokenRefreshEventTypes = {
+  "oauth:token:refreshed": {
+    secretId: string;
+    connector?: string;
+    orgSlug?: string;
+    projectSlug?: string;
+    originalUrl: string;
+    refreshedAt: string;
+    expiresAt?: string;
+  };
+  "oauth:token:failed": {
+    secretId?: string;
+    connector?: string;
+    orgSlug?: string;
+    projectSlug?: string;
+    originalUrl: string;
+    failedAt: string;
+    reason: "NOT_REFRESHABLE" | "NO_REFRESH_TOKEN" | "REFRESH_FAILED" | "SECRET_NOT_FOUND";
+    reauthUrl: string;
+  };
+};
+
 export type UserEventTypes = {
   "user:created": {
     userId: string;
@@ -129,6 +151,7 @@ export type InternalEventTypes = {
   ResendWebhookEventTypes &
   MachineLifecycleEventTypes &
   OAuthConnectionEventTypes &
+  OAuthTokenRefreshEventTypes &
   BillingEventTypes &
   UserEventTypes &
   OrganizationEventTypes &

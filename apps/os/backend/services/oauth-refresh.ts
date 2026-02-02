@@ -12,6 +12,7 @@ import type { SecretMetadata } from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { decryptWithSecret, encryptWithSecret } from "../utils/encryption-core.ts";
 import { getConnectorForUrl, getFullReauthUrl } from "./connectors.ts";
+import { emitOAuthTokenFailed, emitOAuthTokenRefreshed } from "./oauth-refresh-outbox.ts";
 
 export type RefreshResult =
   | { ok: true; newValue: string }
@@ -59,8 +60,24 @@ export async function attemptSecretRefresh(
     where: eq(schema.secret.id, secretId),
   });
 
+  // Determine connector from URL
+  const connector = getConnectorForUrl(originalUrl);
+  const reauthUrl = connector
+    ? getFullReauthUrl(connector, context, context.publicUrl)
+    : "/settings/connectors";
+
   if (!secret) {
     logger.error("attemptSecretRefresh: secret not found", { secretId });
+    await emitOAuthTokenFailed(db, {
+      secretId,
+      connector: connector?.name,
+      orgSlug: context.orgSlug,
+      projectSlug: context.projectSlug,
+      originalUrl,
+      failedAt: new Date().toISOString(),
+      reason: "SECRET_NOT_FOUND",
+      reauthUrl: "/settings/connectors",
+    });
     return {
       ok: false,
       code: "REFRESH_FAILED",
@@ -68,15 +85,19 @@ export async function attemptSecretRefresh(
     };
   }
 
-  // Determine connector from URL
-  const connector = getConnectorForUrl(originalUrl);
-  const reauthUrl = connector
-    ? getFullReauthUrl(connector, context, context.publicUrl)
-    : "/settings/connectors";
-
   // Check if connector is refreshable
   if (!connector?.refreshable) {
     logger.debug("Connector not refreshable", { connector: connector?.name });
+    await emitOAuthTokenFailed(db, {
+      secretId,
+      connector: connector?.name,
+      orgSlug: context.orgSlug,
+      projectSlug: context.projectSlug,
+      originalUrl,
+      failedAt: new Date().toISOString(),
+      reason: "NOT_REFRESHABLE",
+      reauthUrl,
+    });
     return { ok: false, code: "NOT_REFRESHABLE", reauthUrl };
   }
 
@@ -86,8 +107,22 @@ export async function attemptSecretRefresh(
   if (connector.name === "GitHub") {
     if (!metadata?.githubInstallationId) {
       logger.debug("No GitHub installation ID for refresh", { secretId });
+      await emitOAuthTokenFailed(db, {
+        secretId,
+        connector: connector?.name,
+        orgSlug: context.orgSlug,
+        projectSlug: context.projectSlug,
+        originalUrl,
+        failedAt: new Date().toISOString(),
+        reason: "NO_REFRESH_TOKEN",
+        reauthUrl,
+      });
       return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
     }
+
+    let githubOutcome:
+      | { ok: true; accessToken: string; expiresAt?: string }
+      | { ok: false; reason: "REFRESH_FAILED" };
 
     try {
       const newTokenData = await refreshGitHubInstallationToken(
@@ -98,38 +133,76 @@ export async function attemptSecretRefresh(
       if (!newTokenData) {
         logger.warn("attemptSecretRefresh: GitHub refresh returned no data", { secretId });
         await updateSecretFailure(db, secretId);
-        return { ok: false, code: "REFRESH_FAILED", reauthUrl };
+        githubOutcome = { ok: false, reason: "REFRESH_FAILED" };
+      } else {
+        const encryptedNewToken = await encryptWithSecret(
+          newTokenData.accessToken,
+          context.encryptionSecret,
+        );
+
+        await db
+          .update(schema.secret)
+          .set({
+            encryptedValue: encryptedNewToken,
+            lastSuccessAt: new Date(),
+          })
+          .where(eq(schema.secret.id, secretId));
+
+        logger.debug("GitHub token refresh success", { secretId });
+        githubOutcome = {
+          ok: true,
+          accessToken: newTokenData.accessToken,
+          expiresAt: newTokenData.expiresAt,
+        };
       }
-
-      // Encrypt and store new token
-      const encryptedNewToken = await encryptWithSecret(
-        newTokenData.accessToken,
-        context.encryptionSecret,
-      );
-
-      await db
-        .update(schema.secret)
-        .set({
-          encryptedValue: encryptedNewToken,
-          lastSuccessAt: new Date(),
-        })
-        .where(eq(schema.secret.id, secretId));
-
-      logger.debug("GitHub token refresh success", { secretId });
-      return { ok: true, newValue: newTokenData.accessToken };
     } catch (error) {
       logger.error("attemptSecretRefresh: GitHub error", {
         secretId,
         error: error instanceof Error ? error.message : String(error),
       });
       await updateSecretFailure(db, secretId);
+      githubOutcome = { ok: false, reason: "REFRESH_FAILED" };
+    }
+
+    if (!githubOutcome.ok) {
+      await emitOAuthTokenFailed(db, {
+        secretId,
+        connector: connector?.name,
+        orgSlug: context.orgSlug,
+        projectSlug: context.projectSlug,
+        originalUrl,
+        failedAt: new Date().toISOString(),
+        reason: githubOutcome.reason,
+        reauthUrl,
+      });
       return { ok: false, code: "REFRESH_FAILED", reauthUrl };
     }
+
+    await emitOAuthTokenRefreshed(db, {
+      secretId,
+      connector: connector?.name,
+      orgSlug: context.orgSlug,
+      projectSlug: context.projectSlug,
+      originalUrl,
+      refreshedAt: new Date().toISOString(),
+      expiresAt: githubOutcome.expiresAt,
+    });
+    return { ok: true, newValue: githubOutcome.accessToken };
   }
 
   // Standard OAuth refresh flow for other connectors
   if (!metadata?.encryptedRefreshToken) {
     logger.warn("attemptSecretRefresh: no refresh token", { secretId });
+    await emitOAuthTokenFailed(db, {
+      secretId,
+      connector: connector?.name,
+      orgSlug: context.orgSlug,
+      projectSlug: context.projectSlug,
+      originalUrl,
+      failedAt: new Date().toISOString(),
+      reason: "NO_REFRESH_TOKEN",
+      reauthUrl,
+    });
     return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
   }
 
@@ -140,53 +213,83 @@ export async function attemptSecretRefresh(
   );
 
   // Attempt refresh based on connector type
+  let refreshOutcome:
+    | { ok: true; accessToken: string; expiresAt?: string }
+    | { ok: false; reason: "REFRESH_FAILED" };
+
   try {
     const newTokenData = await refreshOAuthToken(connector.name, refreshToken, context);
 
     if (!newTokenData) {
       logger.warn("attemptSecretRefresh: refresh returned no data", { secretId });
       await updateSecretFailure(db, secretId);
-      return { ok: false, code: "REFRESH_FAILED", reauthUrl };
-    }
-
-    // Encrypt and store new token
-    const encryptedNewToken = await encryptWithSecret(
-      newTokenData.accessToken,
-      context.encryptionSecret,
-    );
-
-    // Update metadata if we got a new refresh token
-    const newMetadata: SecretMetadata = { ...metadata };
-    if (newTokenData.refreshToken) {
-      newMetadata.encryptedRefreshToken = await encryptWithSecret(
-        newTokenData.refreshToken,
+      refreshOutcome = { ok: false, reason: "REFRESH_FAILED" };
+    } else {
+      const encryptedNewToken = await encryptWithSecret(
+        newTokenData.accessToken,
         context.encryptionSecret,
       );
-    }
-    if (newTokenData.expiresAt) {
-      newMetadata.expiresAt = newTokenData.expiresAt;
-    }
 
-    // Update the secret
-    await db
-      .update(schema.secret)
-      .set({
-        encryptedValue: encryptedNewToken,
-        metadata: newMetadata,
-        lastSuccessAt: new Date(),
-      })
-      .where(eq(schema.secret.id, secretId));
+      const newMetadata: SecretMetadata = { ...metadata };
+      if (newTokenData.refreshToken) {
+        newMetadata.encryptedRefreshToken = await encryptWithSecret(
+          newTokenData.refreshToken,
+          context.encryptionSecret,
+        );
+      }
+      if (newTokenData.expiresAt) {
+        newMetadata.expiresAt = newTokenData.expiresAt;
+      }
 
-    logger.debug("Token refresh success", { connector: connector.name });
-    return { ok: true, newValue: newTokenData.accessToken };
+      await db
+        .update(schema.secret)
+        .set({
+          encryptedValue: encryptedNewToken,
+          metadata: newMetadata,
+          lastSuccessAt: new Date(),
+        })
+        .where(eq(schema.secret.id, secretId));
+
+      logger.debug("Token refresh success", { connector: connector.name });
+      refreshOutcome = {
+        ok: true,
+        accessToken: newTokenData.accessToken,
+        expiresAt: newTokenData.expiresAt,
+      };
+    }
   } catch (error) {
     logger.error("attemptSecretRefresh: error", {
       secretId,
       error: error instanceof Error ? error.message : String(error),
     });
     await updateSecretFailure(db, secretId);
+    refreshOutcome = { ok: false, reason: "REFRESH_FAILED" };
+  }
+
+  if (!refreshOutcome.ok) {
+    await emitOAuthTokenFailed(db, {
+      secretId,
+      connector: connector?.name,
+      orgSlug: context.orgSlug,
+      projectSlug: context.projectSlug,
+      originalUrl,
+      failedAt: new Date().toISOString(),
+      reason: refreshOutcome.reason,
+      reauthUrl,
+    });
     return { ok: false, code: "REFRESH_FAILED", reauthUrl };
   }
+
+  await emitOAuthTokenRefreshed(db, {
+    secretId,
+    connector: connector?.name,
+    orgSlug: context.orgSlug,
+    projectSlug: context.projectSlug,
+    originalUrl,
+    refreshedAt: new Date().toISOString(),
+    expiresAt: refreshOutcome.expiresAt,
+  });
+  return { ok: true, newValue: refreshOutcome.accessToken };
 }
 
 /**
