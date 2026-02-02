@@ -369,6 +369,46 @@ async function cloneRepoInternal(url: string, targetPath: string, branch: string
   }
 }
 
+let lastSyncedIterateSha: string | null = null;
+
+/**
+ * Sync the iterate repo to the expected sha if needed.
+ */
+export async function syncIterateRepo(expectedSha: string): Promise<void> {
+  // Skip if we already synced to this sha
+  if (lastSyncedIterateSha === expectedSha) {
+    return;
+  }
+
+  const iterateRepoPath = process.env.ITERATE_REPO;
+  if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+    return;
+  }
+
+  const git = simpleGit(iterateRepoPath);
+  const currentSha = (await git.revparse(["HEAD"])).trim();
+
+  // Skip if already at expected sha
+  if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
+    lastSyncedIterateSha = expectedSha;
+    return;
+  }
+
+  console.log(`[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha}`);
+
+  const status = await git.status(["--porcelain"]);
+  if (!status.isClean()) {
+    console.log(`[platform] Iterate repo is dirty, stashing`);
+    const stash = await git.stash();
+    console.log(`[platform] Stashed changes: ${stash}`);
+  }
+
+  await git.checkout(["main"]);
+  await git.fetch("origin", "main");
+  await git.reset(["--hard", expectedSha]);
+  lastSyncedIterateSha = expectedSha;
+}
+
 export const platformRouter = createTRPCRouter({
   /**
    * Trigger an immediate refresh of bootstrap data from the control plane.
