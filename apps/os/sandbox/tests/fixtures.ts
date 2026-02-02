@@ -17,7 +17,7 @@ interface IntegrationFixtures extends LocalFixtures {
 }
 
 export const localTest = baseTest.extend<LocalFixtures>({
-  provider: async ({}, use) => {
+  provider: async (_ctx, use) => {
     await use(getProvider());
   },
   sandbox: async ({ provider, task }, use) => {
@@ -35,10 +35,10 @@ export const localTest = baseTest.extend<LocalFixtures>({
 });
 
 export const integrationTest = baseTest.extend<IntegrationFixtures>({
-  provider: async ({}, use) => {
+  provider: async (_ctx, use) => {
     await use(getProvider());
   },
-  mock: async ({}, use) => {
+  mock: async (_ctx, use) => {
     const mock = createMockIterateOsApi();
     await mock.start();
     await use(mock);

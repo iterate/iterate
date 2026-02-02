@@ -33,6 +33,7 @@ export default defineConfig([
   globalIgnores([
     "**/.cache/",
     "**/.corepack/",
+    "**/.pnpm-store/",
     "**/.turbo/",
     "**/.claude/",
     "**/.cursor/",
@@ -496,6 +497,14 @@ export default defineConfig([
     },
   },
   {
+    name: "sandbox-tests-no-react-hooks",
+    files: ["apps/os/sandbox/tests/**/*.ts", "apps/os/sandbox/tests/**/*.tsx"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+      "react-hooks/exhaustive-deps": "off",
+    },
+  },
+  {
     name: "backend-no-console",
     files: ["apps/*/backend/**/*.ts"],
     ignores: ["**/*test*/**", "**/*test*", "spec/**/*"],
@@ -520,6 +529,9 @@ function fixToSuggestionInIDE(builtinRule, desc = "Apply default fix") {
           if (prop === "report") {
             /** @param {Parameters<typeof context.report>[0]} params */
             return ({ fix, ...params }) => {
+              if (!fix) {
+                return context.report({ ...params });
+              }
               return context.report({ ...params, suggest: [{ desc, fix }] });
             };
           }

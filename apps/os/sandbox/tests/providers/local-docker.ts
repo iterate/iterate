@@ -76,7 +76,7 @@ function tagSandboxImage(projectName: string): void {
   try {
     execSync(`docker image inspect ${baseImage}`, { stdio: "ignore" });
     execSync(`docker tag ${baseImage} ${targetImage}`, { stdio: "inherit" });
-  } catch (err) {
+  } catch (_err) {
     throw new Error(
       `Sandbox image not found: ${baseImage}. Run 'pnpm os snapshot:local-docker' or pull from GHCR.`,
     );
