@@ -49,11 +49,7 @@ export const GLOBAL_SECRETS_CONFIG = [
   egressProxyRule: string;
 }>;
 
-export type GlobalSecretEnvVarName =
-  | (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"]
-  | "PSCALE_DATABASE_URL"
-  | "DATABASE_URL"
-  | "ENCRYPTION_SECRET";
+export type GlobalSecretEnvVarName = (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"];
 
 async function main() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
@@ -141,7 +137,10 @@ async function main() {
   console.log("Done!");
 }
 
-main().catch((err) => {
-  console.error("Failed to seed secrets:", err);
-  process.exit(1);
-});
+// look for --run so we can import values from this file without running it immediately
+if (process.argv.includes("--run")) {
+  main().catch((err) => {
+    console.error("Failed to seed secrets:", err);
+    process.exit(1);
+  });
+}
