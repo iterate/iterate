@@ -20,12 +20,22 @@ import {
   ItemDescription,
   ItemActions,
 } from "../components/ui/item.tsx";
+import { isFreeEmailDomain } from "../../backend/utils/free-email-domains.ts";
+import { slugify } from "../../backend/utils/slug.ts";
 
 const getDefaultOrgName = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const user = await context.variables.trpcCaller.user.me();
-    return (user.email.split("@").at(-1) ?? "").replace(".com", "");
+    const [localPart, domain] = user.email.split("@");
+    // For free email providers (gmail, yahoo, etc), use the username as the org name
+    // For work emails, use the domain (without .com suffix)
+    const baseName =
+      domain && isFreeEmailDomain(domain)
+        ? (localPart ?? "")
+        : (domain ?? "").replace(/\.com$/, "");
+    // Slugify to match what the slug will be (name === slug for simplicity)
+    return slugify(baseName);
   });
 
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
