@@ -45,9 +45,33 @@ export type MachineLifecycleEventTypes = {
   };
 };
 
+export type OAuthConnectionEventTypes = {
+  "connection:github:created": {
+    projectId: string;
+    installationId: number;
+    encryptedAccessToken: string;
+  };
+  "connection:slack:created": {
+    projectId: string;
+    teamId: string;
+    teamName: string;
+    teamDomain: string;
+    encryptedAccessToken: string;
+  };
+  "connection:google:created": {
+    projectId: string;
+    userId: string;
+    encryptedAccessToken: string;
+    encryptedRefreshToken?: string;
+    expiresAt?: string;
+    scopes: string[];
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
 } & StripeWebhookEventTypes &
   SlackWebhookEventTypes &
   ResendWebhookEventTypes &
-  MachineLifecycleEventTypes;
+  MachineLifecycleEventTypes &
+  OAuthConnectionEventTypes;

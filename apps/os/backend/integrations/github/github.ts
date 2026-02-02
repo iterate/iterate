@@ -7,6 +7,7 @@ import * as jose from "jose";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 
@@ -133,133 +134,90 @@ githubApp.get(
 
     const encryptedAccessToken = await encrypt(accessToken);
 
-    const project = await c.var.db.transaction(async (tx) => {
-      const existingConnection = await tx.query.projectConnection.findFirst({
-        where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "github-app")),
-      });
+    const { project } = await outboxClient.sendTx(
+      c.var.db,
+      "connection:github:created",
+      async (tx) => {
+        const existingConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) =>
+            and(eq(pc.projectId, projectId), eq(pc.provider, "github-app")),
+        });
 
-      if (existingConnection) {
-        await tx
-          .update(schema.projectConnection)
-          .set({
+        if (existingConnection) {
+          await tx
+            .update(schema.projectConnection)
+            .set({
+              externalId: installation_id.toString(),
+              providerData: {
+                installationId: installation_id,
+                githubUserId: userInfo.id,
+                githubLogin: userInfo.login,
+                encryptedAccessToken,
+              },
+            })
+            .where(eq(schema.projectConnection.id, existingConnection.id));
+        } else {
+          await tx.insert(schema.projectConnection).values({
+            projectId,
+            provider: "github-app",
             externalId: installation_id.toString(),
+            scope: "project",
+            userId,
             providerData: {
               installationId: installation_id,
               githubUserId: userInfo.id,
               githubLogin: userInfo.login,
               encryptedAccessToken,
             },
-          })
-          .where(eq(schema.projectConnection.id, existingConnection.id));
-      } else {
-        await tx.insert(schema.projectConnection).values({
-          projectId,
-          provider: "github-app",
-          externalId: installation_id.toString(),
-          scope: "project",
-          userId,
-          providerData: {
-            installationId: installation_id,
-            githubUserId: userInfo.id,
-            githubLogin: userInfo.login,
-            encryptedAccessToken,
-          },
-        });
-      }
+          });
+        }
 
-      if (installationRepos.repositories.length === 1) {
-        const repo = installationRepos.repositories[0];
-        const existingRepo = await tx.query.projectRepo.findFirst({
-          where: eq(schema.projectRepo.projectId, projectId),
-        });
+        if (installationRepos.repositories.length === 1) {
+          const repo = installationRepos.repositories[0];
+          const existingRepo = await tx.query.projectRepo.findFirst({
+            where: eq(schema.projectRepo.projectId, projectId),
+          });
 
-        if (existingRepo) {
-          await tx
-            .update(schema.projectRepo)
-            .set({
+          if (existingRepo) {
+            await tx
+              .update(schema.projectRepo)
+              .set({
+                provider: "github",
+                externalId: repo.id.toString(),
+                owner: repo.owner.login,
+                name: repo.name,
+                defaultBranch: repo.default_branch,
+              })
+              .where(eq(schema.projectRepo.id, existingRepo.id));
+          } else {
+            await tx.insert(schema.projectRepo).values({
+              projectId,
               provider: "github",
               externalId: repo.id.toString(),
               owner: repo.owner.login,
               name: repo.name,
               defaultBranch: repo.default_branch,
-            })
-            .where(eq(schema.projectRepo.id, existingRepo.id));
-        } else {
-          await tx.insert(schema.projectRepo).values({
-            projectId,
-            provider: "github",
-            externalId: repo.id.toString(),
-            owner: repo.owner.login,
-            name: repo.name,
-            defaultBranch: repo.default_branch,
-          });
-        }
-      }
-
-      // Upsert secret for egress proxy to use (project-scoped for sandbox git operations)
-      // This allows the magic string `getIterateSecret({secretKey: "github.access_token"})` to resolve
-      // We store the installation token (not user token) because git operations need app-level access
-      const projectInfo = await tx.query.project.findFirst({
-        where: eq(schema.project.id, projectId),
-      });
-
-      if (projectInfo) {
-        // Get a fresh installation token - this is what git operations need
-        const installationToken = await getGitHubInstallationToken(c.env, installation_id);
-        if (!installationToken) {
-          logger.error("Failed to get GitHub installation token", {
-            installationId: installation_id,
-          });
-          // Fall back to user token (may not work for private repos)
+            });
+          }
         }
 
-        const tokenToStore = installationToken || accessToken;
-        const encryptedToken = await encrypt(tokenToStore);
-
-        // Only store installationId in metadata if we have an installation token
-        // If we fell back to user token, don't store installationId (would cause refresh failures)
-        const secretMetadata = installationToken ? { githubInstallationId: installation_id } : {};
-
-        const existingSecret = await tx.query.secret.findFirst({
-          where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
-            whereAnd(
-              whereEq(s.key, "github.access_token"),
-              whereEq(s.projectId, projectId),
-              whereIsNull(s.userId), // Only match project-scoped secrets, not user-scoped
-            ),
+        const project = await tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
+          },
         });
 
-        const githubEgressRule = `$contains(url.hostname, 'github.com') or $contains(url.hostname, 'githubcopilot.com')`;
-
-        if (existingSecret) {
-          await tx
-            .update(schema.secret)
-            .set({
-              encryptedValue: encryptedToken,
-              lastSuccessAt: new Date(),
-              metadata: secretMetadata,
-              egressProxyRule: githubEgressRule,
-            })
-            .where(eq(schema.secret.id, existingSecret.id));
-        } else {
-          await tx.insert(schema.secret).values({
-            key: "github.access_token",
-            encryptedValue: encryptedToken,
-            organizationId: projectInfo.organizationId,
+        return {
+          payload: {
             projectId,
-            metadata: secretMetadata,
-            egressProxyRule: githubEgressRule,
-          });
-        }
-      }
-
-      return tx.query.project.findFirst({
-        where: eq(schema.project.id, projectId),
-        with: {
-          organization: true,
-        },
-      });
-    });
+            installationId: installation_id,
+            encryptedAccessToken,
+          },
+          project,
+        };
+      },
+    );
 
     const redirectPath =
       callbackURL ||

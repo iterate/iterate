@@ -4,13 +4,11 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import type { CloudflareEnv } from "../../../env.ts";
-import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
-import type { SecretMetadata } from "../../db/schema.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 
 /**
  * Google OAuth scopes for Gmail, Calendar, Docs, Sheets, and Drive access.
@@ -211,23 +209,44 @@ googleApp.get(
     const encryptedAccessToken = await encrypt(accessToken);
     const encryptedRefreshToken = refreshToken ? await encrypt(refreshToken) : undefined;
 
-    const project = await c.var.db.transaction(async (tx) => {
-      // Check if this user already has a Google connection for this project
-      const existingConnection = await tx.query.projectConnection.findFirst({
-        where: (pc, { eq: whereEq, and: whereAnd }) =>
-          whereAnd(
-            whereEq(pc.projectId, projectId),
-            whereEq(pc.provider, "google"),
-            whereEq(pc.userId, userId),
-          ),
-      });
+    const { project } = await outboxClient.sendTx(
+      c.var.db,
+      "connection:google:created",
+      async (tx) => {
+        // Check if this user already has a Google connection for this project
+        const existingConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq: whereEq, and: whereAnd }) =>
+            whereAnd(
+              whereEq(pc.projectId, projectId),
+              whereEq(pc.provider, "google"),
+              whereEq(pc.userId, userId),
+            ),
+        });
 
-      if (existingConnection) {
-        // Update existing connection
-        await tx
-          .update(schema.projectConnection)
-          .set({
+        if (existingConnection) {
+          // Update existing connection
+          await tx
+            .update(schema.projectConnection)
+            .set({
+              externalId: userInfo.id,
+              providerData: {
+                googleUserId: userInfo.id,
+                email: userInfo.email,
+                name: userInfo.name,
+                picture: userInfo.picture,
+                encryptedAccessToken,
+              },
+              scopes: GOOGLE_OAUTH_SCOPES.join(" "),
+            })
+            .where(eq(schema.projectConnection.id, existingConnection.id));
+        } else {
+          // Create new user-scoped connection
+          await tx.insert(schema.projectConnection).values({
+            projectId,
+            provider: "google",
             externalId: userInfo.id,
+            scope: "user",
+            userId,
             providerData: {
               googleUserId: userInfo.id,
               email: userInfo.email,
@@ -236,86 +255,28 @@ googleApp.get(
               encryptedAccessToken,
             },
             scopes: GOOGLE_OAUTH_SCOPES.join(" "),
-          })
-          .where(eq(schema.projectConnection.id, existingConnection.id));
-      } else {
-        // Create new user-scoped connection
-        await tx.insert(schema.projectConnection).values({
-          projectId,
-          provider: "google",
-          externalId: userInfo.id,
-          scope: "user",
-          userId,
-          providerData: {
-            googleUserId: userInfo.id,
-            email: userInfo.email,
-            name: userInfo.name,
-            picture: userInfo.picture,
-            encryptedAccessToken,
-          },
-          scopes: GOOGLE_OAUTH_SCOPES.join(" "),
-        });
-      }
-
-      // Upsert user-scoped secret for egress proxy
-      // This allows `getIterateSecret({secretKey: "google.access_token"})` to resolve for this user
-      const projectInfo = await tx.query.project.findFirst({
-        where: eq(schema.project.id, projectId),
-      });
-
-      if (projectInfo) {
-        const existingSecret = await tx.query.secret.findFirst({
-          where: (s, { and: whereAnd, eq: whereEq }) =>
-            whereAnd(
-              whereEq(s.key, "google.access_token"),
-              whereEq(s.projectId, projectId),
-              whereEq(s.userId, userId),
-            ),
-        });
-
-        const googleEgressRule = `$contains(url.hostname, 'googleapis.com')`;
-        const secretMetadata: SecretMetadata = {
-          encryptedRefreshToken,
-          expiresAt: expiresAt?.toISOString(),
-          scopes: GOOGLE_OAUTH_SCOPES,
-        };
-
-        if (existingSecret) {
-          await tx
-            .update(schema.secret)
-            .set({
-              encryptedValue: encryptedAccessToken,
-              metadata: secretMetadata,
-              lastSuccessAt: new Date(),
-              egressProxyRule: googleEgressRule,
-            })
-            .where(eq(schema.secret.id, existingSecret.id));
-        } else {
-          await tx.insert(schema.secret).values({
-            key: "google.access_token",
-            encryptedValue: encryptedAccessToken,
-            organizationId: projectInfo.organizationId,
-            projectId,
-            userId,
-            metadata: secretMetadata,
-            egressProxyRule: googleEgressRule,
           });
         }
-      }
 
-      return tx.query.project.findFirst({
-        where: eq(schema.project.id, projectId),
-        with: {
-          organization: true,
-        },
-      });
-    });
+        const project = await tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
+          },
+        });
 
-    // Poke running machines to refresh their bootstrap data
-    waitUntil(
-      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
-        logger.error("[Google OAuth] Failed to poke machines for refresh", err);
-      }),
+        return {
+          payload: {
+            projectId,
+            userId,
+            encryptedAccessToken,
+            encryptedRefreshToken,
+            expiresAt: expiresAt?.toISOString(),
+            scopes: GOOGLE_OAUTH_SCOPES,
+          },
+          project,
+        };
+      },
     );
 
     const redirectPath =

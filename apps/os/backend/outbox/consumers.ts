@@ -11,6 +11,11 @@ import {
   handleSlackInteractiveEvent,
   handleSlackWebhookEvent,
 } from "../integrations/slack/slack-outbox.ts";
+import {
+  handleGitHubConnectionCreated,
+  handleGoogleConnectionCreated,
+  handleSlackConnectionCreated,
+} from "../integrations/oauth-outbox.ts";
 import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.ts";
 import { handleMachineCreated, handleMachinePromoted } from "../machines/machine-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
@@ -21,6 +26,7 @@ export const registerConsumers = () => {
   registerSlackConsumers();
   registerResendConsumers();
   registerMachineConsumers();
+  registerOAuthConsumers();
 };
 
 function registerTestConsumers() {
@@ -145,6 +151,32 @@ function registerMachineConsumers() {
     on: "machine:promoted",
     handler: async ({ payload }) => {
       await handleMachinePromoted(payload);
+    },
+  });
+}
+
+function registerOAuthConsumers() {
+  cc.registerConsumer({
+    name: "provisionSlackConnectionSecrets",
+    on: "connection:slack:created",
+    handler: async ({ payload }) => {
+      await handleSlackConnectionCreated(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "provisionGitHubConnectionSecrets",
+    on: "connection:github:created",
+    handler: async ({ payload }) => {
+      await handleGitHubConnectionCreated(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "provisionGoogleConnectionSecrets",
+    on: "connection:google:created",
+    handler: async ({ payload }) => {
+      await handleGoogleConnectionCreated(payload);
     },
   });
 }

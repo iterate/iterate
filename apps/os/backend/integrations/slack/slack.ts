@@ -4,7 +4,6 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
-import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import { getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -13,7 +12,6 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 
 import { createMachineProvider } from "../../providers/index.ts";
-import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 /**
@@ -261,7 +259,7 @@ slackApp.get(
 
     let project;
     try {
-      project = await c.var.db.transaction(async (tx) => {
+      const result = await outboxClient.sendTx(c.var.db, "connection:slack:created", async (tx) => {
         // Check if this project already has a Slack connection
         const existingProjectConnection = await tx.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "slack")),
@@ -317,50 +315,25 @@ slackApp.get(
           });
         }
 
-        // Upsert secret for egress proxy to use
-        // This allows the magic string `getIterateSecret({secretKey: "slack.access_token"})` to resolve
-        const projectInfo = await tx.query.project.findFirst({
-          where: eq(schema.project.id, projectId),
-        });
-
-        if (projectInfo) {
-          const existingSecret = await tx.query.secret.findFirst({
-            where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
-              whereAnd(
-                whereEq(s.key, "slack.access_token"),
-                whereEq(s.projectId, projectId),
-                whereIsNull(s.userId), // Only match project-scoped secrets
-              ),
-          });
-
-          const slackEgressRule = `$contains(url.hostname, 'slack.com')`;
-          if (existingSecret) {
-            await tx
-              .update(schema.secret)
-              .set({
-                encryptedValue: encryptedAccessToken,
-                lastSuccessAt: new Date(),
-                egressProxyRule: slackEgressRule,
-              })
-              .where(eq(schema.secret.id, existingSecret.id));
-          } else {
-            await tx.insert(schema.secret).values({
-              key: "slack.access_token",
-              encryptedValue: encryptedAccessToken,
-              organizationId: projectInfo.organizationId,
-              projectId,
-              egressProxyRule: slackEgressRule,
-            });
-          }
-        }
-
-        return tx.query.project.findFirst({
+        const project = await tx.query.project.findFirst({
           where: eq(schema.project.id, projectId),
           with: {
             organization: true,
           },
         });
+
+        return {
+          payload: {
+            projectId,
+            teamId: teamData.id,
+            teamName: teamData.name,
+            teamDomain: teamData.domain,
+            encryptedAccessToken,
+          },
+          project,
+        };
       });
+      project = result.project;
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
         const conflictData = JSON.parse(
@@ -386,13 +359,6 @@ slackApp.get(
       }
       throw error;
     }
-
-    // Poke running machines to refresh their bootstrap data (they'll pull the new Slack token)
-    waitUntil(
-      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
-        logger.error("[Slack OAuth] Failed to poke machines for refresh", err);
-      }),
-    );
 
     const redirectPath =
       callbackURL ||

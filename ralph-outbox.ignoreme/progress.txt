@@ -6,6 +6,7 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
 - For non-tRPC events (webhooks), use `outboxClient.sendTx(getDb(), eventName, async (_tx) => ({ payload }))` to enqueue and let consumers handle side effects.
 - For tRPC routers emitting outbox events, use `outbox/internal-client.ts` with shared `outbox/event-types.ts` to avoid appRouter type cycles.
 - For machine promotion side effects, emit `machine:promoted` via `internalOutboxClient.sendTx` and pass archived machine info so consumers can archive providers asynchronously.
+- For OAuth callbacks, enqueue `connection:*:created` with connection metadata and let consumers provision secrets + poke machines.
 
 ## 2026-02-02 15:46:57 GMT - US-001
 - Ported outbox infra (pgmq library, queuer, client, consumers, type tests) and wired consumer registration on worker startup
@@ -59,4 +60,13 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Patterns discovered: include archived machine provider details in outbox payloads to avoid follow-up DB reads
   - Gotchas encountered: use `internalOutboxClient.sendTx` in non-tRPC paths to keep promotion updates and enqueue atomic
   - Useful context: provider archiving should run in consumers to keep daemon handlers fast and retryable
+---
+
+## 2026-02-02 16:40:12 GMT - US-007
+- Emitted OAuth connection outbox events and moved secret provisioning + machine refresh to consumers
+- Files changed: apps/os/backend/integrations/github/github.ts, apps/os/backend/integrations/google/google.ts, apps/os/backend/integrations/slack/slack.ts, apps/os/backend/integrations/oauth-outbox.ts, apps/os/backend/outbox/consumers.ts, apps/os/backend/outbox/event-types.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep OAuth handlers focused on connection writes and enqueue follow-up provisioning
+  - Gotchas encountered: include encrypted tokens in outbox payloads when consumer needs secret material
+  - Useful context: consumer names should describe side effects, not event names
 ---

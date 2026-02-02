@@ -101,7 +101,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Files: github.ts:136-262, slack.ts:245-344, google.ts:214-312."
     },
     {
