@@ -16,12 +16,7 @@ try {
   };
 }
 
-export type CloudflareEnv = {
-  // annoyingly cloudfalre types only allow for non-optional values
-  [K in keyof typeof worker.Env]: [(typeof worker.Env)[K]] extends [never]
-    ? string | undefined
-    : (typeof worker.Env)[K];
-};
+export type CloudflareEnv = typeof worker.Env;
 export const env = _env as CloudflareEnv;
 
 export { isProduction, isNonProd } from "./env-client.ts";
