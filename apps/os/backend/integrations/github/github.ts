@@ -9,6 +9,7 @@ import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -252,6 +253,11 @@ githubApp.get(
           });
         }
       }
+
+      // Emit connection:github:created event for async processing (machine refresh)
+      await outboxClient.sendTx(tx, "connection:github:created", async (_tx) => ({
+        payload: { projectId },
+      }));
 
       return tx.query.project.findFirst({
         where: eq(schema.project.id, projectId),

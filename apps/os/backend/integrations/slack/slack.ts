@@ -4,14 +4,12 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
-import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-
 import { createMachineProvider } from "../../providers/index.ts";
-import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
 /**
@@ -335,6 +333,11 @@ slackApp.get(
           }
         }
 
+        // Emit connection:slack:created event for async processing (machine refresh)
+        await outboxClient.sendTx(tx, "connection:slack:created", async (_tx) => ({
+          payload: { projectId },
+        }));
+
         return tx.query.project.findFirst({
           where: eq(schema.project.id, projectId),
           with: {
@@ -367,13 +370,6 @@ slackApp.get(
       }
       throw error;
     }
-
-    // Poke running machines to refresh their bootstrap data (they'll pull the new Slack token)
-    waitUntil(
-      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
-        logger.error("[Slack OAuth] Failed to poke machines for refresh", err);
-      }),
-    );
 
     const redirectPath =
       callbackURL ||

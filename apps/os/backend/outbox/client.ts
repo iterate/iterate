@@ -58,6 +58,12 @@ export type MachineEventTypes = {
   };
 };
 
+export type OAuthEventTypes = {
+  "connection:github:created": { projectId: string };
+  "connection:slack:created": { projectId: string };
+  "connection:google:created": { projectId: string };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -72,6 +78,7 @@ export const outboxClient = createConsumerClient<
     StripeEventTypes &
     SlackEventTypes &
     ResendEventTypes &
-    MachineEventTypes,
+    MachineEventTypes &
+    OAuthEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

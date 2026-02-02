@@ -4,13 +4,12 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import type { CloudflareEnv } from "../../../env.ts";
-import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import type { SecretMetadata } from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 /**
  * Google OAuth scopes for Gmail, Calendar, Docs, Sheets, and Drive access.
@@ -303,6 +302,11 @@ googleApp.get(
         }
       }
 
+      // Emit connection:google:created event for async processing (machine refresh)
+      await outboxClient.sendTx(tx, "connection:google:created", async (_tx) => ({
+        payload: { projectId },
+      }));
+
       return tx.query.project.findFirst({
         where: eq(schema.project.id, projectId),
         with: {
@@ -310,13 +314,6 @@ googleApp.get(
         },
       });
     });
-
-    // Poke running machines to refresh their bootstrap data
-    waitUntil(
-      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
-        logger.error("[Google OAuth] Failed to poke machines for refresh", err);
-      }),
-    );
 
     const redirectPath =
       callbackURL ||
