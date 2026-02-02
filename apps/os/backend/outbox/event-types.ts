@@ -102,6 +102,26 @@ export type OrganizationEventTypes = {
   };
 };
 
+export type PostHogEventTypes = {
+  "posthog:event.captured": {
+    distinctId: string;
+    event: string;
+    properties?: Record<string, unknown>;
+    groups?: Record<string, string>;
+    capturedAt: string;
+  };
+  "posthog:exception.captured": {
+    distinctId: string;
+    error: {
+      name: string;
+      message: string;
+      stack?: string;
+    };
+    properties?: Record<string, unknown>;
+    capturedAt: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
 } & StripeWebhookEventTypes &
@@ -111,4 +131,5 @@ export type InternalEventTypes = {
   OAuthConnectionEventTypes &
   BillingEventTypes &
   UserEventTypes &
-  OrganizationEventTypes;
+  OrganizationEventTypes &
+  PostHogEventTypes;

@@ -1,12 +1,16 @@
+import { getDb } from "../db/client.ts";
+import type { PostHogEventTypes } from "../outbox/event-types.ts";
+import { internalOutboxClient } from "../outbox/internal-client.ts";
 import { logger } from "../tag-logger.ts";
-
-const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
 
 /** Minimal env type for PostHog functions */
 type PostHogEnv = {
   POSTHOG_PUBLIC_KEY?: string;
   VITE_APP_STAGE: string;
 };
+
+type PostHogEventPayload = PostHogEventTypes["posthog:event.captured"];
+type PostHogExceptionPayload = PostHogEventTypes["posthog:exception.captured"];
 
 /**
  * Capture a server-side event via PostHog HTTP API.
@@ -33,61 +37,20 @@ export async function captureServerEvent(
     return;
   }
 
-  const body = {
-    api_key: apiKey,
+  const db = getDb();
+  const payload: PostHogEventPayload = {
+    distinctId: params.distinctId,
     event: params.event,
-    distinct_id: params.distinctId,
-    properties: {
-      ...params.properties,
-      $environment: env.VITE_APP_STAGE,
-      $lib: "posthog-fetch",
-      ...(params.groups && { $groups: params.groups }),
-    },
-    timestamp: new Date().toISOString(),
+    properties: params.properties,
+    groups: params.groups,
+    capturedAt: new Date().toISOString(),
   };
 
-  const response = await fetch(POSTHOG_CAPTURE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`PostHog capture failed: ${response.status} ${response.statusText}`);
-  }
-}
-
-/**
- * Parse a stack trace string into PostHog-compatible frames.
- */
-function parseStackTrace(stack: string | undefined): Array<{
-  filename: string;
-  function: string;
-  lineno: number | undefined;
-  colno: number | undefined;
-  in_app: boolean;
-}> {
-  if (!stack) return [];
-
-  const lines = stack.split("\n").slice(1); // Skip the first line (error message)
-  return lines
-    .map((line) => {
-      // Match patterns like "at functionName (filename:line:col)" or "at filename:line:col"
-      const match = line.match(/^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+):(\d+)\)?$/);
-      if (!match) return null;
-
-      const [, fn, filename, lineno, colno] = match;
-      return {
-        filename: filename || "<unknown>",
-        function: fn || "<anonymous>",
-        lineno: lineno ? parseInt(lineno, 10) : undefined,
-        colno: colno ? parseInt(colno, 10) : undefined,
-        in_app: !filename?.includes("node_modules"),
-      };
-    })
-    .filter((frame): frame is NonNullable<typeof frame> => frame !== null);
+  await internalOutboxClient.send(
+    { transaction: db, parent: db },
+    "posthog:event.captured",
+    payload,
+  );
 }
 
 /**
@@ -112,43 +75,21 @@ export async function captureServerException(
     return;
   }
 
-  const frames = parseStackTrace(params.error.stack);
-
-  const body = {
-    api_key: apiKey,
-    event: "$exception",
-    distinct_id: params.distinctId,
-    properties: {
-      $exception_list: [
-        {
-          type: params.error.name,
-          value: params.error.message,
-          mechanism: {
-            handled: true,
-            synthetic: false,
-          },
-          stacktrace: {
-            type: "raw",
-            frames,
-          },
-        },
-      ],
-      $environment: env.VITE_APP_STAGE,
-      $lib: "posthog-fetch",
-      ...params.properties,
+  const db = getDb();
+  const payload: PostHogExceptionPayload = {
+    distinctId: params.distinctId,
+    error: {
+      name: params.error.name,
+      message: params.error.message,
+      stack: params.error.stack,
     },
-    timestamp: new Date().toISOString(),
+    properties: params.properties,
+    capturedAt: new Date().toISOString(),
   };
 
-  const response = await fetch(POSTHOG_CAPTURE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    throw new Error(`PostHog capture failed: ${response.status} ${response.statusText}`);
-  }
+  await internalOutboxClient.send(
+    { transaction: db, parent: db },
+    "posthog:exception.captured",
+    payload,
+  );
 }

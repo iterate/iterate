@@ -21,6 +21,10 @@ import { handleMachineCreated, handleMachinePromoted } from "../machines/machine
 import { handleBillingCheckoutInitiated } from "../billing/billing-outbox.ts";
 import { handleUserCreated } from "../auth/auth-outbox.ts";
 import { handleOrganizationCreated } from "../organizations/organization-outbox.ts";
+import {
+  handlePosthogEventCaptured,
+  handlePosthogExceptionCaptured,
+} from "../lib/posthog-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -33,6 +37,7 @@ export const registerConsumers = () => {
   registerBillingConsumers();
   registerUserConsumers();
   registerOrganizationConsumers();
+  registerPosthogConsumers();
 };
 
 function registerTestConsumers() {
@@ -213,6 +218,24 @@ function registerOrganizationConsumers() {
     on: "organization:created",
     handler: async ({ payload }) => {
       await handleOrganizationCreated(payload);
+    },
+  });
+}
+
+function registerPosthogConsumers() {
+  cc.registerConsumer({
+    name: "capturePosthogEvent",
+    on: "posthog:event.captured",
+    handler: async ({ payload }) => {
+      await handlePosthogEventCaptured(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "capturePosthogException",
+    on: "posthog:exception.captured",
+    handler: async ({ payload }) => {
+      await handlePosthogExceptionCaptured(payload);
     },
   });
 }

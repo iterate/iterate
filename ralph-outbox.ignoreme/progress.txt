@@ -98,3 +98,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: none
   - Useful context: organization event payload includes id, slug, name, and creator for downstream automation
 ---
+
+## 2026-02-02 17:22:27 GMT - US-011
+- Queued PostHog event + exception capture via outbox and added consumers to forward to PostHog
+- Files changed: apps/os/backend/lib/posthog.ts, apps/os/backend/lib/posthog-outbox.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/outbox/consumers.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep PostHog payloads in outbox with capturedAt so consumer preserves original timestamps
+  - Gotchas encountered: none
+  - Useful context: PostHog API key stays in env; payloads avoid storing secrets in outbox_event
+---

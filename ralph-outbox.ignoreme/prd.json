@@ -156,7 +156,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "Current file references at posthog.ts:49, 143."
     },
     {
