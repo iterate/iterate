@@ -30,12 +30,9 @@ const getDefaultOrgName = createServerFn({ method: "GET" })
     const [localPart, domain] = user.email.split("@");
     // For free email providers (gmail, yahoo, etc), use the username as the org name
     // For work emails, use the domain (without .com suffix)
-    const baseName =
-      domain && isFreeEmailDomain(domain)
-        ? (localPart ?? "")
-        : (domain ?? "").replace(/\.com$/, "");
     // Slugify to match what the slug will be (name === slug for simplicity)
-    return slugify(baseName);
+    if (isFreeEmailDomain(domain)) return slugify(localPart.split("+")[0]);
+    return slugify(domain.replace(/\.com$/, "");
   });
 
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
