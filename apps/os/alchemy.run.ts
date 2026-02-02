@@ -347,6 +347,7 @@ async function setupDatabase() {
       env: {
         PSCALE_DATABASE_URL: origin,
         DATABASE_URL: origin,
+        ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
         ...Object.fromEntries(GLOBAL_SECRETS_CONFIG.map((c) => [c.envVar, process.env[c.envVar]])),
       },
       command: "tsx ./scripts/seed-global-secrets.ts --run",
