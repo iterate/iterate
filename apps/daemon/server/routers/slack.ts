@@ -413,6 +413,7 @@ function formatMidThreadMentionMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...(event.files?.map((file) => `File: ${file.id}`) || []),
     "",
   ];
 
@@ -447,6 +448,10 @@ function formatFyiMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...(event.files?.map((file) => {
+      if ("private_url" in file) return `File private_url: ${file.private_url}`;
+      return `File id: ${file.id}`;
+    }) || []),
     "",
   ];
 

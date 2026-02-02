@@ -30,7 +30,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop build-essential fd-find gh git inotify-tools make rsync sqlite3 sudo tini tmux && \
+    apt-get install -y btop build-essential fd-find gh git inotify-tools jq make rsync sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
@@ -45,12 +45,22 @@ RUN mkdir -p /var/log/pidnap && \
     chown -R iterate:iterate /var/log/pidnap
 
 # Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx
+RUN npm install -g pnpm tsx serve
 
 # Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
 RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
     echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
     chmod +x /usr/local/bin/iterate
+
+# Replicate CLI shim - directs users to iterate tool replicate
+RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
+    echo 'echo "Error: The replicate CLI is not installed." >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "Use iterate tool replicate instead. Example:" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "  iterate tool replicate '"'"'const output = await replicate.run(\"black-forest-labs/flux-schnell\", { input: { prompt: \"a cat\" } }); console.log(output);'"'"'" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
+    echo 'exit 1' >> /usr/local/bin/replicate && \
+    chmod +x /usr/local/bin/replicate
 
 # === Switch to non-root user ===
 
@@ -95,9 +105,6 @@ RUN mkdir -p /home/iterate/.local/bin && \
 
 # === Agent packages (npm, userspace) ===
 RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
-
-# Install Replicate CLI (Go-based)
-RUN go install github.com/replicate/cli@latest
 
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 
