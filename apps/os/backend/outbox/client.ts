@@ -16,6 +16,17 @@ export type EstateBuilderWorkflowInput = {
   isManual?: boolean;
 };
 
+export type StripeEventTypes = {
+  "stripe:subscription.created": { subscription: any; customerId: string };
+  "stripe:subscription.updated": { subscription: any; customerId: string };
+  "stripe:subscription.deleted": { subscription: any; customerId: string };
+  "stripe:subscription.paused": { subscription: any; customerId: string };
+  "stripe:subscription.resumed": { subscription: any; customerId: string };
+  "stripe:invoice.paid": { invoice: any; customerId: string };
+  "stripe:invoice.payment_failed": { invoice: any; customerId: string };
+  "stripe:checkout.session.completed": { session: any };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -25,6 +36,6 @@ export type InternalEventTypes = {
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
 export const outboxClient = createConsumerClient<
-  InternalEventTypes & AppTrpcEventTypes,
+  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

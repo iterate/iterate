@@ -1,8 +1,10 @@
 import { logger } from "../tag-logger.ts";
 import { outboxClient as cc } from "./client.ts";
+import { registerStripeConsumers } from "./stripe-consumers.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
+  registerStripeConsumers();
 };
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
