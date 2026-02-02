@@ -2,6 +2,9 @@
 Started: Mon  2 Feb 2026 15:30:58 GMT
 ---
 
+## Codebase Patterns
+- For non-tRPC events (webhooks), use `outboxClient.sendTx(getDb(), eventName, async (_tx) => ({ payload }))` to enqueue and let consumers handle side effects.
+
 ## 2026-02-02 15:46:57 GMT - US-001
 - Ported outbox infra (pgmq library, queuer, client, consumers, type tests) and wired consumer registration on worker startup
 - Files changed: apps/os/backend/outbox/*, apps/os/backend/trpc/trpc.ts, apps/os/backend/worker.ts, apps/os/backend/db/schema.ts, apps/os/backend/db/migrations/0013_outbox_event.sql, apps/os/backend/db/migrations/0014_pgmq.sql, apps/os/backend/db/migrations/0015_consumer_job_queue.sql, ralph-outbox.ignoreme/prd.json
@@ -9,4 +12,13 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Patterns discovered: outbox consumers register via `registerConsumers()` and can be wired early in `apps/os/backend/worker.ts`
   - Gotchas encountered: `tag-logger` lacks `logger.run`; use direct calls in outbox lib
   - Useful context: pgmq queue setup requires both schema migration and `pgmq.create('consumer_job_queue')`
+---
+
+## 2026-02-02 15:54:20 GMT - US-002
+- Moved Stripe webhook side effects to outbox consumers and enqueue events after verification
+- Files changed: apps/os/backend/integrations/stripe/webhook.ts, apps/os/backend/integrations/stripe/stripe-outbox.ts, apps/os/backend/outbox/consumers.ts, apps/os/backend/outbox/client.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: Stripe webhook consumers can reuse existing billing handlers with `env` from `apps/os/env.ts`
+  - Gotchas encountered: `sendTx` callbacks must return a Promise (use `async`)
+  - Useful context: keep webhook handlers minimal; emit per-event outbox names for clarity
 ---

@@ -30,7 +30,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Current handler at apps/os/backend/integrations/stripe/webhook.ts:39. Map event types to existing billing logic and PostHog tracking."
     },
     {
