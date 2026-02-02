@@ -11,6 +11,8 @@ import * as schema from "../db/schema.ts";
 import type { SecretMetadata } from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { decryptWithSecret, encryptWithSecret } from "../utils/encryption-core.ts";
+import { waitUntil } from "../../env.ts";
+import { outboxClient } from "../outbox/client.ts";
 import { getConnectorForUrl, getFullReauthUrl } from "./connectors.ts";
 
 export type RefreshResult =
@@ -77,6 +79,20 @@ export async function attemptSecretRefresh(
   // Check if connector is refreshable
   if (!connector?.refreshable) {
     logger.debug("Connector not refreshable", { connector: connector?.name });
+
+    // Emit failure event for audit
+    waitUntil(
+      outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+        payload: {
+          secretId,
+          connectorName: connector?.name || "unknown",
+          code: "NOT_REFRESHABLE",
+          errorMessage: "Connector does not support token refresh",
+          projectId: secret.projectId ?? undefined,
+        },
+      })),
+    );
+
     return { ok: false, code: "NOT_REFRESHABLE", reauthUrl };
   }
 
@@ -86,6 +102,20 @@ export async function attemptSecretRefresh(
   if (connector.name === "GitHub") {
     if (!metadata?.githubInstallationId) {
       logger.debug("No GitHub installation ID for refresh", { secretId });
+
+      // Emit failure event for audit
+      waitUntil(
+        outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+          payload: {
+            secretId,
+            connectorName: "GitHub",
+            code: "NO_REFRESH_TOKEN",
+            errorMessage: "No GitHub installation ID found",
+            projectId: secret.projectId ?? undefined,
+          },
+        })),
+      );
+
       return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
     }
 
@@ -98,6 +128,20 @@ export async function attemptSecretRefresh(
       if (!newTokenData) {
         logger.warn("attemptSecretRefresh: GitHub refresh returned no data", { secretId });
         await updateSecretFailure(db, secretId);
+
+        // Emit failure event for audit and alerting
+        waitUntil(
+          outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+            payload: {
+              secretId,
+              connectorName: "GitHub",
+              code: "REFRESH_FAILED",
+              errorMessage: "GitHub refresh returned no data",
+              projectId: secret.projectId ?? undefined,
+            },
+          })),
+        );
+
         return { ok: false, code: "REFRESH_FAILED", reauthUrl };
       }
 
@@ -116,13 +160,40 @@ export async function attemptSecretRefresh(
         .where(eq(schema.secret.id, secretId));
 
       logger.debug("GitHub token refresh success", { secretId });
+
+      // Emit success event for audit and alerting
+      waitUntil(
+        outboxClient.sendTx(db, "oauth:token:refreshed", async (_tx) => ({
+          payload: {
+            secretId,
+            connectorName: "GitHub",
+            projectId: secret.projectId ?? undefined,
+          },
+        })),
+      );
+
       return { ok: true, newValue: newTokenData.accessToken };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error("attemptSecretRefresh: GitHub error", {
         secretId,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       });
       await updateSecretFailure(db, secretId);
+
+      // Emit failure event for audit and alerting
+      waitUntil(
+        outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+          payload: {
+            secretId,
+            connectorName: "GitHub",
+            code: "REFRESH_FAILED",
+            errorMessage,
+            projectId: secret.projectId ?? undefined,
+          },
+        })),
+      );
+
       return { ok: false, code: "REFRESH_FAILED", reauthUrl };
     }
   }
@@ -130,6 +201,20 @@ export async function attemptSecretRefresh(
   // Standard OAuth refresh flow for other connectors
   if (!metadata?.encryptedRefreshToken) {
     logger.warn("attemptSecretRefresh: no refresh token", { secretId });
+
+    // Emit failure event for audit
+    waitUntil(
+      outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+        payload: {
+          secretId,
+          connectorName: connector.name,
+          code: "NO_REFRESH_TOKEN",
+          errorMessage: "No refresh token found in metadata",
+          projectId: secret.projectId ?? undefined,
+        },
+      })),
+    );
+
     return { ok: false, code: "NO_REFRESH_TOKEN", reauthUrl };
   }
 
@@ -146,6 +231,20 @@ export async function attemptSecretRefresh(
     if (!newTokenData) {
       logger.warn("attemptSecretRefresh: refresh returned no data", { secretId });
       await updateSecretFailure(db, secretId);
+
+      // Emit failure event for audit and alerting
+      waitUntil(
+        outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+          payload: {
+            secretId,
+            connectorName: connector.name,
+            code: "REFRESH_FAILED",
+            errorMessage: "Refresh returned no data",
+            projectId: secret.projectId ?? undefined,
+          },
+        })),
+      );
+
       return { ok: false, code: "REFRESH_FAILED", reauthUrl };
     }
 
@@ -178,13 +277,40 @@ export async function attemptSecretRefresh(
       .where(eq(schema.secret.id, secretId));
 
     logger.debug("Token refresh success", { connector: connector.name });
+
+    // Emit success event for audit and alerting
+    waitUntil(
+      outboxClient.sendTx(db, "oauth:token:refreshed", async (_tx) => ({
+        payload: {
+          secretId,
+          connectorName: connector.name,
+          projectId: secret.projectId ?? undefined,
+        },
+      })),
+    );
+
     return { ok: true, newValue: newTokenData.accessToken };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error("attemptSecretRefresh: error", {
       secretId,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     });
     await updateSecretFailure(db, secretId);
+
+    // Emit failure event for audit and alerting
+    waitUntil(
+      outboxClient.sendTx(db, "oauth:token:failed", async (_tx) => ({
+        payload: {
+          secretId,
+          connectorName: connector.name,
+          code: "REFRESH_FAILED",
+          errorMessage,
+          projectId: secret.projectId ?? undefined,
+        },
+      })),
+    );
+
     return { ok: false, code: "REFRESH_FAILED", reauthUrl };
   }
 }

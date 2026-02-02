@@ -110,6 +110,21 @@ export type PostHogEventTypes = {
   };
 };
 
+export type OAuthRefreshEventTypes = {
+  "oauth:token:refreshed": {
+    secretId: string;
+    connectorName: string;
+    projectId?: string;
+  };
+  "oauth:token:failed": {
+    secretId: string;
+    connectorName: string;
+    code: "NOT_REFRESHABLE" | "NO_REFRESH_TOKEN" | "REFRESH_FAILED";
+    errorMessage?: string;
+    projectId?: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -129,6 +144,7 @@ export const outboxClient = createConsumerClient<
     BillingEventTypes &
     UserEventTypes &
     OrganizationEventTypes &
-    PostHogEventTypes,
+    PostHogEventTypes &
+    OAuthRefreshEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

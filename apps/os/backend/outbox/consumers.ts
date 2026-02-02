@@ -9,6 +9,7 @@ import { registerBillingConsumers } from "./billing-consumers.ts";
 import { registerUserConsumers } from "./user-consumers.ts";
 import { registerOrganizationConsumers } from "./organization-consumers.ts";
 import { registerPostHogConsumers } from "./posthog-consumers.ts";
+import { registerOAuthRefreshConsumers } from "./oauth-refresh-consumers.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
@@ -21,6 +22,7 @@ export const registerConsumers = () => {
   registerUserConsumers();
   registerOrganizationConsumers();
   registerPostHogConsumers();
+  registerOAuthRefreshConsumers();
 };
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
