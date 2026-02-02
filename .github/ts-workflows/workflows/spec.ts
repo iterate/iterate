@@ -3,7 +3,7 @@ import dedent from "dedent";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "run specs",
+  name: "specs",
   on: {
     push: {},
   },
@@ -12,7 +12,7 @@ export default workflow({
     DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
   },
   jobs: {
-    run: {
+    specs: {
       ...utils.runsOn,
       steps: [
         { uses: "actions/checkout@v4" },
