@@ -92,6 +92,24 @@ export type OrganizationEventTypes = {
   };
 };
 
+export type PostHogEventTypes = {
+  "posthog:event": {
+    distinctId: string;
+    event: string;
+    properties?: Record<string, unknown>;
+    groups?: Record<string, string>;
+  };
+  "posthog:exception": {
+    distinctId: string;
+    error: {
+      name: string;
+      message: string;
+      stack?: string;
+    };
+    properties?: Record<string, unknown>;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -110,6 +128,7 @@ export const outboxClient = createConsumerClient<
     OAuthEventTypes &
     BillingEventTypes &
     UserEventTypes &
-    OrganizationEventTypes,
+    OrganizationEventTypes &
+    PostHogEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });
