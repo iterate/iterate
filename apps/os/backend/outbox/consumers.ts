@@ -3,12 +3,14 @@ import { outboxClient as cc } from "./client.ts";
 import { registerStripeConsumers } from "./stripe-consumers.ts";
 import { registerSlackConsumers } from "./slack-consumers.ts";
 import { registerResendConsumers } from "./resend-consumers.ts";
+import { registerMachineConsumers } from "./machine-consumers.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
   registerStripeConsumers();
   registerSlackConsumers();
   registerResendConsumers();
+  registerMachineConsumers();
 };
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */

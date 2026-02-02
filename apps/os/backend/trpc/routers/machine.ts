@@ -17,6 +17,7 @@ import { createMachineProvider, type MachineProvider } from "../../providers/ind
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<DaemonTRPCRouter>({
@@ -348,20 +349,44 @@ export const machineRouter = router({
           });
         });
 
-      // Create machine in DB with 'starting' state
+      // Create machine in DB with 'starting' state and emit machine:created event
       // It will be promoted to 'active' when the daemon reports ready
       const [newMachine] = await ctx.db
-        .insert(schema.machine)
-        .values({
-          id: machineId,
-          name: input.name,
-          type: input.type,
-          projectId: ctx.project.id,
-          state: "starting",
-          metadata: { ...(input.metadata ?? {}), ...(providerResult.metadata ?? {}) },
-          externalId: providerResult.externalId,
+        .transaction(async (tx) => {
+          const [machine] = await tx
+            .insert(schema.machine)
+            .values({
+              id: machineId,
+              name: input.name,
+              type: input.type,
+              projectId: ctx.project.id,
+              state: "starting",
+              metadata: { ...(input.metadata ?? {}), ...(providerResult.metadata ?? {}) },
+              externalId: providerResult.externalId,
+            })
+            .returning();
+
+          if (!machine) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to create machine",
+            });
+          }
+
+          // Emit machine:created event for async provisioning side effects
+          await outboxClient.sendTx(tx, "machine:created", async (_tx) => ({
+            payload: {
+              machineId: machine.id,
+              projectId: machine.projectId,
+              name: machine.name,
+              type: machine.type,
+              metadata: machine.metadata ?? {},
+              externalId: machine.externalId,
+            },
+          }));
+
+          return [machine];
         })
-        .returning()
         .catch(async (err) => {
           // Cleanup: delete the provider resource if DB insert fails
           // Need a new provider instance with the actual externalId for cleanup

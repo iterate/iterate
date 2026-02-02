@@ -36,6 +36,17 @@ export type ResendEventTypes = {
   "resend:email.received": { payload: Record<string, unknown>; resendEmailId: string };
 };
 
+export type MachineEventTypes = {
+  "machine:created": {
+    machineId: string;
+    projectId: string;
+    name: string;
+    type: string;
+    metadata: Record<string, unknown>;
+    externalId: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -45,6 +56,11 @@ export type InternalEventTypes = {
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
 export const outboxClient = createConsumerClient<
-  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes & SlackEventTypes & ResendEventTypes,
+  InternalEventTypes &
+    AppTrpcEventTypes &
+    StripeEventTypes &
+    SlackEventTypes &
+    ResendEventTypes &
+    MachineEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });
