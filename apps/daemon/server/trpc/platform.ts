@@ -405,7 +405,7 @@ export async function syncIterateRepo(expectedSha: string): Promise<void> {
 
   await git.checkout(["main"]);
   await git.fetch("origin", "main");
-  await git.merge([expectedSha]);
+  await git.reset(["--hard", expectedSha]);
   lastSyncedIterateSha = expectedSha;
 }
 
