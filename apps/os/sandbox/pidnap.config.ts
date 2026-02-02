@@ -92,6 +92,17 @@ export default defineConfig({
         cwd: `${iterateRepo}/apps/daemon`,
       },
     },
+    {
+      name: "task-build-daemon-client",
+      definition: {
+        command: "pnpm",
+        args: ["exec", "vite", "build", "--mode", "production"],
+        cwd: `${iterateRepo}/apps/daemon`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+    },
   ],
   processes: [
     {
@@ -118,31 +129,14 @@ export default defineConfig({
     },
     {
       name: "iterate-daemon",
-      // TODO: bring back built daemon react app for production use
-      // Just took it out because it was a bit of a faff and this way
-      // our container mirrors development more closely
-      definition: {
-        command: "pnpm",
-        args: ["exec", "vite", "--host", "0.0.0.0", "--port", "3000"],
-        cwd: `${iterateRepo}/apps/daemon`,
-      },
-      options: {
-        restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
-      },
-      envOptions: {
-        inheritGlobalEnv: false,
-      },
-    },
-    {
-      name: "iterate-daemon-server",
       definition: {
         command: "tsx",
         args: ["server.ts"],
         cwd: `${iterateRepo}/apps/daemon`,
         env: {
           HOSTNAME: "0.0.0.0",
-          PORT: "3001",
+          PORT: "3000",
+          NODE_ENV: "production",
         },
       },
       options: {

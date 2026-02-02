@@ -3,6 +3,7 @@
 FROM node:24-slim
 
 # === Versions ===
+ARG SANDBOX_CODEX_VERSION=0.93.0
 ARG SANDBOX_OPENCODE_VERSION=1.1.41
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ARG SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
@@ -14,7 +15,6 @@ ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
-ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
@@ -55,7 +55,6 @@ RUN useradd -m -s /bin/bash iterate && \
     chown -R iterate:iterate /home/iterate /var/log/pidnap
 
 USER iterate
-WORKDIR /home/iterate/src/github.com/iterate/iterate
 
 # Primary reason for this Dockerfile: keep wrapper scripts at absolute PATH top
 # (e.g. wrap claude/codex with dangerously skipped permissions).
@@ -96,9 +95,14 @@ RUN mkdir -p /home/iterate/.local/bin && \
 
 # === Agent packages (npm, userspace) ===
 RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
+RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
+
+# Repo path and working dir (used by COPY steps below).
+ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
+WORKDIR /home/iterate/src/github.com/iterate/iterate
 
 # Copy lockfile first (dependency layer)
 # This way, unless the dependencies change, we don't have to download from pnpm
@@ -122,10 +126,13 @@ COPY --chown=iterate:iterate --exclude=.git . .
 # Without it, build fails: "gitdir not found". Script always provides it.
 COPY --from=gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
 
-# Copy home skeleton into /home/iterate 
-RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home.sh"
-
 # Install dependencies
 RUN pnpm install --frozen-lockfile --offline
+
+# Build daemon frontend
+RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
+
+# Copy home skeleton into /home/iterate
+RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 
 ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/entry.sh"]

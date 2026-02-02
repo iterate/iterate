@@ -36,30 +36,24 @@ export interface LocalDockerGitInfo {
  */
 export function getLocalDockerGitInfo(repoRoot: string): LocalDockerGitInfo | undefined {
   try {
-    const commit = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
-    const gitDirRaw = execSync("git rev-parse --git-dir", {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    }).trim();
-    const commonDirRaw = execSync("git rev-parse --git-common-dir", {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    }).trim();
-    // git branch --show-current returns empty in detached HEAD state (e.g., CI checkout)
-    // We don't use GITHUB_HEAD_REF because that branch may not exist in the local git clone
-    const branch =
-      execSync("git branch --show-current", { cwd: repoRoot, encoding: "utf-8" }).trim() ||
-      undefined;
-
+    const runGit = (command: string) =>
+      execSync(command, { cwd: repoRoot, encoding: "utf-8" }).trim();
     const resolvePath = (value: string) =>
       realpathSync(isAbsolute(value) ? value : join(repoRoot, value));
+
+    const commit = runGit("git rev-parse HEAD");
+    const gitDirRaw = runGit("git rev-parse --git-dir");
+    const commonDirRaw = runGit("git rev-parse --git-common-dir");
+    // git branch --show-current returns empty in detached HEAD state (e.g., CI checkout)
+    // We don't use GITHUB_HEAD_REF because that branch may not exist in the local git clone
+    const branch = runGit("git branch --show-current") || undefined;
 
     return {
       repoRoot: realpathSync(repoRoot),
       gitDir: resolvePath(gitDirRaw),
       commonDir: resolvePath(commonDirRaw),
       commit,
-      branch: branch || undefined,
+      branch,
     };
   } catch (err) {
     console.warn("Failed to get local Docker git info:", err);

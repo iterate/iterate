@@ -96,5 +96,5 @@ docker buildx build --push -f apps/os/sandbox/Dockerfile \\
 
 - `apps/os/sandbox/Dockerfile`
 - `apps/os/sandbox/entry.sh`
-- `apps/os/sandbox/sync-home.sh`
+- `apps/os/sandbox/sync-home-skeleton.sh`
 - `apps/os/sandbox/pidnap.config.ts`

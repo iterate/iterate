@@ -5,7 +5,7 @@ ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
 HOME_SKELETON="$ITERATE_REPO/apps/os/sandbox/home-skeleton"
 
 if [ ! -d "$HOME_SKELETON" ]; then
-  echo "[sync-home] Missing home skeleton: $HOME_SKELETON" >&2
+  echo "[sync-home-skeleton] Missing home skeleton: $HOME_SKELETON" >&2
   exit 1
 fi
 
@@ -27,7 +27,7 @@ warn_if_newer() {
     src_mtime=$(get_mtime "$src")
     dest_mtime=$(get_mtime "$dest")
     if [ "$dest_mtime" -gt "$src_mtime" ]; then
-      echo "[sync-home] $dest is newer than source; overwriting anyway"
+      echo "[sync-home-skeleton] $dest is newer than source; overwriting anyway"
     fi
   fi
 }

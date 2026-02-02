@@ -19,22 +19,17 @@ const overrideKeys = [
   "LOCAL_DOCKER_GIT_BRANCH",
   "LOCAL_DOCKER_GIT_REPO_ROOT",
 ] as const;
-const overrides = Object.fromEntries(
-  overrideKeys.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
-);
-const envVars = { ...derivedEnvVars, ...overrides };
-const composeProjectName =
-  envVars.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? getLocalDockerComposeProjectName(repoRoot);
-
 const env = {
   ...process.env,
-  ...envVars,
-  COMPOSE_PROJECT_NAME: composeProjectName,
+  ...derivedEnvVars,
+  ...Object.fromEntries(
+    overrideKeys.map((key) => [key, process.env[key]] as const).filter(([, value]) => value),
+  ),
 };
 
 const args = process.argv.slice(2);
 if (args[0] === "--") args.shift();
 
-const cmd = args.length === 0 ? ["docker", "compose"] : ["docker", "compose", ...args];
+const cmd = ["docker", "compose", ...args];
 const result = spawnSync(cmd[0], cmd.slice(1), { env, stdio: "inherit" });
 process.exit(result.status ?? 1);

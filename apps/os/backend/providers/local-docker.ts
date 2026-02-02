@@ -370,6 +370,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       const envVarsWithDev = {
         ...rewrittenEnvVars,
         ITERATE_DEV: "true",
+        ...(mounts ? { LOCAL_DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
       };
 
       const envArray = sanitizeEnvVars(envVarsWithDev);
