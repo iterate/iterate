@@ -56,9 +56,11 @@ function secretKeyToEnvVarNames(secretKey: string): string[] {
     }
     return [...new Set(names)];
   }
-  if (secretKey.startsWith("slack.") || secretKey.startsWith("resend.")) {
-    // Slack and Resend are specifically for our bots to send replies to users - worth including "ITERATE_" prefix for clarity.
-    return ["ITERATE_" + secretKey.replace(".", "_").toUpperCase()];
+  if (secretKey === "slack.access_token") {
+    return ["SLACK_BOT_TOKEN"];
+  }
+  if (secretKey === "replicate.api_token") {
+    return ["REPLICATE_API_TOKEN"];
   }
   if (secretKey.startsWith("google.")) {
     return [
