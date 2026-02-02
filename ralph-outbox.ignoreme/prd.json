@@ -1,0 +1,176 @@
+{
+  "project": "Iterate - Outbox Pattern Candidates",
+  "branchName": "ralph/outbox-pattern-candidates-v2",
+  "description": "Port outbox implementation from v2025 and apply it to high-value backend workflows (webhooks, machine lifecycle, OAuth, billing).",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Port outbox infrastructure from v2025",
+      "description": "Bring apps/os/backend/outbox modules, schema, and queue setup into current branch.",
+      "acceptanceCriteria": [
+        "Port v2025 outbox modules into apps/os/backend/outbox/",
+        "Add migration for outbox_event table and pgmq queue setup",
+        "Wire outbox client/consumers into backend startup path",
+        "Include minimal consumer registration pattern/example",
+        "pnpm typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Source in v2025 branch: apps/os/backend/outbox/* (client.ts, consumers.ts, pgmq-lib.ts, outbox-queuer.ts)."
+    },
+    {
+      "id": "US-002",
+      "title": "Outbox Stripe webhook processing",
+      "description": "Move Stripe webhook side effects to outbox consumers.",
+      "acceptanceCriteria": [
+        "apps/os/backend/integrations/stripe/webhook.ts writes verified events to outbox",
+        "Webhook handler returns after enqueue; no inline business logic",
+        "Consumers handle: subscription created, subscription updated/deleted/paused/resumed, invoice paid/payment_failed, checkout.session.completed",
+        "Retryable processing via outbox (no waitUntil direct forwarding)",
+        "pnpm typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Current handler at apps/os/backend/integrations/stripe/webhook.ts:39. Map event types to existing billing logic and PostHog tracking."
+    },
+    {
+      "id": "US-003",
+      "title": "Outbox Slack webhook processing",
+      "description": "Write Slack events to outbox and process via consumers.",
+      "acceptanceCriteria": [
+        "apps/os/backend/integrations/slack/slack.ts writes raw events to outbox",
+        "Consumer forwards events to daemon machines",
+        "Separate consumer handles interactive callbacks",
+        "Webhook handler returns ok after enqueue",
+        "pnpm typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "See slack.ts:392 for event handling and slack.ts:504 for interactive callbacks."
+    },
+    {
+      "id": "US-004",
+      "title": "Outbox Resend webhook processing",
+      "description": "Queue Resend events and forward via consumer.",
+      "acceptanceCriteria": [
+        "apps/os/backend/integrations/resend/resend.ts writes raw events to outbox",
+        "Consumer forwards events to daemon",
+        "Handler returns after enqueue",
+        "pnpm typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Current handler at apps/os/backend/integrations/resend/resend.ts:253."
+    },
+    {
+      "id": "US-005",
+      "title": "Outbox machine provisioning side effects",
+      "description": "Emit machine lifecycle events and handle provisioning in consumers.",
+      "acceptanceCriteria": [
+        "apps/os/backend/trpc/routers/machine.ts emits machine:created on insert",
+        "Consumer handles Daytona provisioning, initial state tracking, and PostHog event",
+        "Event payload includes machineId, projectId, and provider metadata",
+        "pnpm typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Current flow in machine.ts:285-396. Consider machine:ready and machine:archived events if needed."
+    },
+    {
+      "id": "US-006",
+      "title": "Outbox machine archival after promotion",
+      "description": "Queue machine:promoted and archive old machines via consumer.",
+      "acceptanceCriteria": [
+        "apps/os/backend/orpc/router.ts emits machine:promoted after new active machine",
+        "Consumer runs archiveOldMachines and provider.archive",
+        "Retry on failures via outbox",
+        "pnpm typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "Current waitUntil path in orpc/router.ts:184-202."
+    },
+    {
+      "id": "US-007",
+      "title": "Outbox OAuth connection setup",
+      "description": "Queue OAuth completion events and handle side effects in consumers.",
+      "acceptanceCriteria": [
+        "Emit connection:github:created, connection:slack:created, connection:google:created after OAuth callbacks",
+        "Consumers provision secrets and poke running machines to refresh",
+        "Remove direct pokeRunningMachinesToRefresh calls from handlers",
+        "pnpm typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "Files: github.ts:136-262, slack.ts:245-344, google.ts:214-312."
+    },
+    {
+      "id": "US-008",
+      "title": "Outbox billing checkout initiation",
+      "description": "Queue checkout initiation and create Stripe customer/session in consumers.",
+      "acceptanceCriteria": [
+        "apps/os/backend/trpc/routers/billing.ts emits billing:checkout:initiated",
+        "Consumer creates Stripe customer if missing",
+        "Consumer creates checkout session",
+        "pnpm typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "Current flow in billing.ts:29-71."
+    },
+    {
+      "id": "US-009",
+      "title": "Outbox user signup side effects",
+      "description": "Emit user:created and move side effects to consumers.",
+      "acceptanceCriteria": [
+        "apps/os/backend/auth/auth.ts emits user:created",
+        "Consumer sends PostHog user_signed_up event",
+        "Hook points for future welcome email and default org creation",
+        "pnpm typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Current flow in auth.ts:72-107."
+    },
+    {
+      "id": "US-010",
+      "title": "Outbox organization creation",
+      "description": "Emit organization:created for future side effects.",
+      "acceptanceCriteria": [
+        "apps/os/backend/trpc/routers/organization.ts emits organization:created",
+        "Consumer stub registered for future automation",
+        "pnpm typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Current flow in organization.ts:40-56."
+    },
+    {
+      "id": "US-011",
+      "title": "Outbox PostHog event capture",
+      "description": "Queue PostHog events for retry and audit trail.",
+      "acceptanceCriteria": [
+        "apps/os/backend/lib/posthog.ts writes events to outbox instead of fire-and-forget",
+        "Consumer sends PostHog events with existing payload shape",
+        "Batching or retry logic documented in consumer",
+        "pnpm typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Current file references at posthog.ts:49, 143."
+    },
+    {
+      "id": "US-012",
+      "title": "Outbox OAuth token refresh events",
+      "description": "Emit oauth token refresh events for audit and alerting.",
+      "acceptanceCriteria": [
+        "apps/os/backend/services/oauth-refresh.ts emits oauth:token:refreshed and oauth:token:failed",
+        "Consumers log or track failures (no inline console)",
+        "pnpm typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "Ensure egress proxy path still refreshes tokens correctly."
+    }
+  ]
+}

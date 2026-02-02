@@ -8,6 +8,7 @@ import {
   index,
   integer,
   check,
+  bigserial,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
@@ -550,6 +551,15 @@ export const eventRelations = relations(event, ({ one }) => ({
   }),
 }));
 // #endregion ========== Events ==========
+
+// #region ========== Outbox ==========
+export const outboxEvent = pgTable("outbox_event", (t) => ({
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  name: t.text().notNull(),
+  payload: jsonb().$type<Record<string, unknown>>().notNull(),
+  ...withTimestamps,
+}));
+// #endregion ========== Outbox ==========
 
 // #region ========== Project Repo (simplified iterateConfigSource) ==========
 export const projectRepo = pgTable(

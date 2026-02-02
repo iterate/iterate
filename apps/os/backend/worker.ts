@@ -27,9 +27,12 @@ import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
 import type { Variables } from "./types.ts";
 
 export type { Variables };
+
+registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
