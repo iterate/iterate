@@ -264,7 +264,7 @@ async function verifyDopplerEnvironment() {
 const NonEmpty = z.string().nonempty();
 const Required = NonEmpty;
 const Optional = NonEmpty.optional();
-const BoolyString = z.stringbool().optional();
+const BoolyString = z.enum(["true", "false"]).optional();
 /** needed by the deploy script, but not at runtime */
 const Env = z.object({
   // you'll need CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and ALCHEMY_STATE_TOKEN for the deployment to work, but not at runtime
