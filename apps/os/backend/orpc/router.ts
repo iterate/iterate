@@ -2,7 +2,6 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -14,6 +13,7 @@ import { decrypt } from "../utils/encryption.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
+import { outboxClient } from "../outbox/client.ts";
 
 /** Initial context provided by the handler */
 export type ORPCContext = RequestHeadersPluginContext & {
@@ -149,9 +149,9 @@ export const reportStatus = os.machines.reportStatus
     // If machine is in 'starting' state and daemon reports ready, activate it
     // This archives any existing active machine and promotes this one to active
     if (status === "ready" && machineWithOrg.state === "starting") {
-      // Use transaction to ensure atomic activation - prevents race conditions
-      // if two machines report ready simultaneously
-      const archivedMachines = await db.transaction(async (tx) => {
+      // Use transaction to ensure atomic activation + outbox event emission
+      // Prevents race conditions if two machines report ready simultaneously
+      await db.transaction(async (tx) => {
         // Archive all currently active machines for this project
         const activeMachines = await tx.query.machine.findMany({
           where: and(
@@ -178,28 +178,22 @@ export const reportStatus = os.machines.reportStatus
 
         logger.info("Machine activated", { machineId: machine.id });
 
-        return activeMachines;
+        // Emit machine:promoted event for async provider cleanup via outbox consumer
+        if (activeMachines.length > 0) {
+          await outboxClient.sendTx(tx, "machine:promoted", async (_tx) => ({
+            payload: {
+              promotedMachineId: machine.id,
+              projectId: machineWithOrg.projectId,
+              archivedMachines: activeMachines.map((m) => ({
+                id: m.id,
+                type: m.type,
+                externalId: m.externalId,
+                metadata: (m.metadata as Record<string, unknown>) ?? {},
+              })),
+            },
+          }));
+        }
       });
-
-      // Archive via provider AFTER transaction commits
-      // This is intentional - we want DB state to be consistent first,
-      // then clean up provider resources. Provider failures are logged but don't rollback.
-      // TODO: Replace with outbox consumer once outbox system is added
-      for (const activeMachine of archivedMachines) {
-        const provider = await createMachineProvider({
-          type: activeMachine.type,
-          env,
-          externalId: activeMachine.externalId,
-          metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
-          buildProxyUrl: () => "",
-        });
-        await provider.archive().catch((err) => {
-          logger.error("Failed to archive machine via provider", {
-            machineId: activeMachine.id,
-            err,
-          });
-        });
-      }
     } else {
       // Just update metadata
       await db

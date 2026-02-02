@@ -1,6 +1,7 @@
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { env } from "../../env.ts";
+import { createMachineProvider } from "../providers/index.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export function registerMachineConsumers() {
@@ -33,6 +34,49 @@ export function registerMachineConsumers() {
       });
 
       return "machine_created";
+    },
+  });
+
+  cc.registerConsumer({
+    name: "handleMachinePromoted",
+    on: "machine:promoted",
+    handler: async ({ payload }) => {
+      const { promotedMachineId, archivedMachines } = payload;
+
+      logger.info("Processing machine promotion archival", {
+        promotedMachineId,
+        archivedCount: archivedMachines.length,
+      });
+
+      // Archive each machine via provider
+      for (const machine of archivedMachines) {
+        try {
+          const provider = await createMachineProvider({
+            type: machine.type,
+            env,
+            externalId: machine.externalId,
+            metadata: machine.metadata,
+            buildProxyUrl: () => "",
+          });
+
+          await provider.archive();
+
+          logger.info("Archived machine via provider", {
+            machineId: machine.id,
+            promotedMachineId,
+          });
+        } catch (err) {
+          logger.error("Failed to archive machine via provider", {
+            machineId: machine.id,
+            promotedMachineId,
+            err,
+          });
+          // Rethrow to trigger retry via outbox
+          throw err;
+        }
+      }
+
+      return "archived_machines";
     },
   });
 }

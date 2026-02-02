@@ -1,5 +1,6 @@
 import type { appRouter } from "../trpc/root.ts";
 import { waitUntil } from "../../env.ts";
+import type { MachineType } from "../db/schema.ts";
 import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
@@ -41,9 +42,19 @@ export type MachineEventTypes = {
     machineId: string;
     projectId: string;
     name: string;
-    type: string;
+    type: MachineType;
     metadata: Record<string, unknown>;
     externalId: string;
+  };
+  "machine:promoted": {
+    promotedMachineId: string;
+    projectId: string;
+    archivedMachines: Array<{
+      id: string;
+      type: MachineType;
+      externalId: string;
+      metadata: Record<string, unknown>;
+    }>;
   };
 };
 
