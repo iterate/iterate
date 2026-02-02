@@ -74,6 +74,15 @@ export type BillingEventTypes = {
   };
 };
 
+export type UserEventTypes = {
+  "user:created": {
+    userId: string;
+    email: string;
+    name: string | null;
+    signupMethod: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -90,6 +99,7 @@ export const outboxClient = createConsumerClient<
     ResendEventTypes &
     MachineEventTypes &
     OAuthEventTypes &
-    BillingEventTypes,
+    BillingEventTypes &
+    UserEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

@@ -7,8 +7,8 @@ import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
-import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
+import { outboxClient } from "../outbox/client.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -85,22 +85,20 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
           },
           after: async (user) => {
             logger.info("User signed up", { userId: user.id, email: user.email });
-            // Track user_signed_up event in PostHog using waitUntil to ensure delivery
+            // Emit user:created event to outbox for async processing
             waitUntil(
-              captureServerEvent(envParam, {
-                distinctId: user.id,
-                event: "user_signed_up",
-                properties: {
-                  signup_method: "oauth", // Could be refined based on context
-                  // $set creates/updates person properties so the event is linked to a person profile
-                  $set: {
+              outboxClient
+                .sendTx(db, "user:created", async (_tx) => ({
+                  payload: {
+                    userId: user.id,
                     email: user.email,
-                    name: user.name,
+                    name: user.name ?? null,
+                    signupMethod: "oauth", // Could be refined based on context
                   },
-                },
-              }).catch((error) => {
-                logger.error("Failed to track user_signed_up event", { error, userId: user.id });
-              }),
+                }))
+                .catch((error: unknown) => {
+                  logger.error("Failed to emit user:created event", { error, userId: user.id });
+                }),
             );
           },
         },

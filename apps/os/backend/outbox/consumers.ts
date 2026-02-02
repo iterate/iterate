@@ -6,6 +6,7 @@ import { registerResendConsumers } from "./resend-consumers.ts";
 import { registerMachineConsumers } from "./machine-consumers.ts";
 import { registerOAuthConsumers } from "./oauth-consumers.ts";
 import { registerBillingConsumers } from "./billing-consumers.ts";
+import { registerUserConsumers } from "./user-consumers.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
@@ -15,6 +16,7 @@ export const registerConsumers = () => {
   registerMachineConsumers();
   registerOAuthConsumers();
   registerBillingConsumers();
+  registerUserConsumers();
 };
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
