@@ -18,6 +18,7 @@ import {
 } from "../integrations/oauth-outbox.ts";
 import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.ts";
 import { handleMachineCreated, handleMachinePromoted } from "../machines/machine-outbox.ts";
+import { handleBillingCheckoutInitiated } from "../billing/billing-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -27,6 +28,7 @@ export const registerConsumers = () => {
   registerResendConsumers();
   registerMachineConsumers();
   registerOAuthConsumers();
+  registerBillingConsumers();
 };
 
 function registerTestConsumers() {
@@ -177,6 +179,16 @@ function registerOAuthConsumers() {
     on: "connection:google:created",
     handler: async ({ payload }) => {
       await handleGoogleConnectionCreated(payload);
+    },
+  });
+}
+
+function registerBillingConsumers() {
+  cc.registerConsumer({
+    name: "createBillingCheckoutSession",
+    on: "billing:checkout:initiated",
+    handler: async ({ payload, eventId }) => {
+      await handleBillingCheckoutInitiated(payload, eventId);
     },
   });
 }

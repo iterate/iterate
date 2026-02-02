@@ -115,7 +115,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "Current flow in billing.ts:29-71."
     },
     {

@@ -1,11 +1,12 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
+import { router, orgAdminMutation, orgAdminProcedure, orgProtectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { BILLING_METERS } from "../../billing/meters.generated.ts";
 import { env } from "../../../env.ts";
+import { internalOutboxClient } from "../../outbox/internal-client.ts";
 
 export const billingRouter = router({
   getBillingAccount: orgProtectedProcedure.query(async ({ ctx }) => {
@@ -24,83 +25,99 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const stripe = getStripe();
+      const baseUrl = env.VITE_PUBLIC_URL;
+      const defaultSuccessUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?success=true`;
+      const defaultCancelUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?canceled=true`;
 
-      const account = await ctx.db.transaction(async (tx) => {
-        let existing = await tx.query.billingAccount.findFirst({
+      const { eventId } = await ctx.db.transaction(async (tx) => {
+        let account = await tx.query.billingAccount.findFirst({
           where: eq(schema.billingAccount.organizationId, ctx.organization.id),
         });
 
-        if (!existing) {
+        if (!account) {
           const [newAccount] = await tx
             .insert(schema.billingAccount)
             .values({
               organizationId: ctx.organization.id,
             })
             .returning();
-          existing = newAccount;
+          account = newAccount;
         }
 
-        if (!existing) {
+        if (!account) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: "Failed to create billing account",
           });
         }
 
-        if (!existing.stripeCustomerId) {
-          const customer = await stripe.customers.create({
-            name: ctx.organization.name,
-            email: ctx.user.email ?? undefined, // For Stripe→PostHog data warehouse linking
-            metadata: {
-              organizationId: ctx.organization.id,
-              organizationSlug: ctx.organization.slug,
-              createdByUserId: ctx.user.id, // For PostHog tracking in webhooks
-            },
-          });
-
-          await tx
-            .update(schema.billingAccount)
-            .set({ stripeCustomerId: customer.id })
-            .where(eq(schema.billingAccount.id, existing.id));
-
-          existing = { ...existing, stripeCustomerId: customer.id };
-        }
-
-        return existing;
-      });
-
-      const baseUrl = env.VITE_PUBLIC_URL;
-      const defaultSuccessUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?success=true`;
-      const defaultCancelUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?canceled=true`;
-
-      const session = await stripe.checkout.sessions.create({
-        mode: "subscription",
-        customer: account.stripeCustomerId!,
-        line_items: [
+        return internalOutboxClient.send(
+          { transaction: tx, parent: ctx.db },
+          "billing:checkout:initiated",
           {
-            price: env.STRIPE_METERED_PRICE_ID,
-          },
-        ],
-        success_url: input.successUrl ?? defaultSuccessUrl,
-        cancel_url: input.cancelUrl ?? defaultCancelUrl,
-        client_reference_id: ctx.organization.id,
-        subscription_data: {
-          metadata: {
             organizationId: ctx.organization.id,
             organizationSlug: ctx.organization.slug,
+            organizationName: ctx.organization.name,
+            createdByUserId: ctx.user.id,
+            createdByUserEmail: ctx.user.email ?? undefined,
+            successUrl: input.successUrl ?? defaultSuccessUrl,
+            cancelUrl: input.cancelUrl ?? defaultCancelUrl,
+            status: "pending",
           },
-        },
+        );
       });
 
-      if (!session.url) {
+      return { eventId };
+    }),
+
+  getCheckoutSessionStatus: orgAdminProcedure
+    .input(
+      z.object({
+        eventId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const eventId = Number(input.eventId);
+
+      if (!Number.isFinite(eventId)) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create checkout session",
+          code: "BAD_REQUEST",
+          message: "Invalid checkout event id",
         });
       }
 
-      return { url: session.url };
+      const event = await ctx.db.query.outboxEvent.findFirst({
+        where: and(
+          eq(schema.outboxEvent.id, eventId),
+          eq(schema.outboxEvent.name, "billing:checkout:initiated"),
+        ),
+        columns: { payload: true },
+      });
+
+      if (!event) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Checkout session not found",
+        });
+      }
+
+      const payload = event.payload as {
+        organizationId?: string;
+        status?: "pending" | "ready";
+        checkoutUrl?: string;
+      };
+
+      if (!payload.organizationId || payload.organizationId !== ctx.organization.id) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Checkout session not found",
+        });
+      }
+
+      return {
+        status: payload.status ?? "pending",
+        url: payload.checkoutUrl ?? null,
+      };
     }),
 
   createPortalSession: orgAdminMutation.mutation(async ({ ctx }) => {

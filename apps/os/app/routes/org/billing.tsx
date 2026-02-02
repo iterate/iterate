@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { CreditCard, ExternalLink } from "lucide-react";
@@ -36,6 +36,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
 function BillingPage() {
   const params = useParams({ from: "/_auth/orgs/$organizationSlug/billing" });
   const search = useSearch({ from: "/_auth/orgs/$organizationSlug/billing" });
+  const [checkoutEventId, setCheckoutEventId] = useState<string | null>(null);
 
   useEffect(() => {
     if (search.success === "true") {
@@ -60,12 +61,38 @@ function BillingPage() {
       });
     },
     onSuccess: (data) => {
-      window.location.href = data.url;
+      setCheckoutEventId(data.eventId);
     },
     onError: (error) => {
       toast.error("Failed to create checkout session: " + error.message);
     },
   });
+
+  const checkoutStatus = useQuery(
+    trpc.billing.getCheckoutSessionStatus.queryOptions(
+      {
+        organizationSlug: params.organizationSlug,
+        eventId: checkoutEventId ?? "",
+      },
+      {
+        enabled: Boolean(checkoutEventId),
+        refetchInterval: 1000,
+      },
+    ),
+  );
+
+  useEffect(() => {
+    if (checkoutStatus.data?.status === "ready" && checkoutStatus.data.url) {
+      window.location.href = checkoutStatus.data.url;
+    }
+  }, [checkoutStatus.data]);
+
+  useEffect(() => {
+    if (checkoutStatus.error) {
+      toast.error("Failed to load checkout session: " + checkoutStatus.error.message);
+      setCheckoutEventId(null);
+    }
+  }, [checkoutStatus.error]);
 
   const createPortal = useMutation({
     mutationFn: () =>
@@ -91,6 +118,9 @@ function BillingPage() {
   const isUnpaid = subscriptionStatus === "unpaid";
   const hasAnySubscription =
     hasActiveSubscription || isPastDue || isPaused || isCanceled || isIncomplete || isUnpaid;
+  const isCheckoutPending =
+    createCheckout.isPending ||
+    (checkoutEventId !== null && checkoutStatus.data?.status !== "ready");
 
   return (
     <div className="p-4 space-y-6">
@@ -162,8 +192,8 @@ function BillingPage() {
                 Your subscription has been canceled. Subscribe again to continue using
                 iterate&apos;s AI-powered features.
               </p>
-              <Button onClick={() => createCheckout.mutate()} disabled={createCheckout.isPending}>
-                {createCheckout.isPending ? "Loading..." : "Subscribe Again"}
+              <Button onClick={() => createCheckout.mutate()} disabled={isCheckoutPending}>
+                {isCheckoutPending ? "Preparing checkout..." : "Subscribe Again"}
               </Button>
             </div>
           ) : isIncomplete ? (
@@ -182,8 +212,8 @@ function BillingPage() {
               <p className="text-sm text-muted-foreground">
                 Subscribe to start using iterate&apos;s AI-powered features.
               </p>
-              <Button onClick={() => createCheckout.mutate()} disabled={createCheckout.isPending}>
-                {createCheckout.isPending ? "Loading..." : "Subscribe Now"}
+              <Button onClick={() => createCheckout.mutate()} disabled={isCheckoutPending}>
+                {isCheckoutPending ? "Preparing checkout..." : "Subscribe Now"}
               </Button>
             </div>
           )}

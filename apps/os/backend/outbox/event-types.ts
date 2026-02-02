@@ -22,6 +22,22 @@ export type ResendWebhookEventTypes = {
   "resend:email.received": { event: ResendEmailReceivedPayload };
 };
 
+export type BillingEventTypes = {
+  "billing:checkout:initiated": {
+    organizationId: string;
+    organizationSlug: string;
+    organizationName: string;
+    createdByUserId: string;
+    createdByUserEmail?: string;
+    successUrl: string;
+    cancelUrl: string;
+    status: "pending" | "ready";
+    checkoutUrl?: string;
+    stripeCustomerId?: string;
+    stripeCheckoutSessionId?: string;
+  };
+};
+
 type MachineTypeValue = (typeof schema.MachineType)[number];
 
 export type MachineLifecycleEventTypes = {
@@ -74,4 +90,5 @@ export type InternalEventTypes = {
   SlackWebhookEventTypes &
   ResendWebhookEventTypes &
   MachineLifecycleEventTypes &
-  OAuthConnectionEventTypes;
+  OAuthConnectionEventTypes &
+  BillingEventTypes;
