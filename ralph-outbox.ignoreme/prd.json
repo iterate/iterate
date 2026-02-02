@@ -142,7 +142,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Current flow in organization.ts:40-56."
     },
     {

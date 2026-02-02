@@ -20,6 +20,7 @@ import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.
 import { handleMachineCreated, handleMachinePromoted } from "../machines/machine-outbox.ts";
 import { handleBillingCheckoutInitiated } from "../billing/billing-outbox.ts";
 import { handleUserCreated } from "../auth/auth-outbox.ts";
+import { handleOrganizationCreated } from "../organizations/organization-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -31,6 +32,7 @@ export const registerConsumers = () => {
   registerOAuthConsumers();
   registerBillingConsumers();
   registerUserConsumers();
+  registerOrganizationConsumers();
 };
 
 function registerTestConsumers() {
@@ -201,6 +203,16 @@ function registerUserConsumers() {
     on: "user:created",
     handler: async ({ payload }) => {
       await handleUserCreated(payload);
+    },
+  });
+}
+
+function registerOrganizationConsumers() {
+  cc.registerConsumer({
+    name: "provisionOrganizationDefaults",
+    on: "organization:created",
+    handler: async ({ payload }) => {
+      await handleOrganizationCreated(payload);
     },
   });
 }

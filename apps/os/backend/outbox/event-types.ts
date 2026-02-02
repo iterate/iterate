@@ -93,6 +93,15 @@ export type UserEventTypes = {
   };
 };
 
+export type OrganizationEventTypes = {
+  "organization:created": {
+    organizationId: string;
+    name: string;
+    slug: string;
+    createdByUserId: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
 } & StripeWebhookEventTypes &
@@ -101,4 +110,5 @@ export type InternalEventTypes = {
   MachineLifecycleEventTypes &
   OAuthConnectionEventTypes &
   BillingEventTypes &
-  UserEventTypes;
+  UserEventTypes &
+  OrganizationEventTypes;

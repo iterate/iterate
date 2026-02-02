@@ -89,3 +89,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: keep PostHog capture in consumers for retryable delivery
   - Useful context: add hook stubs in consumer handlers for future side effects
 ---
+
+## 2026-02-02 17:14:29 GMT - US-010
+- Emitted organization:created during org creation and registered a consumer stub for future automation
+- Files changed: apps/os/backend/trpc/routers/organization.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/outbox/consumers.ts, apps/os/backend/organizations/organization-outbox.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: wrap org + membership inserts in internalOutboxClient.sendTx for atomic enqueue
+  - Gotchas encountered: none
+  - Useful context: organization event payload includes id, slug, name, and creator for downstream automation
+---

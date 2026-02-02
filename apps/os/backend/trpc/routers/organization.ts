@@ -15,7 +15,9 @@ import {
   UserRole,
   user,
 } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import { slugify } from "../../utils/slug.ts";
+import { internalOutboxClient } from "../../outbox/internal-client.ts";
 
 export const organizationRouter = router({
   create: protectedMutation
@@ -37,23 +39,39 @@ export const organizationRouter = router({
         });
       }
 
-      const [newOrg] = await ctx.db
-        .insert(organization)
-        .values({ name: input.name, slug })
-        .returning();
+      const { organization: newOrg } = await internalOutboxClient.sendTx(
+        ctx.db,
+        "organization:created",
+        async (tx) => {
+          const [createdOrg] = await tx
+            .insert(schema.organization)
+            .values({ name: input.name, slug })
+            .returning();
 
-      if (!newOrg) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create organization",
-        });
-      }
+          if (!createdOrg) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Failed to create organization",
+            });
+          }
 
-      await ctx.db.insert(organizationUserMembership).values({
-        organizationId: newOrg.id,
-        userId: ctx.user.id,
-        role: "owner",
-      });
+          await tx.insert(schema.organizationUserMembership).values({
+            organizationId: createdOrg.id,
+            userId: ctx.user.id,
+            role: "owner",
+          });
+
+          return {
+            payload: {
+              organizationId: createdOrg.id,
+              name: createdOrg.name,
+              slug: createdOrg.slug,
+              createdByUserId: ctx.user.id,
+            },
+            organization: createdOrg,
+          };
+        },
+      );
 
       return newOrg;
     }),
