@@ -26,7 +26,7 @@ describe("Manager - Reload & Remove", () => {
       await manager.start();
 
       // Wait for initial process to complete
-      await wait(400);
+      await expect.poll(() => manager.getProcessByTarget("test-proc")?.state).toBe("stopped");
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc).toBeDefined();
       expect(proc?.state).toBe("stopped");
@@ -147,7 +147,7 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(300);
+      await expect.poll(() => manager.getProcessByTarget("test-proc")?.state).toBe("stopped");
 
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc?.state).toBe("stopped");

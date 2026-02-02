@@ -32,7 +32,7 @@ describe("LazyProcess", () => {
       expect(proc.state).toBe("running");
 
       // Wait for process to complete
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
       expect(proc.state).toBe("stopped");
     });
 
@@ -77,7 +77,7 @@ describe("LazyProcess", () => {
       await proc.start();
 
       // Wait for process to exit
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await proc.waitForExit();
 
       expect(proc.state).toBe("error");
       // Logger now uses withPrefix, so check the child logger was called

@@ -117,7 +117,7 @@ export default defineConfig({
       },
     },
     {
-      name: "daemon-client",
+      name: "iterate-daemon",
       // TODO: bring back built daemon react app for production use
       // Just took it out because it was a bit of a faff and this way
       // our container mirrors development more closely
@@ -135,7 +135,7 @@ export default defineConfig({
       },
     },
     {
-      name: "daemon-server",
+      name: "iterate-daemon-server",
       definition: {
         command: "tsx",
         args: ["server.ts"],

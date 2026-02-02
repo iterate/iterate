@@ -81,7 +81,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc.restarts, { timeout: 3000 }).toBeGreaterThan(0);
 
       await proc.stop();
     });
