@@ -368,6 +368,18 @@ async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): 
 }
 
 /**
+ * Format file attachments for agent messages.
+ * Includes private_url when available for curl downloads.
+ */
+function formatFileLines(files: GenericMessageEvent["files"] | AppMentionEvent["files"]): string[] {
+  if (!files) return [];
+  return files.map((file) => {
+    if ("url_private" in file) return `File url_private: ${file.url_private}`;
+    return `File id: ${file.id}`;
+  });
+}
+
+/**
  * Format message for a new thread @mention.
  * This is a fresh conversation - provide full context.
  */
@@ -387,6 +399,7 @@ function formatNewThreadMentionMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
     `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
@@ -413,6 +426,7 @@ function formatMidThreadMentionMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
   ];
 
@@ -447,6 +461,7 @@ function formatFyiMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
   ];
 
