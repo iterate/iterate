@@ -12,7 +12,7 @@ import {
   handleSlackWebhookEvent,
 } from "../integrations/slack/slack-outbox.ts";
 import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.ts";
-import { handleMachineCreated } from "../machines/machine-outbox.ts";
+import { handleMachineCreated, handleMachinePromoted } from "../machines/machine-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -137,6 +137,14 @@ function registerMachineConsumers() {
     on: "machine:created",
     handler: async ({ payload }) => {
       await handleMachineCreated(payload);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "archiveOldMachines",
+    on: "machine:promoted",
+    handler: async ({ payload }) => {
+      await handleMachinePromoted(payload);
     },
   });
 }

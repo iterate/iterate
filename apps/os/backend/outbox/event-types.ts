@@ -33,6 +33,16 @@ export type MachineLifecycleEventTypes = {
     providerMetadata: Record<string, unknown>;
     createdByUserId: string;
   };
+  "machine:promoted": {
+    projectId: string;
+    promotedMachineId: string;
+    archivedMachines: Array<{
+      machineId: string;
+      type: MachineTypeValue;
+      externalId: string;
+      metadata: Record<string, unknown>;
+    }>;
+  };
 };
 
 export type InternalEventTypes = {

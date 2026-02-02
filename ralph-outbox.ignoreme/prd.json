@@ -87,7 +87,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "Current waitUntil path in orpc/router.ts:184-202."
     },
     {

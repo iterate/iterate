@@ -5,6 +5,7 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
 ## Codebase Patterns
 - For non-tRPC events (webhooks), use `outboxClient.sendTx(getDb(), eventName, async (_tx) => ({ payload }))` to enqueue and let consumers handle side effects.
 - For tRPC routers emitting outbox events, use `outbox/internal-client.ts` with shared `outbox/event-types.ts` to avoid appRouter type cycles.
+- For machine promotion side effects, emit `machine:promoted` via `internalOutboxClient.sendTx` and pass archived machine info so consumers can archive providers asynchronously.
 
 ## 2026-02-02 15:46:57 GMT - US-001
 - Ported outbox infra (pgmq library, queuer, client, consumers, type tests) and wired consumer registration on worker startup
@@ -49,4 +50,13 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Patterns discovered: split outbox event types into `outbox/event-types.ts` for reuse across internal clients
   - Gotchas encountered: avoid importing `outboxClient` inside appRouter modules to prevent type cycles
   - Useful context: placeholder machine externalId can be updated after provisioning completes
+---
+
+## 2026-02-02 16:29:17 GMT - US-006
+- Emitted machine:promoted from daemon reportStatus flow and moved provider archival to outbox consumer
+- Files changed: apps/os/backend/orpc/router.ts, apps/os/backend/outbox/consumers.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/machines/machine-outbox.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: include archived machine provider details in outbox payloads to avoid follow-up DB reads
+  - Gotchas encountered: use `internalOutboxClient.sendTx` in non-tRPC paths to keep promotion updates and enqueue atomic
+  - Useful context: provider archiving should run in consumers to keep daemon handlers fast and retryable
 ---

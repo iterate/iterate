@@ -9,6 +9,7 @@ import type { MachineLifecycleEventTypes } from "../outbox/event-types.ts";
 import { getOrCreateProjectMachineToken } from "./machine-token.ts";
 
 type MachineCreatedPayload = MachineLifecycleEventTypes["machine:created"];
+type MachinePromotedPayload = MachineLifecycleEventTypes["machine:promoted"];
 
 export async function handleMachineCreated(payload: MachineCreatedPayload): Promise<void> {
   const db = getDb();
@@ -116,4 +117,28 @@ export async function handleMachineCreated(payload: MachineCreatedPayload): Prom
       project: project.id,
     },
   });
+}
+
+type ArchivedMachine = MachinePromotedPayload["archivedMachines"][number];
+
+export async function archiveOldMachines(archivedMachines: ArchivedMachine[]): Promise<void> {
+  for (const archivedMachine of archivedMachines) {
+    const provider = await createMachineProvider({
+      type: archivedMachine.type,
+      env,
+      externalId: archivedMachine.externalId,
+      metadata: archivedMachine.metadata,
+      buildProxyUrl: () => "",
+    });
+
+    await provider.archive();
+  }
+}
+
+export async function handleMachinePromoted(payload: MachinePromotedPayload): Promise<void> {
+  if (payload.archivedMachines.length === 0) {
+    return;
+  }
+
+  await archiveOldMachines(payload.archivedMachines);
 }

@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineProvider } from "../providers/index.ts";
+import { internalOutboxClient } from "../outbox/internal-client.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -151,7 +151,7 @@ export const reportStatus = os.machines.reportStatus
     if (status === "ready" && machineWithOrg.state === "starting") {
       // Use transaction to ensure atomic activation - prevents race conditions
       // if two machines report ready simultaneously
-      const archivedMachines = await db.transaction(async (tx) => {
+      await internalOutboxClient.sendTx(db, "machine:promoted", async (tx) => {
         // Archive all currently active machines for this project
         const activeMachines = await tx.query.machine.findMany({
           where: and(
@@ -178,28 +178,19 @@ export const reportStatus = os.machines.reportStatus
 
         logger.info("Machine activated", { machineId: machine.id });
 
-        return activeMachines;
+        return {
+          payload: {
+            projectId: machineWithOrg.projectId,
+            promotedMachineId: machine.id,
+            archivedMachines: activeMachines.map((activeMachine) => ({
+              machineId: activeMachine.id,
+              type: activeMachine.type,
+              externalId: activeMachine.externalId,
+              metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
+            })),
+          },
+        };
       });
-
-      // Archive via provider AFTER transaction commits
-      // This is intentional - we want DB state to be consistent first,
-      // then clean up provider resources. Provider failures are logged but don't rollback.
-      // TODO: Replace with outbox consumer once outbox system is added
-      for (const activeMachine of archivedMachines) {
-        const provider = await createMachineProvider({
-          type: activeMachine.type,
-          env,
-          externalId: activeMachine.externalId,
-          metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
-          buildProxyUrl: () => "",
-        });
-        await provider.archive().catch((err) => {
-          logger.error("Failed to archive machine via provider", {
-            machineId: activeMachine.id,
-            err,
-          });
-        });
-      }
     } else {
       // Just update metadata
       await db
