@@ -27,6 +27,11 @@ export type StripeEventTypes = {
   "stripe:checkout.session.completed": { session: any };
 };
 
+export type SlackEventTypes = {
+  "slack:event": { payload: Record<string, unknown>; teamId: string; slackEventId?: string };
+  "slack:interactive": { payload: Record<string, unknown>; teamId: string };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -36,6 +41,6 @@ export type InternalEventTypes = {
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
 export const outboxClient = createConsumerClient<
-  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes,
+  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes & SlackEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

@@ -386,8 +386,7 @@ slackApp.get(
  * Slack webhook handler
  * - Verifies Slack signature synchronously
  * - Handles url_verification challenge synchronously
- * - Processes events in background via waitUntil for Slack compliance
- * - Deduplicates events via slack_event_id
+ * - Writes verified events to outbox for async processing
  */
 slackApp.post("/webhook", async (c) => {
   // Signature verification - KEEP SYNCHRONOUS
@@ -426,80 +425,28 @@ slackApp.post("/webhook", async (c) => {
   // Log full payload for debugging
   logger.debug("[Slack Webhook] Received", { payload });
 
-  // Get references before returning (needed in background)
-  const db = c.var.db;
-  const env = c.env;
+  if (!teamId) {
+    logger.warn("[Slack Webhook] No team_id in payload");
+    return c.text("ok");
+  }
 
-  // RETURN IMMEDIATELY - process in background for Slack compliance
-  waitUntil(
-    (async () => {
-      try {
-        if (!teamId) {
-          logger.warn("[Slack Webhook] No team_id in payload");
-          return;
-        }
-
-        // Dedup check using external_id (Slack's event_id)
-        if (slackEventId) {
-          const existing = await db.query.event.findFirst({
-            where: (e, { eq }) => eq(e.externalId, slackEventId),
-          });
-          if (existing) {
-            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
-            return;
-          }
-        }
-
-        logger.debug("[Slack Webhook] Looking up connection", { teamId });
-        // Find connection and the single active machine for its project
-        const connection = await db.query.projectConnection.findFirst({
-          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
-          with: {
-            project: {
-              with: {
-                machines: {
-                  where: (m, { eq }) => eq(m.state, "active"),
-                  limit: 1,
-                },
-              },
-            },
-          },
-        });
-
-        const projectId = connection?.projectId;
-        if (!projectId) {
-          logger.warn("[Slack Webhook] No project for team", { teamId });
-          return;
-        }
-
-        // Get the single active machine for this project
-        const targetMachine = connection.project?.machines[0] ?? null;
-
-        // Forward to machine if available
-        if (targetMachine) {
-          logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
-          await forwardSlackWebhookToMachine(targetMachine, payload, env);
-        }
-
-        // Save event with type slack:webhook-received, detailed info in payload
-        await db.insert(schema.event).values({
-          type: "slack:webhook-received",
-          payload: payload,
-          projectId,
-          externalId: slackEventId,
-        });
-      } catch (err) {
-        logger.error("[Slack Webhook] Background error", err);
-      }
-    })(),
-  );
+  // Write to outbox for async processing
+  const { outboxClient } = await import("../../outbox/client.ts");
+  await outboxClient.sendTx(c.var.db, "slack:event", async (_tx) => ({
+    payload: {
+      payload,
+      teamId,
+      slackEventId,
+    },
+  }));
 
   return c.text("ok");
 });
 
 /**
- * Slack interactive endpoint (for future use)
+ * Slack interactive endpoint
  * Handles interactive components like buttons, menus, etc.
+ * Writes verified callbacks to outbox for async processing
  */
 slackApp.post("/interactive", async (c) => {
   const body = await c.req.text();
@@ -524,11 +471,31 @@ slackApp.post("/interactive", async (c) => {
     return c.json({ error: "Missing payload" }, 400);
   }
 
+  let payload: Record<string, unknown>;
   try {
-    JSON.parse(payloadStr);
+    payload = JSON.parse(payloadStr);
   } catch {
     return c.json({ error: "Invalid JSON" }, 400);
   }
+
+  // Extract team info
+  const teamId =
+    ((payload.team as Record<string, unknown>)?.id as string) ||
+    ((payload.user as Record<string, unknown>)?.team_id as string);
+
+  if (!teamId) {
+    logger.warn("[Slack Interactive] No team_id in payload");
+    return c.json({ error: "Missing team_id" }, 400);
+  }
+
+  // Write to outbox for async processing
+  const { outboxClient } = await import("../../outbox/client.ts");
+  await outboxClient.sendTx(c.var.db, "slack:interactive", async (_tx) => ({
+    payload: {
+      payload,
+      teamId,
+    },
+  }));
 
   return c.json({ ok: true });
 });
