@@ -83,8 +83,7 @@ function tagSandboxImage(projectName: string): void {
   }
 }
 
-function rewriteLocalhost(url?: string): string | undefined {
-  if (!url) return url;
+function rewriteLocalhost(url: string): string {
   return url.replace(/localhost/g, "host.docker.internal");
 }
 
@@ -128,31 +127,39 @@ class LocalDockerSandboxHandle implements SandboxHandle {
         const remainingMs = timeoutMs - (Date.now() - start);
         const payload = JSON.stringify({
           json: {
-            service,
-            timeoutMs: Math.min(30_000, remainingMs),
+            target: service,
           },
         });
         const result = await this.exec([
           "curl",
           "-sf",
-          "http://localhost:9876/rpc/services/waitHealthy",
+          "http://localhost:9876/rpc/processes/get",
           "-H",
           "Content-Type: application/json",
           "-d",
           payload,
         ]);
-        const parsed = JSON.parse(result) as { json?: WaitHealthyResponse };
-        const response = parsed.json ?? parsed;
-        if (response.healthy) return response;
-        if (response.error === "terminal_state") {
-          throw new Error(`Service ${service} in terminal state: ${response.state}`);
+        const parsed = JSON.parse(result) as { json?: { state?: string } };
+        const response = (parsed.json ?? parsed) as { state?: string };
+        const state = response.state;
+        const elapsedMs = timeoutMs - remainingMs;
+        if (state === "running") {
+          return { healthy: true, state, elapsedMs };
+        }
+        if (state === "stopped" || state === "max-restarts-reached") {
+          throw new Error(`Service ${service} in terminal state: ${state}`);
         }
       } catch (err) {
         if (err instanceof Error && err.message.includes("terminal state")) throw err;
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    throw new Error(`Timeout waiting for service ${service}`);
+    return {
+      healthy: false,
+      state: "timeout",
+      elapsedMs: timeoutMs,
+      error: "timeout",
+    };
   }
 
   public async stop(): Promise<void> {
@@ -193,7 +200,7 @@ export function createLocalDockerProvider(): SandboxProvider {
       const projectName = createProjectName();
       tagSandboxImage(projectName);
 
-      const env = { ...opts?.env };
+      const env: Record<string, string> = { ...(opts?.env ?? {}) };
       if (env.ITERATE_OS_BASE_URL) {
         env.ITERATE_OS_BASE_URL = rewriteLocalhost(env.ITERATE_OS_BASE_URL);
       }

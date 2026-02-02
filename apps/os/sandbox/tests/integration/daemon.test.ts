@@ -1,6 +1,16 @@
 import { integrationTest as test, describe, expect } from "../fixtures.ts";
 import type { MockIterateOsApi, OrpcProcedure } from "../mock-iterate-os-api/types.ts";
 
+function buildEnvVars(vars: Record<string, string>) {
+  return Object.entries(vars).map(([key, value]) => ({
+    key,
+    value,
+    secret: null,
+    description: null,
+    source: { type: "user" as const, envVarId: `mock-${key.toLowerCase()}` },
+  }));
+}
+
 async function waitForOrpc(
   mock: MockIterateOsApi,
   procedure: OrpcProcedure,
@@ -21,7 +31,7 @@ describe("Daemon Control Plane Integration", () => {
     await waitForOrpc(mock, "machines.getEnv");
 
     mock.orpc.setGetEnvResponse({
-      envVars: { TEST_VAR: "test-value", SECRET_KEY: "secret-123" },
+      envVars: buildEnvVars({ TEST_VAR: "test-value", SECRET_KEY: "secret-123" }),
       repos: [],
     });
     mock.resetRequests();

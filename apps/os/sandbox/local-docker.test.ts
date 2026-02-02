@@ -15,8 +15,8 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
 import { createClient as createPidnapClient } from "../../../packages/pidnap/src/api/client.ts";
-import { execInContainer } from "./test-helpers.ts";
-import { getLocalDockerGitInfo } from "./local-docker-utils.ts";
+import { execInContainer } from "./tests/helpers/test-helpers.ts";
+import { getLocalDockerGitInfo } from "./tests/helpers/local-docker-utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
@@ -126,8 +126,8 @@ function createProject(): ComposeProject {
 }
 
 /**
- * Wait for a pidnap-managed service to become healthy.
- * Polls pidnap's services.waitHealthy API endpoint until the service is running.
+ * Wait for a pidnap-managed process to become running.
+ * Polls pidnap's processes.get endpoint until the process is running.
  * Handles connection failures gracefully (pidnap may not be up yet).
  */
 async function waitForServiceHealthy(
@@ -140,13 +140,9 @@ async function waitForServiceHealthy(
 
   while (Date.now() - start < timeoutMs) {
     try {
-      const remainingMs = timeoutMs - (Date.now() - start);
-      const data = await client.services.waitHealthy({
-        service,
-        timeoutMs: Math.min(30000, remainingMs),
-      });
-      if (data.healthy) return;
-      if (data.error === "terminal_state") {
+      const data = await client.processes.get({ target: service });
+      if (data.state === "running") return;
+      if (data.state === "stopped" || data.state === "max-restarts-reached") {
         throw new Error(`Service ${service} in terminal state: ${data.state}`);
       }
     } catch (e) {
@@ -422,37 +418,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
-    test("services.waitHealthy returns success for running service with logs", async () => {
+    test("processes.get returns running state for iterate-daemon", async () => {
       // iterate-daemon is already running (waited in beforeAll)
-      // Call pidnap's waitHealthy endpoint for iterate-daemon (should already be running)
+      // Call pidnap's processes.get for iterate-daemon (should already be running)
       const client = createPidnapRpcClient(project.port9876!);
-      const result = await client.services.waitHealthy({
-        service: "iterate-daemon",
-        timeoutMs: 5000,
-      });
-      expect(result.healthy).toBe(true);
+      const result = await client.processes.get({ target: "iterate-daemon" });
       expect(result.state).toBe("running");
-      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
-      expect(result.elapsedMs).toBeLessThan(5000);
-
-      // Logs should be an array of strings with actual content
-      expect(Array.isArray(result.logs)).toBe(true);
-      expect(result.logs.length).toBeGreaterThan(0);
-      expect(result.logs.every((line: unknown) => typeof line === "string")).toBe(true);
-
-      // Daemon logs should contain timestamp patterns (pidnap log format: [HH:MM:SS.mmm])
-      const logsJoined = result.logs.join("\n");
-      expect(logsJoined).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/);
-
-      // Should contain some daemon-related output (INFO/DEBUG level or server startup)
-      expect(logsJoined).toMatch(/INFO|DEBUG|listening|started|server/i);
     }, 210000);
 
-    test("services.waitHealthy returns failure for non-existent service", async () => {
+    test("processes.get fails for non-existent service", async () => {
       const client = createPidnapRpcClient(project.port9876!);
-      await expect(
-        client.services.waitHealthy({ service: "nonexistent", timeoutMs: 1000 }),
-      ).rejects.toThrow(/Service not found/i);
+      await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
+        /Process not found/i,
+      );
     }, 30000);
   });
 });

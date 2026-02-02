@@ -342,10 +342,6 @@ export const machineRouter = router({
             GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
             GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
             // Note: git URL rewriting is configured in entry.sh via git config commands
-            // In dev, use the current git branch for Daytona sandboxes
-            ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
-              ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
-              : {}),
           },
         })
         .catch((err) => {

@@ -1,6 +1,16 @@
 import { integrationTest as test, describe, expect } from "../fixtures.ts";
 import { refreshEnv } from "../helpers/refresh-env.ts";
 
+function buildEnvVars(vars: Record<string, string>) {
+  return Object.entries(vars).map(([key, value]) => ({
+    key,
+    value,
+    secret: null,
+    description: null,
+    source: { type: "user" as const, envVarId: `mock-${key.toLowerCase()}` },
+  }));
+}
+
 describe("Egress Proxy", () => {
   test("mitmproxy installed and addon exists", async ({ sandbox }) => {
     const version = await sandbox.exec(["mitmproxy", "--version"]);
@@ -15,11 +25,11 @@ describe("Egress Proxy", () => {
 
   test("resolves magic strings via egress proxy", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
-      envVars: {
+      envVars: buildEnvVars({
         ITERATE_EGRESS_PROXY_URL: `${mockUrl}/api/egress-proxy`,
         ITERATE_OS_API_KEY: "test-key",
         OPENAI_API_KEY: "getIterateSecret({secretKey: 'openai_api_key'})",
-      },
+      }),
       repos: [],
     });
     mock.egress.setSecrets({ openai_api_key: "sk-test-resolved-key" });
@@ -45,10 +55,10 @@ describe("Egress Proxy", () => {
 
   test("logs all egress traffic", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
-      envVars: {
+      envVars: buildEnvVars({
         ITERATE_EGRESS_PROXY_URL: `${mockUrl}/api/egress-proxy`,
         ITERATE_OS_API_KEY: "test-key",
-      },
+      }),
       repos: [],
     });
     await refreshEnv(sandbox);

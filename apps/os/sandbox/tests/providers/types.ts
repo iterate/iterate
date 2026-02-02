@@ -1,7 +1,6 @@
 export interface WaitHealthyResponse {
   healthy: boolean;
   state: string;
-  logs: string[];
   elapsedMs: number;
   error?: string;
 }

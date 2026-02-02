@@ -37,7 +37,7 @@ export interface MockIterateOsApi {
   requests: RecordedRequest[];
   orpc: {
     getRequests(procedure: OrpcProcedure): OrpcRequest[];
-    setGetEnvResponse(response: { envVars: Record<string, string>; repos: RepoInfo[] }): void;
+    setGetEnvResponse(response: { envVars: EnvVar[]; repos: RepoInfo[] }): void;
     setReportStatusResponse(response: { success: boolean }): void;
   };
   egress: {
@@ -56,4 +56,24 @@ export type RepoInfo = {
   path: string;
   owner: string;
   name: string;
+};
+
+export type EnvVarSource =
+  | { type: "global"; description: string }
+  | { type: "connection"; provider: "github" | "slack" | "google" }
+  | { type: "user"; envVarId: string }
+  | { type: "recommended"; provider: "google"; userEmail: string };
+
+export type EnvVar = {
+  key: string;
+  value: string;
+  secret: {
+    secretKey: string;
+    secretScope: string;
+    machineId?: string;
+    userId?: string;
+    userEmail?: string;
+  } | null;
+  description: string | null;
+  source: EnvVarSource;
 };

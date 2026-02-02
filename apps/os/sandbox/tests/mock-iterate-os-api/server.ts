@@ -5,6 +5,7 @@ import { workerContract } from "../../../../daemon/server/orpc/contract.ts";
 import type {
   EgressHandler,
   EgressRequest,
+  EnvVar,
   MockIterateOsApi,
   OrpcRequest,
   RecordedRequest,
@@ -12,7 +13,7 @@ import type {
 } from "./types.ts";
 
 type OrpcConfig = {
-  getEnvResponse: { envVars: Record<string, string>; repos: RepoInfo[] };
+  getEnvResponse: { envVars: EnvVar[]; repos: RepoInfo[] };
   reportStatusResponse: { success: boolean };
 };
 
@@ -93,7 +94,7 @@ async function sendResponse(res: ServerResponse, response: Response): Promise<vo
 export function createMockIterateOsApi(): MockIterateOsApi {
   const requests: RecordedRequest[] = [];
   const orpcConfig: OrpcConfig = {
-    getEnvResponse: { envVars: {}, repos: [] },
+    getEnvResponse: { envVars: [], repos: [] },
     reportStatusResponse: { success: true },
   };
   const egressConfig: EgressConfig = {

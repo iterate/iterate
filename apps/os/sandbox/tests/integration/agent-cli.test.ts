@@ -7,10 +7,20 @@ import {
   mockOpenAIChat,
 } from "../mock-iterate-os-api/llm-mocks.ts";
 
+function buildEnvVars(vars: Record<string, string>) {
+  return Object.entries(vars).map(([key, value]) => ({
+    key,
+    value,
+    secret: null,
+    description: null,
+    source: { type: "user" as const, envVarId: `mock-${key.toLowerCase()}` },
+  }));
+}
+
 describe("Agent CLI", () => {
   test("opencode computes 50-8=42", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
-      envVars: {
+      envVars: buildEnvVars({
         ITERATE_EGRESS_PROXY_URL: `${mockUrl}/api/egress-proxy`,
         ITERATE_OS_API_KEY: "test-key",
         OPENAI_BASE_URL: "https://api.openai.com/v1",
@@ -19,7 +29,7 @@ describe("Agent CLI", () => {
         ANTHROPIC_API_URL: "https://api.anthropic.com/v1",
         OPENAI_API_KEY: "getIterateSecret({secretKey: 'openai_api_key'})",
         ANTHROPIC_API_KEY: "getIterateSecret({secretKey: 'anthropic_api_key'})",
-      },
+      }),
       repos: [],
     });
     mock.egress.setSecrets({ openai_api_key: "sk-fake", anthropic_api_key: "sk-ant-fake" });
@@ -45,7 +55,7 @@ describe("Agent CLI", () => {
 
   test("claude answers messaging platform question", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
-      envVars: {
+      envVars: buildEnvVars({
         ITERATE_EGRESS_PROXY_URL: `${mockUrl}/api/egress-proxy`,
         ITERATE_OS_API_KEY: "test-key",
         ANTHROPIC_BASE_URL: "https://api.anthropic.com/v1",
@@ -53,7 +63,7 @@ describe("Agent CLI", () => {
         ANTHROPIC_API_KEY: "getIterateSecret({secretKey: 'anthropic_api_key'})",
         ANTHROPIC_AUTH_TOKEN: "getIterateSecret({secretKey: 'anthropic_api_key'})",
         CLAUDE_API_KEY: "getIterateSecret({secretKey: 'anthropic_api_key'})",
-      },
+      }),
       repos: [],
     });
     mock.egress.setSecrets({ anthropic_api_key: "sk-ant-fake" });
@@ -82,7 +92,7 @@ describe("Agent CLI", () => {
 
   test("pi answers messaging platform question", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
-      envVars: {
+      envVars: buildEnvVars({
         ITERATE_EGRESS_PROXY_URL: `${mockUrl}/api/egress-proxy`,
         ITERATE_OS_API_KEY: "test-key",
         ANTHROPIC_BASE_URL: "https://api.anthropic.com/v1",
@@ -90,7 +100,7 @@ describe("Agent CLI", () => {
         ANTHROPIC_API_KEY: "getIterateSecret({secretKey: 'anthropic_api_key'})",
         ANTHROPIC_AUTH_TOKEN: "getIterateSecret({secretKey: 'anthropic_api_key'})",
         CLAUDE_API_KEY: "getIterateSecret({secretKey: 'anthropic_api_key'})",
-      },
+      }),
       repos: [],
     });
     mock.egress.setSecrets({ anthropic_api_key: "sk-ant-fake" });
