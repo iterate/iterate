@@ -8,6 +8,7 @@ import {
   index,
   integer,
   check,
+  bigserial,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
@@ -620,3 +621,12 @@ export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
 }));
 
 // #endregion ========== Billing ==========
+
+// #region ========== Outbox ==========
+export const outboxEvent = pgTable("outbox_event", (t) => ({
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  name: t.text().notNull(),
+  payload: jsonb().$type<Record<string, unknown>>().notNull(),
+  ...withTimestamps,
+}));
+// #endregion ========== Outbox ==========

@@ -28,8 +28,12 @@ import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
 
 export type { Variables };
+
+// Register outbox consumers on worker startup
+registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
