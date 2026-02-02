@@ -1,0 +1,35 @@
+ARG SANDBOX_BASE_IMAGE=iterate-sandbox-base:latest
+FROM ${SANDBOX_BASE_IMAGE}
+
+ARG SANDBOX_COMMIT
+ARG SANDBOX_BRANCH
+
+# Copy scripts
+COPY entry.sh /app/entry.sh
+RUN sudo chmod +x /app/*.sh
+
+# Copy repo from build context (local git clone)
+COPY --chown=iterate:iterate repo/ $ITERATE_REPO/
+
+# Set up git remote and checkout target commit/branch
+RUN cd $ITERATE_REPO && \
+    git remote set-url origin https://github.com/iterate/iterate.git && \
+    git checkout $SANDBOX_COMMIT && \
+    if [ -n "$SANDBOX_BRANCH" ]; then \
+      git checkout -B "$SANDBOX_BRANCH"; \
+    fi
+
+# Install dependencies (Daytona doesn't use BuildKit; cache mounts fail)
+USER root
+RUN mkdir -p /home/iterate/.pnpm-store && \
+    chown -R iterate:iterate /home/iterate/.pnpm-store && \
+    sudo -u iterate --preserve-env=PATH bash -lc "cd $ITERATE_REPO && pnpm install --no-frozen-lockfile --store-dir /home/iterate/.pnpm-store"
+USER iterate
+
+# Run post-clone setup (copy home-skeleton, etc.)
+RUN echo "Making scripts executable..." && \
+    chmod +x "$ITERATE_REPO/apps/os/sandbox/"*.sh && \
+    echo "Setting up home directory..." && \
+    bash "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
+
+ENTRYPOINT [ "/app/entry.sh" ]

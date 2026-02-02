@@ -4,7 +4,7 @@
  */
 
 import { Agent, request } from "undici";
-import { getDockerHostConfig, dockerApi } from "../backend/providers/local-docker.ts";
+import { getDockerHostConfig, dockerApi } from "../../../backend/providers/local-docker.ts";
 
 export { dockerApi };
 

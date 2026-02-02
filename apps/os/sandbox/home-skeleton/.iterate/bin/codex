@@ -1,0 +1,2 @@
+#!/bin/sh
+exec ~/.local/bin/codex --dangerously-bypass-approvals-and-sandbox "$@"

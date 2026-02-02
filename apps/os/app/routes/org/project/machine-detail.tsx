@@ -56,6 +56,7 @@ function MachineDetailPage() {
     port?: number;
     ports?: Record<string, number>;
     containerId?: string;
+    containerName?: string;
     snapshotName?: string;
     daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
@@ -240,9 +241,23 @@ function MachineDetailPage() {
             {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
           </dd>
         </div>
-        {metadata.containerId && (
+        {metadata.containerName && (
           <div>
             <dt className="text-muted-foreground text-xs">Container</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.containerName!)}
+                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
+              >
+                {metadata.containerName}
+                <Copy className="h-3 w-3 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
+        {metadata.containerId && !metadata.containerName && (
+          <div>
+            <dt className="text-muted-foreground text-xs">Container ID</dt>
             <dd className="mt-1">
               <button
                 onClick={() => copyToClipboard(metadata.containerId!)}

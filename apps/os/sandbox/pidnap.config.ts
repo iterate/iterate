@@ -17,12 +17,15 @@ const bash = (command: string) => ({
 });
 
 export default defineConfig({
+  http: {
+    host: "0.0.0.0",
+    port: 9876,
+  },
   logDir: "/var/log/pidnap",
   envFile,
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    ITERATE_REPO_LOCAL_DOCKER_MOUNT: "/local-iterate-repo",
     // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,
@@ -114,14 +117,32 @@ export default defineConfig({
       },
     },
     {
-      name: "iterate-daemon",
+      name: "daemon-client",
+      // TODO: bring back built daemon react app for production use
+      // Just took it out because it was a bit of a faff and this way
+      // our container mirrors development more closely
+      definition: {
+        command: "pnpm",
+        args: ["exec", "vite", "--host", "0.0.0.0", "--port", "3000"],
+        cwd: `${iterateRepo}/apps/daemon`,
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+      },
+    },
+    {
+      name: "daemon-server",
       definition: {
         command: "tsx",
         args: ["server.ts"],
         cwd: `${iterateRepo}/apps/daemon`,
         env: {
           HOSTNAME: "0.0.0.0",
-          PORT: "3000",
+          PORT: "3001",
         },
       },
       options: {
@@ -137,7 +158,16 @@ export default defineConfig({
       definition: {
         // Note, the client needs to handle the working directory by passing in a directory when creating a client using the SDK.
         command: "opencode",
-        args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
+        args: [
+          "serve",
+          "--port",
+          "4096",
+          "--hostname",
+          "0.0.0.0",
+          "--log-level",
+          "DEBUG",
+          "--print-logs",
+        ],
       },
       envOptions: {
         reloadDelay: 500,

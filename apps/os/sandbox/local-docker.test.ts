@@ -2,7 +2,7 @@
  * Local Docker + pidnap Integration Tests
  *
  * Verifies sandbox container setup with pidnap process supervision.
- * Image rebuilt once, each test group gets its own container.
+ * Uses docker-compose for container management - each test group gets isolated via --project-name.
  *
  * RUN WITH:
  *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts
@@ -14,180 +14,200 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type { TRPCRouter } from "../../daemon/server/trpc/router.ts";
-import { dockerApi, execInContainer } from "./test-helpers.ts";
+import { createClient as createPidnapClient } from "../../../packages/pidnap/src/api/client.ts";
+import { execInContainer } from "./test-helpers.ts";
+import { getLocalDockerGitInfo } from "./local-docker-utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
 
-const IMAGE_NAME = "iterate-sandbox-test";
 const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
-// ============ Container Helpers ============
+// ============ Docker Compose Helpers ============
 
-interface ContainerInfo {
-  id: string;
-  port?: number;
+/**
+ * Get environment variables needed for docker-compose
+ */
+function getComposeEnv(): Record<string, string> {
+  const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+  if (!gitInfo) throw new Error("Failed to get git info for local Docker tests");
+  return {
+    ...process.env,
+    LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+    LOCAL_DOCKER_REPO_CHECKOUT: gitInfo.repoRoot,
+    LOCAL_DOCKER_GIT_DIR: gitInfo.gitDir,
+    LOCAL_DOCKER_COMMON_DIR: gitInfo.commonDir,
+    // Pass API keys if available (for agent CLI tests)
+    ...(process.env.ANTHROPIC_API_KEY
+      ? { SANDBOX_ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+      : {}),
+    ...(process.env.OPENAI_API_KEY ? { SANDBOX_OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
+  } as Record<string, string>;
 }
 
-function createContainerName(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+interface ComposeProject {
+  projectName: string;
+  containerId: string;
+  port3000?: number;
+  port9876?: number;
 }
 
-function getRandomPort(): number {
-  return 13000 + Math.floor(Math.random() * 2000);
+function createProjectName(): string {
+  return `sandbox-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function createContainer(options?: { exposePort?: boolean }): Promise<ContainerInfo> {
-  const containerName = createContainerName("sandbox-test");
-  const port = options?.exposePort ? getRandomPort() : undefined;
-
-  const envVars = [
-    "PATH=/home/iterate/.opencode/bin:/home/iterate/.local/bin:/home/iterate/.npm-global/bin:/home/iterate/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    // Set customer repo path for daemon's getServerCwd endpoint
-    `ITERATE_CUSTOMER_REPO_PATH=${CONTAINER_REPO_PATH}`,
-  ];
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    envVars.push(`ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}`);
-  }
-  if (process.env.OPENAI_API_KEY) {
-    envVars.push(`OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
-  }
-
-  const config: Record<string, unknown> = {
-    Image: IMAGE_NAME,
-    name: containerName,
-    Env: envVars,
-    Tty: false,
-    HostConfig: {
-      AutoRemove: false,
-      // Mount local repo so entry.sh can rsync it into the container
-      Binds: [`${REPO_ROOT}:/local-iterate-repo:ro`],
-      // Map host.docker.internal to the host machine (needed on Linux, automatic on Mac Docker Desktop)
-      ExtraHosts: ["host.docker.internal:host-gateway"],
-    },
-  };
-
-  if (port) {
-    config.ExposedPorts = { "3000/tcp": {} };
-    (config.HostConfig as Record<string, unknown>).PortBindings = {
-      "3000/tcp": [{ HostPort: String(port) }],
-    };
-  }
-
-  const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", config);
-  await dockerApi("POST", `/containers/${createResponse.Id}/start`, {});
-
-  return { id: createResponse.Id, port };
+/**
+ * Start sandbox via docker-compose with unique project name for isolation
+ */
+function composeUp(projectName: string): void {
+  execSync(`docker compose --project-name ${projectName} up -d sandbox`, {
+    cwd: REPO_ROOT,
+    env: getComposeEnv(),
+    stdio: "inherit",
+  });
 }
 
-async function destroyContainer(containerId: string): Promise<void> {
+/**
+ * Stop and remove containers/volumes for a project
+ */
+function composeDown(projectName: string): void {
   try {
-    await dockerApi("POST", `/containers/${containerId}/stop?t=5`, {});
+    execSync(`docker compose --project-name ${projectName} down -v --remove-orphans`, {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
+      stdio: "inherit",
+    });
   } catch {
-    // might already be stopped
+    // Best effort cleanup
   }
-  await dockerApi("DELETE", `/containers/${containerId}?force=true`, undefined);
 }
 
-async function waitForContainerReady(containerId: string, timeoutMs = 180000): Promise<void> {
+/**
+ * Get container ID for the sandbox service
+ */
+function getContainerId(projectName: string): string {
+  return execSync(`docker compose --project-name ${projectName} ps -q sandbox`, {
+    cwd: REPO_ROOT,
+    env: getComposeEnv(),
+    encoding: "utf-8",
+  }).trim();
+}
+
+/**
+ * Get allocated host port for a container port
+ */
+function getPort(projectName: string, containerPort: number): number {
+  const output = execSync(
+    `docker compose --project-name ${projectName} port sandbox ${containerPort}`,
+    {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
+      encoding: "utf-8",
+    },
+  ).trim();
+  // Output is like "0.0.0.0:54321" - extract port
+  const match = output.match(/:(\d+)$/);
+  if (!match) throw new Error(`Failed to parse port from: ${output}`);
+  return parseInt(match[1], 10);
+}
+
+/**
+ * Create and start a sandbox container via docker-compose
+ */
+function createProject(): ComposeProject {
+  const projectName = createProjectName();
+  composeUp(projectName);
+  const containerId = getContainerId(projectName);
+  const port3000 = getPort(projectName, 3000);
+  const port9876 = getPort(projectName, 9876);
+  return { projectName, containerId, port3000, port9876 };
+}
+
+/**
+ * Wait for a pidnap-managed service to become healthy.
+ * Polls pidnap's services.waitHealthy API endpoint until the service is running.
+ * Handles connection failures gracefully (pidnap may not be up yet).
+ */
+async function waitForServiceHealthy(
+  port: number,
+  service: string,
+  timeoutMs = 180000,
+): Promise<void> {
   const start = Date.now();
+  const client = createPidnapClient(`http://127.0.0.1:${port}/rpc`);
 
-  // First wait for container to be running
   while (Date.now() - start < timeoutMs) {
     try {
-      const info = await dockerApi<{ State: { Running: boolean } }>(
-        "GET",
-        `/containers/${containerId}/json`,
-      );
-      if (info.State.Running) break;
-    } catch {
-      // Container not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  // Then wait for entry.sh to complete setup (creates ready file after setup-home.sh)
-  while (Date.now() - start < timeoutMs) {
-    try {
-      // Use sh -c with && echo to get output only on success
-      const result = await execInContainer(containerId, [
-        "sh",
-        "-c",
-        "test -f /tmp/.iterate-sandbox-ready && echo ready",
-      ]);
-      if (result.trim() === "ready") return;
-    } catch {
-      // File doesn't exist yet or container not ready
+      const remainingMs = timeoutMs - (Date.now() - start);
+      const data = await client.services.waitHealthy({
+        service,
+        timeoutMs: Math.min(30000, remainingMs),
+      });
+      if (data.healthy) return;
+      if (data.error === "terminal_state") {
+        throw new Error(`Service ${service} in terminal state: ${data.state}`);
+      }
+    } catch (e) {
+      // Connection refused (pidnap not up yet) or service not ready - retry
+      if (e instanceof Error && e.message.includes("terminal state")) throw e;
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error("Timeout waiting for container setup to complete");
-}
-
-async function waitForDaemonReady(port: number, timeoutMs = 180000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const response = await fetch(`http://localhost:${port}/api/health`);
-      if (response.ok) return;
-    } catch {
-      // not ready
-    }
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw new Error("Timeout waiting for daemon to be ready");
+  throw new Error(`Timeout waiting for service ${service} to become healthy`);
 }
 
 function createDaemonTrpcClient(port: number) {
   return createTRPCClient<TRPCRouter>({
-    links: [httpLink({ url: `http://localhost:${port}/api/trpc` })],
+    links: [httpLink({ url: `http://127.0.0.1:${port}/api/trpc` })],
   });
+}
+
+function createPidnapRpcClient(port: number) {
+  return createPidnapClient(`http://127.0.0.1:${port}/rpc`);
 }
 
 // ============ Tests ============
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   beforeAll(async () => {
-    console.log("Building sandbox image via pnpm snapshot:local-docker...");
-    // Use the existing script - builds without SANDBOX_ITERATE_REPO_REF (local dev mode)
-    execSync(`pnpm snapshot:local-docker`, {
-      cwd: join(REPO_ROOT, "apps/os"),
+    console.log("Building sandbox image via docker compose build...");
+    execSync(`docker compose build sandbox`, {
+      cwd: REPO_ROOT,
+      env: getComposeEnv(),
       stdio: "inherit",
-      env: { ...process.env, LOCAL_DOCKER_IMAGE_NAME: IMAGE_NAME },
     });
   }, 300000);
 
   // ============ Container Setup ============
-  describe.concurrent("Container Setup", () => {
-    let container: ContainerInfo;
+  describe("Container Setup", () => {
+    let project: ComposeProject;
 
     beforeAll(async () => {
-      container = await createContainer();
-      await waitForContainerReady(container.id);
+      project = createProject();
+      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
     }, 300000);
 
-    afterAll(async () => {
-      if (container?.id) await destroyContainer(container.id);
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
     test("agent CLIs installed", async () => {
-      const opencode = await execInContainer(container.id, ["opencode", "--version"]);
+      const opencode = await execInContainer(project.containerId, ["opencode", "--version"]);
       expect(opencode).toMatch(/\d+\.\d+\.\d+/);
 
-      const claude = await execInContainer(container.id, ["claude", "--version"]);
+      const claude = await execInContainer(project.containerId, ["claude", "--version"]);
       expect(claude).toMatch(/\d+\.\d+\.\d+/);
 
-      const pi = await execInContainer(container.id, ["pi", "--version"]);
+      const pi = await execInContainer(project.containerId, ["pi", "--version"]);
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
     test.runIf(process.env.OPENAI_API_KEY)(
       "opencode answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "opencode",
           "run",
           "what messaging app are you built to help with?",
@@ -200,7 +220,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "claude answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "claude",
           "-p",
           "what messaging app are you built to help with?",
@@ -213,7 +233,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test.runIf(process.env.ANTHROPIC_API_KEY)(
       "pi answers secret question",
       async () => {
-        const output = await execInContainer(container.id, [
+        const output = await execInContainer(project.containerId, [
           "pi",
           "-p",
           "what messaging app are you built to help with?",
@@ -225,24 +245,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     test("container setup correct", async () => {
       // repo cloned
-      const ls = await execInContainer(container.id, ["ls", CONTAINER_REPO_PATH]);
+      const ls = await execInContainer(project.containerId, ["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
-
-      // has bind mount for local repo (entry.sh syncs from this)
-      const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
-        "GET",
-        `/containers/${container.id}/json`,
-      );
-      expect(inspect.HostConfig?.Binds).toHaveLength(1);
-      expect(inspect.HostConfig?.Binds?.[0]).toContain("/local-iterate-repo");
     });
 
     test("git operations work", async () => {
-      const init = await execInContainer(container.id, ["git", "init", "/tmp/test-repo"]);
+      const init = await execInContainer(project.containerId, ["git", "init", "/tmp/test-repo"]);
       expect(init).toContain("Initialized");
 
-      const config = await execInContainer(container.id, [
+      const config = await execInContainer(project.containerId, [
         "git",
         "-C",
         "/tmp/test-repo",
@@ -251,10 +263,14 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       ]);
       expect(config).toContain("@");
 
-      await execInContainer(container.id, ["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
-      await execInContainer(container.id, ["git", "-C", "/tmp/test-repo", "add", "."]);
+      await execInContainer(project.containerId, [
+        "sh",
+        "-c",
+        "echo 'hello' > /tmp/test-repo/test.txt",
+      ]);
+      await execInContainer(project.containerId, ["git", "-C", "/tmp/test-repo", "add", "."]);
 
-      const commit = await execInContainer(container.id, [
+      const commit = await execInContainer(project.containerId, [
         "git",
         "-C",
         "/tmp/test-repo",
@@ -265,43 +281,77 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(commit).toContain("test");
     });
 
-    test("git status works in iterate repo", async () => {
-      const status = await execInContainer(container.id, [
-        "git",
-        "-C",
-        CONTAINER_REPO_PATH,
-        "status",
+    test("git state matches host", async () => {
+      const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+      expect(gitInfo).toBeDefined();
+
+      // Check branch matches (empty string if detached HEAD on both)
+      const containerBranch = (
+        await execInContainer(project.containerId, [
+          "git",
+          "-C",
+          CONTAINER_REPO_PATH,
+          "branch",
+          "--show-current",
+        ])
+      ).trim();
+      expect(containerBranch).toBe(gitInfo!.branch ?? "");
+
+      // Check commit matches
+      const containerCommit = (
+        await execInContainer(project.containerId, [
+          "git",
+          "-C",
+          CONTAINER_REPO_PATH,
+          "rev-parse",
+          "HEAD",
+        ])
+      ).trim();
+      expect(containerCommit).toBe(gitInfo!.commit);
+    });
+
+    test("shell sources ~/.iterate/.env automatically", async () => {
+      // Write env var to ~/.iterate/.env
+      await execInContainer(project.containerId, [
+        "sh",
+        "-c",
+        'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
       ]);
-      // CI checks out PR merge commits in detached HEAD state, which is fine
-      expect(status).toMatch(/On branch|HEAD detached/);
+
+      // Start a new login shell and check if env var is available
+      const envOutput = await execInContainer(project.containerId, [
+        "bash",
+        "-l",
+        "-c",
+        "env | grep TEST_ITERATE_ENV_VAR",
+      ]);
+
+      expect(envOutput).toContain("hello_from_env_file");
     });
   });
 
   // ============ Daemon ============
-  describe.concurrent("Daemon", () => {
-    let container: ContainerInfo;
+  describe("Daemon", () => {
+    let project: ComposeProject;
 
     beforeAll(async () => {
-      container = await createContainer({ exposePort: true });
-      await waitForContainerReady(container.id);
+      project = createProject();
+      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
     }, 300000);
 
-    afterAll(async () => {
-      if (container?.id) await destroyContainer(container.id);
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
     test("daemon accessible", async () => {
-      // Wait for daemon to be ready (entry.sh does pnpm install + vite build)
-      await waitForDaemonReady(container.port!);
-
       // Verify health endpoint from host
-      const healthResponse = await fetch(`http://localhost:${container.port}/api/health`);
+      const healthResponse = await fetch(`http://127.0.0.1:${project.port3000}/api/health`);
       expect(healthResponse.ok).toBe(true);
       const healthText = await healthResponse.text();
       expect(healthText.includes("ok") || healthText.includes("healthy")).toBe(true);
 
       // Verify health from inside container
-      const internalHealth = await execInContainer(container.id, [
+      const internalHealth = await execInContainer(project.containerId, [
         "curl",
         "-s",
         "http://localhost:3000/api/health",
@@ -310,19 +360,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("PTY endpoint works", async () => {
-      await waitForDaemonReady(container.port!);
-
       // PTY endpoint exists
       const ptyResponse = await fetch(
-        `http://localhost:${container.port}/api/pty/ws?cols=80&rows=24`,
+        `http://127.0.0.1:${project.port3000}/api/pty/ws?cols=80&rows=24`,
       );
       expect(ptyResponse.status).not.toBe(404);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
-      await waitForDaemonReady(container.port!);
-      const baseUrl = `http://localhost:${container.port}`;
-      const trpc = createDaemonTrpcClient(container.port!);
+      const baseUrl = `http://127.0.0.1:${project.port3000}`;
+      const trpc = createDaemonTrpcClient(project.port3000!);
 
       // index.html
       const root = await fetch(`${baseUrl}/`);
@@ -360,5 +407,52 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
     }, 210000);
+  });
+
+  // ============ Pidnap ============
+  describe("Pidnap", () => {
+    let project: ComposeProject;
+
+    beforeAll(async () => {
+      project = createProject();
+      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
+    }, 300000);
+
+    afterAll(() => {
+      if (project?.projectName) composeDown(project.projectName);
+    }, 30000);
+
+    test("services.waitHealthy returns success for running service with logs", async () => {
+      // iterate-daemon is already running (waited in beforeAll)
+      // Call pidnap's waitHealthy endpoint for iterate-daemon (should already be running)
+      const client = createPidnapRpcClient(project.port9876!);
+      const result = await client.services.waitHealthy({
+        service: "iterate-daemon",
+        timeoutMs: 5000,
+      });
+      expect(result.healthy).toBe(true);
+      expect(result.state).toBe("running");
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(result.elapsedMs).toBeLessThan(5000);
+
+      // Logs should be an array of strings with actual content
+      expect(Array.isArray(result.logs)).toBe(true);
+      expect(result.logs.length).toBeGreaterThan(0);
+      expect(result.logs.every((line: unknown) => typeof line === "string")).toBe(true);
+
+      // Daemon logs should contain timestamp patterns (pidnap log format: [HH:MM:SS.mmm])
+      const logsJoined = result.logs.join("\n");
+      expect(logsJoined).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/);
+
+      // Should contain some daemon-related output (INFO/DEBUG level or server startup)
+      expect(logsJoined).toMatch(/INFO|DEBUG|listening|started|server/i);
+    }, 210000);
+
+    test("services.waitHealthy returns failure for non-existent service", async () => {
+      const client = createPidnapRpcClient(project.port9876!);
+      await expect(
+        client.services.waitHealthy({ service: "nonexistent", timeoutMs: 1000 }),
+      ).rejects.toThrow(/Service not found/i);
+    }, 30000);
   });
 });

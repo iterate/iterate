@@ -1,62 +1,53 @@
 #!/bin/bash
 set -euo pipefail
 
-# We need to Sync the files before pidnap can load the config file
-# Once that's done, pidnap takes over
+ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
+HOST_REPO_CHECKOUT="${HOST_REPO_CHECKOUT:-/host/repo-checkout}"
+HOST_GITDIR="${HOST_GITDIR:-/host/gitdir}"
+HOST_COMMONDIR="${HOST_COMMONDIR:-/host/commondir}"
 
-# Sandbox entrypoint: sets up agent environment and starts pidnap process manager,
-# which runs our daemon and the opencode server under supervision.
-#
-# Two modes:
-#   - Local Docker: /local-iterate-repo mount exists → rsync, pnpm install, build
-#   - Daytona/CI: image has everything pre-baked → just starts pidnap
-#
-# Why rsync in local mode?
-#   The docker image already contains the repo, but may be stale. Restarting the container
-#   syncs the latest source from the host mount. This means in local dev you can
-#   restart a container and any changes to the daemon/home-skeleton
-#   that you made locally will be reflected in the container.
-
-ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
-ITERATE_REPO_LOCAL_DOCKER_MOUNT="/local-iterate-repo"
-SANDBOX_DIR="$ITERATE_REPO/apps/os/sandbox"
-
-# --- Local Docker: sync host repo into container ---
-if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
-  echo "Local mode: syncing host repo (restart container to pick up changes)"
-
-  # Sync using .gitignore patterns (excludes build artifacts, node_modules, etc.)
-  # But do include .git so that `git status` inside the container shows the same thing as outside
+if [[ -d "${HOST_REPO_CHECKOUT}" ]]; then
+  echo "[entry] Syncing repo from ${HOST_REPO_CHECKOUT} -> ${ITERATE_REPO}"
   rsync -a --delete \
     --filter=':- .gitignore' \
-    "$ITERATE_REPO_LOCAL_DOCKER_MOUNT/" "$ITERATE_REPO/"
+    --filter=':- .git/info/exclude' \
+    --exclude='.git' \
+    --exclude='node_modules' \
+    "${HOST_REPO_CHECKOUT}/" "${ITERATE_REPO}/"
 
-  echo "Git status:"
-  (cd "$ITERATE_REPO" && git status --verbose)
+  if [[ -d "${HOST_COMMONDIR}" ]]; then
+    echo "[entry] Syncing commondir from ${HOST_COMMONDIR} -> ${ITERATE_REPO}/.git"
+    mkdir -p "${ITERATE_REPO}/.git"
+    rsync -a --delete \
+      --no-owner --no-group --no-perms \
+      "${HOST_COMMONDIR}/" "${ITERATE_REPO}/.git/"
+  fi
 
-  # NOTE: Do NOT delete $ITERATE_REPO_LOCAL_DOCKER_MOUNT - it's a mount point and rm would fail or
-  # worse, delete host files if mounted read-write. The mount is isolated anyway.
+  if [[ -d "${HOST_GITDIR}" ]]; then
+    if [[ -e "${ITERATE_REPO}/.git" && ! -d "${ITERATE_REPO}/.git" ]]; then
+        rm -f "${ITERATE_REPO}/.git"
+    fi
 
-  # Make scripts executable (rsync preserves permissions but host may not have +x)
-  chmod +x "$ITERATE_REPO/apps/os/sandbox/"*.sh
+    echo "[entry] Syncing gitdir from ${HOST_GITDIR} -> ${ITERATE_REPO}/.git"
+    mkdir -p "${ITERATE_REPO}/.git"
+    rsync -a \
+      --no-owner --no-group --no-perms \
+      "${HOST_GITDIR}/" "${ITERATE_REPO}/.git/"
+  fi
 
-  # Patch pidnap package.json to use the built tgz
-  sed -i 's|workspace:|file:/app/pidnap.tgz|g' "$ITERATE_REPO/apps/os/sandbox/package.json"
+  # Flatten worktree metadata copied from host paths.
+  if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]; then
+    rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
+  fi
 
-  echo "Installing dependencies..."
-  (cd "$ITERATE_REPO" && pnpm install --no-frozen-lockfile)
-
-  echo "Building daemon..."
-  (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
-
-  # Setup home directory (agent configs from home-skeleton)
-  "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
+  if [[ -f "${ITERATE_REPO}/apps/os/sandbox/sync-home.sh" ]]; then
+    echo "[entry] Syncing home-skeleton"
+    bash "${ITERATE_REPO}/apps/os/sandbox/sync-home.sh"
+  fi
 fi
 
-export ITERATE_REPO
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
 
-# Signal readiness for tests and stuff
-touch /tmp/.iterate-sandbox-ready
-
-# Pidnap take the wheel
-exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts"
+exec tini -sg -- pnpm exec tsx --env-file-if-exists ~/.iterate/.env --watch "${ITERATE_REPO}/packages/pidnap/src/cli.ts" init -c "${ITERATE_REPO}/apps/os/sandbox/pidnap.config.ts"

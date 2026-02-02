@@ -14,6 +14,7 @@ import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
+import { Checkbox } from "../../../components/ui/checkbox.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
   Sheet,
@@ -95,6 +96,8 @@ function ProjectMachinesPage() {
   const [newLocalHost, setNewLocalHost] = useState("localhost");
   // Per-daemon port state for local machines (daemonId -> port string)
   const [newLocalPorts, setNewLocalPorts] = useState<Record<string, string>>(DEFAULT_LOCAL_PORTS);
+  const [newLocalDockerImage, setNewLocalDockerImage] = useState("ghcr.io/iterate/sandbox:local");
+  const [newLocalDockerSyncRepo, setNewLocalDockerSyncRepo] = useState(true);
 
   // Fetch daemon definitions for the form
   const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
@@ -131,6 +134,8 @@ function ProjectMachinesPage() {
       setNewMachineName(`${defaultType}-${dateSlug()}`);
       setNewLocalHost("localhost");
       setNewLocalPorts(DEFAULT_LOCAL_PORTS);
+      setNewLocalDockerImage("ghcr.io/iterate/sandbox:local");
+      setNewLocalDockerSyncRepo(true);
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -225,6 +230,25 @@ function ProjectMachinesPage() {
       return;
     }
 
+    if (newMachineType === "local-docker") {
+      const imageName = newLocalDockerImage.trim();
+      if (!imageName) {
+        toast.error("Docker image is required");
+        return;
+      }
+      createMachine.mutate({
+        name: trimmedName,
+        type: newMachineType,
+        metadata: {
+          localDocker: {
+            imageName,
+            syncRepo: newLocalDockerSyncRepo,
+          },
+        },
+      });
+      return;
+    }
+
     createMachine.mutate({ name: trimmedName, type: newMachineType });
   };
 
@@ -313,6 +337,42 @@ function ProjectMachinesPage() {
                 </div>
               </div>
             )}
+            {isNonProd && newMachineType === "local-docker" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Docker Image</label>
+                  <Input
+                    placeholder="ghcr.io/iterate/sandbox:sha-<sha>"
+                    value={newLocalDockerImage}
+                    onChange={(e) => setNewLocalDockerImage(e.target.value)}
+                    disabled={createMachine.isPending}
+                    autoComplete="off"
+                    data-1p-ignore
+                  />
+                </div>
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="local-docker-sync-repo"
+                    checked={newLocalDockerSyncRepo}
+                    onCheckedChange={(value) => setNewLocalDockerSyncRepo(value === true)}
+                    disabled={createMachine.isPending}
+                  />
+                  <label
+                    className="text-sm font-medium leading-tight"
+                    htmlFor="local-docker-sync-repo"
+                  >
+                    Sync host git repo into the sandbox
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  When enabled, the sandbox mounts your repo read-only and rsyncs it into
+                  ~/src/github.com/iterate/iterate at startup. This means `git status` in the
+                  container starts out matching your host, but commits made in the container won't
+                  appear on your host filesystem. It slows restarts, but avoids rebuilding images to
+                  pick up code changes.
+                </p>
+              </div>
+            )}
           </div>
           <SheetFooter>
             <Button
@@ -353,7 +413,7 @@ function ProjectMachinesPage() {
   }
 
   return (
-    <div className="p-4">
+    <div className="p-4 space-y-4">
       <HeaderActions>
         <Button asChild size="sm">
           <Link to={Route.fullPath} params={params} search={{ create: true }}>
@@ -363,6 +423,7 @@ function ProjectMachinesPage() {
         </Button>
       </HeaderActions>
       {createSheet}
+
       <MachineTable
         machines={machines}
         organizationSlug={params.organizationSlug}
