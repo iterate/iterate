@@ -1,2 +1,15 @@
-(cd .github/ts-workflows && node cli.ts from-ts) && git add .github/workflows
+# Check if running as an agent (Claude Code, OpenCode, Cursor, etc.)
+is_agent() {
+  [ "$AGENT" = "1" ] || [ "$OPENCODE" = "1" ] || [ -n "$OPENCODE_SESSION" ] || [ -n "$CLAUDE_CODE" ]
+}
+
+# Generate workflow yml files from ts sources
+# For non-agents: stage the generated yml files
+# For agents: skip staging (they can't push workflow changes anyway, and
+# prepare-commit-msg will block them if they try)
+(cd .github/ts-workflows && node cli.ts from-ts)
+if ! is_agent; then
+  git add .github/workflows
+fi
+
 pnpm lint-staged
