@@ -83,6 +83,15 @@ export type UserEventTypes = {
   };
 };
 
+export type OrganizationEventTypes = {
+  "organization:created": {
+    organizationId: string;
+    name: string;
+    slug: string;
+    createdByUserId: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -100,6 +109,7 @@ export const outboxClient = createConsumerClient<
     MachineEventTypes &
     OAuthEventTypes &
     BillingEventTypes &
-    UserEventTypes,
+    UserEventTypes &
+    OrganizationEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });

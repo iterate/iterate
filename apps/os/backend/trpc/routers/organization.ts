@@ -16,6 +16,8 @@ import {
   user,
 } from "../../db/schema.ts";
 import { slugify } from "../../utils/slug.ts";
+import { outboxClient } from "../../outbox/client.ts";
+import { waitUntil } from "../../../env.ts";
 
 export const organizationRouter = router({
   create: protectedMutation
@@ -54,6 +56,18 @@ export const organizationRouter = router({
         userId: ctx.user.id,
         role: "owner",
       });
+
+      // Emit organization:created event
+      waitUntil(
+        outboxClient.sendTx(ctx.db, "organization:created", async (_tx) => ({
+          payload: {
+            organizationId: newOrg.id,
+            name: newOrg.name,
+            slug: newOrg.slug,
+            createdByUserId: ctx.user.id,
+          },
+        })),
+      );
 
       return newOrg;
     }),
