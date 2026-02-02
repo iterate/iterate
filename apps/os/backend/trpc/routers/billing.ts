@@ -6,6 +6,8 @@ import * as schema from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { BILLING_METERS } from "../../billing/meters.generated.ts";
 import { env } from "../../../env.ts";
+import { outboxClient } from "../../outbox/client.ts";
+import { waitUntil } from "../../../env.ts";
 
 export const billingRouter = router({
   getBillingAccount: orgProtectedProcedure.query(async ({ ctx }) => {
@@ -99,6 +101,19 @@ export const billingRouter = router({
           message: "Failed to create checkout session",
         });
       }
+
+      // Emit event for tracking and audit
+      waitUntil(
+        outboxClient.sendTx(ctx.db, "billing:checkout:initiated", async (_tx) => ({
+          payload: {
+            organizationId: ctx.organization.id,
+            organizationSlug: ctx.organization.slug,
+            userId: ctx.user.id,
+            stripeCustomerId: account.stripeCustomerId,
+            checkoutSessionId: session.id,
+          },
+        })),
+      );
 
       return { url: session.url };
     }),

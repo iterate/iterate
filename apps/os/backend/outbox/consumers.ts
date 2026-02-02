@@ -5,6 +5,7 @@ import { registerSlackConsumers } from "./slack-consumers.ts";
 import { registerResendConsumers } from "./resend-consumers.ts";
 import { registerMachineConsumers } from "./machine-consumers.ts";
 import { registerOAuthConsumers } from "./oauth-consumers.ts";
+import { registerBillingConsumers } from "./billing-consumers.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
@@ -13,6 +14,7 @@ export const registerConsumers = () => {
   registerResendConsumers();
   registerMachineConsumers();
   registerOAuthConsumers();
+  registerBillingConsumers();
 };
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
