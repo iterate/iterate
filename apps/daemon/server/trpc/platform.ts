@@ -401,9 +401,9 @@ export async function syncIterateRepo(expectedSha: string): Promise<void> {
     console.log(`[platform] Iterate repo is dirty, stashing`);
     const stash = await git.stash();
     console.log(`[platform] Stashed changes: ${stash}`);
-    await git.checkout(["main"]);
   }
 
+  await git.checkout(["main"]);
   await git.fetch("origin", "main");
   await git.merge([expectedSha]);
   lastSyncedIterateSha = expectedSha;
