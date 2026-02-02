@@ -7,11 +7,16 @@ import {
   handleSubscriptionDeleted,
   handleSubscriptionUpdated,
 } from "../integrations/stripe/stripe-outbox.ts";
+import {
+  handleSlackInteractiveEvent,
+  handleSlackWebhookEvent,
+} from "../integrations/slack/slack-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
   registerStripeConsumers();
+  registerSlackConsumers();
 };
 
 function registerTestConsumers() {
@@ -90,6 +95,24 @@ function registerStripeConsumers() {
     on: "stripe:checkout.session.completed",
     handler: async ({ payload }) => {
       await handleCheckoutSessionCompleted(payload.session);
+    },
+  });
+}
+
+function registerSlackConsumers() {
+  cc.registerConsumer({
+    name: "forwardSlackWebhook",
+    on: "slack:webhook.received",
+    handler: async ({ payload }) => {
+      await handleSlackWebhookEvent(payload.event);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "forwardSlackInteractiveCallback",
+    on: "slack:interactive.received",
+    handler: async ({ payload }) => {
+      await handleSlackInteractiveEvent(payload.event);
     },
   });
 }

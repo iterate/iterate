@@ -22,3 +22,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: `sendTx` callbacks must return a Promise (use `async`)
   - Useful context: keep webhook handlers minimal; emit per-event outbox names for clarity
 ---
+
+## 2026-02-02 16:02:18 GMT - US-003
+- Moved Slack webhook + interactive handling to outbox consumers and enqueue raw events
+- Files changed: apps/os/backend/integrations/slack/slack.ts, apps/os/backend/integrations/slack/slack-outbox.ts, apps/os/backend/outbox/client.ts, apps/os/backend/outbox/consumers.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: share Slack team + active machine lookup across webhook/interactive consumers
+  - Gotchas encountered: update outbox client event types before calling `sendTx`
+  - Useful context: webhook handlers should enqueue and return after signature checks
+---

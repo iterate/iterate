@@ -6,7 +6,9 @@ import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
+import { getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 
@@ -53,7 +55,24 @@ export async function forwardSlackWebhookToMachine(
   payload: Record<string, unknown>,
   env: CloudflareEnv,
 ): Promise<{ success: boolean; error?: string }> {
-  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/slack/webhook", env);
+  return forwardSlackPayloadToMachine(machine, payload, env, "/api/integrations/slack/webhook");
+}
+
+export async function forwardSlackInteractiveToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  payload: Record<string, unknown>,
+  env: CloudflareEnv,
+): Promise<{ success: boolean; error?: string }> {
+  return forwardSlackPayloadToMachine(machine, payload, env, "/api/integrations/slack/interactive");
+}
+
+async function forwardSlackPayloadToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  payload: Record<string, unknown>,
+  env: CloudflareEnv,
+  path: string,
+): Promise<{ success: boolean; error?: string }> {
+  const targetUrl = await buildMachineForwardUrl(machine, path, env);
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
@@ -416,83 +435,12 @@ slackApp.post("/webhook", async (c) => {
     return c.json({ challenge: payload.challenge });
   }
 
-  // Extract event_id for dedup
-  const slackEventId = payload.event_id as string | undefined;
-  const teamId =
-    (payload.team_id as string) ||
-    ((payload.team as Record<string, unknown>)?.id as string) ||
-    ((payload.event as Record<string, unknown>)?.team as string);
-
   // Log full payload for debugging
   logger.debug("[Slack Webhook] Received", { payload });
 
-  // Get references before returning (needed in background)
-  const db = c.var.db;
-  const env = c.env;
-
-  // RETURN IMMEDIATELY - process in background for Slack compliance
-  waitUntil(
-    (async () => {
-      try {
-        if (!teamId) {
-          logger.warn("[Slack Webhook] No team_id in payload");
-          return;
-        }
-
-        // Dedup check using external_id (Slack's event_id)
-        if (slackEventId) {
-          const existing = await db.query.event.findFirst({
-            where: (e, { eq }) => eq(e.externalId, slackEventId),
-          });
-          if (existing) {
-            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
-            return;
-          }
-        }
-
-        logger.debug("[Slack Webhook] Looking up connection", { teamId });
-        // Find connection and the single active machine for its project
-        const connection = await db.query.projectConnection.findFirst({
-          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
-          with: {
-            project: {
-              with: {
-                machines: {
-                  where: (m, { eq }) => eq(m.state, "active"),
-                  limit: 1,
-                },
-              },
-            },
-          },
-        });
-
-        const projectId = connection?.projectId;
-        if (!projectId) {
-          logger.warn("[Slack Webhook] No project for team", { teamId });
-          return;
-        }
-
-        // Get the single active machine for this project
-        const targetMachine = connection.project?.machines[0] ?? null;
-
-        // Forward to machine if available
-        if (targetMachine) {
-          logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
-          await forwardSlackWebhookToMachine(targetMachine, payload, env);
-        }
-
-        // Save event with type slack:webhook-received, detailed info in payload
-        await db.insert(schema.event).values({
-          type: "slack:webhook-received",
-          payload: payload,
-          projectId,
-          externalId: slackEventId,
-        });
-      } catch (err) {
-        logger.error("[Slack Webhook] Background error", err);
-      }
-    })(),
-  );
+  await outboxClient.sendTx(getDb(), "slack:webhook.received", async (_tx) => ({
+    payload: { event: payload },
+  }));
 
   return c.text("ok");
 });
@@ -524,11 +472,16 @@ slackApp.post("/interactive", async (c) => {
     return c.json({ error: "Missing payload" }, 400);
   }
 
+  let payload: Record<string, unknown>;
   try {
-    JSON.parse(payloadStr);
+    payload = JSON.parse(payloadStr) as Record<string, unknown>;
   } catch {
     return c.json({ error: "Invalid JSON" }, 400);
   }
+
+  await outboxClient.sendTx(getDb(), "slack:interactive.received", async (_tx) => ({
+    payload: { event: payload },
+  }));
 
   return c.json({ ok: true });
 });

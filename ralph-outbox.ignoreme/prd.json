@@ -45,7 +45,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "See slack.ts:392 for event handling and slack.ts:504 for interactive callbacks."
     },
     {

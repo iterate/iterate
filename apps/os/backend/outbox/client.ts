@@ -15,9 +15,15 @@ export type StripeWebhookEventTypes = {
   "stripe:checkout.session.completed": { session: Stripe.Checkout.Session };
 };
 
+export type SlackWebhookEventTypes = {
+  "slack:webhook.received": { event: Record<string, unknown> };
+  "slack:interactive.received": { event: Record<string, unknown> };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
-} & StripeWebhookEventTypes;
+} & StripeWebhookEventTypes &
+  SlackWebhookEventTypes;
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
