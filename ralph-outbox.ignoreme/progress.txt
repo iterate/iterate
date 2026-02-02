@@ -4,6 +4,7 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
 
 ## Codebase Patterns
 - For non-tRPC events (webhooks), use `outboxClient.sendTx(getDb(), eventName, async (_tx) => ({ payload }))` to enqueue and let consumers handle side effects.
+- For tRPC routers emitting outbox events, use `outbox/internal-client.ts` with shared `outbox/event-types.ts` to avoid appRouter type cycles.
 
 ## 2026-02-02 15:46:57 GMT - US-001
 - Ported outbox infra (pgmq library, queuer, client, consumers, type tests) and wired consumer registration on worker startup
@@ -39,4 +40,13 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Patterns discovered: keep stage-forwarding logic in webhook handlers, move side effects to outbox consumers
   - Gotchas encountered: add outbox event types before enqueueing
   - Useful context: reuse existing email forwarding helpers inside consumer to keep handler minimal
+---
+
+## 2026-02-02 17:12:04 GMT - US-005
+- Moved machine provisioning to outbox consumer with machine:created enqueue and PostHog tracking
+- Files changed: apps/os/backend/trpc/routers/machine.ts, apps/os/backend/outbox/consumers.ts, apps/os/backend/outbox/client.ts, apps/os/backend/outbox/internal-client.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/machines/machine-outbox.ts, apps/os/backend/machines/machine-token.ts, apps/os/backend/trpc/routers/access-token.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: split outbox event types into `outbox/event-types.ts` for reuse across internal clients
+  - Gotchas encountered: avoid importing `outboxClient` inside appRouter modules to prevent type cycles
+  - Useful context: placeholder machine externalId can be updated after provisioning completes
 ---

@@ -5,7 +5,7 @@ import { typeid } from "typeid-js";
 import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectAccessToken } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { generateProjectAccessKey } from "./machine.ts";
+import { generateProjectAccessKey } from "../../machines/machine-token.ts";
 
 export const accessTokenRouter = router({
   list: projectProtectedProcedure.query(async ({ ctx }) => {

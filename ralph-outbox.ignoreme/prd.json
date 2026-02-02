@@ -73,7 +73,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Current flow in machine.ts:285-396. Consider machine:ready and machine:archived events if needed."
     },
     {
