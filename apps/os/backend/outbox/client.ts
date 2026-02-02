@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 import type { appRouter } from "../trpc/root.ts";
+import type { ResendEmailReceivedPayload } from "../integrations/resend/resend.ts";
 import { waitUntil } from "../../env.ts";
 import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
@@ -20,10 +21,15 @@ export type SlackWebhookEventTypes = {
   "slack:interactive.received": { event: Record<string, unknown> };
 };
 
+export type ResendWebhookEventTypes = {
+  "resend:email.received": { event: ResendEmailReceivedPayload };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
 } & StripeWebhookEventTypes &
-  SlackWebhookEventTypes;
+  SlackWebhookEventTypes &
+  ResendWebhookEventTypes;
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 

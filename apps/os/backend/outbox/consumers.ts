@@ -11,12 +11,14 @@ import {
   handleSlackInteractiveEvent,
   handleSlackWebhookEvent,
 } from "../integrations/slack/slack-outbox.ts";
+import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
   registerStripeConsumers();
   registerSlackConsumers();
+  registerResendConsumers();
 };
 
 function registerTestConsumers() {
@@ -113,6 +115,16 @@ function registerSlackConsumers() {
     on: "slack:interactive.received",
     handler: async ({ payload }) => {
       await handleSlackInteractiveEvent(payload.event);
+    },
+  });
+}
+
+function registerResendConsumers() {
+  cc.registerConsumer({
+    name: "forwardResendInboundEmail",
+    on: "resend:email.received",
+    handler: async ({ payload }) => {
+      await handleResendEmailReceived(payload.event);
     },
   });
 }

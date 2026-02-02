@@ -31,3 +31,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: update outbox client event types before calling `sendTx`
   - Useful context: webhook handlers should enqueue and return after signature checks
 ---
+
+## 2026-02-02 16:07:42 GMT - US-004
+- Moved Resend webhook handling to outbox consumer and enqueue raw events after validation
+- Files changed: apps/os/backend/integrations/resend/resend.ts, apps/os/backend/integrations/resend/resend-outbox.ts, apps/os/backend/outbox/client.ts, apps/os/backend/outbox/consumers.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep stage-forwarding logic in webhook handlers, move side effects to outbox consumers
+  - Gotchas encountered: add outbox event types before enqueueing
+  - Useful context: reuse existing email forwarding helpers inside consumer to keep handler minimal
+---

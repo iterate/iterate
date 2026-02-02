@@ -59,7 +59,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Current handler at apps/os/backend/integrations/resend/resend.ts:253."
     },
     {
