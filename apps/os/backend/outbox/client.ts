@@ -32,6 +32,10 @@ export type SlackEventTypes = {
   "slack:interactive": { payload: Record<string, unknown>; teamId: string };
 };
 
+export type ResendEventTypes = {
+  "resend:email.received": { payload: Record<string, unknown>; resendEmailId: string };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
@@ -41,6 +45,6 @@ export type InternalEventTypes = {
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
 export const outboxClient = createConsumerClient<
-  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes & SlackEventTypes,
+  InternalEventTypes & AppTrpcEventTypes & StripeEventTypes & SlackEventTypes & ResendEventTypes,
   typeof queuer.$types.db
 >(queuer, { waitUntil });
