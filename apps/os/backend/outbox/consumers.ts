@@ -19,6 +19,7 @@ import {
 import { handleResendEmailReceived } from "../integrations/resend/resend-outbox.ts";
 import { handleMachineCreated, handleMachinePromoted } from "../machines/machine-outbox.ts";
 import { handleBillingCheckoutInitiated } from "../billing/billing-outbox.ts";
+import { handleUserCreated } from "../auth/auth-outbox.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -29,6 +30,7 @@ export const registerConsumers = () => {
   registerMachineConsumers();
   registerOAuthConsumers();
   registerBillingConsumers();
+  registerUserConsumers();
 };
 
 function registerTestConsumers() {
@@ -189,6 +191,16 @@ function registerBillingConsumers() {
     on: "billing:checkout:initiated",
     handler: async ({ payload, eventId }) => {
       await handleBillingCheckoutInitiated(payload, eventId);
+    },
+  });
+}
+
+function registerUserConsumers() {
+  cc.registerConsumer({
+    name: "trackUserSignup",
+    on: "user:created",
+    handler: async ({ payload }) => {
+      await handleUserCreated(payload);
     },
   });
 }

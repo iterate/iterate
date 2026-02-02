@@ -80,3 +80,12 @@ Started: Mon  2 Feb 2026 15:30:58 GMT
   - Gotchas encountered: trpc queryOptions doesn't accept onSuccess/onError; use useEffect for redirect/toast
   - Useful context: internalOutboxClient.send returns eventId for polling
 ---
+
+## 2026-02-02 17:04:11 GMT - US-009
+- Emitted user:created in auth hooks and moved signup tracking to outbox consumer with PostHog capture
+- Files changed: apps/os/backend/auth/auth.ts, apps/os/backend/auth/auth-outbox.ts, apps/os/backend/outbox/event-types.ts, apps/os/backend/outbox/consumers.ts, ralph-outbox.ignoreme/prd.json, ralph-outbox.ignoreme/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: use internalOutboxClient in auth database hooks to avoid router type cycles
+  - Gotchas encountered: keep PostHog capture in consumers for retryable delivery
+  - Useful context: add hook stubs in consumer handlers for future side effects
+---

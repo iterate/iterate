@@ -129,7 +129,7 @@
         "pnpm typecheck passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Current flow in auth.ts:72-107."
     },
     {

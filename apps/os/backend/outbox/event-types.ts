@@ -84,6 +84,15 @@ export type OAuthConnectionEventTypes = {
   };
 };
 
+export type UserEventTypes = {
+  "user:created": {
+    userId: string;
+    email: string;
+    name?: string;
+    signupMethod?: string;
+  };
+};
+
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
 } & StripeWebhookEventTypes &
@@ -91,4 +100,5 @@ export type InternalEventTypes = {
   ResendWebhookEventTypes &
   MachineLifecycleEventTypes &
   OAuthConnectionEventTypes &
-  BillingEventTypes;
+  BillingEventTypes &
+  UserEventTypes;
