@@ -16,8 +16,12 @@ interface IntegrationFixtures extends LocalFixtures {
   mockUrl: string;
 }
 
-export const localTest = baseTest.extend<LocalFixtures>({
-  provider: async (_ctx, use) => {
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const providerTest = hasProvider ? baseTest : baseTest.skip;
+
+export const localTest = providerTest.extend<LocalFixtures>({
+  provider: async ({ task: _task }, use) => {
     await use(getProvider());
   },
   sandbox: async ({ provider, task }, use) => {
@@ -34,11 +38,11 @@ export const localTest = baseTest.extend<LocalFixtures>({
   },
 });
 
-export const integrationTest = baseTest.extend<IntegrationFixtures>({
-  provider: async (_ctx, use) => {
+export const integrationTest = providerTest.extend<IntegrationFixtures>({
+  provider: async ({ task: _task }, use) => {
     await use(getProvider());
   },
-  mock: async (_ctx, use) => {
+  mock: async ({ task: _task }, use) => {
     const mock = createMockIterateOsApi();
     await mock.start();
     await use(mock);

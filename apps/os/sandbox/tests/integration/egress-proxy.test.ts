@@ -1,6 +1,10 @@
 import { integrationTest as test, describe, expect } from "../fixtures.ts";
 import { refreshEnv } from "../helpers/refresh-env.ts";
 
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const describeIfProvider = describe.runIf(hasProvider);
+
 function buildEnvVars(vars: Record<string, string>) {
   return Object.entries(vars).map(([key, value]) => ({
     key,
@@ -11,7 +15,7 @@ function buildEnvVars(vars: Record<string, string>) {
   }));
 }
 
-describe("Egress Proxy", () => {
+describeIfProvider("Egress Proxy", () => {
   test("mitmproxy installed and addon exists", async ({ sandbox }) => {
     const version = await sandbox.exec(["mitmproxy", "--version"]);
     expect(version.toLowerCase()).toContain("mitmproxy");

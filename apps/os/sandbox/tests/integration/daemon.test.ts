@@ -1,6 +1,10 @@
 import { integrationTest as test, describe, expect } from "../fixtures.ts";
 import type { MockIterateOsApi, OrpcProcedure } from "../mock-iterate-os-api/types.ts";
 
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const describeIfProvider = describe.runIf(hasProvider);
+
 function buildEnvVars(vars: Record<string, string>) {
   return Object.entries(vars).map(([key, value]) => ({
     key,
@@ -25,7 +29,7 @@ async function waitForOrpc(
   throw new Error(`Timeout waiting for ${procedure} to be called`);
 }
 
-describe("Daemon Control Plane Integration", () => {
+describeIfProvider("Daemon Control Plane Integration", () => {
   test("calls getEnv on startup and applies env vars", async ({ sandbox, mock }) => {
     await waitForOrpc(mock, "machines.reportStatus");
     await waitForOrpc(mock, "machines.getEnv");

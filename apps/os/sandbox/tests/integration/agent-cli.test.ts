@@ -17,7 +17,11 @@ function buildEnvVars(vars: Record<string, string>) {
   }));
 }
 
-describe("Agent CLI", () => {
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const describeIfProvider = describe.runIf(hasProvider);
+
+describeIfProvider("Agent CLI", () => {
   test("opencode computes 50-8=42", async ({ sandbox, mock, mockUrl }) => {
     mock.orpc.setGetEnvResponse({
       envVars: buildEnvVars({

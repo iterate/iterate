@@ -1,6 +1,10 @@
 import { localTest as test, describe, expect } from "../fixtures.ts";
 
-describe("Pidnap Process Supervisor", () => {
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const describeIfProvider = describe.runIf(hasProvider);
+
+describeIfProvider("Pidnap Process Supervisor", () => {
   test("processes.get returns running state", async ({ sandbox }) => {
     const result = await sandbox.waitForServiceHealthy("iterate-daemon", 5000);
     expect(result.healthy).toBe(true);

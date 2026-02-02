@@ -7,7 +7,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../../../..");
 const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
-describe("Container Setup", () => {
+const hasProvider =
+  process.env.RUN_LOCAL_DOCKER_TESTS === "true" || process.env.RUN_DAYTONA_TESTS === "true";
+const describeIfProvider = describe.runIf(hasProvider);
+
+describeIfProvider("Container Setup", () => {
   test("agent CLIs installed and working", async ({ sandbox }) => {
     const opencode = await sandbox.exec(["opencode", "--version"]);
     expect(opencode).toMatch(/\d+\.\d+\.\d+/);
