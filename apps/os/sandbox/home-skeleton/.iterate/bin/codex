@@ -1,2 +1,2 @@
 #!/bin/sh
-exec ~/.local/bin/codex --dangerously-bypass-approvals-and-sandbox "$@"
+exec codex --dangerously-bypass-approvals-and-sandbox "$@"
