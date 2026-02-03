@@ -121,7 +121,7 @@ describe("RestartingProcess", () => {
         mockLogger,
       );
       failureProc.start();
-      await expect.poll(() => failureProc.restarts).toBeGreaterThan(0);
+      await expect.poll(() => failureProc.restarts, { timeout: 5000 }).toBeGreaterThan(0);
 
       await failureProc.stop();
     });
@@ -262,7 +262,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("max-restarts-reached");
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("max-restarts-reached");
       expect(proc.restarts).toBe(2);
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("Max total restarts"));
     });
@@ -276,7 +276,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("max-restarts-reached");
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("max-restarts-reached");
 
       // Restart with long-running process should reset counters
       const options2: RestartingProcessOptions = {

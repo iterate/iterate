@@ -1,7 +1,7 @@
 /**
  * Build local Docker sandbox image.
  */
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -79,7 +79,7 @@ for (const tag of tags) {
 console.log("Docker buildx command:");
 console.log(buildCommand);
 
-execSync(buildArgs.join(" "), {
+execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
 });

@@ -162,10 +162,8 @@ describe("Manager - Reload & Remove", () => {
         },
       });
 
-      await wait(400);
-
       // Should have restarted with new policy
-      expect(proc?.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc?.restarts ?? 0, { timeout: 2000 }).toBeGreaterThan(0);
 
       await manager.stop();
     });

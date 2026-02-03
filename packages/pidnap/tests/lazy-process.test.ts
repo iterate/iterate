@@ -157,8 +157,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -177,8 +176,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("error");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -198,8 +196,7 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
     });
 
     it("should follow correct lifecycle with stop: idle -> running -> stopping -> stopped", async () => {

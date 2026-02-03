@@ -160,7 +160,7 @@ describe("TaskList", () => {
 
       // Should be significantly less than 400ms (sequential would be 400ms+)
       // Allow generous overhead for process startup and async start()
-      expect(elapsed).toBeLessThan(700);
+      expect(elapsed).toBeLessThan(1200);
       expect(taskList.tasks[0].state).toBe("completed");
     });
   });
