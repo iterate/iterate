@@ -25,7 +25,8 @@ export function vitePublicUrl(): Plugin {
         if (!publicURL || !req.headers.host) return next();
         const targetURL = new URL(publicURL);
         if (
-          req.headers.host.split(":")[0] !== targetURL.hostname &&
+          // only redirect if the req url is localhost
+          ["localhost", "127.0.0.1"].includes(req.headers.host.split(":")[0]) &&
           !targetURL.host.startsWith("localhost")
         ) {
           const redirectURL = `${targetURL.origin}${req.url}`;
@@ -38,6 +39,3 @@ export function vitePublicUrl(): Plugin {
     },
   };
 }
-
-/** @deprecated Use vitePublicUrl instead */
-export const forceVitePublicUrl = vitePublicUrl;
