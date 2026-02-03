@@ -3,7 +3,7 @@ import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default {
-  name: "Daily Release",
+  name: "Release",
   permissions: {
     contents: "write",
   },
@@ -12,7 +12,36 @@ export default {
       // 8pm UTC every day
       { cron: "0 20 * * *" },
     ],
-    workflow_dispatch: {},
+    workflow_dispatch: {
+      inputs: {
+        release_title: {
+          description: "Title for the release (e.g. 'Daily scheduled release')",
+          required: false,
+          default: "",
+        },
+        trigger_description: {
+          description: "Description of what triggered this release",
+          required: false,
+          default: "",
+        },
+      },
+    },
+    workflow_call: {
+      inputs: {
+        release_title: {
+          description: "Title for the release (e.g. 'Daily scheduled release')",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        trigger_description: {
+          description: "Description of what triggered this release",
+          required: false,
+          type: "string",
+          default: "",
+        },
+      },
+    },
   },
   jobs: {
     release: {
@@ -24,6 +53,40 @@ export default {
           with: {
             "fetch-depth": 0,
           },
+        },
+        {
+          name: "Set trigger context",
+          id: "context",
+          run: dedent`
+            # Determine trigger type and set appropriate defaults
+            if [ "\${{ github.event_name }}" = "schedule" ]; then
+              RELEASE_TITLE="Daily scheduled release"
+              TRIGGER_DESC="scheduled release"
+            elif [ "\${{ github.event_name }}" = "workflow_call" ]; then
+              RELEASE_TITLE="\${{ inputs.release_title }}"
+              TRIGGER_DESC="\${{ inputs.trigger_description }}"
+              # Use defaults if not provided
+              if [ -z "$RELEASE_TITLE" ]; then
+                RELEASE_TITLE="Release"
+              fi
+              if [ -z "$TRIGGER_DESC" ]; then
+                TRIGGER_DESC="workflow_call"
+              fi
+            else
+              # workflow_dispatch
+              RELEASE_TITLE="\${{ inputs.release_title }}"
+              TRIGGER_DESC="\${{ inputs.trigger_description }}"
+              if [ -z "$RELEASE_TITLE" ]; then
+                RELEASE_TITLE="Manual release"
+              fi
+              if [ -z "$TRIGGER_DESC" ]; then
+                TRIGGER_DESC="manual dispatch"
+              fi
+            fi
+
+            echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+            echo "trigger_desc=$TRIGGER_DESC" >> $GITHUB_OUTPUT
+          `,
         },
         {
           name: "Get release info",
@@ -64,6 +127,7 @@ export default {
 
             LAST_RELEASE="\${{ steps.release_info.outputs.last_release }}"
             RELEASE_NAME="\${{ steps.release_info.outputs.release_name }}"
+            TRIGGER_DESC="\${{ steps.context.outputs.trigger_desc }}"
 
             if [ "$LAST_RELEASE" = "" ]; then
               LAST_RELEASE=$(git rev-parse HEAD~1)
@@ -86,7 +150,7 @@ export default {
 
             write_git_changes '.' 'changes'
 
-            add_to_changelog "Triggered by: scheduled release"
+            add_to_changelog "Triggered by: $TRIGGER_DESC"
 
             add_to_changelog "[Comparison with current main](\${{ github.event.repository.html_url }}/compare/$RELEASE_NAME...main)"
 
@@ -106,7 +170,7 @@ export default {
                 tag_name: "${{ steps.release_info.outputs.release_name }}",
                 name: "${{ steps.release_info.outputs.release_name }}",
                 body: [
-                  "Daily scheduled release",
+                  "${{ steps.context.outputs.release_title }}",
                   "", //
                   await fs.readFile("changelog.md", "utf8"),
                 ].join("\n"),
