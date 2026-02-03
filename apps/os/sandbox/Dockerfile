@@ -1,5 +1,3 @@
-# Always read in context of local-docker-snapshot.ts, which makes sure to set buildkit 
-# context and args etc correctly
 FROM node:24-slim
 
 # === Versions ===
