@@ -6,9 +6,7 @@ import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
-const commit =
-  process.env.SANDBOX_ITERATE_REPO_REF ??
-  execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+const commit = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 
 const snapshotName = process.env.SANDBOX_SNAPSHOT_NAME ?? `iterate-sandbox-${commit}`;
 const image = process.env.SANDBOX_IMAGE ?? `ghcr.io/iterate/sandbox:sha-${commit}`;
