@@ -17,13 +17,13 @@ test.describe("naming defaults", () => {
   });
 
   test("organization name defaults to username for free email providers", async ({ page }) => {
-    const username = `testuser-${Date.now()}`;
+    const username = `testuser+${Date.now()}`;
     const testEmail = `${username}+test@gmail.com`;
     await login(page, testEmail);
 
     await page
       .getByLabel("Organization name")
-      .and(page.locator(`[value='${username}']`))
+      .and(page.locator(`[value='${username.split("+")[0]}']`))
       .waitFor();
   });
 
