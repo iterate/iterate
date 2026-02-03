@@ -15,30 +15,26 @@ export default {
     workflow_dispatch: {
       inputs: {
         release_title: {
-          description: "Title for the release (e.g. 'Daily scheduled release')",
-          required: false,
-          default: "",
+          description: "Title for the release",
+          required: true,
         },
         trigger_description: {
-          description: "Description of what triggered this release",
-          required: false,
-          default: "",
+          description: "What triggered this release",
+          required: true,
         },
       },
     },
     workflow_call: {
       inputs: {
         release_title: {
-          description: "Title for the release (e.g. 'Daily scheduled release')",
-          required: false,
+          description: "Title for the release",
+          required: true,
           type: "string",
-          default: "",
         },
         trigger_description: {
-          description: "Description of what triggered this release",
-          required: false,
+          description: "What triggered this release",
+          required: true,
           type: "string",
-          default: "",
         },
       },
     },
@@ -59,7 +55,7 @@ export default {
           id: "context",
           run: dedent`
             echo "release_title=\${{ inputs.release_title || 'Daily scheduled release' }}" >> $GITHUB_OUTPUT
-            echo "trigger_desc=\${{ github.event_name }}\${{ github.event.schedule && format(': {0}', github.event.schedule) || (inputs.trigger_description && format(': {0}', inputs.trigger_description) || '') }}" >> $GITHUB_OUTPUT
+            echo "trigger_desc=\${{ inputs.trigger_description || format('schedule: {0}', github.event.schedule) }}" >> $GITHUB_OUTPUT
           `,
         },
         {
