@@ -404,17 +404,38 @@ export async function syncIterateRepo(expectedSha: string, branch = "main"): Pro
     `[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha} (branch: ${branch})`,
   );
 
-  const status = await git.status(["--porcelain"]);
-  if (!status.isClean()) {
-    console.log(`[platform] Iterate repo is dirty, stashing`);
-    const stash = await git.stash();
-    console.log(`[platform] Stashed changes: ${stash}`);
-  }
+  try {
+    const status = await git.status(["--porcelain"]);
+    if (!status.isClean()) {
+      console.log(`[platform] Iterate repo is dirty, stashing`);
+      const stash = await git.stash();
+      console.log(`[platform] Stashed changes: ${stash}`);
+    }
 
-  await git.checkout([branch]);
-  await git.fetch("origin", branch);
-  await git.reset(["--hard", expectedSha]);
-  lastSyncedIterateSha = expectedSha;
+    // Fetch the specific sha/branch from origin
+    // Use refspec to ensure we get the branch even if it doesn't exist locally
+    console.log(`[platform] Fetching origin ${branch}...`);
+    await git.fetch(["origin", `${branch}:refs/remotes/origin/${branch}`, "--force"]);
+
+    // Checkout the branch (create if it doesn't exist locally)
+    console.log(`[platform] Checking out ${branch}...`);
+    try {
+      await git.checkout([branch]);
+    } catch {
+      // Branch doesn't exist locally, create it tracking the remote
+      console.log(`[platform] Creating local branch ${branch} tracking origin/${branch}`);
+      await git.checkout(["-b", branch, `origin/${branch}`]);
+    }
+
+    // Reset to the expected sha
+    console.log(`[platform] Resetting to ${expectedSha}...`);
+    await git.reset(["--hard", expectedSha]);
+    lastSyncedIterateSha = expectedSha;
+    console.log(`[platform] Sync complete`);
+  } catch (error) {
+    console.error(`[platform] Failed to sync iterate repo:`, error);
+    throw error;
+  }
 }
 
 export const platformRouter = createTRPCRouter({
