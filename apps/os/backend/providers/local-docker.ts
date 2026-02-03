@@ -209,7 +209,11 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
   const { host, ports } = config;
 
   const getUrl = (port: number): string => {
-    if (ports["iterate-daemon"] && port === DEFAULT_DAEMON_PORT) {
+    const daemon = DAEMON_DEFINITIONS.find((definition) => definition.internalPort === port);
+    if (daemon && ports[daemon.id]) {
+      return `http://${host}:${ports[daemon.id]}`;
+    }
+    if (ports["iterate-daemon"]) {
       return `http://${host}:${ports["iterate-daemon"]}`;
     }
     return `http://${host}:${port}`;
