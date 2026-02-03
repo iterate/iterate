@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
-import { createWriteStream, mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { format } from "node:util";
 import { RPCHandler } from "@orpc/server/node";
 import { onError } from "@orpc/server";
@@ -200,14 +199,6 @@ const cliRouter = os.router({
     )
     .handler(async ({ input }) => {
       process.title = "pidnap";
-
-      // Pipe stdout/stderr to console log file
-      const consoleLogPath = "/var/log/pidnap/console";
-      mkdirSync(dirname(consoleLogPath), { recursive: true });
-      const consoleLogStream = createWriteStream(consoleLogPath, { flags: "a" });
-      process.stdout.write = consoleLogStream.write.bind(consoleLogStream);
-      process.stderr.write = consoleLogStream.write.bind(consoleLogStream);
-
       const initLogger = logger({ name: "pidnap" });
 
       // Add global error handlers to catch unhandled errors

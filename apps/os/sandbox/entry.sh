@@ -58,5 +58,9 @@ export ITERATE_REPO
 # Signal readiness for tests and stuff
 touch /tmp/.iterate-sandbox-ready
 
-# Pidnap take the wheel
-exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts"
+# Setup console log pipe for pidnap stdout/stderr
+CONSOLE_LOG="/var/log/pidnap/console"
+mkdir -p "$(dirname "$CONSOLE_LOG")"
+
+# Pidnap take the wheel - pipe stdout/stderr to console log
+exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts" 2>&1 | tee -a "$CONSOLE_LOG"
