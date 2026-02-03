@@ -42,7 +42,7 @@ describeIfProvider("Agent CLI", () => {
     mock.egress.onRequest(/api\.anthropic\.com.*chat\/completions/, mockOpenAIChat("42"));
 
     await refreshEnv(sandbox);
-    await sandbox.waitForServiceHealthy("egress-proxy", 30_000);
+    await sandbox.waitForServiceHealthy({ process: "egress-proxy", timeoutMs: 30_000 });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const output = await sandbox.exec([
@@ -82,7 +82,7 @@ describeIfProvider("Agent CLI", () => {
     mock.egress.onRequest(/api\.anthropic\.com.*messages/, mockAnthropicMessages("slack"));
 
     await refreshEnv(sandbox);
-    await sandbox.waitForServiceHealthy("egress-proxy", 30_000);
+    await sandbox.waitForServiceHealthy({ process: "egress-proxy", timeoutMs: 30_000 });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const output = await sandbox.exec([
@@ -119,7 +119,7 @@ describeIfProvider("Agent CLI", () => {
     mock.egress.onRequest(/api\.anthropic\.com.*messages/, mockAnthropicMessages("slack"));
 
     await refreshEnv(sandbox);
-    await sandbox.waitForServiceHealthy("egress-proxy", 30_000);
+    await sandbox.waitForServiceHealthy({ process: "egress-proxy", timeoutMs: 30_000 });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const output = await sandbox.exec([

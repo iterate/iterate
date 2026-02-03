@@ -126,45 +126,88 @@ class LocalDockerSandboxHandle implements SandboxHandle {
     return execInContainer(this.containerId, cmd);
   }
 
-  getHostPort(containerPort: number): number {
-    return this.ports[containerPort] ?? containerPort;
+  getUrl(opts: { port: number }): string {
+    const hostPort = this.ports[opts.port] ?? opts.port;
+    return `http://127.0.0.1:${hostPort}`;
   }
 
-  async waitForServiceHealthy(service: string, timeoutMs = 180_000): Promise<WaitHealthyResponse> {
+  async waitForServiceHealthy(opts: {
+    process: string;
+    timeoutMs?: number;
+  }): Promise<WaitHealthyResponse> {
+    const { process, timeoutMs = 180_000 } = opts;
+    const pollIntervalMs = 1000;
     const start = Date.now();
 
+    // Poll until timeout - never fail fast on connection errors
     while (Date.now() - start < timeoutMs) {
+      const remainingMs = timeoutMs - (Date.now() - start);
+      // Use shorter timeout for individual requests so we can retry
+      const requestTimeoutMs = Math.min(remainingMs, 30_000);
+      const payload = JSON.stringify({
+        json: {
+          target: process,
+          timeoutMs: requestTimeoutMs,
+          includeLogs: true,
+          logTailLines: 200,
+        },
+      });
+
       try {
-        const payload = JSON.stringify({ json: { target: service } });
         const result = await this.exec([
           "curl",
           "-sf",
-          "http://localhost:9876/rpc/processes/get",
+          "--max-time",
+          String(Math.ceil(requestTimeoutMs / 1000)),
+          "http://localhost:9876/rpc/processes/waitForRunning",
           "-H",
           "Content-Type: application/json",
           "-d",
           payload,
         ]);
-        const parsed = JSON.parse(result) as { json?: { state?: string } };
-        const response = (parsed.json ?? parsed) as { state?: string };
-        const state = response.state;
-        const elapsedMs = Date.now() - start;
-        if (state === "running") {
-          return { healthy: true, state, elapsedMs };
+        const parsed = JSON.parse(result) as {
+          json?: { name: string; state: string; elapsedMs: number; logs?: string };
+        };
+        const response = (parsed.json ?? parsed) as {
+          name: string;
+          state: string;
+          elapsedMs: number;
+          logs?: string;
+        };
+
+        if (response.state === "running") {
+          return {
+            healthy: true,
+            state: response.state,
+            elapsedMs: Date.now() - start,
+            logs: response.logs,
+          };
         }
-        if (state === "stopped" || state === "max-restarts-reached") {
-          throw new Error(`Service ${service} in terminal state: ${state}`);
+        if (response.state === "stopped" || response.state === "max-restarts-reached") {
+          // Terminal failure state - don't retry
+          return {
+            healthy: false,
+            state: response.state,
+            elapsedMs: Date.now() - start,
+            error: `Service ${process} in terminal state: ${response.state}`,
+            logs: response.logs,
+          };
         }
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("terminal state")) throw err;
+        // Non-terminal state (idle, starting, etc.) - the waitForRunning endpoint
+        // should have waited, but if we get here, wait a bit and retry
+      } catch {
+        // Connection failed (pidnap not ready yet) - wait and retry
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
+
+    // Timeout reached
     return {
       healthy: false,
       state: "timeout",
-      elapsedMs: timeoutMs,
-      error: "timeout",
+      elapsedMs: Date.now() - start,
+      error: `Timeout waiting for ${process} to become healthy`,
     };
   }
 
@@ -235,30 +278,28 @@ export function createLocalDockerProvider(
         binds.push(`${gitInfo.commonDir}:/host/commondir:ro`);
       }
 
-      // Env vars
-      const env: Record<string, string> = { ...(opts?.env ?? {}) };
-      if (env.ITERATE_OS_BASE_URL) {
-        env.ITERATE_OS_BASE_URL = rewriteLocalhost(env.ITERATE_OS_BASE_URL);
-      }
-      if (env.ITERATE_EGRESS_PROXY_URL) {
-        env.ITERATE_EGRESS_PROXY_URL = rewriteLocalhost(env.ITERATE_EGRESS_PROXY_URL);
-      }
-
-      // Pass API keys if available
-      if (process.env.ANTHROPIC_API_KEY) {
-        env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-      }
-      if (process.env.OPENAI_API_KEY) {
-        env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-      }
-
-      const envVarsWithDev = {
-        ...env,
+      // Docker env vars (minimal - just what's needed for container startup)
+      const dockerEnv: Record<string, string> = {
         ITERATE_DEV: "true",
         ...(gitInfo ? { LOCAL_DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
       };
 
-      const envArray = sanitizeEnvVars(envVarsWithDev);
+      const envArray = sanitizeEnvVars(dockerEnv);
+
+      // Env vars to write to ~/.iterate/.env (available to shells)
+      const iterateEnv: Record<string, string> = { ...(opts?.env ?? {}) };
+      if (iterateEnv.ITERATE_OS_BASE_URL) {
+        iterateEnv.ITERATE_OS_BASE_URL = rewriteLocalhost(iterateEnv.ITERATE_OS_BASE_URL);
+      }
+      if (iterateEnv.ITERATE_EGRESS_PROXY_URL) {
+        iterateEnv.ITERATE_EGRESS_PROXY_URL = rewriteLocalhost(iterateEnv.ITERATE_EGRESS_PROXY_URL);
+      }
+      if (process.env.ANTHROPIC_API_KEY) {
+        iterateEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+      }
+      if (process.env.OPENAI_API_KEY) {
+        iterateEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+      }
 
       const labels: Record<string, string> = {
         "com.iterate.test": "true",
@@ -289,7 +330,46 @@ export function createLocalDockerProvider(
       // Start container
       await dockerApi("POST", `/containers/${containerId}/start`, {});
 
-      return new LocalDockerSandboxHandle(containerId, ports);
+      const handle = new LocalDockerSandboxHandle(containerId, ports);
+
+      // Wait for entry.sh to complete (pidnap will be listening)
+      // This ensures sync-home-skeleton has finished and won't overwrite our env vars
+      if (Object.keys(iterateEnv).length > 0) {
+        const maxWaitMs = 30000;
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+          try {
+            await handle.exec(["curl", "-sf", "http://localhost:9876/rpc/health"]);
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+
+        // Ensure initial sync scripts have finished before writing env vars
+        const syncStart = Date.now();
+        while (Date.now() - syncStart < maxWaitMs) {
+          const running = await handle.exec([
+            "bash",
+            "-c",
+            "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
+          ]);
+          if (!running.trim()) {
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        // Write env vars to ~/.iterate/.env (appending to existing content)
+        // First add a newline in case the file doesn't end with one
+        await handle.exec(["sh", "-c", "echo '' >> ~/.iterate/.env"]);
+        for (const [key, value] of Object.entries(iterateEnv)) {
+          const encoded = Buffer.from(`export ${key}="${value}"\n`).toString("base64");
+          await handle.exec(["sh", "-c", `echo '${encoded}' | base64 -d >> ~/.iterate/.env`]);
+        }
+      }
+
+      return handle;
     },
   };
 }

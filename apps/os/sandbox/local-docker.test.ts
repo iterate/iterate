@@ -28,14 +28,14 @@ const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
 
-function createDaemonTrpcClient(port: number) {
+function createDaemonTrpcClient(baseUrl: string) {
   return createTRPCClient<TRPCRouter>({
-    links: [httpLink({ url: `http://127.0.0.1:${port}/api/trpc` })],
+    links: [httpLink({ url: `${baseUrl}/api/trpc` })],
   });
 }
 
-function createPidnapRpcClient(port: number) {
-  return createPidnapClient(`http://127.0.0.1:${port}/rpc`);
+function createPidnapRpcClient(baseUrl: string) {
+  return createPidnapClient(`${baseUrl}/rpc`);
 }
 
 /** Dump container logs to stdout for debugging test failures */
@@ -67,6 +67,51 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
       await sandbox.delete();
     }
   }, 10000);
+
+  test("dynamically added env var available in shell and pidnap", async () => {
+    const sandbox = await provider.createSandbox();
+    try {
+      // Wait for daemon-backend to be running (confirms pidnap is ready)
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+
+      const pidnapUrl = sandbox.getUrl({ port: 9876 });
+      const client = createPidnapRpcClient(pidnapUrl);
+
+      // Step 1: Add a new env var to ~/.iterate/.env via exec
+      // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
+      await sandbox.exec([
+        "sh",
+        "-c",
+        'echo "DYNAMIC_TEST_VAR=added_at_runtime" >> ~/.iterate/.env',
+      ]);
+
+      // Step 2: Verify a new shell picks up the env var (shell sources .bashrc which sources .env)
+      const shellEnv = await sandbox.exec(["bash", "-l", "-c", "echo $DYNAMIC_TEST_VAR"]);
+      expect(shellEnv.trim()).toBe("added_at_runtime");
+
+      // Step 3: Wait for pidnap to auto-reload opencode with new env vars
+      // Note: daemon-backend has inheritGlobalEnv: false, but opencode inherits global env
+      // opencode has reloadDelay: 500ms and inheritGlobalEnv: true (default)
+      // Use expect.poll to retry until the env var appears (up to 10s)
+      await expect
+        .poll(
+          async () => {
+            const info = await client.processes.get({
+              target: "opencode",
+              includeEffectiveEnv: true,
+            });
+            return info.effectiveEnv?.DYNAMIC_TEST_VAR;
+          },
+          { timeout: 10000, interval: 500 },
+        )
+        .toBe("added_at_runtime");
+    } catch (err) {
+      dumpContainerLogs(sandbox.id);
+      throw err;
+    } finally {
+      await sandbox.delete();
+    }
+  }, 60000);
 });
 
 /**
@@ -197,8 +242,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       sandbox = await provider.createSandbox();
-      await sandbox.waitForServiceHealthy("daemon-backend");
-      await sandbox.waitForServiceHealthy("daemon-frontend");
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+      await sandbox.waitForServiceHealthy({ process: "daemon-frontend" });
     }, 300000);
 
     afterAll(async () => {
@@ -216,44 +261,41 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
-    test.runIf(process.env.OPENAI_API_KEY)(
-      "opencode answers secret question",
-      async () => {
-        const output = await sandbox.exec([
-          "opencode",
-          "run",
-          "what messaging app are you built to help with?",
-        ]);
-        expect(output.toLowerCase()).toContain("slack");
-      },
-      30000,
-    );
+    test("opencode answers secret question", async () => {
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY environment variable is required");
+      }
+      const output = await sandbox.exec([
+        "bash",
+        "-c",
+        "source ~/.iterate/.env && opencode run 'what messaging app are you built to help with?'",
+      ]);
+      expect(output.toLowerCase()).toContain("slack");
+    }, 30000);
 
-    test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "claude answers secret question",
-      async () => {
-        const output = await sandbox.exec([
-          "claude",
-          "-p",
-          "what messaging app are you built to help with?",
-        ]);
-        expect(output.toLowerCase()).toContain("slack");
-      },
-      30000,
-    );
+    test("claude answers secret question", async () => {
+      if (!process.env.ANTHROPIC_API_KEY) {
+        throw new Error("ANTHROPIC_API_KEY environment variable is required");
+      }
+      const output = await sandbox.exec([
+        "bash",
+        "-c",
+        "source ~/.iterate/.env && claude -p 'what messaging app are you built to help with?'",
+      ]);
+      expect(output.toLowerCase()).toContain("slack");
+    }, 30000);
 
-    test.runIf(process.env.ANTHROPIC_API_KEY)(
-      "pi answers secret question",
-      async () => {
-        const output = await sandbox.exec([
-          "pi",
-          "-p",
-          "what messaging app are you built to help with?",
-        ]);
-        expect(output.toLowerCase()).toContain("slack");
-      },
-      30000,
-    );
+    test("pi answers secret question", async () => {
+      if (!process.env.ANTHROPIC_API_KEY) {
+        throw new Error("ANTHROPIC_API_KEY environment variable is required");
+      }
+      const output = await sandbox.exec([
+        "bash",
+        "-c",
+        "source ~/.iterate/.env && pi -p 'what messaging app are you built to help with?'",
+      ]);
+      expect(output.toLowerCase()).toContain("slack");
+    }, 30000);
 
     test("container setup correct", async () => {
       // repo cloned
@@ -314,7 +356,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       sandbox = await provider.createSandbox();
-      await sandbox.waitForServiceHealthy("daemon-backend");
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     }, 300000);
 
     afterAll(async () => {
@@ -322,10 +364,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 30000);
 
     test("daemon accessible", async () => {
-      const port3000 = sandbox.getHostPort(3000);
+      const baseUrl = sandbox.getUrl({ port: 3000 });
 
       // Verify health endpoint from host
-      const healthResponse = await fetch(`http://127.0.0.1:${port3000}/api/health`);
+      const healthResponse = await fetch(`${baseUrl}/api/health`);
       expect(healthResponse.ok).toBe(true);
       const healthText = await healthResponse.text();
       expect(healthText.includes("ok") || healthText.includes("healthy")).toBe(true);
@@ -336,16 +378,15 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 210000);
 
     test("PTY endpoint works", async () => {
-      const port3000 = sandbox.getHostPort(3000);
+      const baseUrl = sandbox.getUrl({ port: 3000 });
       // PTY endpoint exists
-      const ptyResponse = await fetch(`http://127.0.0.1:${port3000}/api/pty/ws?cols=80&rows=24`);
+      const ptyResponse = await fetch(`${baseUrl}/api/pty/ws?cols=80&rows=24`);
       expect(ptyResponse.status).not.toBe(404);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
-      const port3000 = sandbox.getHostPort(3000);
-      const baseUrl = `http://127.0.0.1:${port3000}`;
-      const trpc = createDaemonTrpcClient(port3000);
+      const baseUrl = sandbox.getUrl({ port: 3000 });
+      const trpc = createDaemonTrpcClient(baseUrl);
 
       // index.html
       const root = await fetch(`${baseUrl}/`);
@@ -391,7 +432,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       sandbox = await provider.createSandbox();
-      await sandbox.waitForServiceHealthy("daemon-backend");
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     }, 300000);
 
     afterAll(async () => {
@@ -399,16 +440,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     }, 30000);
 
     test("processes.get returns running state for daemon-backend", async () => {
-      const port9876 = sandbox.getHostPort(9876);
+      const baseUrl = sandbox.getUrl({ port: 9876 });
       // daemon-backend is already running (waited in beforeAll)
-      const client = createPidnapRpcClient(port9876);
+      const client = createPidnapRpcClient(baseUrl);
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
     }, 210000);
 
     test("processes.get fails for non-existent service", async () => {
-      const port9876 = sandbox.getHostPort(9876);
-      const client = createPidnapRpcClient(port9876);
+      const baseUrl = sandbox.getUrl({ port: 9876 });
+      const client = createPidnapRpcClient(baseUrl);
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
         /Process not found/i,
       );

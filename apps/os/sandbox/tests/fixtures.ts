@@ -41,7 +41,7 @@ export const localTest: LocalTestFn = (name, fn, timeout) => {
       const provider = getProvider();
       const sandbox = await provider.createSandbox();
       try {
-        await sandbox.waitForServiceHealthy("daemon-backend");
+        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
         await fn({ provider, sandbox });
       } catch (error) {
         await dumpLogsOnFailure({ sandbox });
@@ -82,7 +82,7 @@ export const integrationTest: IntegrationTestFn = (name, fn, timeout) => {
       });
 
       try {
-        await sandbox.waitForServiceHealthy("daemon-backend");
+        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
         await fn({ provider, mock, mockUrl, sandbox });
       } catch (error) {
         await dumpLogsOnFailure({ sandbox, mock });

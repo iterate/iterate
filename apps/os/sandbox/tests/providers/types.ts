@@ -3,13 +3,18 @@ export interface WaitHealthyResponse {
   state: string;
   elapsedMs: number;
   error?: string;
+  /** Process logs (tail) - available when using pidnap's waitForRunning endpoint */
+  logs?: string;
 }
 
 export interface SandboxHandle {
   id: string;
   exec(cmd: string[]): Promise<string>;
-  getHostPort(containerPort: number): number;
-  waitForServiceHealthy(service: string, timeoutMs?: number): Promise<WaitHealthyResponse>;
+  getUrl(opts: { port: number }): string;
+  waitForServiceHealthy(opts: {
+    process: string;
+    timeoutMs?: number;
+  }): Promise<WaitHealthyResponse>;
   stop(): Promise<void>;
   restart(): Promise<void>;
   delete(): Promise<void>;

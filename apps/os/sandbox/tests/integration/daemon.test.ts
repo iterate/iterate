@@ -40,7 +40,7 @@ describeIfProvider("Daemon Control Plane Integration", () => {
     });
     mock.resetRequests();
     await sandbox.restart();
-    await sandbox.waitForServiceHealthy("daemon-backend");
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     await waitForOrpc(mock, "machines.reportStatus");
     await waitForOrpc(mock, "machines.getEnv");
 
@@ -52,7 +52,7 @@ describeIfProvider("Daemon Control Plane Integration", () => {
     mock.resetRequests();
 
     await sandbox.restart();
-    await sandbox.waitForServiceHealthy("daemon-backend");
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
 
     await waitForOrpc(mock, "machines.reportStatus");
     await waitForOrpc(mock, "machines.getEnv");

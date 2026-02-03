@@ -39,7 +39,7 @@ describeIfProvider("Egress Proxy", () => {
     mock.egress.setSecrets({ openai_api_key: "sk-test-resolved-key" });
 
     await refreshEnv(sandbox);
-    await sandbox.waitForServiceHealthy("egress-proxy", 30_000);
+    await sandbox.waitForServiceHealthy({ process: "egress-proxy", timeoutMs: 30_000 });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const output = await sandbox.exec([
@@ -66,7 +66,7 @@ describeIfProvider("Egress Proxy", () => {
       repos: [],
     });
     await refreshEnv(sandbox);
-    await sandbox.waitForServiceHealthy("egress-proxy", 30_000);
+    await sandbox.waitForServiceHealthy({ process: "egress-proxy", timeoutMs: 30_000 });
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     await sandbox.exec([

@@ -37,54 +37,70 @@ class DaytonaSandboxHandle implements SandboxHandle {
     return output;
   }
 
-  public getHostPort(_containerPort: number): number {
-    throw new Error("getHostPort not supported for Daytona sandboxes");
+  public getUrl(opts: { port: number }): string {
+    // Daytona sandboxes are created with public: true, so we use the standard preview URL format
+    return `https://${opts.port}-${this.id}.dtn-us.net`;
   }
 
-  public async waitForServiceHealthy(
-    service: string,
-    timeoutMs = 180_000,
-  ): Promise<WaitHealthyResponse> {
+  public async waitForServiceHealthy(opts: {
+    process: string;
+    timeoutMs?: number;
+  }): Promise<WaitHealthyResponse> {
+    const { process, timeoutMs = 180_000 } = opts;
     const start = Date.now();
+    const payload = JSON.stringify({
+      json: { target: process, timeoutMs, includeLogs: true, logTailLines: 200 },
+    });
 
-    while (Date.now() - start < timeoutMs) {
-      try {
-        const remainingMs = timeoutMs - (Date.now() - start);
-        const payload = JSON.stringify({
-          json: {
-            target: service,
-          },
-        });
-        const result = await this.exec([
-          "curl",
-          "-sf",
-          "http://localhost:9876/rpc/processes/get",
-          "-H",
-          "Content-Type: application/json",
-          "-d",
-          payload,
-        ]);
-        const parsed = JSON.parse(result) as { json?: { state?: string } };
-        const response = (parsed.json ?? parsed) as { state?: string };
-        const state = response.state;
-        const elapsedMs = timeoutMs - remainingMs;
-        if (state === "running") {
-          return { healthy: true, state, elapsedMs };
-        }
-        if (state === "stopped" || state === "max-restarts-reached") {
-          throw new Error(`Service ${service} in terminal state: ${state}`);
-        }
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("terminal state")) throw err;
+    try {
+      const result = await this.exec([
+        "curl",
+        "-sf",
+        "http://localhost:9876/rpc/processes/waitForRunning",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        payload,
+      ]);
+      const parsed = JSON.parse(result) as {
+        json?: { name: string; state: string; elapsedMs: number; logs?: string };
+      };
+      const response = (parsed.json ?? parsed) as {
+        name: string;
+        state: string;
+        elapsedMs: number;
+        logs?: string;
+      };
+
+      if (response.state === "running") {
+        return {
+          healthy: true,
+          state: response.state,
+          elapsedMs: response.elapsedMs,
+          logs: response.logs,
+        };
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (response.state === "stopped" || response.state === "max-restarts-reached") {
+        throw new Error(
+          `Service ${process} in terminal state: ${response.state}\n\nLogs:\n${response.logs ?? "(no logs)"}`,
+        );
+      }
+      return {
+        healthy: false,
+        state: response.state,
+        elapsedMs: response.elapsedMs,
+        error: `process state: ${response.state}`,
+        logs: response.logs,
+      };
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("terminal state")) throw err;
+      return {
+        healthy: false,
+        state: "error",
+        elapsedMs: Date.now() - start,
+        error: err instanceof Error ? err.message : "unknown error",
+      };
     }
-    return {
-      healthy: false,
-      state: "timeout",
-      elapsedMs: timeoutMs,
-      error: "timeout",
-    };
   }
 
   public async stop(): Promise<void> {
