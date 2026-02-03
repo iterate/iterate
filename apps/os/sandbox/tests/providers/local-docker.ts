@@ -1,9 +1,17 @@
+/**
+ * Local Docker Test Provider
+ *
+ * Creates sandbox containers via Docker API (not docker-compose).
+ * Uses the same Docker API helpers as the backend provider.
+ */
+
 import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dockerApi } from "../../../backend/providers/local-docker.ts";
 import { execInContainer } from "../helpers/test-helpers.ts";
-import { getLocalDockerEnvVars, getLocalDockerGitInfo } from "../helpers/local-docker-utils.ts";
+import { getLocalDockerGitInfo } from "../helpers/local-docker-utils.ts";
 import type {
   CreateSandboxOptions,
   SandboxHandle,
@@ -14,34 +22,48 @@ import type {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../../../..");
 
-function ensurePnpmStore(): void {
-  try {
-    execSync("docker volume create iterate-pnpm-store", { stdio: "ignore" });
-  } catch {
-    // Best effort: volume may already exist or Docker not available yet.
+const PIDNAP_PORT = 9876;
+
+// Port definitions matching backend/daemons.ts
+const DAEMON_PORTS = [
+  { id: "iterate-daemon", internalPort: 3000 },
+  { id: "iterate-daemon-server", internalPort: 3001 },
+  { id: "opencode", internalPort: 4096 },
+] as const;
+
+interface DockerContainer {
+  Ports?: Array<{ PublicPort?: number }>;
+}
+
+/** Find a block of consecutive available host ports by querying Docker */
+async function findAvailablePortBlock(count: number): Promise<number> {
+  const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
+
+  const usedPorts = new Set<number>();
+  for (const container of containers) {
+    for (const port of container.Ports ?? []) {
+      if (port.PublicPort) {
+        usedPorts.add(port.PublicPort);
+      }
+    }
   }
-}
 
-function getComposeEnv(): Record<string, string> {
-  const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
-  if (!gitInfo) throw new Error("Failed to get git info for local Docker tests");
-
-  return {
-    ...process.env,
-    ...getLocalDockerEnvVars(REPO_ROOT),
-    LOCAL_DOCKER_REPO_CHECKOUT: gitInfo.repoRoot,
-    LOCAL_DOCKER_GIT_DIR: gitInfo.gitDir,
-    LOCAL_DOCKER_COMMON_DIR: gitInfo.commonDir,
-    LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
-  };
-}
-
-function createProjectName(): string {
-  return `sandbox-test-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  // Find a contiguous block of `count` available ports
+  for (let basePort = 10000; basePort <= 11000 - count; basePort++) {
+    let blockAvailable = true;
+    for (let i = 0; i < count; i++) {
+      if (usedPorts.has(basePort + i)) {
+        blockAvailable = false;
+        break;
+      }
+    }
+    if (blockAvailable) return basePort;
+  }
+  throw new Error(`No available port block of size ${count} in range 10000-11000`);
 }
 
 function getDefaultComposeProjectName(): string {
-  const repoName = REPO_ROOT.split("/").pop() ?? "sandbox";
+  const repoName = basename(REPO_ROOT);
   return repoName.toLowerCase().replace(/[^a-z0-9-]/g, "");
 }
 
@@ -55,7 +77,7 @@ function resolveBaseImage(): string {
     execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
     return localDefault;
   } catch {
-    // fall back to compose-tagged image
+    // fall back
   }
 
   const bakedDefault = "ghcr.io/iterate/sandbox:main";
@@ -63,73 +85,52 @@ function resolveBaseImage(): string {
     execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
     return bakedDefault;
   } catch {
-    // fall back to compose-tagged image
+    // fall back
   }
 
   const baseProjectName = getDefaultComposeProjectName();
   return `${baseProjectName}-sandbox`;
 }
 
-function tagSandboxImage(projectName: string): void {
-  const baseImage = resolveBaseImage();
-  const targetImage = `${projectName}-sandbox`;
-  try {
-    execSync(`docker image inspect ${baseImage}`, { stdio: "ignore" });
-    execSync(`docker tag ${baseImage} ${targetImage}`, { stdio: "inherit" });
-  } catch (_err) {
-    throw new Error(
-      `Sandbox image not found: ${baseImage}. Run 'pnpm os snapshot:local-docker' or pull from GHCR.`,
-    );
-  }
-}
-
 function rewriteLocalhost(url: string): string {
   return url.replace(/localhost/g, "host.docker.internal");
+}
+
+function sanitizeEnvVars(envVars: Record<string, string>): string[] {
+  return Object.entries(envVars).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Invalid environment variable name: ${key}`);
+    }
+    // eslint-disable-next-line no-control-regex -- intentionally matching control chars
+    const sanitizedValue = String(value).replace(/[\u0000-\u001f]/g, "");
+    return `${key}=${sanitizedValue}`;
+  });
 }
 
 class LocalDockerSandboxHandle implements SandboxHandle {
   public readonly id: string;
 
-  public constructor(
-    private projectName: string,
-    containerId: string,
-    private composeEnv: Record<string, string>,
+  constructor(
+    private containerId: string,
+    private ports: Record<number, number>, // containerPort -> hostPort
   ) {
     this.id = containerId;
   }
 
-  public async exec(cmd: string[]): Promise<string> {
-    return execInContainer(this.id, cmd);
+  async exec(cmd: string[]): Promise<string> {
+    return execInContainer(this.containerId, cmd);
   }
 
-  public getHostPort(containerPort: number): number {
-    const output = execSync(
-      `docker compose --project-name ${this.projectName} port sandbox ${containerPort}`,
-      {
-        cwd: REPO_ROOT,
-        env: this.composeEnv,
-        encoding: "utf-8",
-      },
-    ).trim();
-    const match = output.match(/:(\d+)$/);
-    if (!match) throw new Error(`Failed to parse port from: ${output}`);
-    return Number.parseInt(match[1], 10);
+  getHostPort(containerPort: number): number {
+    return this.ports[containerPort] ?? containerPort;
   }
 
-  public async waitForServiceHealthy(
-    service: string,
-    timeoutMs = 180_000,
-  ): Promise<WaitHealthyResponse> {
+  async waitForServiceHealthy(service: string, timeoutMs = 180_000): Promise<WaitHealthyResponse> {
     const start = Date.now();
 
     while (Date.now() - start < timeoutMs) {
       try {
-        const remainingMs = timeoutMs - (Date.now() - start);
-        const payload = JSON.stringify({
-          json: {
-            target: service,
-          },
-        });
+        const payload = JSON.stringify({ json: { target: service } });
         const result = await this.exec([
           "curl",
           "-sf",
@@ -142,7 +143,7 @@ class LocalDockerSandboxHandle implements SandboxHandle {
         const parsed = JSON.parse(result) as { json?: { state?: string } };
         const response = (parsed.json ?? parsed) as { state?: string };
         const state = response.state;
-        const elapsedMs = timeoutMs - remainingMs;
+        const elapsedMs = Date.now() - start;
         if (state === "running") {
           return { healthy: true, state, elapsedMs };
         }
@@ -162,29 +163,21 @@ class LocalDockerSandboxHandle implements SandboxHandle {
     };
   }
 
-  public async stop(): Promise<void> {
-    execSync(`docker compose --project-name ${this.projectName} stop sandbox`, {
-      cwd: REPO_ROOT,
-      env: this.composeEnv,
-      stdio: "inherit",
-    });
-  }
-
-  public async restart(): Promise<void> {
-    execSync(`docker compose --project-name ${this.projectName} restart sandbox`, {
-      cwd: REPO_ROOT,
-      env: this.composeEnv,
-      stdio: "inherit",
-    });
-  }
-
-  public async delete(): Promise<void> {
+  async stop(): Promise<void> {
     try {
-      execSync(`docker compose --project-name ${this.projectName} down -v --remove-orphans`, {
-        cwd: REPO_ROOT,
-        env: this.composeEnv,
-        stdio: "inherit",
-      });
+      await dockerApi("POST", `/containers/${this.containerId}/stop`, {});
+    } catch {
+      // Container might already be stopped
+    }
+  }
+
+  async restart(): Promise<void> {
+    await dockerApi("POST", `/containers/${this.containerId}/restart`, {});
+  }
+
+  async delete(): Promise<void> {
+    try {
+      await dockerApi("DELETE", `/containers/${this.containerId}?force=true`, undefined);
     } catch {
       // Best effort cleanup
     }
@@ -196,10 +189,44 @@ export function createLocalDockerProvider(): SandboxProvider {
     name: "local-docker",
 
     async createSandbox(opts?: CreateSandboxOptions): Promise<SandboxHandle> {
-      ensurePnpmStore();
-      const projectName = createProjectName();
-      tagSandboxImage(projectName);
+      const imageName = resolveBaseImage();
 
+      // Allocate ports
+      const totalPorts = DAEMON_PORTS.length + 1; // +1 for pidnap
+      const basePort = await findAvailablePortBlock(totalPorts);
+
+      const ports: Record<number, number> = {};
+      const portBindings: Record<string, Array<{ HostPort: string }>> = {};
+      const exposedPorts: Record<string, object> = {};
+
+      DAEMON_PORTS.forEach((daemon, index) => {
+        const hostPort = basePort + index;
+        const internalPortKey = `${daemon.internalPort}/tcp`;
+        ports[daemon.internalPort] = hostPort;
+        portBindings[internalPortKey] = [{ HostPort: String(hostPort) }];
+        exposedPorts[internalPortKey] = {};
+      });
+
+      // Pidnap port
+      const pidnapHostPort = basePort + DAEMON_PORTS.length;
+      ports[PIDNAP_PORT] = pidnapHostPort;
+      portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: String(pidnapHostPort) }];
+      exposedPorts[`${PIDNAP_PORT}/tcp`] = {};
+
+      // Container name
+      const suffix = randomBytes(4).toString("hex");
+      const containerName = `sandbox-test-${Date.now()}-${suffix}`;
+
+      // Git mounts for repo sync
+      const binds: string[] = [];
+      const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+      if (gitInfo) {
+        binds.push(`${gitInfo.repoRoot}:/host/repo-checkout:ro`);
+        binds.push(`${gitInfo.gitDir}:/host/gitdir:ro`);
+        binds.push(`${gitInfo.commonDir}:/host/commondir:ro`);
+      }
+
+      // Env vars
       const env: Record<string, string> = { ...(opts?.env ?? {}) };
       if (env.ITERATE_OS_BASE_URL) {
         env.ITERATE_OS_BASE_URL = rewriteLocalhost(env.ITERATE_OS_BASE_URL);
@@ -208,31 +235,52 @@ export function createLocalDockerProvider(): SandboxProvider {
         env.ITERATE_EGRESS_PROXY_URL = rewriteLocalhost(env.ITERATE_EGRESS_PROXY_URL);
       }
 
-      const sandboxEnv = Object.fromEntries(
-        Object.entries(env).map(([key, value]) => [`SANDBOX_${key}`, value]),
-      );
-
-      const composeEnv = getComposeEnv();
-      execSync(`docker compose --project-name ${projectName} up -d --no-build sandbox`, {
-        cwd: REPO_ROOT,
-        env: {
-          ...composeEnv,
-          ...sandboxEnv,
-        },
-        stdio: "inherit",
-      });
-
-      const containerId = execSync(`docker compose --project-name ${projectName} ps -q sandbox`, {
-        cwd: REPO_ROOT,
-        env: composeEnv,
-        encoding: "utf-8",
-      }).trim();
-
-      if (!containerId) {
-        throw new Error("Failed to resolve sandbox container ID");
+      // Pass API keys if available
+      if (process.env.ANTHROPIC_API_KEY) {
+        env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+      }
+      if (process.env.OPENAI_API_KEY) {
+        env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
       }
 
-      return new LocalDockerSandboxHandle(projectName, containerId, composeEnv);
+      const envVarsWithDev = {
+        ...env,
+        ITERATE_DEV: "true",
+        ...(gitInfo ? { LOCAL_DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
+      };
+
+      const envArray = sanitizeEnvVars(envVarsWithDev);
+
+      const labels: Record<string, string> = {
+        "com.iterate.test": "true",
+        "com.iterate.container_name": containerName,
+      };
+
+      const hostConfig: Record<string, unknown> = {
+        PortBindings: portBindings,
+        Binds: binds,
+        ExtraHosts: ["host.docker.internal:host-gateway"],
+      };
+
+      // Create container
+      const createResponse = await dockerApi<{ Id: string }>(
+        "POST",
+        `/containers/create?name=${encodeURIComponent(containerName)}`,
+        {
+          Image: imageName,
+          Env: envArray,
+          ExposedPorts: exposedPorts,
+          HostConfig: hostConfig,
+          Labels: labels,
+        },
+      );
+
+      const containerId = createResponse.Id;
+
+      // Start container
+      await dockerApi("POST", `/containers/${containerId}/start`, {});
+
+      return new LocalDockerSandboxHandle(containerId, ports);
     },
   };
 }
