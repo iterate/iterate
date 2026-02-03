@@ -86,13 +86,13 @@ To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
-doppler run --config dev -- tsx apps/os/sandbox/build-daytona-snapshot.ts
+doppler run --config dev -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
 
 # For staging snapshots
-doppler run --config stg -- tsx apps/os/sandbox/build-daytona-snapshot.ts
+doppler run --config stg -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
 
 # For production snapshots
-doppler run --config prd -- tsx apps/os/sandbox/build-daytona-snapshot.ts
+doppler run --config prd -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
 ```
 
 Or from the `apps/os` directory:

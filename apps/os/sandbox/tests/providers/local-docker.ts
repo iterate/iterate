@@ -20,7 +20,12 @@ import type {
 } from "./types.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(__dirname, "../../../../..");
+const DEFAULT_REPO_ROOT = join(__dirname, "../../../../..");
+
+export interface LocalDockerProviderOptions {
+  /** Override the repo root to mount into the container. Defaults to the iterate monorepo root. */
+  repoRoot?: string;
+}
 
 const PIDNAP_PORT = 9876;
 
@@ -62,12 +67,12 @@ async function findAvailablePortBlock(count: number): Promise<number> {
   throw new Error(`No available port block of size ${count} in range 10000-11000`);
 }
 
-function getDefaultComposeProjectName(): string {
-  const repoName = basename(REPO_ROOT);
+function getDefaultComposeProjectName(repoRoot: string): string {
+  const repoName = basename(repoRoot);
   return repoName.toLowerCase().replace(/[^a-z0-9-]/g, "");
 }
 
-function resolveBaseImage(): string {
+function resolveBaseImage(repoRoot: string): string {
   if (process.env.LOCAL_DOCKER_IMAGE_NAME) {
     return process.env.LOCAL_DOCKER_IMAGE_NAME;
   }
@@ -88,7 +93,7 @@ function resolveBaseImage(): string {
     // fall back
   }
 
-  const baseProjectName = getDefaultComposeProjectName();
+  const baseProjectName = getDefaultComposeProjectName(repoRoot);
   return `${baseProjectName}-sandbox`;
 }
 
@@ -184,12 +189,16 @@ class LocalDockerSandboxHandle implements SandboxHandle {
   }
 }
 
-export function createLocalDockerProvider(): SandboxProvider {
+export function createLocalDockerProvider(
+  providerOpts?: LocalDockerProviderOptions,
+): SandboxProvider {
+  const repoRoot = providerOpts?.repoRoot ?? DEFAULT_REPO_ROOT;
+
   return {
     name: "local-docker",
 
     async createSandbox(opts?: CreateSandboxOptions): Promise<SandboxHandle> {
-      const imageName = resolveBaseImage();
+      const imageName = resolveBaseImage(repoRoot);
 
       // Allocate ports
       const totalPorts = DAEMON_PORTS.length + 1; // +1 for pidnap
@@ -219,7 +228,7 @@ export function createLocalDockerProvider(): SandboxProvider {
 
       // Git mounts for repo sync
       const binds: string[] = [];
-      const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+      const gitInfo = getLocalDockerGitInfo(repoRoot);
       if (gitInfo) {
         binds.push(`${gitInfo.repoRoot}:/host/repo-checkout:ro`);
         binds.push(`${gitInfo.gitDir}:/host/gitdir:ro`);

@@ -8,6 +8,9 @@
  *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts
  */
 
+import { execSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
@@ -35,6 +38,16 @@ function createPidnapRpcClient(port: number) {
   return createPidnapClient(`http://127.0.0.1:${port}/rpc`);
 }
 
+/** Dump container logs to stdout for debugging test failures */
+function dumpContainerLogs(containerId: string): void {
+  try {
+    const logs = execSync(`docker logs ${containerId} 2>&1`, { encoding: "utf-8" });
+    console.log(`\n=== Container logs for ${containerId} ===\n${logs}\n=== End logs ===\n`);
+  } catch {
+    console.log(`[debug] Could not fetch logs for container ${containerId}`);
+  }
+}
+
 // ============ Tests ============
 
 // Super minimal test: verify sync-home-skeleton copied .iterate/.env
@@ -47,10 +60,132 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
       // Don't wait for daemon - just check env immediately
       const envOutput = await sandbox.exec(["bash", "-l", "-c", "env"]);
       expect(envOutput).toContain("DUMMY_ENV_VAR=42");
+    } catch (err) {
+      dumpContainerLogs(sandbox.id);
+      throw err;
     } finally {
       await sandbox.delete();
     }
-  }, 60000);
+  }, 10000);
+});
+
+/**
+ * Git Worktree Sync Test
+ *
+ * WHAT: Tests that sync-repo-from-host.sh correctly syncs a git worktree into the container.
+ *
+ * WHY: Many developers use git worktrees for parallel work. When the host repo is a worktree,
+ * its .git is a file (not a directory) pointing to the main repo's gitdir. The sync mechanism
+ * must handle this correctly - mounting and merging both the worktree's gitdir and the shared
+ * commondir so that git commands inside the container see the correct state.
+ *
+ * HOW: We create a fresh worktree with known dirty state:
+ * - A unique branch name (verifies branch syncs correctly)
+ * - Staged changes (new file added to index)
+ * - Unstaged changes (modified existing file)
+ * - Untracked files
+ *
+ * Then verify the container sees EXACTLY the same git state via `git status --porcelain`:
+ * - Correct branch name
+ * - Correct commit SHA
+ * - All staged/unstaged/untracked changes match exactly
+ */
+describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
+  let worktreePath: string;
+  let branchName: string;
+
+  beforeAll(() => {
+    // Create a fresh git worktree in a temp directory
+    worktreePath = mkdtempSync(join(tmpdir(), "git-sync-test-"));
+    branchName = `test-git-sync-${Date.now()}`;
+
+    execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
+      cwd: REPO_ROOT,
+      stdio: "pipe",
+    });
+
+    // Create dirty git state:
+    // 1. Staged new file
+    writeFileSync(join(worktreePath, "staged-new.txt"), "staged content");
+    execSync("git add staged-new.txt", { cwd: worktreePath });
+
+    // 2. Unstaged modification to existing file
+    appendFileSync(join(worktreePath, "README.md"), "\n# test modification for git sync test");
+
+    // 3. Untracked file
+    writeFileSync(join(worktreePath, "untracked.txt"), "untracked content");
+  });
+
+  afterAll(() => {
+    // Cleanup worktree and branch
+    try {
+      execSync(`git worktree remove --force ${worktreePath}`, { cwd: REPO_ROOT, stdio: "pipe" });
+    } catch {
+      rmSync(worktreePath, { recursive: true, force: true });
+      execSync(`git worktree prune`, { cwd: REPO_ROOT, stdio: "pipe" });
+    }
+    try {
+      execSync(`git branch -D ${branchName}`, { cwd: REPO_ROOT, stdio: "pipe" });
+    } catch {
+      // Branch might not exist if worktree creation failed
+    }
+  });
+
+  test("container git state matches host worktree exactly", async () => {
+    // Capture host git state
+    const hostBranch = execSync("git branch --show-current", {
+      cwd: worktreePath,
+      encoding: "utf-8",
+    }).trim();
+    const hostCommit = execSync("git rev-parse HEAD", {
+      cwd: worktreePath,
+      encoding: "utf-8",
+    }).trim();
+    const hostStatus = execSync("git status --porcelain", {
+      cwd: worktreePath,
+      encoding: "utf-8",
+    }).trim();
+
+    console.log("[host] branch:", hostBranch);
+    console.log("[host] commit:", hostCommit);
+    console.log("[host] status:\n", hostStatus);
+
+    // Create container from worktree
+    const provider = createLocalDockerProvider({ repoRoot: worktreePath });
+    const sandbox = await provider.createSandbox();
+    console.log("[container] id:", sandbox.id);
+
+    try {
+      // No need to wait for daemon - sync happens in entry.sh before pidnap starts
+      // Just give it a moment for sync-repo-from-host.sh to complete
+      await new Promise((r) => setTimeout(r, 2000));
+
+      // Get container git state
+      const containerBranch = (
+        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
+      ).trim();
+      const containerCommit = (
+        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "rev-parse", "HEAD"])
+      ).trim();
+      const containerStatus = (
+        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "status", "--porcelain"])
+      ).trim();
+
+      console.log("[container] branch:", containerBranch);
+      console.log("[container] commit:", containerCommit);
+      console.log("[container] status:\n", containerStatus);
+
+      // Verify exact match
+      expect(containerBranch).toBe(hostBranch);
+      expect(containerCommit).toBe(hostCommit);
+      expect(containerStatus).toBe(hostStatus);
+    } catch (err) {
+      dumpContainerLogs(sandbox.id);
+      throw err;
+    } finally {
+      await sandbox.delete();
+    }
+  }, 30000);
 });
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
