@@ -428,6 +428,20 @@ export const platformRouter = createTRPCRouter({
       return { success: false };
     }
   }),
+
+  /**
+   * Get the current iterate repo SHA. Used by E2E tests to verify repo sync.
+   */
+  getIterateRepoSha: publicProcedure.query(async () => {
+    const iterateRepoPath = process.env.ITERATE_REPO;
+    if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+      return { sha: null, path: iterateRepoPath ?? null };
+    }
+
+    const git = simpleGit(iterateRepoPath);
+    const sha = (await git.revparse(["HEAD"])).trim();
+    return { sha, path: iterateRepoPath };
+  }),
 });
 
 export type PlatformRouter = typeof platformRouter;
