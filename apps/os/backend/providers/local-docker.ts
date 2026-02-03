@@ -393,7 +393,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
 
       return {
         externalId: newContainerId,
-        metadata: { ports, containerId: newContainerId },
+        metadata: { ports, containerId: newContainerId, containerName },
       };
     },
 

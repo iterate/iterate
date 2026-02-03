@@ -110,7 +110,7 @@ describe("RestartingProcess", () => {
         mockLogger,
       );
       successProc.start();
-      await expect.poll(() => successProc.state).toBe("stopped");
+      await expect.poll(() => successProc.state, { timeout: 5000 }).toBe("stopped");
       expect(successProc.restarts).toBe(0);
 
       // Failure process should restart

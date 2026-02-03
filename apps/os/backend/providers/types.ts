@@ -65,9 +65,6 @@ export interface MachineProvider {
   readonly commands: MachineCommand[];
   readonly terminalOptions: TerminalOption[];
 
-  /** Runtime metadata to merge with stored metadata (e.g., containerName for local-docker) */
-  readonly runtimeMetadata?: Record<string, unknown>;
-
   /** Get preview URL for a specific port (for services on different ports) */
   getPreviewUrl(port: number): string;
 

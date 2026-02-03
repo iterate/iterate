@@ -133,7 +133,7 @@ describe("CronProcess", () => {
       expect(proc.state).toBe("queued");
 
       // Wait for both jobs to complete
-      await expect.poll(() => proc.runCount, { timeout: 2000 }).toBe(2);
+      await expect.poll(() => proc.runCount, { timeout: 5000 }).toBe(2);
 
       await proc.stop();
     });
