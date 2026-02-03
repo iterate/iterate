@@ -272,6 +272,7 @@ const Env = z.object({
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
   DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  ITERATE_REPO_SHA: Optional, // git sha of iterate repo at deploy time
   DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
   DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   GOOGLE_CLIENT_ID: Required,

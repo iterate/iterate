@@ -1,5 +1,10 @@
 import { createWorkerClient } from "./orpc/client.ts";
-import { applyEnvVars, clearGitHubCredentials, cloneRepos } from "./trpc/platform.ts";
+import {
+  applyEnvVars,
+  clearGitHubCredentials,
+  cloneRepos,
+  syncIterateRepo,
+} from "./trpc/platform.ts";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const JITTER_MS = 5 * 60 * 1000; // +/- 5 minutes
@@ -86,5 +91,10 @@ export async function fetchBootstrapData(): Promise<void> {
   if (result.repos.length > 0) {
     cloneRepos(result.repos);
     console.log(`[bootstrap-refresh] Triggered clone for ${result.repos.length} repos`);
+  }
+
+  // Sync iterate repo if sha provided
+  if (result.iterateRepoSha) {
+    await syncIterateRepo(result.iterateRepoSha);
   }
 }
