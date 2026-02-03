@@ -128,18 +128,19 @@ RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
-# Copy repo, then remove .git (if present).
-# For git worktree checkouts, .git is a file pointing to the shared .git folder
-# on the host machine - which doesn't exist in the container.
-# We delete it and overlay the real git dir via BuildKit extra context.
-# (Using RUN rm instead of COPY --exclude for compatibility with non-BuildKit builders like Daytona)
-COPY --chown=iterate:iterate . .
-RUN rm -rf .git
+# Copy repo (exclude .git file from worktrees)
+COPY --chown=iterate:iterate --exclude=.git . .
 
-# Overlay real git dir via BuildKit extra context.
-# REQUIRED: Build with --build-context gitdir=<path> (see local-docker-snapshot.ts).
-# Without it, build fails: "gitdir not found". Script always provides it.
-COPY --from=gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
+# Ensure shell scripts are executable (git may not preserve permissions on all platforms)
+RUN chmod +x apps/os/sandbox/*.sh
+
+# Overlay git directory pieces from BuildKit contexts (worktree-safe).
+# In a worktree, .git is a file that points at the real gitdir/commondir on disk.
+# The build script passes both as BuildKit contexts, then we copy them into
+# $ITERATE_REPO/.git and remove the indirection markers so git works in-container.
+COPY --from=iterate-repo-commondir --chown=iterate:iterate . $ITERATE_REPO/.git
+COPY --from=iterate-repo-gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
+RUN rm -f $ITERATE_REPO/.git/commondir $ITERATE_REPO/.git/gitdir
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile --offline

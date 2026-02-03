@@ -37,6 +37,22 @@ function createPidnapRpcClient(port: number) {
 
 // ============ Tests ============
 
+// Super minimal test: verify sync-home-skeleton copied .iterate/.env
+describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
+  const provider = createLocalDockerProvider();
+
+  test("DUMMY_ENV_VAR from skeleton .env is present", async () => {
+    const sandbox = await provider.createSandbox();
+    try {
+      // Don't wait for daemon - just check env immediately
+      const envOutput = await sandbox.exec(["bash", "-l", "-c", "env"]);
+      expect(envOutput).toContain("DUMMY_ENV_VAR=42");
+    } finally {
+      await sandbox.delete();
+    }
+  }, 60000);
+});
+
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   const provider = createLocalDockerProvider();
 

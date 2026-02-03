@@ -54,7 +54,7 @@ export default workflow({
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
-            "pnpm os snapshot:daytona:${{ inputs.doppler_config }}",
+            "pnpm os daytona:build",
             'echo "snapshot_name=iterate-sandbox-${{ github.sha }}" >> $GITHUB_OUTPUT',
           ].join("\n"),
         },

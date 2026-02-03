@@ -20,7 +20,7 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- tsx apps/os/sandbox/daytona-snapshot.ts
+doppler run --config dev -- tsx apps/os/sandbox/build-daytona-snapshot.ts
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR

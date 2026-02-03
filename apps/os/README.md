@@ -28,7 +28,7 @@ When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatical
 To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
 
 ```bash
-pnpm snapshot:local-docker
+pnpm docker:build
 ```
 
 New local-docker machines always use the latest `iterate-sandbox:local` image tag.
@@ -73,38 +73,38 @@ For local development, each developer gets their own namespace based on `ITERATE
 To create a new Daytona snapshot from `apps/os`:
 
 ```bash
-pnpm snapshot:daytona
+pnpm daytona:build
 ```
 
 Or from the repo root using the filter flag:
 
 ```bash
-pnpm --filter os snapshot:daytona
+pnpm --filter os daytona:build
 ```
 
 To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
-doppler run --config dev -- tsx apps/os/sandbox/daytona-snapshot.ts
+doppler run --config dev -- tsx apps/os/sandbox/build-daytona-snapshot.ts
 
 # For staging snapshots
-doppler run --config stg -- tsx apps/os/sandbox/daytona-snapshot.ts
+doppler run --config stg -- tsx apps/os/sandbox/build-daytona-snapshot.ts
 
 # For production snapshots
-doppler run --config prd -- tsx apps/os/sandbox/daytona-snapshot.ts
+doppler run --config prd -- tsx apps/os/sandbox/build-daytona-snapshot.ts
 ```
 
 Or from the `apps/os` directory:
 
 ```bash
-pnpm snapshot:daytona
+pnpm daytona:build
 ```
 
 If you want to force a specific Doppler config while staying in `apps/os`:
 
 ```bash
-doppler run --config stg -- pnpm snapshot:daytona
+doppler run --config stg -- pnpm daytona:build
 ```
 
 This will:

@@ -17,6 +17,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 exec tini -sg -- \
-  tsx --watch --env-file-if-exists /home/iterate/.iterate/.env \
+  # pidnap watches /home/iterate/.iterate/.env itself, so avoid tsx --env-file-if-exists
+  tsx --watch \
   "$ITERATE_REPO/packages/pidnap/src/cli.ts" \
   init -c "$ITERATE_REPO/apps/os/sandbox/pidnap.config.ts"

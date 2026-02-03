@@ -32,7 +32,7 @@ ITERATE_EGRESS_PROXY_URL="${ITERATE_EGRESS_PROXY_URL:-https://dev-nick-os.dev.it
 ITERATE_OS_API_KEY="${ITERATE_OS_API_KEY:-test-dev-key}"
 
 log "Building Docker image..."
-LOCAL_DOCKER_IMAGE_NAME="ghcr.io/iterate/sandbox:test" pnpm --filter os snapshot:local-docker
+LOCAL_DOCKER_IMAGE_NAME="ghcr.io/iterate/sandbox:test" pnpm --filter os docker:build
 
 log ""
 log "Running egress proxy test in container..."

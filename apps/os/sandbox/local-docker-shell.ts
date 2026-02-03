@@ -16,7 +16,7 @@ const imageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbo
 
 const inspect = spawnSync("docker", ["image", "inspect", imageName], { stdio: "ignore" });
 if (inspect.status !== 0) {
-  throw new Error(`Image not found: ${imageName}. Run 'pnpm os snapshot:local-docker'.`);
+  throw new Error(`Image not found: ${imageName}. Run 'pnpm os docker:build'.`);
 }
 
 const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);

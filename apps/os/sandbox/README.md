@@ -18,7 +18,7 @@ Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked re
 Local build (uses current repo checkout):
 
 ```bash
-pnpm os snapshot:local-docker
+pnpm os docker:build
 ```
 
 Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
@@ -26,7 +26,7 @@ Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-di
 Push to GHCR (updates shared build cache):
 
 ```bash
-PUSH=1 pnpm os snapshot:local-docker
+PUSH=1 pnpm os docker:build
 ```
 
 Direct Docker build:
@@ -56,24 +56,26 @@ If dependencies change, run `pnpm install` inside the container.
 
 These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
 
-## Daytona snapshots (GHCR pull)
+## Daytona snapshots
 
-Create snapshot from GHCR image:
+Create snapshot directly from Dockerfile (builds on Daytona's infra):
 
 ```bash
-pnpm os snapshot:daytona
+pnpm os daytona:build
 ```
 
-Defaults:
+Options:
 
-- Snapshot name: `iterate-sandbox-${GIT_SHA}`
-- Image: `ghcr.io/iterate/sandbox:sha-${GIT_SHA}`
+- `--name` / `-n`: Snapshot name (default: `iterate-sandbox-<sha>` or `iterate-sandbox-<sha>-$ITERATE_USER-dirty`)
+- `--cpu` / `-c`: CPU cores (default: 2)
+- `--memory` / `-m`: Memory in GB (default: 4)
+- `--disk` / `-d`: Disk in GB (default: 10)
 
-Override with env vars:
+Example:
 
-- `SANDBOX_SNAPSHOT_NAME`
-- `SANDBOX_IMAGE`
-- `SANDBOX_SNAPSHOT_CPU`, `SANDBOX_SNAPSHOT_MEMORY`, `SANDBOX_SNAPSHOT_DISK`
+```bash
+pnpm os daytona:build --name my-snapshot --cpu 4 --memory 8
+```
 
 Requires `daytona` CLI (`daytona login`).
 

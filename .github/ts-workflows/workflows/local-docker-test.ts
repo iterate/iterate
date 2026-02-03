@@ -36,7 +36,7 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "pnpm os snapshot:local-docker:test",
+          run: "pnpm os docker:build:test",
         },
         {
           name: "Upload test results",

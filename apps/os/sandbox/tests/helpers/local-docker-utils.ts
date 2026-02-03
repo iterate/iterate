@@ -3,7 +3,7 @@
  * Used by local Docker sandbox tests.
  *
  * NOTE: Workerd can't exec, even in local development. These helpers run on the
- * host side (scripts like local-docker-snapshot.ts or alchemy.run.ts) to derive
+ * host side (scripts like build-docker-image.ts or alchemy.run.ts) to derive
  * git/compose env vars before they're injected into the worker.
  */
 
