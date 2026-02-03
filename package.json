@@ -24,7 +24,7 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:clean": "docker compose down -v",
-    "snapshot:daytona": "pnpm os snapshot:daytona",
+    "snapshot:daytona": "SANDBOX_ITERATE_REPO_REF=$(git rev-parse HEAD) pnpm os snapshot:daytona:dev",
     "snapshot:local-docker": "pnpm os snapshot:local-docker",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",

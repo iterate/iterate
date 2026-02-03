@@ -95,6 +95,6 @@ export async function fetchBootstrapData(): Promise<void> {
 
   // Sync iterate repo if sha provided
   if (result.iterateRepoSha) {
-    await syncIterateRepo(result.iterateRepoSha);
+    await syncIterateRepo(result.iterateRepoSha, result.iterateRepoBranch ?? "main");
   }
 }

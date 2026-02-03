@@ -374,7 +374,7 @@ let lastSyncedIterateSha: string | null = null;
 /**
  * Sync the iterate repo to the expected sha if needed.
  */
-export async function syncIterateRepo(expectedSha: string): Promise<void> {
+export async function syncIterateRepo(expectedSha: string, branch = "main"): Promise<void> {
   // Skip if we already synced to this sha
   if (lastSyncedIterateSha === expectedSha) {
     return;
@@ -394,7 +394,9 @@ export async function syncIterateRepo(expectedSha: string): Promise<void> {
     return;
   }
 
-  console.log(`[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha}`);
+  console.log(
+    `[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha} (branch: ${branch})`,
+  );
 
   const status = await git.status(["--porcelain"]);
   if (!status.isClean()) {
@@ -403,8 +405,8 @@ export async function syncIterateRepo(expectedSha: string): Promise<void> {
     console.log(`[platform] Stashed changes: ${stash}`);
   }
 
-  await git.checkout(["main"]);
-  await git.fetch("origin", "main");
+  await git.checkout([branch]);
+  await git.fetch("origin", branch);
   await git.reset(["--hard", expectedSha]);
   lastSyncedIterateSha = expectedSha;
 }

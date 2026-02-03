@@ -46,6 +46,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DAYTONA_SNAPSHOT_NAME: ${{ inputs.daytona_snapshot_name }}
           ITERATE_REPO_SHA: ${{ github.sha }}
+          ITERATE_REPO_BRANCH: ${{ github.ref_name }}
         run: pnpm run deploy:prd
         working-directory: apps/os
   deploy-iterate-com:
