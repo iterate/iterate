@@ -1,56 +1,22 @@
 # Slack Channel Instructions
 
-## CRITICAL: Immediate Acknowledgment
-
-**When you receive ANY message that @mentions you, your VERY FIRST action must be to acknowledge it.** Do not read files, do not think, do not plan - acknowledge IMMEDIATELY.
-
-Call `slack.reactions.add` with `:eyes:` as your first tool call, BEFORE any other processing. This lets the user know you've seen their message and are working on it.
-
-```bash
-# THIS MUST BE YOUR FIRST TOOL CALL when @mentioned
-iterate tool slack 'await slack.reactions.add({
-  channel: "CHANNEL_ID",
-  timestamp: "MESSAGE_TS",
-  name: "eyes",
-})'
-```
-
 ## Message Types
 
-You will receive one of three message types:
+### 1. New Thread Mention / Mid-Thread Mention
 
-### 1. New Thread Mention
-
-**Trigger:** You've been @mentioned to start a new conversation (no existing thread).
+**Trigger:** You've been @mentioned.
 
 **What to do:**
 
-1. **IMMEDIATELY** add :eyes: reaction (before anything else!)
-2. Understand the request fully before acting
-3. Respond with your findings/actions
-4. Remove :eyes: when responding
+1. **IMMEDIATELY** acknowledge - react with :eyes: OR send a quick reply (for simple answers, just reply directly). Use `Promise.all` to do both if needed.
+2. Do the work
+3. Remove :eyes: when responding (if you added it)
 
-### 2. Mid-Thread Mention
+### 2. FYI Message
 
-**Trigger:** You've been @mentioned in an existing thread (joining a conversation in progress).
+**Trigger:** Message in thread you're in, but no @mention.
 
-**What to do:**
-
-1. **IMMEDIATELY** add :eyes: reaction (before anything else!)
-2. Query the raw event to get conversation context if needed
-3. Query other events for the thread_ts or use `slack.conversations.replies` to fetch thread history
-4. Respond addressing the specific question
-5. Remove :eyes: when responding
-
-### 3. FYI Message
-
-**Trigger:** A message in a thread you're participating in, but you weren't @mentioned.
-
-**What to do:**
-
-- Usually no response needed - just note the information
-- Only respond if it's clearly a direct question or instruction to you
-- If you do respond, keep it brief
+**What to do:** Usually ignore. Only respond if clearly directed at you.
 
 ## Files
 
@@ -137,8 +103,6 @@ If a message contains files or attachments, query the raw event to get file URLs
 
 ## Best Practices
 
-1. **Acknowledge IMMEDIATELY**: Your FIRST tool call when @mentioned MUST be `slack.reactions.add` with :eyes:. No exceptions. Don't read files or think first - react immediately.
-2. **Remove acknowledgment when done**: Remove :eyes: and post your response together.
-3. **Be concise**: Slack messages should be shorter than typical coding responses. Sacrifice grammar for sake of concision.
-4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
-5. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
+1. **Acknowledge IMMEDIATELY**: First tool call when @mentioned must acknowledge - either :eyes: reaction or a quick reply. No reading files or thinking first.
+2. **Be concise**: Shorter than typical coding responses.
+3. **Set status**: For long-running work, use `assistant.threads.setStatus`.
