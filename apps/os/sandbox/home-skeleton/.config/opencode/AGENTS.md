@@ -7,6 +7,12 @@ You are an AI agent running in an Iterate sandbox. Your agent slug (visible in t
 - **`slack-*`**: You communicate via Slack. Use `iterate tool slack` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
 - **`email-*`**: You communicate via email. Use `iterate tool email` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
 
+## Handling User Queries
+
+To search the internet, use `exa` tools. When you need to search technical docs, use `context7` tools.
+
+If you are unsure how to do something, you can use `gh_grep` to search code examples from GitHub.
+
 ## Working in Isolation (Git Worktrees)
 
 When making code changes, you should create an isolated git worktree first. This prevents conflicts when multiple agents work on the same repo simultaneously.
@@ -216,3 +222,118 @@ iterate task get --filename my-task.md
 - `--priority`: `low` | `normal` | `high` (optional, default: normal)
 
 **Important:** The task body should contain ALL context needed. The cron agent that runs the task won't have access to the current conversation - include user names, channel IDs, specific instructions, etc.
+
+## Replicate (AI Model API)
+
+Replicate provides API access to thousands of AI models for image generation, video creation, audio synthesis, and more. The `REPLICATE_API_TOKEN` env var is available globally.
+
+**Recommended: Use `iterate tool replicate`** for programmatic access:
+
+```bash
+# Generate an image
+iterate tool replicate '
+const output = await replicate.run("black-forest-labs/flux-schnell", {
+  input: { prompt: "a photo of a cat riding a bicycle" }
+});
+console.log(output);
+'
+
+# Generate and save to file
+iterate tool replicate '
+const fs = require("fs");
+const output = await replicate.run("black-forest-labs/flux-schnell", {
+  input: { prompt: "a sunset over mountains" }
+});
+// output[0] is a URL - fetch and save it
+const response = await fetch(output[0]);
+const buffer = Buffer.from(await response.arrayBuffer());
+fs.writeFileSync("output.png", buffer);
+console.log("Saved to output.png");
+'
+```
+
+**Finding Models:**
+
+Use the Replicate search API to find models for your task:
+
+```bash
+iterate tool replicate '
+const results = await replicate.models.search("image generation");
+for (const model of results.results.slice(0, 5)) {
+  console.log(model.owner + "/" + model.name, "-", model.description?.slice(0, 80));
+}
+'
+```
+
+**IMPORTANT: Check Model Schema First**
+
+Model APIs vary significantly - parameter names differ between models (e.g., `image` vs `image_input`, single value vs array). Always check the schema before running:
+
+```bash
+iterate tool replicate '
+const model = await replicate.models.get("google", "nano-banana-pro");
+console.log(JSON.stringify(model.latest_version.openapi_schema.components.schemas.Input, null, 2));
+'
+```
+
+**Image-to-Image with Streaming Output:**
+
+Some models return a `ReadableStream` instead of URLs. Handle both cases:
+
+```bash
+iterate tool replicate '
+const fs = require("fs");
+const imageData = fs.readFileSync("/tmp/input.png");
+const base64Image = `data:image/png;base64,${imageData.toString("base64")}`;
+
+const output = await replicate.run("google/nano-banana-pro", {
+  input: {
+    prompt: "Your detailed style prompt here",
+    image_input: [base64Image],  // Note: parameter name varies by model!
+    aspect_ratio: "match_input_image"
+  }
+});
+
+// Handle streaming output (ReadableStream)
+if (output && typeof output.getReader === "function") {
+  const reader = output.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  fs.writeFileSync("/tmp/output.jpg", Buffer.from(result));
+} else if (Array.isArray(output)) {
+  // URL-based output
+  const response = await fetch(output[0]);
+  fs.writeFileSync("/tmp/output.jpg", Buffer.from(await response.arrayBuffer()));
+} else {
+  console.log(output)
+}
+'
+```
+
+**Style Transfer Prompting Tips:**
+
+Generic style descriptions like "Quentin Blake style" don't work well. Be specific:
+
+- **Describe visual characteristics:** line weight, stroke style, color palette, proportions
+- **Use technical art terms:** "scratchy ink lines", "watercolor washes", "gestural strokes", "cross-hatching"
+- **Be specific about what you want:** "thin black pen lines, wild spiky hair, exaggerated gangly limbs, minimal muted watercolor washes, slightly grotesque cartoonish faces with big noses"
+- **State what you DON'T want:** "NOT polished, NOT photorealistic, NOT smooth gradients"
+- **Reference techniques, not just artists:** "like Roald Dahl book illustrations" is better than just "Quentin Blake"
+
+**Key Points:**
+
+- **Always check model schema first** - parameter names vary between models
+- Output may be URLs OR a ReadableStream - handle both
+- Use `replicate.stream()` for LLMs to stream tokens
+- Models are pay-per-second with no idle charges

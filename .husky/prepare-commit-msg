@@ -44,4 +44,24 @@ if [ "$AGENT" = "1" ] || [ "$OPENCODE" = "1" ] || [ -n "$OPENCODE_SESSION" ] || 
     echo "See: https://git-scm.com/docs/githooks#_prepare_commit_msg"
     exit 1
   fi
+
+  # Block commits that include .github/workflows/*.yml files
+  # The GitHub App token doesn't have 'workflows' permission, so agents should
+  # only commit .ts files and let CI generate the .yml files.
+  workflow_files=$(git diff --cached --name-only | grep '^\.github/workflows/.*\.yml$' || true)
+  if [ -n "$workflow_files" ]; then
+    echo ""
+    echo "ERROR: Agents cannot commit .github/workflows/*.yml files directly."
+    echo ""
+    echo "The GitHub App token doesn't have 'workflows' permission."
+    echo "Instead, only commit the .ts source files in .github/ts-workflows/workflows/"
+    echo "and let CI generate the .yml files for you."
+    echo ""
+    echo "To fix this, run:"
+    echo "  git restore --staged .github/workflows/"
+    echo "  git checkout -- .github/workflows/"
+    echo ""
+    echo "Then commit again with just the .ts changes."
+    exit 1
+  fi
 fi

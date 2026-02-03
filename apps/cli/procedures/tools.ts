@@ -5,13 +5,14 @@ import { join } from "node:path";
 import dedent from "dedent";
 import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
+import Replicate from "replicate";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
 // add debug logging by default so that agents always see the message_ts info etc. when they send messages
 function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
-  const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
-  if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
   return new WebClient(token, { logLevel });
 }
 
@@ -19,6 +20,12 @@ function getResendClient() {
   const apiKey = process.env.ITERATE_RESEND_API_KEY;
   if (!apiKey) throw new Error("ITERATE_RESEND_API_KEY environment variable is required");
   return new Resend(apiKey);
+}
+
+function getReplicateClient() {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is required");
+  return new Replicate({ auth: token });
 }
 
 export const toolsRouter = t.router({
@@ -121,6 +128,28 @@ export const toolsRouter = t.router({
         };
       }),
   }),
+  replicate: t.procedure
+    .meta({ description: "Run AI models via Replicate API" })
+    .input(
+      z.object({
+        code: z.string().meta({ positional: true }).describe(dedent`
+          A JavaScript script that uses a Replicate client named \`replicate\`. For example:
+
+          // Generate an image
+          const output = await replicate.run("black-forest-labs/flux-schnell", {
+            input: { prompt: "a photo of a cat" }
+          });
+          console.log(output);
+        `),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const require = createRequire(import.meta.url);
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const _execute = new AsyncFunction("replicate", "require", input.code);
+      const result = await _execute(getReplicateClient(), require);
+      return result;
+    }),
   printenv: t.procedure
     .meta({ description: "List environment variables from ~/.iterate/.env" })
     .input(z.object({}).optional())

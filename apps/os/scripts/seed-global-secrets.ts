@@ -35,6 +35,13 @@ export const GLOBAL_SECRETS_CONFIG = [
     // there is an additional check in the egress proxy to make sure you can always send to your own org's email addresses.
     egressProxyRule: `url.hostname = 'api.resend.com' and (url.pathname = '/emails' or url.pathname = '/emails/batch')`,
   },
+  {
+    envVar: "REPLICATE_API_TOKEN",
+    key: "iterate.replicate_api_token",
+    description:
+      "Replicate API token for running AI models (image/video generation, speech synthesis, etc.)",
+    egressProxyRule: `url.hostname = 'api.replicate.com'`,
+  },
 ] as const satisfies Array<{
   envVar: string;
   key: string;
@@ -42,11 +49,7 @@ export const GLOBAL_SECRETS_CONFIG = [
   egressProxyRule: string;
 }>;
 
-export type GlobalSecretEnvVarName =
-  | (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"]
-  | "PSCALE_DATABASE_URL"
-  | "DATABASE_URL"
-  | "ENCRYPTION_SECRET";
+export type GlobalSecretEnvVarName = (typeof GLOBAL_SECRETS_CONFIG)[number]["envVar"];
 
 async function main() {
   const databaseUrl = process.env.PSCALE_DATABASE_URL || process.env.DATABASE_URL;
@@ -134,7 +137,10 @@ async function main() {
   console.log("Done!");
 }
 
-main().catch((err) => {
-  console.error("Failed to seed secrets:", err);
-  process.exit(1);
-});
+// look for --run so we can import values from this file without running it immediately
+if (process.argv.includes("--run")) {
+  main().catch((err) => {
+    console.error("Failed to seed secrets:", err);
+    process.exit(1);
+  });
+}
