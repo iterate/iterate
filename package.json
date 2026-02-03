@@ -31,9 +31,9 @@
     "db:studio": "pnpm os db:studio",
     "db:studio:staging": "PSCALE_DATABASE_URL=$(doppler secrets --config stg get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DANGEROUS_PRODUCTION_POSTGRES_URL) pnpm db:studio",
-    "db:query": "docker compose exec postgres psql -U postgres -d iterate",
-    "db:query:file": "docker compose exec -T postgres psql -U postgres -d iterate -f",
-    "db:exec": "docker compose exec -T postgres psql -U postgres -d iterate -c",
+    "db:query": "tsx ./scripts/docker-compose.ts exec postgres psql -U postgres -d os",
+    "db:query:file": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -f",
+    "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
