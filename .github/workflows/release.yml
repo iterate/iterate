@@ -36,7 +36,7 @@ jobs:
         id: context
         run: |-
           echo "release_title=${{ inputs.release_title || 'Daily scheduled release' }}" >> $GITHUB_OUTPUT
-          echo "trigger_desc=${{ inputs.trigger_description || format('schedule: {0}', github.event.schedule) }}" >> $GITHUB_OUTPUT
+          echo "trigger_desc=${{ format('{0}: {1}', github.event_name, inputs.trigger_description || github.event.schedule || 'unknown') }}" >> $GITHUB_OUTPUT
       - name: Get release info
         id: release_info
         run: |-
