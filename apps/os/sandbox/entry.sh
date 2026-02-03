@@ -63,6 +63,7 @@ touch /tmp/.iterate-sandbox-ready
 CONSOLE_LOG="/var/log/pidnap/console"
 CONSOLE_FIFO="/tmp/pidnap-console-fifo"
 mkdir -p "$(dirname "$CONSOLE_LOG")"
+rm -f "$CONSOLE_FIFO"
 mkfifo "$CONSOLE_FIFO"
 
 # Background process reads from FIFO and writes to both file and stdout
