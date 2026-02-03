@@ -28,6 +28,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       gh \
       git \
       inotify-tools \
+      jq \
       make \
       openssh-client \
       rsync \
@@ -44,7 +45,7 @@ RUN corepack enable
 
 # Global npm tools (as root for system-wide access)
 RUN corepack prepare pnpm@10.24.0 --activate && \
-    npm install -g tsx
+    npm install -g tsx serve
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
@@ -53,6 +54,21 @@ RUN useradd -m -s /bin/bash iterate && \
     mkdir -p /home/iterate/src/github.com/iterate \
     /var/log/pidnap && \
     chown -R iterate:iterate /home/iterate /var/log/pidnap
+
+# Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
+RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
+    echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
+    chmod +x /usr/local/bin/iterate
+
+# Replicate CLI shim - directs users to iterate tool replicate
+RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
+    echo 'echo "Error: The replicate CLI is not installed." >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "Use iterate tool replicate instead. Example:" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "  iterate tool replicate '"'"'const output = await replicate.run(\"black-forest-labs/flux-schnell\", { input: { prompt: \"a cat\" } }); console.log(output);'"'"'" >&2' >> /usr/local/bin/replicate && \
+    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
+    echo 'exit 1' >> /usr/local/bin/replicate && \
+    chmod +x /usr/local/bin/replicate
 
 USER iterate
 

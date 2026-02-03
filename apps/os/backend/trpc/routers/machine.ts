@@ -661,24 +661,18 @@ export const machineRouter = router({
         });
       }
 
-      try {
-        const provider = await createMachineProvider({
-          type: machineRecord.type,
-          env: ctx.env,
-          externalId: machineRecord.externalId,
-          metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
-          buildProxyUrl: () => "", // Not used here
-        });
-        const daemonClient = createDaemonTrpcClient(provider.previewUrl);
-        const [agents, serverInfo] = await Promise.all([
-          daemonClient.listAgents.query(),
-          daemonClient.getServerCwd.query(),
-        ]);
-        return { agents, customerRepoPath: serverInfo.customerRepoPath };
-      } catch (err) {
-        logger.error("Failed to fetch agents from daemon", err);
-        // Return empty list on error (daemon might not be ready)
-        return { agents: [], customerRepoPath: null };
-      }
+      const provider = await createMachineProvider({
+        type: machineRecord.type,
+        env: ctx.env,
+        externalId: machineRecord.externalId,
+        metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
+        buildProxyUrl: () => "", // Not used here
+      });
+      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      const [agents, serverInfo] = await Promise.all([
+        daemonClient.listAgents.query(),
+        daemonClient.getServerCwd.query(),
+      ]);
+      return { agents, customerRepoPath: serverInfo.customerRepoPath };
     }),
 });

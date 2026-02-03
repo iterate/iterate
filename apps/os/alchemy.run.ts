@@ -14,6 +14,10 @@ import {
   ensureIteratePnpmStoreVolume,
   getLocalDockerEnvVars,
 } from "./sandbox/tests/helpers/local-docker-utils.ts";
+import {
+  GLOBAL_SECRETS_CONFIG,
+  type GlobalSecretEnvVarName,
+} from "./scripts/seed-global-secrets.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -204,6 +208,7 @@ const Env = z.object({
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
   ANTHROPIC_API_KEY: Required,
+  REPLICATE_API_TOKEN: Required,
   SLACK_CLIENT_ID: Required,
   SLACK_CLIENT_SECRET: Required,
   SLACK_SIGNING_SECRET: Required,
@@ -228,7 +233,9 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URL: Optional,
   SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
-} satisfies Record<string, z.ZodType<unknown, string | undefined>>);
+} satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
+  [K in GlobalSecretEnvVarName]: typeof Required;
+});
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
@@ -265,19 +272,15 @@ async function setupDatabase() {
   const seedGlobalSecrets = async (origin: string) => {
     // Seed global secrets (OpenAI, Anthropic keys) into the database
     // These are the lowest priority secrets, overridable at org/project/user level
+
     const res = await Exec("db-seed-secrets", {
       env: {
         PSCALE_DATABASE_URL: origin,
         DATABASE_URL: origin,
         ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        RESEND_BOT_API_KEY: process.env.RESEND_BOT_API_KEY,
-      } satisfies Record<
-        import("./scripts/seed-global-secrets.ts").GlobalSecretEnvVarName,
-        string | undefined
-      >,
-      command: "tsx ./scripts/seed-global-secrets.ts",
+        ...Object.fromEntries(GLOBAL_SECRETS_CONFIG.map((c) => [c.envVar, process.env[c.envVar]])),
+      },
+      command: "tsx ./scripts/seed-global-secrets.ts --run",
     });
 
     if (res.exitCode !== 0) {

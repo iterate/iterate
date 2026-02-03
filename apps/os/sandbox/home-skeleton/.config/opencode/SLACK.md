@@ -37,6 +37,17 @@ You will receive one of three message types:
 - Only respond if it's clearly a direct question or instruction to you
 - If you do respond, keep it brief
 
+## Files
+
+You can't download and view files using the JS sdk. If there's a file attachment you need to read, use `curl` to download using the "private_url" field, for example:
+
+```sh
+curl -D /dev/stdout -H "Authorization: Bearer $SLACK_BOT_TOKEN" "https://files.slack.com/files-pri/T0123456789-F0123456789/something.jpg" -o /tmp/test_download.jpg
+# check the file type - Slack responds with HTML if something went wrong with auth
+file /tmp/test_download.jpg
+head -1 /tmp/test_download.jpg
+```
+
 ## Sending Replies
 
 Use the `iterate tool slack` CLI command to interact with Slack. This gives you access to the full Slack Web API via a `slack` client object.

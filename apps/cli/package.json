@@ -14,6 +14,7 @@
     "@trpc/server": "^11.4.3",
     "dedent": "^1.7.0",
     "ms": "4.0.0-nightly.202508271359",
+    "replicate": "^1.4.0",
     "resend": "^6.8.0",
     "trpc-cli": "^0.12.2",
     "zod": "^4.1.11"
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
   }
 }
