@@ -32,7 +32,7 @@ const getDefaultOrgName = createServerFn({ method: "GET" })
     // For work emails, use the domain (without .com suffix)
     // Slugify to match what the slug will be (name === slug for simplicity)
     if (isFreeEmailDomain(domain)) return slugify(localPart.split("+")[0]);
-    return slugify(domain.replace(/\.com$/, "");
+    return slugify(domain.replace(/\.com$/, ""));
   });
 
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
