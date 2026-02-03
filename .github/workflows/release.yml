@@ -39,34 +39,8 @@ jobs:
       - name: Set trigger context
         id: context
         run: |-
-          # Determine trigger type and set appropriate defaults
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            RELEASE_TITLE="Daily scheduled release"
-            TRIGGER_DESC="scheduled release"
-          elif [ "${{ github.event_name }}" = "workflow_call" ]; then
-            RELEASE_TITLE="${{ inputs.release_title }}"
-            TRIGGER_DESC="${{ inputs.trigger_description }}"
-            # Use defaults if not provided
-            if [ -z "$RELEASE_TITLE" ]; then
-              RELEASE_TITLE="Release"
-            fi
-            if [ -z "$TRIGGER_DESC" ]; then
-              TRIGGER_DESC="workflow_call"
-            fi
-          else
-            # workflow_dispatch
-            RELEASE_TITLE="${{ inputs.release_title }}"
-            TRIGGER_DESC="${{ inputs.trigger_description }}"
-            if [ -z "$RELEASE_TITLE" ]; then
-              RELEASE_TITLE="Manual release"
-            fi
-            if [ -z "$TRIGGER_DESC" ]; then
-              TRIGGER_DESC="manual dispatch"
-            fi
-          fi
-
-          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
-          echo "trigger_desc=$TRIGGER_DESC" >> $GITHUB_OUTPUT
+          echo "release_title=${{ inputs.release_title || 'Daily scheduled release' }}" >> $GITHUB_OUTPUT
+          echo "trigger_desc=${{ github.event_name }}${{ github.event.schedule && format(': {0}', github.event.schedule) || (inputs.trigger_description && format(': {0}', inputs.trigger_description) || '') }}" >> $GITHUB_OUTPUT
       - name: Get release info
         id: release_info
         run: |-
