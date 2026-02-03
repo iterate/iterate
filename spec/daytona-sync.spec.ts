@@ -40,6 +40,9 @@ const TEST_MARKER = `sync-test-${Date.now()}`;
 test.describe("Daytona iterate repo sync", () => {
   test.skip(!RUN_TEST, "Skipped: set RUN_DAYTONA_SYNC_SPEC=1 to run");
 
+  // Increase action timeout for this test since we're managing our own server
+  test.use({ actionTimeout: 10_000 });
+
   test("syncs iterate repo when control plane reports new SHA", async ({ page }) => {
     test.setTimeout(TEST_TIMEOUT_MS);
 
@@ -273,6 +276,8 @@ async function createTestContext() {
       .toMatchObject({ ready: true });
 
     console.log("[dev] Dev server ready");
+    // Give the server a moment to stabilize before running tests against it
+    await new Promise((r) => setTimeout(r, 3000));
   };
 
   const stopDevServer = async () => {
