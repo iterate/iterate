@@ -21,7 +21,7 @@ Local build (uses current repo checkout):
 pnpm os snapshot:local-docker
 ```
 
-Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-dirty` if dirty). The `:local` tag always points at the most recent local build.
+Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
 
 Push to GHCR (updates shared build cache):
 

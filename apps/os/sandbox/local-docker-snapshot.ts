@@ -25,9 +25,9 @@ function splitImageRef(image: string): { name: string; tag: string } {
 }
 
 const imageName = baseImageName;
-const shaTag = `sha-${gitSha}${isDirty ? "-dirty" : ""}`;
 const imageRepo = splitImageRef(baseImageName).name;
 const builtBy = process.env.ITERATE_USER ?? "unknown";
+const shaTag = `sha-${gitSha}${isDirty ? `-${builtBy}-dirty` : ""}`;
 
 const push = process.env.PUSH === "1";
 const cacheRef = process.env.SANDBOX_BUILD_CACHE_REF ?? "ghcr.io/iterate/sandbox:buildcache";

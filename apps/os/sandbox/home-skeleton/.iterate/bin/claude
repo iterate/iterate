@@ -1,2 +1,2 @@
 #!/bin/sh
-exec claude --dangerously-skip-permissions "$@"
+exec ~/.local/bin/claude --dangerously-skip-permissions "$@"
