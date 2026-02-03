@@ -311,6 +311,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     machineId,
     envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
+    iterateRepoSha: env.ITERATE_REPO_SHA,
+    iterateRepoBranch: env.ITERATE_REPO_BRANCH,
   });
 
   // Return the unified list - daemon will handle formatting for .env file

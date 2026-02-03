@@ -375,13 +375,19 @@ let lastSyncedIterateSha: string | null = null;
  * Sync the iterate repo to the expected sha if needed.
  */
 export async function syncIterateRepo(expectedSha: string, branch = "main"): Promise<void> {
+  console.log(
+    `[platform] syncIterateRepo called with expectedSha=${expectedSha}, branch=${branch}`,
+  );
+
   // Skip if we already synced to this sha
   if (lastSyncedIterateSha === expectedSha) {
+    console.log(`[platform] Already synced to ${expectedSha}, skipping`);
     return;
   }
 
   const iterateRepoPath = process.env.ITERATE_REPO;
   if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+    console.log(`[platform] ITERATE_REPO not set or missing .git: ${iterateRepoPath}`);
     return;
   }
 

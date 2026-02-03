@@ -241,7 +241,7 @@ async function createTestContext() {
       "sh",
       [
         "-c",
-        `ITERATE_REPO_SHA=${sha} ITERATE_REPO_BRANCH=${branch} DAYTONA_SNAPSHOT_NAME=${snapshotName} doppler run -- pnpm dev`,
+        `ITERATE_REPO_SHA=${sha} ITERATE_REPO_BRANCH=${branch} DAYTONA_SNAPSHOT_NAME=${snapshotName} doppler run --preserve-env=ITERATE_REPO_SHA,ITERATE_REPO_BRANCH,DAYTONA_SNAPSHOT_NAME -- pnpm dev`,
       ],
       {
         cwd: join(REPO_ROOT, "apps/os"),

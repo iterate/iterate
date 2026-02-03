@@ -94,6 +94,9 @@ export async function fetchBootstrapData(): Promise<void> {
   }
 
   // Sync iterate repo if sha provided
+  console.log(
+    `[bootstrap-refresh] iterateRepoSha from control plane: ${result.iterateRepoSha ?? "null"}`,
+  );
   if (result.iterateRepoSha) {
     await syncIterateRepo(result.iterateRepoSha, result.iterateRepoBranch ?? "main");
   }
