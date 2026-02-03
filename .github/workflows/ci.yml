@@ -20,12 +20,9 @@ jobs:
     steps:
       - id: get_env
         name: Get environment variables
-        run: |-
-          echo stage=${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
-          echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
+        run: echo stage=${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
-      release_name: ${{ steps.get_env.outputs.release_name }}
   build-snapshot:
     needs:
       - variables
@@ -86,109 +83,12 @@ jobs:
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
           SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
         run: pnpm os snapshot:daytona:test
-  release:
-    needs:
-      - variables
-      - deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Write last release
-        run: echo "LAST_RELEASE=$(git describe --tags --abbrev=0 || echo '')" >> $GITHUB_ENV
-      - name: Write changelog
-        run: |-
-          add_to_changelog() {
-            echo "$1" >> changelog.md
-            echo "" >> changelog.md
-          }
-
-          if [ "$LAST_RELEASE" = "" ]; then
-            LAST_RELEASE=$(git rev-parse HEAD~1)
-            add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
-          else
-            add_to_changelog "Last tagged release: [$LAST_RELEASE](${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](${{ github.event.repository.html_url }}/compare/$LAST_RELEASE...${{ needs.variables.outputs.release_name }}))"
-          fi
-
-          write_git_changes() {
-            glob=$1
-            description=${2:-$glob}
-
-            changes=$(git log $LAST_RELEASE..HEAD --oneline -- $glob | sed 's/^/- /g')
-
-            if [ "$changes" != "" ]; then
-              add_to_changelog "## $description"
-              add_to_changelog "$changes"
-            fi
-          }
-
-          write_git_changes '.' 'changes'
-
-          add_to_changelog "Triggered by: @${{ github.actor }}"
-
-          add_to_changelog "[Comparison with current main](${{ github.event.repository.html_url }}/compare/${{ needs.variables.outputs.release_name }}...main)"
-
-          echo "echoing changes for debugging (notes are not published unless deploying to production):"
-          cat changelog.md
-      - if: needs.variables.outputs.stage == 'prd'
-        name: prd_release
-        id: prd_release
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
-          script: |-
-            github.log = {
-              ...console,
-              debug: () => {},
-            };
-
-            // write a shimmed module of "fs" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
-            require("fs").writeFileSync(
-              ".github/ts-workflows/workflows/ci.ts.fs-bc7b36fe4d2924e49800d9b3dc4a325c-tsx-shim.cjs",
-              "module.exports.load = () => import(\"fs\")",
-            );
-
-            const vars = {
-              github,
-              context,
-              core,
-              glob,
-              io,
-              require,
-            };
-
-            const __handler = async function prd_release(
-              {
-                github,
-                context,
-              },
-            ) {
-              const {
-                promises: fs,
-              } = await require(
-                ".github/ts-workflows/workflows/ci.ts.fs-bc7b36fe4d2924e49800d9b3dc4a325c-tsx-shim.cjs" /* <-- shimmed module of "fs" that actions/github-script can require */,
-              ).load();
-
-              await github.rest.repos.createRelease({
-                ...context.repo,
-                tag_name: "${{ needs.variables.outputs.release_name }}",
-                name: "${{ needs.variables.outputs.release_name }}",
-
-                body: [`stage: \${{ needs.variables.outputs.stage }}`, //
-                "", await fs.readFile("changelog.md", "utf8")].join("\n"),
-              });
-            };
-
-            return __handler(vars);
   slack_failure:
     needs:
       - variables
       - build-snapshot
       - deploy
       - daytona-test
-      - release
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     env:
@@ -247,11 +147,7 @@ jobs:
                 }],
               ) => result === "failure").map(([name]) => name);
 
-              const {
-                release_name,
-                ...outputs
-              } = needs.variables?.outputs;
-
+              const outputs = needs.variables?.outputs;
               const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
               let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
               message += " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
