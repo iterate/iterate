@@ -182,7 +182,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       project = createProject();
-      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
+      await waitForServiceHealthy(project.port9876!, "daemon-backend");
+      await waitForServiceHealthy(project.port9876!, "daemon-frontend");
     }, 300000);
 
     afterAll(() => {
@@ -332,7 +333,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       project = createProject();
-      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
+      await waitForServiceHealthy(project.port9876!, "daemon-backend");
     }, 300000);
 
     afterAll(() => {
@@ -411,18 +412,18 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
 
     beforeAll(async () => {
       project = createProject();
-      await waitForServiceHealthy(project.port9876!, "iterate-daemon");
+      await waitForServiceHealthy(project.port9876!, "daemon-backend");
     }, 300000);
 
     afterAll(() => {
       if (project?.projectName) composeDown(project.projectName);
     }, 30000);
 
-    test("processes.get returns running state for iterate-daemon", async () => {
-      // iterate-daemon is already running (waited in beforeAll)
-      // Call pidnap's processes.get for iterate-daemon (should already be running)
+    test("processes.get returns running state for daemon-backend", async () => {
+      // daemon-backend is already running (waited in beforeAll)
+      // Call pidnap's processes.get for daemon-backend (should already be running)
       const client = createPidnapRpcClient(project.port9876!);
-      const result = await client.processes.get({ target: "iterate-daemon" });
+      const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
     }, 210000);
 

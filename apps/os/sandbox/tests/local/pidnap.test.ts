@@ -6,7 +6,7 @@ const describeIfProvider = describe.runIf(hasProvider);
 
 describeIfProvider("Pidnap Process Supervisor", () => {
   test("processes.get returns running state", async ({ sandbox }) => {
-    const result = await sandbox.waitForServiceHealthy("iterate-daemon", 5000);
+    const result = await sandbox.waitForServiceHealthy("daemon-backend", 5000);
     expect(result.healthy).toBe(true);
     expect(result.state).toBe("running");
   });

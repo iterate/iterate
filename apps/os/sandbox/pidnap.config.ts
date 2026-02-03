@@ -128,14 +128,32 @@ export default defineConfig({
       },
     },
     {
-      name: "iterate-daemon",
+      name: "daemon-backend",
       definition: {
         command: "tsx",
         args: ["server.ts"],
         cwd: `${iterateRepo}/apps/daemon`,
         env: {
           HOSTNAME: "0.0.0.0",
-          PORT: "3000",
+          PORT: "3001",
+          NODE_ENV: "production",
+        },
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+      },
+    },
+    {
+      name: "daemon-frontend",
+      definition: {
+        command: "pnpm",
+        args: ["exec", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"],
+        cwd: `${iterateRepo}/apps/daemon`,
+        env: {
           NODE_ENV: "production",
         },
       },

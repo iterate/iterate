@@ -42,7 +42,7 @@ describeIfProvider("Container Setup", () => {
     const pidBefore = await sandbox.exec(["cat", "/var/run/pidnap.pid"]);
 
     await sandbox.restart();
-    await sandbox.waitForServiceHealthy("iterate-daemon");
+    await sandbox.waitForServiceHealthy("daemon-backend");
 
     const pidAfter = await sandbox.exec(["cat", "/var/run/pidnap.pid"]);
     expect(pidAfter).not.toBe(pidBefore);

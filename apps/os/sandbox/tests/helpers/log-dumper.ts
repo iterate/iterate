@@ -30,15 +30,26 @@ export async function dumpLogsOnFailure(ctx: TestContext): Promise<void> {
       );
     }
 
-    console.log("\n--- PIDNAP LOGS (iterate-daemon) ---");
+    console.log("\n--- PIDNAP LOGS (daemon-backend) ---");
     try {
       const daemonLogs = await ctx.sandbox.exec([
         "cat",
-        "/var/log/pidnap/process/iterate-daemon.log",
+        "/var/log/pidnap/process/daemon-backend.log",
       ]);
       console.log(daemonLogs);
     } catch {
       console.log("(no daemon logs)");
+    }
+
+    console.log("\n--- PIDNAP LOGS (daemon-frontend) ---");
+    try {
+      const frontendLogs = await ctx.sandbox.exec([
+        "cat",
+        "/var/log/pidnap/process/daemon-frontend.log",
+      ]);
+      console.log(frontendLogs);
+    } catch {
+      console.log("(no daemon frontend logs)");
     }
 
     console.log("\n--- PIDNAP LOGS (opencode) ---");
