@@ -1,4 +1,4 @@
-FROM node:24-slim
+FROM node:24
 
 # === Versions ===
 ARG SANDBOX_CODEX_VERSION=0.93.0
@@ -13,6 +13,9 @@ ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
+# Install curl first (may not be present in all base images)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
@@ -21,7 +24,6 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       btop \
       build-essential \
       ca-certificates \
-      curl \
       fd-find \
       gh \
       git \
@@ -126,14 +128,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
-# Copy repo - except for .git!
-# This is because for git worktree checkouts .git isn't a .git folder,
-# but instead is a file that contains a reference to the shared .git folder
-# on the host machine. If we just copied that .git file over, the git repo
-# in the container wouldn't work, because .git would point to a non-existent location.
-# So local-docker-snapshot.ts sets buildkit extra context for gitdir that points 
-# to the true location 
-COPY --chown=iterate:iterate --exclude=.git . .
+# Copy repo, then remove .git (if present).
+# For git worktree checkouts, .git is a file pointing to the shared .git folder
+# on the host machine - which doesn't exist in the container.
+# We delete it and overlay the real git dir via BuildKit extra context.
+# (Using RUN rm instead of COPY --exclude for compatibility with non-BuildKit builders like Daytona)
+COPY --chown=iterate:iterate . .
+RUN rm -rf .git
 
 # Overlay real git dir via BuildKit extra context.
 # REQUIRED: Build with --build-context gitdir=<path> (see local-docker-snapshot.ts).

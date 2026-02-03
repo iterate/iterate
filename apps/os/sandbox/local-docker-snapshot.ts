@@ -46,6 +46,8 @@ const buildArgs = [
   "docker",
   "buildx",
   "build",
+  "--platform",
+  "linux/amd64",
   push ? "--push" : "--load",
   "-f",
   "apps/os/sandbox/Dockerfile",
