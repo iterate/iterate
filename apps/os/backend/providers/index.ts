@@ -45,26 +45,15 @@ export async function createMachineProvider(
       if (!import.meta.env.DEV) {
         throw new Error("local-docker provider only available in development");
       }
-      // Cast env to access dev-only bindings
-      const devEnv = env as CloudflareEnv & {
-        LOCAL_DOCKER_COMPOSE_PROJECT_NAME?: string;
-        LOCAL_DOCKER_IMAGE_NAME?: string;
-        LOCAL_DOCKER_GIT_REPO_ROOT?: string;
-        LOCAL_DOCKER_GIT_GITDIR?: string;
-        LOCAL_DOCKER_GIT_COMMON_DIR?: string;
-        LOCAL_DOCKER_REPO_CHECKOUT?: string;
-        LOCAL_DOCKER_GIT_DIR?: string;
-        LOCAL_DOCKER_COMMON_DIR?: string;
-      };
       const { createLocalDockerProvider } = await import("./local-docker.ts");
       return createLocalDockerProvider({
-        imageName: devEnv.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+        imageName: env.LOCAL_DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
         externalId,
         metadata,
-        composeProjectName: devEnv.LOCAL_DOCKER_COMPOSE_PROJECT_NAME,
-        repoCheckout: devEnv.LOCAL_DOCKER_GIT_REPO_ROOT ?? devEnv.LOCAL_DOCKER_REPO_CHECKOUT,
-        gitDir: devEnv.LOCAL_DOCKER_GIT_GITDIR ?? devEnv.LOCAL_DOCKER_GIT_DIR,
-        commonDir: devEnv.LOCAL_DOCKER_GIT_COMMON_DIR ?? devEnv.LOCAL_DOCKER_COMMON_DIR,
+        composeProjectName: env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME || undefined,
+        repoCheckout: env.LOCAL_DOCKER_GIT_REPO_ROOT || env.LOCAL_DOCKER_REPO_CHECKOUT || undefined,
+        gitDir: env.LOCAL_DOCKER_GIT_GITDIR || env.LOCAL_DOCKER_GIT_DIR || undefined,
+        commonDir: env.LOCAL_DOCKER_GIT_COMMON_DIR || env.LOCAL_DOCKER_COMMON_DIR || undefined,
       });
     }
 

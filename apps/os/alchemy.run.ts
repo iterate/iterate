@@ -404,9 +404,31 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
           "LOCAL_DOCKER_GIT_COMMIT",
           "LOCAL_DOCKER_GIT_BRANCH",
           "LOCAL_DOCKER_GIT_REPO_ROOT",
+          "LOCAL_DOCKER_REPO_CHECKOUT",
+          "LOCAL_DOCKER_GIT_DIR",
+          "LOCAL_DOCKER_COMMON_DIR",
         ]),
       }
     : {};
+  const localDockerBindings = {
+    LOCAL_DOCKER_IMAGE_NAME: "",
+    LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
+    LOCAL_DOCKER_GIT_COMMON_DIR: "",
+    LOCAL_DOCKER_GIT_GITDIR: "",
+    LOCAL_DOCKER_GIT_COMMIT: "",
+    LOCAL_DOCKER_GIT_BRANCH: "",
+    LOCAL_DOCKER_GIT_REPO_ROOT: "",
+    LOCAL_DOCKER_REPO_CHECKOUT: "",
+    LOCAL_DOCKER_GIT_DIR: "",
+    LOCAL_DOCKER_COMMON_DIR: "",
+  };
+  if (isDevelopment) {
+    Object.assign(localDockerBindings, {
+      LOCAL_DOCKER_IMAGE_NAME:
+        process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+      ...localDockerEnvVars,
+    });
+  }
 
   const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
     "realtime-pusher",
@@ -431,19 +453,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
-      // In dev, pass local-docker bindings for container creation/grouping
-      ...(isDevelopment
-        ? {
-            LOCAL_DOCKER_IMAGE_NAME:
-              process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
-            ...localDockerEnvVars,
-            ...envVarsFrom([
-              "LOCAL_DOCKER_REPO_CHECKOUT",
-              "LOCAL_DOCKER_GIT_DIR",
-              "LOCAL_DOCKER_COMMON_DIR",
-            ]),
-          }
-        : {}),
+      // Use empty defaults outside dev so worker.Env contains these bindings for typing.
+      ...localDockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
