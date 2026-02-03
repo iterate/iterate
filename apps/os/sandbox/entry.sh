@@ -58,9 +58,15 @@ export ITERATE_REPO
 # Signal readiness for tests and stuff
 touch /tmp/.iterate-sandbox-ready
 
-# Setup console log pipe for pidnap stdout/stderr
+# Setup console logging via named pipe (FIFO)
+# Using a FIFO keeps pidnap as direct child of tini for proper signal handling
 CONSOLE_LOG="/var/log/pidnap/console"
+CONSOLE_FIFO="/tmp/pidnap-console-fifo"
 mkdir -p "$(dirname "$CONSOLE_LOG")"
+mkfifo "$CONSOLE_FIFO"
 
-# Pidnap take the wheel - pipe stdout/stderr to console log
-exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts" 2>&1 | tee -a "$CONSOLE_LOG"
+# Background process reads from FIFO and writes to both file and stdout
+tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
+
+# Pidnap take the wheel - redirect stdout/stderr to FIFO
+exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1
