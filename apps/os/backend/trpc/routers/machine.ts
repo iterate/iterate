@@ -436,6 +436,34 @@ export const machineRouter = router({
     };
   }),
 
+  // Get available machine types (checks which providers are configured)
+  getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
+    const types: Array<{
+      type: (typeof schema.MachineType)[number];
+      label: string;
+      disabledReason?: string;
+    }> = [];
+
+    // Dev-only types first (preferred in dev)
+    if (import.meta.env.DEV) {
+      types.push({ type: "local-docker", label: "Local Docker" });
+    }
+
+    // Daytona - available if configured
+    types.push({
+      type: "daytona",
+      label: "Daytona (Cloud)",
+      disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
+    });
+
+    // Local host:port - dev only
+    if (import.meta.env.DEV) {
+      types.push({ type: "local", label: "Local (Host:Port)" });
+    }
+
+    return types;
+  }),
+
   getPreviewInfo: projectProtectedProcedure
     .input(
       z.object({
