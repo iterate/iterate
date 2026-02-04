@@ -44,7 +44,7 @@ RUN corepack enable
 RUN corepack prepare pnpm@10.24.0 --activate && \
     npm install -g tsx serve
 
-# Configure UTF-8 locale (required for btop and other tools)
+# Configure UTF-8 locale (required for btop and other CLI tools)
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8

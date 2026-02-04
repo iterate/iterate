@@ -16,8 +16,6 @@ if [[ $# -gt 0 ]]; then
   exec "$@"
 fi
 
-# Signal readiness for tests and stuff
-touch /tmp/.iterate-sandbox-ready
 
 # Setup console logging via named pipe (FIFO)
 # Using a FIFO keeps pidnap as direct child of tini for proper signal handling
