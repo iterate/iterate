@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLocalDockerEnvVars } from "../apps/os/sandbox/tests/helpers.ts";
+import { getLocalDockerEnvVars } from "../apps/os/sandbox/test/helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
