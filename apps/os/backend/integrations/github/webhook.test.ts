@@ -181,8 +181,9 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const payload = { ...validWorkflowRunPayload, action: "requested" };
       const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ ignored: true, reason: "not completed" });
+      const json = (await res.json()) as { ignored: boolean; reason: string };
+      expect(json.ignored).toBe(true);
+      expect(json.reason).toContain("action");
     });
 
     it("ignores non-success conclusions", async () => {
@@ -192,8 +193,9 @@ describe("GitHub Webhook Handler", () => {
         workflow_run: { ...validWorkflowRunPayload.workflow_run, conclusion: "failure" },
       };
       const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ ignored: true, reason: "not success" });
+      const json = (await res.json()) as { ignored: boolean; reason: string };
+      expect(json.ignored).toBe(true);
+      expect(json.reason).toContain("conclusion");
     });
 
     it("ignores non-main branches", async () => {
@@ -203,8 +205,9 @@ describe("GitHub Webhook Handler", () => {
         workflow_run: { ...validWorkflowRunPayload.workflow_run, head_branch: "feature-branch" },
       };
       const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ ignored: true, reason: "not main branch" });
+      const json = (await res.json()) as { ignored: boolean; reason: string };
+      expect(json.ignored).toBe(true);
+      expect(json.reason).toContain("head_branch");
     });
 
     it("ignores non-ci.yml workflows", async () => {
@@ -217,8 +220,9 @@ describe("GitHub Webhook Handler", () => {
         },
       };
       const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ ignored: true, reason: "not ci.yml" });
+      const json = (await res.json()) as { ignored: boolean; reason: string };
+      expect(json.ignored).toBe(true);
+      expect(json.reason).toContain("path");
     });
 
     it("ignores non-iterate/iterate repos", async () => {
@@ -231,8 +235,9 @@ describe("GitHub Webhook Handler", () => {
         },
       };
       const res = await makeRequest(app, payload);
-      const json = await res.json();
-      expect(json).toMatchObject({ ignored: true, reason: "not iterate/iterate" });
+      const json = (await res.json()) as { ignored: boolean; reason: string };
+      expect(json.ignored).toBe(true);
+      expect(json.reason).toContain("full_name");
     });
 
     it("accepts valid CI completion events", async () => {

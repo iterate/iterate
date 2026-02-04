@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
+import { z } from "zod/v4";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
@@ -41,24 +42,39 @@ async function verifyGitHubSignature(
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
 }
 
-// GitHub workflow_run event payload (relevant fields)
-type WorkflowRunPayload = {
-  action: string;
-  workflow_run: {
-    id: number;
-    name: string;
-    head_branch: string;
-    head_sha: string;
-    path: string;
-    conclusion: string | null;
-    repository: {
-      full_name: string;
-    };
-  };
-  repository: {
-    full_name: string;
-  };
-};
+// Zod schema for GitHub workflow_run event payload
+const WorkflowRunPayload = z.object({
+  action: z.string(),
+  workflow_run: z.object({
+    id: z.number(),
+    name: z.string(),
+    head_branch: z.string(),
+    head_sha: z.string(),
+    path: z.string(),
+    conclusion: z.string().nullable(),
+    repository: z.object({
+      full_name: z.string(),
+    }),
+  }),
+  repository: z.object({
+    full_name: z.string(),
+  }),
+});
+
+// Schema to validate this is the CI completion event we care about
+const CICompletionEvent = z.object({
+  action: z.literal("completed"),
+  workflow_run: z.object({
+    id: z.number(),
+    head_branch: z.literal("main"),
+    head_sha: z.string(),
+    path: z.string().endsWith("ci.yml"),
+    conclusion: z.literal("success"),
+    repository: z.object({
+      full_name: z.literal("iterate/iterate"),
+    }),
+  }),
+});
 
 githubWebhookApp.post("/", async (c) => {
   const body = await c.req.text();
@@ -79,39 +95,25 @@ githubWebhookApp.post("/", async (c) => {
     return c.json({ ignored: true, reason: "not workflow_run" });
   }
 
-  const payload = JSON.parse(body) as WorkflowRunPayload;
-  const { action, workflow_run } = payload;
-
-  // Only handle completed workflows
-  if (action !== "completed") {
-    logger.debug("[GitHub Webhook] Ignoring action", { action });
-    return c.json({ ignored: true, reason: "not completed" });
+  // Parse and validate payload structure
+  const parseResult = WorkflowRunPayload.safeParse(JSON.parse(body));
+  if (!parseResult.success) {
+    logger.warn("[GitHub Webhook] Invalid payload", { error: z.prettifyError(parseResult.error) });
+    return c.json({ ignored: true, reason: z.prettifyError(parseResult.error) });
   }
 
-  // Only handle successful workflows
-  if (workflow_run.conclusion !== "success") {
-    logger.debug("[GitHub Webhook] Ignoring non-success", { conclusion: workflow_run.conclusion });
-    return c.json({ ignored: true, reason: "not success" });
+  const payload = parseResult.data;
+
+  // Validate this is the specific CI completion event we care about
+  const ciEventResult = CICompletionEvent.safeParse(payload);
+  if (!ciEventResult.success) {
+    logger.debug("[GitHub Webhook] Not a matching CI event", {
+      error: z.prettifyError(ciEventResult.error),
+    });
+    return c.json({ ignored: true, reason: z.prettifyError(ciEventResult.error) });
   }
 
-  // Only handle main branch
-  if (workflow_run.head_branch !== "main") {
-    logger.debug("[GitHub Webhook] Ignoring branch", { branch: workflow_run.head_branch });
-    return c.json({ ignored: true, reason: "not main branch" });
-  }
-
-  // Only handle ci.yml workflow
-  if (!workflow_run.path.endsWith("ci.yml")) {
-    logger.debug("[GitHub Webhook] Ignoring workflow", { path: workflow_run.path });
-    return c.json({ ignored: true, reason: "not ci.yml" });
-  }
-
-  // Only handle iterate/iterate repo
-  if (workflow_run.repository.full_name !== "iterate/iterate") {
-    logger.debug("[GitHub Webhook] Ignoring repo", { repo: workflow_run.repository.full_name });
-    return c.json({ ignored: true, reason: "not iterate/iterate" });
-  }
-
+  const { workflow_run } = payload;
   const db = c.var.db;
   const env = c.env;
   const workflowRunId = workflow_run.id.toString();
