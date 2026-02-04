@@ -27,7 +27,7 @@ import type {
   KnownBlock,
 } from "@slack/types";
 import { z } from "zod/v4";
-import { getAgent, createAgent, appendToAgent, resetAgent } from "../services/agent-manager.ts";
+import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
@@ -171,28 +171,6 @@ const backslashCommands = {
           ],
         },
       ],
-    };
-  },
-
-  new: async ({ channel, threadTs, agentSlug }): Promise<BackslashCommandResponse> => {
-    const workingDirectory = await getCustomerRepoPath();
-    const newAgentSlug = agentSlug || `slack-${sanitizeThreadId(threadTs)}`;
-
-    await resetAgent({
-      slug: newAgentSlug,
-      harnessType: "opencode",
-      workingDirectory,
-      initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
-    });
-
-    return {
-      text: `Agent reset. New session created for \`${newAgentSlug}\`. The next message will start a fresh conversation.`,
-    };
-  },
-
-  compact: async (): Promise<BackslashCommandResponse> => {
-    return {
-      text: "Context compaction is not yet implemented. This will allow reducing context size while preserving important information.",
     };
   },
 } satisfies Record<string, BackslashCommandHandler>;
