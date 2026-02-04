@@ -452,6 +452,62 @@ export async function listInstallationRepositories(
 
 // #region ========== Webhook Handler ==========
 
+githubApp.post("/webhook", async (c) => {
+  const body = await c.req.text();
+  const signature = c.req.header("x-hub-signature-256");
+  const eventType = c.req.header("x-github-event");
+  const deliveryId = c.req.header("x-github-delivery");
+
+  // Verify signature
+  const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
+  if (!isValid) {
+    logger.warn("[GitHub Webhook] Invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  // Insert raw event immediately after signature verification for deduplication.
+  // Uses ON CONFLICT DO NOTHING with unique index on externalId.
+  // This pattern allows this handler to become an outbox consumer later -
+  // the event table acts as the inbox, and processing happens in background.
+  const externalId = deliveryId ?? null;
+  const payload = JSON.parse(body);
+
+  const [inserted] = await c.var.db
+    .insert(schema.event)
+    .values({
+      type: `github:${eventType}`,
+      payload: { ...payload, _delivery_id: deliveryId },
+      externalId,
+    })
+    .onConflictDoNothing({ target: [schema.event.type, schema.event.externalId] })
+    .returning({ id: schema.event.id });
+
+  if (!inserted) {
+    // Duplicate delivery - already processed
+    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", { deliveryId });
+    return c.json({ received: true, duplicate: true });
+  }
+
+  // Route to appropriate handler based on event type
+  if (eventType === "workflow_run") {
+    const parseResult = WorkflowRunEvent.safeParse(payload);
+    if (parseResult.success) {
+      // Process in background, return immediately
+      waitUntil(
+        handleWorkflowRun({
+          payload: parseResult.data,
+          db: c.var.db,
+          env: c.env,
+        }).catch((err) => {
+          logger.error("[GitHub Webhook] handleWorkflowRun error", err);
+        }),
+      );
+    }
+  }
+
+  return c.json({ received: true });
+});
+
 /**
  * Verify GitHub webhook signature using HMAC SHA-256.
  * GitHub sends the signature in the `x-hub-signature-256` header.
@@ -504,62 +560,6 @@ const WorkflowRunEvent = z.object({
 });
 
 type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
-
-githubApp.post("/webhook", async (c) => {
-  const body = await c.req.text();
-  const signature = c.req.header("x-hub-signature-256");
-  const eventType = c.req.header("x-github-event");
-  const deliveryId = c.req.header("x-github-delivery");
-
-  // Verify signature
-  const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
-  if (!isValid) {
-    logger.warn("[GitHub Webhook] Invalid signature");
-    return c.json({ error: "Invalid signature" }, 401);
-  }
-
-  // Insert raw event immediately after signature verification for deduplication.
-  // Uses ON CONFLICT DO NOTHING with unique index on externalId.
-  // This pattern allows this handler to become an outbox consumer later -
-  // the event table acts as the inbox, and processing happens in background.
-  const externalId = deliveryId ?? null;
-  const payload = JSON.parse(body);
-
-  const [inserted] = await c.var.db
-    .insert(schema.event)
-    .values({
-      type: `github:${eventType}`,
-      payload: { ...payload, _delivery_id: deliveryId },
-      externalId,
-    })
-    .onConflictDoNothing({ target: schema.event.externalId })
-    .returning({ id: schema.event.id });
-
-  if (!inserted) {
-    // Duplicate delivery - already processed
-    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", { deliveryId });
-    return c.json({ received: true, duplicate: true });
-  }
-
-  // Route to appropriate handler based on event type
-  if (eventType === "workflow_run") {
-    const parseResult = WorkflowRunEvent.safeParse(payload);
-    if (parseResult.success) {
-      // Process in background, return immediately
-      waitUntil(
-        handleWorkflowRun({
-          payload: parseResult.data,
-          db: c.var.db,
-          env: c.env,
-        }).catch((err) => {
-          logger.error("[GitHub Webhook] handleWorkflowRun error", err);
-        }),
-      );
-    }
-  }
-
-  return c.json({ received: true });
-});
 
 /**
  * Handle a workflow_run event. Checks if this is an event we care about

@@ -543,8 +543,8 @@ export const event = pgTable(
   (t) => [
     index().on(t.projectId),
     index().on(t.type),
-    uniqueIndex("event_external_id_unique")
-      .on(t.externalId)
+    uniqueIndex("event_type_external_id_unique")
+      .on(t.type, t.externalId)
       .where(sql`${t.externalId} IS NOT NULL`),
   ],
 );
