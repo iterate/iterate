@@ -41,6 +41,7 @@ type MachineType = "daytona" | "local-docker" | "local";
 /** Default ports for daemons in local machine type */
 const DEFAULT_LOCAL_PORTS: Record<string, string> = {
   "iterate-daemon": "3000",
+  "iterate-daemon-server": "3001",
   opencode: "4096",
 };
 const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
@@ -447,8 +448,12 @@ function ProjectMachinesPage() {
     );
   }
 
+  // Split machines into active and previous
+  const activeMachines = machines.filter((m) => m.state === "active");
+  const previousMachines = machines.filter((m) => m.state !== "active");
+
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 space-y-6">
       <HeaderActions>
         <Button asChild size="sm">
           <Link to={Route.fullPath} params={params} search={{ create: true }}>
@@ -459,14 +464,45 @@ function ProjectMachinesPage() {
       </HeaderActions>
       {createSheet}
 
-      <MachineTable
-        machines={machines}
-        organizationSlug={params.organizationSlug}
-        projectSlug={params.projectSlug}
-        onArchive={(id) => archiveMachine.mutate(id)}
-        onDelete={(id) => deleteMachine.mutate(id)}
-        onRestart={(id) => restartMachine.mutate(id)}
-      />
+      {/* Active machine section */}
+      {activeMachines.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-medium">Active Machine</h2>
+            <p className="text-xs text-muted-foreground">
+              This machine receives all incoming webhooks for the project.
+            </p>
+          </div>
+          <MachineTable
+            machines={activeMachines}
+            organizationSlug={params.organizationSlug}
+            projectSlug={params.projectSlug}
+            onArchive={(id) => archiveMachine.mutate(id)}
+            onDelete={(id) => deleteMachine.mutate(id)}
+            onRestart={(id) => restartMachine.mutate(id)}
+          />
+        </section>
+      )}
+
+      {/* Previous machines section */}
+      {previousMachines.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-medium">Previous Machines</h2>
+            <p className="text-xs text-muted-foreground">
+              Starting or archived machines. A new machine becomes active once it reports ready.
+            </p>
+          </div>
+          <MachineTable
+            machines={previousMachines}
+            organizationSlug={params.organizationSlug}
+            projectSlug={params.projectSlug}
+            onArchive={(id) => archiveMachine.mutate(id)}
+            onDelete={(id) => deleteMachine.mutate(id)}
+            onRestart={(id) => restartMachine.mutate(id)}
+          />
+        </section>
+      )}
     </div>
   );
 }

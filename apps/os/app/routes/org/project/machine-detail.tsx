@@ -58,6 +58,7 @@ function MachineDetailPage() {
     containerId?: string;
     containerName?: string;
     snapshotName?: string;
+    sandboxName?: string;
     daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
@@ -189,8 +190,8 @@ function MachineDetailPage() {
           onClick={() => restartDaemon.mutate()}
           disabled={restartDaemon.isPending || machine.state === "archived"}
         >
-          <RefreshCw className="h-4 w-4 mr-1" />
-          Restart Daemon
+          <RefreshCw className="h-4 w-4" />
+          Daemon
         </Button>
         <Button
           variant="outline"
@@ -198,17 +199,16 @@ function MachineDetailPage() {
           onClick={() => restartMachine.mutate()}
           disabled={restartMachine.isPending || machine.state === "archived"}
         >
-          <RefreshCw className="h-4 w-4 mr-1" />
-          Restart Machine
+          <RefreshCw className="h-4 w-4" />
+          Machine
         </Button>
         <Button
           variant="outline"
-          size="sm"
+          size="icon"
           onClick={() => setDeleteConfirmOpen(true)}
           className="text-destructive hover:text-destructive"
         >
-          <Trash2 className="h-4 w-4 mr-1" />
-          Delete
+          <Trash2 className="h-4 w-4" />
         </Button>
       </HeaderActions>
 
@@ -273,6 +273,20 @@ function MachineDetailPage() {
           <div>
             <dt className="text-muted-foreground text-xs">Snapshot</dt>
             <dd className="mt-1 font-mono text-xs truncate">{metadata.snapshotName}</dd>
+          </div>
+        )}
+        {machine.type === "daytona" && (
+          <div>
+            <dt className="text-muted-foreground text-xs">Sandbox</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.sandboxName ?? machine.externalId)}
+                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
+              >
+                <span className="truncate">{metadata.sandboxName ?? machine.externalId}</span>
+                <Copy className="h-3 w-3 opacity-50 shrink-0" />
+              </button>
+            </dd>
           </div>
         )}
       </div>

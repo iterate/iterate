@@ -68,7 +68,7 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
         autoDeleteInterval,
         public: true,
       });
-      return { externalId: sandbox.id, metadata: { snapshotName } };
+      return { externalId: sandbox.id, metadata: { snapshotName, sandboxName } };
     },
 
     async start(): Promise<void> {

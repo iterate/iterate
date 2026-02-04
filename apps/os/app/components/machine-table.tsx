@@ -28,9 +28,11 @@ interface Machine {
   name: string;
   type: string;
   state: "starting" | "active" | "archived";
+  externalId: string;
   createdAt: Date;
   metadata: {
     snapshotName?: string;
+    sandboxName?: string;
     containerId?: string;
     containerName?: string;
     port?: number;
@@ -203,7 +205,15 @@ export function MachineTable({
                     </span>
                   </>
                 )}
-                {machine.metadata?.snapshotName && (
+                {machine.type === "daytona" && (
+                  <>
+                    <span className="hidden sm:inline">·</span>
+                    <span className="hidden sm:inline font-mono text-xs">
+                      {machine.metadata?.sandboxName ?? machine.externalId}
+                    </span>
+                  </>
+                )}
+                {machine.metadata?.snapshotName && machine.type !== "daytona" && (
                   <>
                     <span className="hidden sm:inline">·</span>
                     <span className="hidden sm:inline font-mono text-xs">
