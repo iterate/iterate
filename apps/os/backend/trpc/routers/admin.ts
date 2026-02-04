@@ -5,6 +5,7 @@ import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { user, billingAccount } from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
+import { syncUsageToStripe } from "../../billing/usage-sync.ts";
 
 export const adminRouter = router({
   // Impersonate a user (creates a session as that user)
@@ -168,6 +169,12 @@ export const adminRouter = router({
         stripeCustomerId: account.stripeCustomerId,
       };
     }),
+
+  // Debug endpoint to manually trigger usage sync from Analytics Engine to Stripe
+  syncUsageToStripe: adminProcedure.mutation(async ({ ctx }) => {
+    await syncUsageToStripe(ctx.env);
+    return { success: true, message: "Usage sync triggered" };
+  }),
 
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;

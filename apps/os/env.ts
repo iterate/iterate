@@ -1,4 +1,5 @@
 import type { worker } from "./alchemy.run.ts";
+import type { AnalyticsEngineDataset } from "./backend/egress-proxy/usage-writer.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;
@@ -16,7 +17,11 @@ try {
   };
 }
 
-export type CloudflareEnv = typeof worker.Env;
+// Extend the base env with Analytics Engine binding (added via wrangler transform)
+export type CloudflareEnv = typeof worker.Env & {
+  /** Analytics Engine dataset for usage metering */
+  USAGE_ANALYTICS?: AnalyticsEngineDataset;
+};
 export const env = _env as CloudflareEnv;
 
 export { isProduction, isNonProd } from "./env-client.ts";

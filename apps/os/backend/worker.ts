@@ -27,6 +27,7 @@ import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
+import { syncUsageToStripe } from "./billing/usage-sync.ts";
 import type { Variables } from "./types.ts";
 
 export type { Variables };
@@ -194,6 +195,24 @@ export default class extends WorkerEntrypoint {
 
   fetch(request: Request) {
     return app.fetch(request, this.env, this.ctx);
+  }
+
+  /**
+   * Scheduled handler for cron-triggered tasks.
+   * Currently handles: Usage sync to Stripe (every 15 minutes)
+   */
+  async scheduled(controller: ScheduledController) {
+    logger.info("Scheduled task triggered", { scheduledTime: controller.scheduledTime });
+
+    try {
+      await syncUsageToStripe(this.env);
+    } catch (err) {
+      logger.error("Scheduled task failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Re-throw to mark the scheduled event as failed
+      throw err;
+    }
   }
 }
 

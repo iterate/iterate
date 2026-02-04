@@ -267,7 +267,9 @@ const Optional = NonEmpty.optional();
 const BoolyString = z.enum(["true", "false"]).optional();
 /** needed by the deploy script, but not at runtime */
 const Env = z.object({
-  // you'll need CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and ALCHEMY_STATE_TOKEN for the deployment to work, but not at runtime
+  // CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are needed for deployment AND runtime (Analytics Engine SQL API)
+  CLOUDFLARE_ACCOUNT_ID: Required,
+  CLOUDFLARE_API_TOKEN: Required, // Needs Account Analytics Read permission for Analytics Engine
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
@@ -456,6 +458,18 @@ const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/
 
 const domains = [`${subdomain}.iterate.com`];
 
+/**
+ * Setup Stripe billing meters and prices.
+ * @see scripts/setup-stripe-billing.ts for implementation
+ */
+async function setupStripeMeters() {
+  const { setupStripeBilling } = await import("./scripts/setup-stripe-billing.ts");
+  await setupStripeBilling({
+    stripeKey: process.env.STRIPE_SECRET_KEY ?? "",
+    isDevelopment,
+  });
+}
+
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
   const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
     "realtime-pusher",
@@ -496,6 +510,14 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     domains,
     wrangler: {
       main: "./backend/worker.ts",
+      // Use transform to add Analytics Engine and cron triggers (not in base type)
+      transform: (spec) => ({
+        ...spec,
+        // Analytics Engine for usage metering (passthrough billing)
+        analytics_engine_datasets: [{ binding: "USAGE_ANALYTICS", dataset: "egress_usage" }],
+        // Cron trigger for syncing usage to Stripe (every 15 minutes)
+        triggers: { crons: ["*/15 * * * *"] },
+      }),
     },
     adopt: true,
     build: {
@@ -526,6 +548,9 @@ if (isDevelopment) {
 // Setup database and env first
 const dbConfig = await setupDatabase();
 const envSecrets = await setupEnvironmentVariables();
+
+// Setup Stripe meters for usage-based billing
+await setupStripeMeters();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)
 export const worker = await deployWorker(dbConfig, envSecrets);

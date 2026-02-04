@@ -41,6 +41,8 @@ import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
 import { checkEgressPolicy } from "./policy-check.ts";
 import type { ApprovalStatus, DecisionStatus, PolicyCheckResult } from "./types.ts";
 import { matchesEgressRule } from "./egress-rules.ts";
+import { getExtractorForUrl } from "./usage-extractors/index.ts";
+import { writeUsageDataPoint } from "./usage-writer.ts";
 
 export const egressProxyApp = new Hono<{
   Bindings: CloudflareEnv;
@@ -832,6 +834,59 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     });
 
     logger.debug("Egress proxy response", { status: response.status });
+
+    // Check if we should extract usage from this response
+    const extractor = URL.canParse(processedURL) ? getExtractorForUrl(new URL(processedURL)) : null;
+
+    if (extractor && response.body && response.ok) {
+      const contentType = response.headers.get("content-type") ?? "";
+      const processor = extractor.createProcessor(contentType);
+
+      // Use TransformStream to intercept response while streaming to client
+      const { readable, writable } = new TransformStream<Uint8Array>();
+      const writer = writable.getWriter();
+      const reader = response.body.getReader();
+
+      // Pipe response through processor - it buffers bytes and parses appropriately
+      waitUntil(
+        (async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              processor.write(value);
+              await writer.write(value);
+            }
+            await writer.close();
+
+            // Get extracted usage after stream ends
+            const usage = processor.end();
+            if (usage && context.organizationId) {
+              writeUsageDataPoint(c.env.USAGE_ANALYTICS, usage, {
+                organizationId: context.organizationId,
+                projectId: context.projectId ?? "",
+              });
+            }
+          } catch (err) {
+            logger.error("Usage extraction stream error", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            try {
+              await writer.abort(err);
+            } catch {
+              // Writer may already be closed
+            }
+          }
+        })(),
+      );
+
+      return new Response(readable, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      });
+    }
 
     return new Response(response.body, {
       status: response.status,
