@@ -51,31 +51,6 @@ function dumpContainerLogs(containerId: string): void {
   }
 }
 
-async function waitForValue<T>(
-  getValue: () => Promise<T | undefined>,
-  opts: { timeoutMs: number; intervalMs: number },
-): Promise<T> {
-  const start = Date.now();
-  while (Date.now() - start < opts.timeoutMs) {
-    const value = await getValue();
-    if (value !== undefined) return value;
-    await new Promise((r) => setTimeout(r, opts.intervalMs));
-  }
-  throw new Error(`Timed out after ${opts.timeoutMs}ms waiting for value`);
-}
-
-async function waitForCondition(
-  check: () => Promise<boolean>,
-  opts: { timeoutMs: number; intervalMs: number },
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < opts.timeoutMs) {
-    if (await check()) return;
-    await new Promise((r) => setTimeout(r, opts.intervalMs));
-  }
-  throw new Error(`Timed out after ${opts.timeoutMs}ms waiting for condition`);
-}
-
 async function execWithTimeout(
   sandbox: SandboxHandle,
   cmd: string[],
@@ -212,17 +187,18 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
       // Note: daemon-backend has inheritGlobalEnv: false, but opencode inherits global env
       // opencode has reloadDelay: 500ms and inheritGlobalEnv: true (default)
       // Retry until the env var appears (up to 10s)
-      const value = await waitForValue(
-        async () => {
-          const info = await client.processes.get({
-            target: "opencode",
-            includeEffectiveEnv: true,
-          });
-          return info.effectiveEnv?.DYNAMIC_TEST_VAR;
-        },
-        { timeoutMs: 10000, intervalMs: 500 },
-      );
-      expect(value).toBe("added_at_runtime");
+      await expect
+        .poll(
+          async () => {
+            const info = await client.processes.get({
+              target: "opencode",
+              includeEffectiveEnv: true,
+            });
+            return info.effectiveEnv?.DYNAMIC_TEST_VAR;
+          },
+          { timeout: 10000, interval: 500 },
+        )
+        .toBe("added_at_runtime");
     },
     60000,
   );
@@ -573,18 +549,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         const trpc = createDaemonTrpcClient(baseUrl);
 
         // index.html
-        await waitForCondition(
-          async () => {
-            try {
-              const root = await fetch(`${baseUrl}/`);
-              const contentType = root.headers.get("content-type") ?? "";
-              return root.ok && contentType.includes("text/html");
-            } catch {
-              return false;
-            }
-          },
-          { timeoutMs: 20000, intervalMs: 1000 },
-        );
+        await expect
+          .poll(
+            async () => {
+              try {
+                const root = await fetch(`${baseUrl}/`);
+                const contentType = root.headers.get("content-type") ?? "";
+                return root.ok && contentType.includes("text/html");
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
         const root = await fetch(`${baseUrl}/`);
         expect(root.ok).toBe(true);
         expect(root.headers.get("content-type")).toContain("text/html");
@@ -592,17 +570,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         expect(html.toLowerCase()).toContain("<!doctype html>");
 
         // health
-        await waitForCondition(
-          async () => {
-            try {
-              const response = await fetch(`${baseUrl}/api/health`);
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-          { timeoutMs: 20000, intervalMs: 1000 },
-        );
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(`${baseUrl}/api/health`);
+                return response.ok;
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
 
         // tRPC
         const hello = await trpc.hello.query();
@@ -613,60 +593,67 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         const jsMatch = html.match(/src="(\.?\/assets\/[^"]+\.js)"/);
         if (cssMatch) {
           const cssUrl = `${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`;
-          await waitForCondition(
-            async () => {
-              try {
-                const response = await fetch(cssUrl);
-                return response.ok;
-              } catch {
-                return false;
-              }
-            },
-            { timeoutMs: 20000, intervalMs: 1000 },
-          );
+          await expect
+            .poll(
+              async () => {
+                try {
+                  const response = await fetch(cssUrl);
+                  return response.ok;
+                } catch {
+                  return false;
+                }
+              },
+              { timeout: 20000, interval: 1000 },
+            )
+            .toBe(true);
         }
         if (jsMatch) {
           const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
-          await waitForCondition(
+          await expect
+            .poll(
+              async () => {
+                try {
+                  const response = await fetch(jsUrl);
+                  return response.ok;
+                } catch {
+                  return false;
+                }
+              },
+              { timeout: 20000, interval: 1000 },
+            )
+            .toBe(true);
+        }
+
+        // logo
+        await expect
+          .poll(
             async () => {
               try {
-                const response = await fetch(jsUrl);
+                const response = await fetch(`${baseUrl}/logo.svg`);
                 return response.ok;
               } catch {
                 return false;
               }
             },
-            { timeoutMs: 20000, intervalMs: 1000 },
-          );
-        }
-
-        // logo
-        await waitForCondition(
-          async () => {
-            try {
-              const response = await fetch(`${baseUrl}/logo.svg`);
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-          { timeoutMs: 20000, intervalMs: 1000 },
-        );
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
 
         // SPA fallback
-        const contentType = await waitForValue(
-          async () => {
-            try {
-              const response = await fetch(`${baseUrl}/agents/some-agent-id`);
-              if (!response.ok) return undefined;
-              return response.headers.get("content-type") ?? "";
-            } catch {
-              return undefined;
-            }
-          },
-          { timeoutMs: 20000, intervalMs: 1000 },
-        );
-        expect(contentType).toContain("text/html");
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(`${baseUrl}/agents/some-agent-id`);
+                if (!response.ok) return "";
+                return response.headers.get("content-type") ?? "";
+              } catch {
+                return "";
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toContain("text/html");
       },
       210000,
     );
@@ -692,17 +679,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         expect(restored).toBe(fileContents);
 
         const baseUrl = sandbox.getUrl({ port: 3000 });
-        await waitForCondition(
-          async () => {
-            try {
-              const response = await fetch(`${baseUrl}/api/health`);
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-          { timeoutMs: 180000, intervalMs: 1000 },
-        );
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(`${baseUrl}/api/health`);
+                return response.ok;
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 180000, interval: 1000 },
+          )
+          .toBe(true);
       },
       300000,
     );
