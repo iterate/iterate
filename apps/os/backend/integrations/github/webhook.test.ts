@@ -85,6 +85,7 @@ describe("GitHub Webhook Handler", () => {
 
     const mockEnv = {
       GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      APP_STAGE: "prd", // workflow_run filter requires prd
     };
 
     const app = new Hono();
@@ -174,11 +175,11 @@ describe("GitHub Webhook Handler", () => {
       });
     }
 
-    it("acknowledges non-workflow_run events", async () => {
+    it("filters out unrecognized event types", async () => {
       const { app } = createTestApp();
       const res = await makeRequest(app, {}, "push");
       const json = await res.json();
-      expect(json).toMatchObject({ received: true });
+      expect(json).toMatchObject({ message: "No filter for event type push" });
     });
 
     it("acknowledges workflow_run events that don't match handlers", async () => {
@@ -201,7 +202,7 @@ describe("GitHub Webhook Handler", () => {
       expect(json).toMatchObject({ received: true });
     });
 
-    it("acknowledges non-main branches", async () => {
+    it("filters out non-main branches via JSONata", async () => {
       const { app } = createTestApp();
       const payload = {
         ...validWorkflowRunPayload,
@@ -209,7 +210,7 @@ describe("GitHub Webhook Handler", () => {
       };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true });
+      expect(json).toMatchObject({ message: "Event filtered out" });
     });
 
     it("acknowledges non-ci.yml workflows", async () => {
@@ -240,11 +241,119 @@ describe("GitHub Webhook Handler", () => {
       expect(json).toMatchObject({ received: true });
     });
 
-    it("accepts valid CI completion events", async () => {
+    it("accepts valid CI completion events in prd", async () => {
       const { app } = createTestApp();
       const res = await makeRequest(app, validWorkflowRunPayload);
       const json = await res.json();
       expect(json).toMatchObject({ received: true });
+    });
+
+    it("filters out workflow_run in non-prd environments", async () => {
+      const mockDb = {
+        query: { event: { findFirst: vi.fn() }, project: { findMany: vi.fn() } },
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
+            }),
+          }),
+        }),
+      };
+      const app = new Hono();
+      app.use("*", async (c, next) => {
+        c.set("db" as never, mockDb as never);
+        c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: "dev" } as never;
+        await next();
+      });
+      app.route("/", githubApp);
+
+      const res = await makeRequest(app, validWorkflowRunPayload);
+      const json = await res.json();
+      expect(json).toMatchObject({ message: "Event filtered out" });
+    });
+  });
+
+  describe("commit_comment filtering", () => {
+    const validCommitCommentPayload = {
+      action: "created",
+      comment: {
+        id: 12345,
+        body: "Testing [refresh] [APP_STAGE=dev]",
+        commit_id: "abc123def456",
+        user: { login: "testuser" },
+      },
+      repository: { full_name: "iterate/iterate" },
+    };
+
+    async function makeRequest(app: Hono, payload: Record<string, unknown>) {
+      const body = JSON.stringify(payload);
+      const signature = await generateSignature(WEBHOOK_SECRET, body);
+      return app.request("/webhook", {
+        method: "POST",
+        body,
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "commit_comment",
+          "x-hub-signature-256": signature,
+          "x-github-delivery": `delivery-${Date.now()}`,
+        },
+      });
+    }
+
+    function createDevApp() {
+      const mockDb = {
+        query: {
+          event: { findFirst: vi.fn() },
+          project: { findMany: vi.fn().mockResolvedValue([]) },
+        },
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
+            }),
+          }),
+        }),
+      };
+      const app = new Hono();
+      app.use("*", async (c, next) => {
+        c.set("db" as never, mockDb as never);
+        c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: "dev" } as never;
+        await next();
+      });
+      app.route("/", githubApp);
+      return { app, mockDb };
+    }
+
+    it("accepts commit_comment with matching APP_STAGE tag", async () => {
+      const { app } = createDevApp();
+      const res = await makeRequest(app, validCommitCommentPayload);
+      const json = await res.json();
+      expect(json).toMatchObject({ received: true });
+    });
+
+    it("filters out commit_comment without APP_STAGE tag", async () => {
+      const { app } = createDevApp();
+      const payload = {
+        ...validCommitCommentPayload,
+        comment: { ...validCommitCommentPayload.comment, body: "Testing [refresh]" },
+      };
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ message: "Event filtered out" });
+    });
+
+    it("filters out commit_comment with wrong APP_STAGE tag", async () => {
+      const { app } = createDevApp();
+      const payload = {
+        ...validCommitCommentPayload,
+        comment: {
+          ...validCommitCommentPayload.comment,
+          body: "Testing [refresh] [APP_STAGE=prd]",
+        },
+      };
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ message: "Event filtered out" });
     });
   });
 });
