@@ -505,25 +505,46 @@ const WorkflowRunEvent = z.object({
 
 type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
 
-// Schema to identify CI completion events we want to act on
-const IterateCICompletion = z.object({
-  action: z.literal("completed"),
-  workflow_run: z.object({
-    head_branch: z.literal("main"),
-    path: z.string().endsWith("ci.yml"),
-    conclusion: z.literal("success"),
-    repository: z.object({
-      full_name: z.literal("iterate/iterate"),
-    }),
-  }),
-});
+githubApp.post("/webhook", async (c) => {
+  const body = await c.req.text();
+  const signature = c.req.header("x-hub-signature-256");
+  const event = c.req.header("x-github-event");
+  const deliveryId = c.req.header("x-github-delivery");
 
-type HandleWorkflowRunParams = {
-  payload: WorkflowRunEvent;
-  deliveryId: string | undefined;
-  db: DB;
-  env: CloudflareEnv;
-};
+  // Verify signature
+  const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
+  if (!isValid) {
+    logger.warn("[GitHub Webhook] Invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  // Route to appropriate handler based on event type
+  if (event === "workflow_run") {
+    const parseResult = WorkflowRunEvent.safeParse(JSON.parse(body));
+    if (parseResult.success) {
+      const payload = parseResult.data;
+      const workflowRunId = payload.workflow_run.id.toString();
+
+      // Process in background, return immediately
+      waitUntil(
+        handleWorkflowRun({
+          payload,
+          deliveryId,
+          db: c.var.db,
+          env: c.env,
+        }).catch((err) => {
+          logger.error("[GitHub Webhook] handleWorkflowRun error", err);
+        }),
+      );
+
+      return c.json({ received: true, workflowRunId });
+    }
+  }
+
+  // Event type we don't handle or couldn't parse
+  logger.debug("[GitHub Webhook] Unhandled event", { event });
+  return c.json({ received: true });
+});
 
 /**
  * Handle a workflow_run event. Checks if this is an event we care about
@@ -635,45 +656,24 @@ async function handleWorkflowRun({ payload, deliveryId, db, env }: HandleWorkflo
   });
 }
 
-githubApp.post("/webhook", async (c) => {
-  const body = await c.req.text();
-  const signature = c.req.header("x-hub-signature-256");
-  const event = c.req.header("x-github-event");
-  const deliveryId = c.req.header("x-github-delivery");
-
-  // Verify signature
-  const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
-  if (!isValid) {
-    logger.warn("[GitHub Webhook] Invalid signature");
-    return c.json({ error: "Invalid signature" }, 401);
-  }
-
-  // Route to appropriate handler based on event type
-  if (event === "workflow_run") {
-    const parseResult = WorkflowRunEvent.safeParse(JSON.parse(body));
-    if (parseResult.success) {
-      const payload = parseResult.data;
-      const workflowRunId = payload.workflow_run.id.toString();
-
-      // Process in background, return immediately
-      waitUntil(
-        handleWorkflowRun({
-          payload,
-          deliveryId,
-          db: c.var.db,
-          env: c.env,
-        }).catch((err) => {
-          logger.error("[GitHub Webhook] handleWorkflowRun error", err);
-        }),
-      );
-
-      return c.json({ received: true, workflowRunId });
-    }
-  }
-
-  // Event type we don't handle or couldn't parse
-  logger.debug("[GitHub Webhook] Unhandled event", { event });
-  return c.json({ received: true });
+// Schema to identify CI completion events we want to act on
+const IterateCICompletion = z.object({
+  action: z.literal("completed"),
+  workflow_run: z.object({
+    head_branch: z.literal("main"),
+    path: z.string().endsWith("ci.yml"),
+    conclusion: z.literal("success"),
+    repository: z.object({
+      full_name: z.literal("iterate/iterate"),
+    }),
+  }),
 });
+
+type HandleWorkflowRunParams = {
+  payload: WorkflowRunEvent;
+  deliveryId: string | undefined;
+  db: DB;
+  env: CloudflareEnv;
+};
 
 // #endregion ========== Webhook Handler ==========
