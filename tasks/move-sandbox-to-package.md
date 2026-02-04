@@ -279,7 +279,16 @@ export interface ProviderDefinition<TEnv extends z.ZodRawShape = z.ZodRawShape> 
 
 ---
 
-## Parameterized Tests
+## Testing Guidance
+
+- Prior art: `jonas-templestein/provider-agnostic-tests`
+- Prefer Vitest fixtures over manual `beforeAll`/`afterAll` hooks.
+- Split test suites:
+  - Super fast local-only tests (no sync) that spin up in seconds.
+  - Provider tests that can run in parallel across Docker/Daytona.
+- Keep tests parallelizable by default (avoid shared global state).
+
+## Parameterized Tests (Provider-Agnostic)
 
 ```typescript
 // sandbox/test/provider.test.ts
@@ -290,10 +299,7 @@ if (process.env.RUN_DAYTONA_TESTS === "true") providersToTest.push("daytona");
 
 describe.skipIf(providersToTest.length === 0)("Provider Tests", () => {
   describe.each(providersToTest)("%s provider", (providerType) => {
-    let provider: Provider;
-    beforeAll(() => {
-      provider = getProvider(providerType);
-    });
+    const provider = useProviderFixture(providerType);
 
     test("creates sandbox", async () => {
       const result = await provider.create({ id: `test-${Date.now()}`, name: "test", envVars: {} });

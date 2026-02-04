@@ -196,7 +196,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
     console.log("[host] status:\n", hostStatus);
 
     // Create container from worktree
-    const provider = createLocalDockerProvider({ repoRoot: worktreePath });
+    const provider = createLocalDockerProvider({
+      repoRoot: worktreePath,
+      syncFromHostRepo: true,
+    });
     const sandbox = await provider.createSandbox();
     console.log("[container] id:", sandbox.id);
 
@@ -330,17 +333,23 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
       expect(gitInfo).toBeDefined();
 
-      // Check branch matches (empty string if detached HEAD on both)
-      const containerBranch = (
-        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
-      ).trim();
-      expect(containerBranch).toBe(gitInfo!.branch ?? "");
+      const syncProvider = createLocalDockerProvider({ syncFromHostRepo: true });
+      const syncSandbox = await syncProvider.createSandbox();
+      try {
+        // Check branch matches (empty string if detached HEAD on both)
+        const containerBranch = (
+          await syncSandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
+        ).trim();
+        expect(containerBranch).toBe(gitInfo!.branch ?? "");
 
-      // Check commit matches
-      const containerCommit = (
-        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "rev-parse", "HEAD"])
-      ).trim();
-      expect(containerCommit).toBe(gitInfo!.commit);
+        // Check commit matches
+        const containerCommit = (
+          await syncSandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "rev-parse", "HEAD"])
+        ).trim();
+        expect(containerCommit).toBe(gitInfo!.commit);
+      } finally {
+        await syncSandbox.delete();
+      }
     });
 
     test("shell sources ~/.iterate/.env automatically", async () => {

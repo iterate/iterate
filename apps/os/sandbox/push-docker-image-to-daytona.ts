@@ -34,7 +34,7 @@ const { values } = parseArgs({
     cpu: { type: "string", short: "c", default: "2" },
     memory: { type: "string", short: "m", default: "4" },
     disk: { type: "string", short: "d", default: "10" },
-    updateDoppler: { type: "boolean", default: true },
+    "update-doppler": { type: "boolean", default: true },
   },
   strict: true,
 });
@@ -161,7 +161,7 @@ if (snapshotAlreadyExists) {
   );
 }
 
-if (values.updateDoppler) {
+if (values["update-doppler"]) {
   const dopplerInfo = JSON.parse(
     execSync("doppler configs get --json", {
       cwd: repoRoot,

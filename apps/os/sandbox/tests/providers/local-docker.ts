@@ -25,6 +25,8 @@ const DEFAULT_REPO_ROOT = join(__dirname, "../../../../..");
 export interface LocalDockerProviderOptions {
   /** Override the repo root to mount into the container. Defaults to the iterate monorepo root. */
   repoRoot?: string;
+  /** Enable syncing the host repo into the container (slow). Defaults to false. */
+  syncFromHostRepo?: boolean;
 }
 
 const PIDNAP_PORT = 9876;
@@ -269,9 +271,9 @@ export function createLocalDockerProvider(
       const suffix = randomBytes(4).toString("hex");
       const containerName = `sandbox-test-${Date.now()}-${suffix}`;
 
-      // Git mounts for repo sync
+      // Git mounts for repo sync (opt-in for tests that need host parity)
       const binds: string[] = [];
-      const gitInfo = getLocalDockerGitInfo(repoRoot);
+      const gitInfo = providerOpts?.syncFromHostRepo ? getLocalDockerGitInfo(repoRoot) : null;
       if (gitInfo) {
         binds.push(`${gitInfo.repoRoot}:/host/repo-checkout:ro`);
         binds.push(`${gitInfo.gitDir}:/host/gitdir:ro`);
