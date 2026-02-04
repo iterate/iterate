@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dockerApi } from "../../backend/providers/local-docker.ts";
-import { execInContainer, getLocalDockerGitInfo } from "../tests/helpers.ts";
+import { execInContainer, getLocalDockerGitInfo } from "../test/helpers.ts";
 import type {
   CreateSandboxOptions,
   SandboxHandle,
@@ -298,11 +298,14 @@ export function createLocalDockerProvider(
       };
 
       // Create container
+      // When opts.command is provided, entry.sh will exec it directly instead of starting pidnap.
+      // See apps/os/sandbox/entry.sh for the pattern: `if [[ $# -gt 0 ]]; then exec "$@"; fi`
       const createResponse = await dockerApi<{ Id: string }>(
         "POST",
         `/containers/create?name=${encodeURIComponent(containerName)}`,
         {
           Image: imageName,
+          ...(opts?.command ? { Cmd: opts.command } : {}),
           Env: envArray,
           ExposedPorts: exposedPorts,
           HostConfig: hostConfig,

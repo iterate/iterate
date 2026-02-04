@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { Agent, request } from "undici";
 import { test as baseTest } from "vitest";
+import { createClient as createPidnapClient } from "pidnap/client";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
-import { createClient as createPidnapClient } from "../../../../packages/pidnap/src/api/client.ts";
 import { getDockerHostConfig, dockerApi } from "../../backend/providers/local-docker.ts";
 import {
   createLocalDockerProvider,
@@ -26,9 +26,12 @@ export type { CreateSandboxOptions, SandboxHandle } from "../providers/types.ts"
 // ============ Constants ============
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = join(__dirname, "../../../..");
-export const CONTAINER_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
-export const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
+export const ITERATE_REPO_PATH_ON_HOST = join(__dirname, "../../../..");
+export const ITERATE_REPO_PATH = "/home/iterate/src/github.com/iterate/iterate";
+export const RUN_LOCAL_DOCKER_TESTS =
+  !!process.env.RUN_LOCAL_DOCKER_TESTS &&
+  process.env.RUN_LOCAL_DOCKER_TESTS !== "0" &&
+  process.env.RUN_LOCAL_DOCKER_TESTS !== "false";
 
 // ============ Docker API Helpers ============
 

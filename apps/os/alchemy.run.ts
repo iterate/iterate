@@ -17,7 +17,7 @@ import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
 import type { ProjectIngressProxy } from "./proxy/worker.ts";
-import { ensureIteratePnpmStoreVolume, getLocalDockerEnvVars } from "./sandbox/tests/helpers.ts";
+import { ensureIteratePnpmStoreVolume, getLocalDockerEnvVars } from "./sandbox/test/helpers.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,

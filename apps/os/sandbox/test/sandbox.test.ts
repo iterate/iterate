@@ -1,11 +1,14 @@
 /**
- * Local Docker + pidnap Integration Tests
+ * Local Docker + Pidnap Integration Tests
  *
- * Verifies sandbox container setup with pidnap process supervision.
- * Uses the local-docker provider for container management.
+ * Tests that require the full pidnap process supervision and daemon-backend.
+ * Uses the default entry.sh entrypoint which starts pidnap.
+ *
+ * For lightweight tests that don't need pidnap/daemon, see sandbox-minimal.test.ts
+ * which uses `command: ["sleep", "infinity"]` to bypass pidnap entirely.
  *
  * RUN WITH:
- *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/tests/sandbox.test.ts
+ *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/test/sandbox.test.ts
  */
 
 import { execSync } from "node:child_process";
@@ -17,8 +20,8 @@ import { createLocalDockerProvider } from "../providers/local-docker.ts";
 import type { SandboxHandle } from "../providers/types.ts";
 import {
   test,
-  REPO_ROOT,
-  CONTAINER_REPO_PATH,
+  ITERATE_REPO_PATH_ON_HOST,
+  ITERATE_REPO_PATH,
   RUN_LOCAL_DOCKER_TESTS,
   createDaemonTrpcClient,
   createPidnapRpcClient,
@@ -105,7 +108,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
         branchName = `test-git-sync-${Date.now()}`;
 
         execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
-          cwd: REPO_ROOT,
+          cwd: ITERATE_REPO_PATH_ON_HOST,
           stdio: "pipe",
         });
 
@@ -152,13 +155,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
 
         // Get container git state
         const containerBranch = (
-          await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
+          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "branch", "--show-current"])
         ).trim();
         const containerCommit = (
-          await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "rev-parse", "HEAD"])
+          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "rev-parse", "HEAD"])
         ).trim();
         const containerStatus = (
-          await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "status", "--porcelain"])
+          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "status", "--porcelain"])
         ).trim();
 
         console.log("[container] branch:", containerBranch);
@@ -182,17 +185,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
           // Cleanup worktree and branch
           try {
             execSync(`git worktree remove --force ${worktreePath}`, {
-              cwd: REPO_ROOT,
+              cwd: ITERATE_REPO_PATH_ON_HOST,
               stdio: "pipe",
             });
           } catch {
             rmSync(worktreePath, { recursive: true, force: true });
-            execSync(`git worktree prune`, { cwd: REPO_ROOT, stdio: "pipe" });
+            execSync(`git worktree prune`, { cwd: ITERATE_REPO_PATH_ON_HOST, stdio: "pipe" });
           }
         }
         if (branchName) {
           try {
-            execSync(`git branch -D ${branchName}`, { cwd: REPO_ROOT, stdio: "pipe" });
+            execSync(`git branch -D ${branchName}`, {
+              cwd: ITERATE_REPO_PATH_ON_HOST,
+              stdio: "pipe",
+            });
           } catch {
             // Branch might not exist if worktree creation failed
           }
@@ -204,55 +210,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
 });
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Local Docker Integration", () => {
-  // ============ Container Setup ============
-  describe("Container Setup", () => {
-    test("agent CLIs installed", async ({ sandbox, expect }) => {
-      const opencode = await sandbox.exec(["opencode", "--version"]);
-      expect(opencode).toMatch(/\d+\.\d+\.\d+/);
-
-      const claude = await sandbox.exec(["claude", "--version"]);
-      expect(claude).toMatch(/\d+\.\d+\.\d+/);
-
-      const pi = await sandbox.exec(["pi", "--version"]);
-      expect(pi).toMatch(/\d+\.\d+\.\d+/);
-    });
-
-    test("container setup correct", async ({ sandbox, expect }) => {
-      // repo cloned
-      const ls = await sandbox.exec(["ls", CONTAINER_REPO_PATH]);
-      expect(ls).toContain("README.md");
-      expect(ls).toContain("apps");
-    });
-
-    test("git operations work", async ({ sandbox, expect }) => {
-      const init = await sandbox.exec(["git", "init", "/tmp/test-repo"]);
-      expect(init).toContain("Initialized");
-
-      const config = await sandbox.exec(["git", "-C", "/tmp/test-repo", "config", "user.email"]);
-      expect(config).toContain("@");
-
-      await sandbox.exec(["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
-      await sandbox.exec(["git", "-C", "/tmp/test-repo", "add", "."]);
-
-      const commit = await sandbox.exec(["git", "-C", "/tmp/test-repo", "commit", "-m", "test"]);
-      expect(commit).toContain("test");
-    });
-
-    test("shell sources ~/.iterate/.env automatically", async ({ sandbox, expect }) => {
-      // Write env var to ~/.iterate/.env
-      await sandbox.exec([
-        "sh",
-        "-c",
-        'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
-      ]);
-
-      // Start a new login shell and check if env var is available
-      const envOutput = await sandbox.exec(["bash", "-l", "-c", "env | grep TEST_ITERATE_ENV_VAR"]);
-
-      expect(envOutput).toContain("hello_from_env_file");
-    });
-  });
-
   // ============ Agent CLI Tests (need API keys) ============
   describe("Agent CLI Tests", () => {
     test.scoped({ sandboxOptions: { env: getAgentEnv() } });
@@ -317,7 +274,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Local Docker Integration", ()
     test.scoped({ providerOptions: { syncFromHostRepo: true } });
 
     test("git state matches host", async ({ sandbox, expect }) => {
-      const gitInfo = getLocalDockerGitInfo(REPO_ROOT);
+      const gitInfo = getLocalDockerGitInfo(ITERATE_REPO_PATH_ON_HOST);
       expect(gitInfo).toBeDefined();
       // Wait for sync-repo-from-host.sh to finish (entry.sh runs it on startup)
       const maxWaitMs = 30000;
@@ -336,13 +293,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Local Docker Integration", ()
 
       // Check branch matches (empty string if detached HEAD on both)
       const containerBranch = (
-        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
+        await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "branch", "--show-current"])
       ).trim();
       expect(containerBranch).toBe(gitInfo!.branch ?? "");
 
       // Check commit matches
       const containerCommit = (
-        await sandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "rev-parse", "HEAD"])
+        await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "rev-parse", "HEAD"])
       ).trim();
       expect(containerCommit).toBe(gitInfo!.commit);
     });
@@ -350,7 +307,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Local Docker Integration", ()
 
   // ============ Daemon ============
   describe("Daemon", () => {
-    test.scoped({ sandboxOptions: { env: { ITERATE_CUSTOMER_REPO_PATH: CONTAINER_REPO_PATH } } });
+    test.scoped({ sandboxOptions: { env: { ITERATE_CUSTOMER_REPO_PATH: ITERATE_REPO_PATH } } });
 
     test("daemon accessible", async ({ sandbox, expect }) => {
       await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
