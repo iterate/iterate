@@ -8,7 +8,7 @@ size: large
 
 ## Summary
 
-Remove the distinction between "tasks" and "processes" in pidnap. Instead, have a single `process` abstraction with a `restartPolicy` parameter that controls restart behavior. A "task" becomes simply a process with `restartPolicy: "never"`.
+Remove the distinction between "tasks" and "processes" in pidnap. Instead, have a single `process` abstraction with a `restartPolicy` parameter that controls restart behavior. A "task" becomes simply a process with `restartPolicy: "never"`. Process sequencing is handled via explicit `dependsOn` declarations.
 
 ## Current Architecture
 
@@ -38,13 +38,29 @@ Remove the distinction between "tasks" and "processes" in pidnap. Instead, have 
 
 ## Proposed Design
 
-### Option A: Unified Process with Dependencies (Recommended)
-
 Merge tasks into processes with an explicit dependency system.
 
-#### Config Schema
+### Config Schema
 
 ```typescript
+// Health check can be an async function that returns true when healthy
+const HealthCheck = v.union([
+  v.function(), // async () => boolean
+  v.object({
+    type: v.literal("http"),
+    url: v.string(),
+    interval: v.optional(v.number()), // ms, default 1000
+    timeout: v.optional(v.number()), // ms, default 5000
+  }),
+  v.object({
+    type: v.literal("command"),
+    command: v.string(),
+    args: v.optional(v.array(v.string())),
+    interval: v.optional(v.number()),
+    timeout: v.optional(v.number()),
+  }),
+]);
+
 const ProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
@@ -58,6 +74,7 @@ const ProcessEntry = v.object({
     }),
   ),
   envOptions: v.optional(EnvOptions),
+  healthCheck: v.optional(HealthCheck), // Used for "healthy" condition
   dependsOn: v.optional(
     v.array(
       v.object({
@@ -65,7 +82,7 @@ const ProcessEntry = v.object({
         condition: v.optional(
           v.picklist([
             "completed", // Dependency exited with code 0 (for tasks)
-            "healthy", // Dependency is running (for long-running processes)
+            "healthy", // Dependency passes health check (or is running if no health check)
             "started", // Dependency has started at least once
           ]),
         ), // defaults to "completed" for restartPolicy:"never", "healthy" otherwise
@@ -75,7 +92,7 @@ const ProcessEntry = v.object({
 });
 ```
 
-#### Example Config
+### Example Config
 
 ```typescript
 export default defineConfig({
@@ -93,11 +110,16 @@ export default defineConfig({
       options: { restartPolicy: "never" },
       dependsOn: [{ process: "install-ca-certs" }], // condition defaults to "completed"
     },
-    // Long-running process that depends on tasks
+    // Long-running process with health check
     {
       name: "egress-proxy",
       definition: { command: "mitmdump", args: [...] },
       options: { restartPolicy: "always" },
+      healthCheck: async () => {
+        // Custom health check logic
+        const res = await fetch("http://localhost:8888/health");
+        return res.ok;
+      },
       dependsOn: [{ process: "install-ca-certs", condition: "completed" }],
     },
     // Long-running process that depends on another long-running process
@@ -105,22 +127,23 @@ export default defineConfig({
       name: "daemon",
       definition: { command: "tsx", args: ["server.ts"] },
       options: { restartPolicy: "always" },
+      healthCheck: { type: "http", url: "http://localhost:3000/health" },
       dependsOn: [
         { process: "db-migrate", condition: "completed" },
-        { process: "egress-proxy", condition: "healthy" },
+        { process: "egress-proxy", condition: "healthy" }, // waits for health check to pass
       ],
     },
   ],
 });
 ```
 
-#### State Machine
+### State Machine
 
 Unified states for all processes:
 
 ```typescript
 type ProcessState =
-  | "pending" // Waiting for dependencies
+  | "pending" // Waiting for dependencies to be met
   | "starting" // Process is starting up
   | "running" // Process is running
   | "stopping" // Being stopped
@@ -129,17 +152,103 @@ type ProcessState =
   | "restarting" // Waiting to restart (backoff delay)
   | "crash-loop-backoff"
   | "max-restarts-reached"
-  | "blocked"; // Dependencies not met (optional, could use "pending")
+  | "dependency-failed"; // A dependency failed, this process cannot start
 ```
 
-#### Dependency Resolution Algorithm
+The `dependency-failed` state is explicit and distinct from `failed` - it means "never started because a dependency failed", making it easy to diagnose issues.
+
+### Health Check Design
+
+Health checks determine when a process is considered "healthy" for the `condition: "healthy"` dependency type.
+
+```typescript
+interface HealthCheckRunner {
+  // Start periodic health checking
+  start(): void;
+  // Stop health checking
+  stop(): void;
+  // Current health status
+  isHealthy(): boolean;
+  // Wait for healthy (with timeout)
+  waitForHealthy(timeoutMs?: number): Promise<boolean>;
+}
+
+// Implementation
+class HealthCheckRunner {
+  private healthy = false;
+  private interval: NodeJS.Timeout | null = null;
+
+  constructor(
+    private check: () => Promise<boolean>,
+    private intervalMs = 1000,
+    private timeoutMs = 5000,
+  ) {}
+
+  async runCheck(): Promise<boolean> {
+    try {
+      const result = await Promise.race([
+        this.check(),
+        new Promise<boolean>((_, reject) =>
+          setTimeout(() => reject(new Error("Health check timeout")), this.timeoutMs),
+        ),
+      ]);
+      this.healthy = result;
+      return result;
+    } catch {
+      this.healthy = false;
+      return false;
+    }
+  }
+
+  start() {
+    this.runCheck(); // Initial check
+    this.interval = setInterval(() => this.runCheck(), this.intervalMs);
+  }
+
+  stop() {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+  }
+
+  isHealthy(): boolean {
+    return this.healthy;
+  }
+
+  async waitForHealthy(timeoutMs = 30000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (this.healthy) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  }
+}
+```
+
+For processes without an explicit health check, `condition: "healthy"` simply means "is running".
+
+### Dependency Resolution Algorithm
 
 ```typescript
 // On any process state change:
 function onProcessStateChange(process: Process) {
+  // Check if any dependents can now start
   for (const dependent of getDependents(process.name)) {
-    if (areDependenciesMet(dependent)) {
+    if (dependent.state === "pending" && areDependenciesMet(dependent)) {
       scheduleStart(dependent);
+    }
+  }
+
+  // If this process failed, mark dependents as dependency-failed
+  if (process.state === "failed") {
+    for (const dependent of getDependents(process.name)) {
+      if (dependent.state === "pending") {
+        dependent.state = "dependency-failed";
+        // Cascade: this dependent's dependents also fail
+        onProcessStateChange(dependent);
+      }
     }
   }
 }
@@ -161,7 +270,10 @@ function meetsCondition(process: Process, condition: DependencyCondition): boole
     case "completed":
       return process.state === "stopped"; // exited with code 0
     case "healthy":
-      return process.state === "running";
+      if (process.healthCheck) {
+        return process.state === "running" && process.healthCheckRunner.isHealthy();
+      }
+      return process.state === "running"; // fallback: running = healthy
     case "started":
       return ["running", "stopped", "failed"].includes(process.state);
   }
@@ -174,151 +286,68 @@ function inferDefaultCondition(process: Process): DependencyCondition {
 }
 ```
 
-### Option B: Simpler Ordered Groups
+### Dependency Failure Handling
 
-Instead of full dependency trees, just allow ordered groups:
+When a dependency fails, all processes that depend on it are marked with the `dependency-failed` state. This cascades through the dependency graph:
 
-```typescript
-export default defineConfig({
-  // Phase 1: All run in parallel, must all complete before phase 2
-  setup: [
-    { name: "install-ca-certs", definition: bash("...") },
-    { name: "git-config", definition: bash("...") },
-  ],
-  // Phase 2: All run in parallel, must all complete before services
-  migrations: [
-    { name: "db-migrate", definition: { command: "pnpm", args: ["db:migrate"] } },
-  ],
-  // Phase 3: Long-running services
-  services: [
-    { name: "egress-proxy", definition: {...}, options: { restartPolicy: "always" } },
-    { name: "daemon", definition: {...}, options: { restartPolicy: "always" } },
-  ],
-});
+```
+install-ca (failed)
+  └── db-migrate (dependency-failed)
+        └── daemon (dependency-failed)
 ```
 
-**Pros**: Simpler to understand, less code
-**Cons**: Less expressive, can't model "daemon depends on proxy but not on CA certs"
-
-### Recommendation
-
-**Option A** - The dependency graph approach is more expressive and better models real-world requirements. It's also closer to how Docker Compose works (which users may be familiar with).
-
-## Migration Path
-
-### Backward Compatibility
-
-Support both old and new config formats during a transition period:
-
-```typescript
-// Old format (deprecated)
-{
-  tasks: [...],
-  processes: [...],
-}
-
-// New format
-{
-  processes: [...], // includes former tasks with restartPolicy: "never"
-}
-```
-
-When old format detected, automatically convert:
-
-1. Tasks become processes with `restartPolicy: "never"`
-2. All original processes implicitly depend on all tasks (preserving current behavior)
-3. Log deprecation warning
-
-### Example Migration
-
-**Before:**
-
-```typescript
-defineConfig({
-  tasks: [
-    { name: "install-ca", definition: bash("...") },
-    { name: "db-migrate", definition: { command: "pnpm", args: ["db:migrate"] } },
-  ],
-  processes: [
-    { name: "daemon", definition: {...}, options: { restartPolicy: "always" } },
-  ],
-})
-```
-
-**After:**
-
-```typescript
-defineConfig({
-  processes: [
-    {
-      name: "install-ca",
-      definition: bash("..."),
-      options: { restartPolicy: "never" },
-    },
-    {
-      name: "db-migrate",
-      definition: { command: "pnpm", args: ["db:migrate"] },
-      options: { restartPolicy: "never" },
-      dependsOn: [{ process: "install-ca" }],
-    },
-    {
-      name: "daemon",
-      definition: {...},
-      options: { restartPolicy: "always" },
-      dependsOn: [
-        { process: "install-ca", condition: "completed" },
-        { process: "db-migrate", condition: "completed" },
-      ],
-    },
-  ],
-})
-```
+This makes it immediately clear why a process didn't start, rather than leaving it stuck in "pending" forever.
 
 ## Implementation Plan
 
 ### Phase 1: Add dependency support to processes
 
 1. Add `dependsOn` field to `RestartingProcessEntry` schema
-2. Implement dependency condition types
-3. Add dependency resolution logic to Manager
-4. Register all processes immediately at startup (fix the 404 bug)
+2. Implement dependency condition types (`completed`, `healthy`, `started`)
+3. Add `dependency-failed` state to `RestartingProcessState`
+4. Add dependency resolution logic to Manager
+5. Register all processes immediately at startup (fix the 404 bug)
 
-### Phase 2: Unify state machines
+### Phase 2: Add health checks
 
-1. Extend `RestartingProcessState` with `pending`/`blocked` states
+1. Add `healthCheck` field to `RestartingProcessEntry` schema
+2. Implement `HealthCheckRunner` class
+3. Integrate health checks with `condition: "healthy"` dependency resolution
+4. Add health status to API responses
+
+### Phase 3: Unify state machines
+
+1. Extend `RestartingProcessState` with `pending` state
 2. Update Manager to start processes based on dependency resolution
 3. Remove the "initializing" manager state (or make it mean "some processes pending")
-
-### Phase 3: Deprecate tasks
-
-1. Add config migration that converts tasks to processes
-2. Log deprecation warning when tasks array is used
-3. Update all internal configs (sandbox, docker)
 
 ### Phase 4: Remove tasks
 
 1. Delete `task-list.ts`
-2. Remove tasks from Manager
-3. Remove tasks from API contract
-4. Update tests
+2. Remove `tasks` from `ManagerConfig` schema
+3. Remove tasks from Manager
+4. Remove tasks from API contract
+5. Update all internal configs (sandbox, docker)
+6. Update tests
 
 ## Files to Modify
 
 ### Core changes
 
 - `packages/pidnap/src/manager.ts` - Add dependency resolution, remove task-first startup
-- `packages/pidnap/src/restarting-process.ts` - Add "pending" state
-- `packages/pidnap/src/task-list.ts` - Eventually delete
+- `packages/pidnap/src/restarting-process.ts` - Add `pending` and `dependency-failed` states
+- `packages/pidnap/src/task-list.ts` - Delete entirely
+- `packages/pidnap/src/health-check.ts` - New file for health check logic
 
 ### Schema changes
 
-- `packages/pidnap/src/manager.ts` - Update `ManagerConfig` schema
-- `packages/pidnap/src/api/contract.ts` - Update API types
+- `packages/pidnap/src/manager.ts` - Update `ManagerConfig` schema (remove tasks, add dependsOn/healthCheck)
+- `packages/pidnap/src/api/contract.ts` - Update API types, add health status
 
 ### Config updates
 
-- `apps/os/sandbox/pidnap.config.ts` - Migrate to new format
-- `packages/pidnap/docker/pidnap.config.ts` - Migrate to new format
+- `apps/os/sandbox/pidnap.config.ts` - Convert tasks to processes with dependencies
+- `packages/pidnap/docker/pidnap.config.ts` - Convert tasks to processes with dependencies
 
 ## Proposed Tests
 
@@ -415,17 +444,79 @@ describe("Process dependencies", () => {
     expect(manager.getProcess("daemon")?.state).toBe("pending"); // waiting
   });
 
-  it("should support backward compatible config with tasks array", async () => {
+  it("should mark dependents as dependency-failed when dependency fails", async () => {
     const manager = new Manager(
       {
-        tasks: [{ name: "setup", definition: successProcess }],
-        processes: [{ name: "daemon", definition: longRunningProcess }],
+        processes: [
+          { name: "task-a", definition: failureProcess, options: { restartPolicy: "never" } },
+          {
+            name: "service-b",
+            definition: longRunningProcess,
+            dependsOn: [{ process: "task-a" }],
+          },
+        ],
       },
       logger,
     );
 
-    // Should work, with daemon implicitly depending on setup
     await manager.start();
+
+    // Wait for task-a to fail
+    await waitFor(() => manager.getProcess("task-a")?.state === "failed");
+
+    // service-b should be marked as dependency-failed
+    expect(manager.getProcess("service-b")?.state).toBe("dependency-failed");
+  });
+
+  it("should cascade dependency-failed through the graph", async () => {
+    const manager = new Manager(
+      {
+        processes: [
+          { name: "a", definition: failureProcess, options: { restartPolicy: "never" } },
+          { name: "b", definition: longRunningProcess, dependsOn: [{ process: "a" }] },
+          { name: "c", definition: longRunningProcess, dependsOn: [{ process: "b" }] },
+        ],
+      },
+      logger,
+    );
+
+    await manager.start();
+    await waitFor(() => manager.getProcess("a")?.state === "failed");
+
+    expect(manager.getProcess("b")?.state).toBe("dependency-failed");
+    expect(manager.getProcess("c")?.state).toBe("dependency-failed");
+  });
+});
+
+describe("Health checks", () => {
+  it("should wait for health check before starting dependent", async () => {
+    let healthy = false;
+    const manager = new Manager(
+      {
+        processes: [
+          {
+            name: "proxy",
+            definition: longRunningProcess,
+            healthCheck: async () => healthy,
+          },
+          {
+            name: "daemon",
+            definition: longRunningProcess,
+            dependsOn: [{ process: "proxy", condition: "healthy" }],
+          },
+        ],
+      },
+      logger,
+    );
+
+    await manager.start();
+
+    // proxy is running but not healthy
+    await waitFor(() => manager.getProcess("proxy")?.state === "running");
+    expect(manager.getProcess("daemon")?.state).toBe("pending");
+
+    // Make proxy healthy
+    healthy = true;
     await waitFor(() => manager.getProcess("daemon")?.state === "running");
   });
 });
@@ -440,28 +531,18 @@ describe("API with dependencies", () => {
     // Call API to get daemon status
     // Should return pending, not 404
   });
+
+  it("should return dependency-failed state with reason", async () => {
+    // Start manager with failing dependency
+    // Call API to get dependent status
+    // Should return dependency-failed
+  });
 });
 ```
 
-## Open Questions
-
-1. **Health checks**: Should we add health check support as part of this? The "healthy" condition currently just means "running", but a proper health check (HTTP, command, etc.) would be more robust.
-
-2. **Dependency failure handling**: What happens when a dependency fails?
-   - Option A: Block dependent forever (current implicit behavior)
-   - Option B: Mark dependent as failed too
-   - Option C: Configurable per-dependency
-
-3. **Restart cascading**: When a dependency restarts, should dependents restart too?
-   - For "healthy" condition: probably yes
-   - For "completed" condition: probably no
-
-4. **API changes**: Should the API expose dependency information? Current contract doesn't have it.
-
 ## Rollout Plan
 
-1. Implement behind feature flag (or just in dev)
-2. Migrate internal configs
+1. Implement in dev
+2. Update internal configs (sandbox, docker)
 3. Test in sandbox environment
-4. Remove feature flag
-5. After 1-2 releases, remove deprecated tasks support
+4. Deploy to production
