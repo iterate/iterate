@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import jsonata from "jsonata";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
@@ -450,12 +451,21 @@ export async function listInstallationRepositories(
   }));
 }
 
+// JSONata filters for webhook events - evaluated against { payload, env }
+// Return true to process the event, false to skip
+const WEBHOOK_FILTERS = {
+  // workflow_run: only process in prod when CI passes on main
+  workflow_run: "env.APP_STAGE = 'prd' and payload.workflow_run.head_branch = 'main'",
+  // commit_comment: require APP_STAGE=xxx tag in comment body to target specific environment
+  commit_comment: `$contains(payload.comment.body, '[APP_STAGE=' & env.APP_STAGE & ']')`,
+};
+
 // #region ========== Webhook Handler ==========
 
 githubApp.post("/webhook", async (c) => {
   const body = await c.req.text();
   const signature = c.req.header("x-hub-signature-256");
-  const eventType = c.req.header("x-github-event");
+  const xGithubEvent = c.req.header("x-github-event");
   const deliveryId = c.req.header("x-github-delivery");
 
   // Verify signature
@@ -476,6 +486,20 @@ githubApp.post("/webhook", async (c) => {
   const externalId = deliveryId;
   const payload = JSON.parse(body);
 
+  if (!xGithubEvent || !(xGithubEvent in WEBHOOK_FILTERS)) {
+    return c.json({ message: `No filter for event type ${xGithubEvent}` }, 200);
+  }
+  const eventType = xGithubEvent as keyof typeof WEBHOOK_FILTERS;
+
+  const jsonataExpression = WEBHOOK_FILTERS[eventType];
+
+  const filterContext = { payload, env: { APP_STAGE: c.env.APP_STAGE } };
+  const matches = await jsonata(jsonataExpression).evaluate(filterContext);
+  if (!matches) {
+    logger.debug("[GitHub Webhook] Event filtered out", { eventType, filter: jsonataExpression });
+    return c.json({ message: `Event filtered out` }, 200);
+  }
+
   const [inserted] = await c.var.db
     .insert(schema.event)
     .values({
@@ -493,34 +517,41 @@ githubApp.post("/webhook", async (c) => {
   }
 
   // Route to appropriate handler based on event type
-  if (eventType === "workflow_run") {
-    const parseResult = WorkflowRunEvent.safeParse(payload);
-    if (parseResult.success) {
-      // Process in background, return immediately
-      waitUntil(
-        handleWorkflowRun({
-          payload: parseResult.data,
-          db: c.var.db,
-          env: c.env,
-        }).catch((err) => {
-          logger.error("[GitHub Webhook] handleWorkflowRun error", err);
-        }),
-      );
+  switch (eventType) {
+    case "workflow_run": {
+      const parseResult = WorkflowRunEvent.safeParse(payload);
+      if (parseResult.success) {
+        // Process in background, return immediately
+        waitUntil(
+          handleWorkflowRun({
+            payload: parseResult.data,
+            db: c.var.db,
+            env: c.env,
+          }).catch((err) => {
+            logger.error("[GitHub Webhook] handleWorkflowRun error", err);
+          }),
+        );
+      }
+      break;
     }
-  }
-
-  if (eventType === "commit_comment") {
-    const parseResult = CommitCommentEvent.safeParse(payload);
-    if (parseResult.success) {
-      waitUntil(
-        handleCommitComment({
-          payload: parseResult.data,
-          db: c.var.db,
-          env: c.env,
-        }).catch((err) => {
-          logger.error("[GitHub Webhook] handleCommitComment error", err);
-        }),
-      );
+    case "commit_comment": {
+      const parseResult = CommitCommentEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handleCommitComment({
+            payload: parseResult.data,
+            db: c.var.db,
+            env: c.env,
+          }).catch((err) => {
+            logger.error("[GitHub Webhook] handleCommitComment error", err);
+          }),
+        );
+      }
+      break;
+    }
+    default: {
+      // ensure we've handled all event types
+      eventType satisfies never;
     }
   }
 
