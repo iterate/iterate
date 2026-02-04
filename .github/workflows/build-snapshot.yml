@@ -37,6 +37,8 @@ jobs:
         run: doppler setup --config ${{ inputs.doppler_config }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Build local sandbox image
+        run: pnpm os docker:build
       - id: build
         name: Build and push Daytona snapshot
         env:

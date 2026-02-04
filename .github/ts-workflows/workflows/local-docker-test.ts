@@ -4,8 +4,8 @@ import * as utils from "../utils/index.ts";
 /**
  * Two parallel tracks:
  *
- * 1. Daytona build: Creates a Daytona snapshot using their native --dockerfile
- *    builder. This is the production path for sandbox creation.
+ * 1. Daytona build: Builds the local image, then pushes a Daytona snapshot.
+ *    This is the production path for sandbox creation.
  *
  * 2. Docker + tests: Builds image locally (no registry push) and runs local
  *    Docker integration tests. Tests the same Dockerfile in a different env.
@@ -68,7 +68,7 @@ export default workflow({
             DOCKER_HOST: "unix:///var/run/docker.sock",
             LOCAL_DOCKER_IMAGE_NAME: "${{ needs.build-sandbox-image.outputs.image_ref }}",
           },
-          run: "pnpm os docker:build:test",
+          run: "pnpm os docker:test",
         },
         {
           name: "Upload test results",

@@ -57,25 +57,6 @@ RUN useradd -m -s /bin/bash iterate && \
     /var/log/pidnap && \
     chown -R iterate:iterate /home/iterate /var/log/pidnap
 
-# Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
-RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
-    echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
-    chmod +x /usr/local/bin/iterate
-
-RUN echo '#!/bin/sh' > /usr/local/bin/helloworld && \
-    echo 'echo "Hello, world it is 17.22"' >> /usr/local/bin/helloworld && \
-    chmod +x /usr/local/bin/helloworld
-
-# Replicate CLI shim - directs users to iterate tool replicate
-RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
-    echo 'echo "Error: The replicate CLI is not installed." >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "Use iterate tool replicate instead. Example:" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "  iterate tool replicate '"'"'const output = await replicate.run(\"black-forest-labs/flux-schnell\", { input: { prompt: \"a cat\" } }); console.log(output);'"'"'" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
-    echo 'exit 1' >> /usr/local/bin/replicate && \
-    chmod +x /usr/local/bin/replicate
-
 USER iterate
 
 # PATH setup for iterate tools. These ENV statements set PATH for non-shell contexts

@@ -47,6 +47,10 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
+          name: "Build local sandbox image",
+          run: "pnpm os docker:build",
+        },
+        {
           id: "build",
           name: "Build and push Daytona snapshot",
           env: {

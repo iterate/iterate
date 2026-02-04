@@ -58,7 +58,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
           LOCAL_DOCKER_IMAGE_NAME: ${{ needs.build-sandbox-image.outputs.image_ref }}
-        run: pnpm os docker:build:test
+        run: pnpm os docker:test
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

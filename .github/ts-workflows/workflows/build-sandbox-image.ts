@@ -6,7 +6,7 @@ import * as utils from "../utils/index.ts";
  *
  * We don't push to a registry because pulling from ghcr.io to Daytona is slow
  * (10+ mins). For local Docker tests, we just --load the image. Daytona builds
- * use their native --dockerfile approach instead (see build-snapshot.ts).
+ * use the same local image build, then push the snapshot (see build-snapshot.ts).
  *
  * depot.dev's registry might help if we need registry-based workflows later.
  */
