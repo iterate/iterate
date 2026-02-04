@@ -41,5 +41,5 @@ jobs:
           DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
           SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
         run: |-
-          pnpm os daytona:build
+          pnpm os daytona:build -- --no-update-doppler
           echo "snapshot_name=iterate-sandbox-${{ github.sha }}" >> $GITHUB_OUTPUT

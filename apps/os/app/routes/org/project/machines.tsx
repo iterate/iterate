@@ -43,6 +43,7 @@ const DEFAULT_LOCAL_PORTS: Record<string, string> = {
   "iterate-daemon": "3000",
   opencode: "4096",
 };
+const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
 
 /** Generate a readable date slug like "jan-14-15h30" */
 function dateSlug() {
@@ -98,6 +99,9 @@ function ProjectMachinesPage() {
   const [newLocalPorts, setNewLocalPorts] = useState<Record<string, string>>(DEFAULT_LOCAL_PORTS);
   const [newLocalDockerImage, setNewLocalDockerImage] = useState("ghcr.io/iterate/sandbox:local");
   const [newLocalDockerSyncRepo, setNewLocalDockerSyncRepo] = useState(true);
+  const [newDaytonaSnapshotName, setNewDaytonaSnapshotName] = useState(
+    DEFAULT_DAYTONA_SNAPSHOT_NAME,
+  );
 
   // Fetch daemon definitions for the form
   const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
@@ -136,6 +140,7 @@ function ProjectMachinesPage() {
       setNewLocalPorts(DEFAULT_LOCAL_PORTS);
       setNewLocalDockerImage("ghcr.io/iterate/sandbox:local");
       setNewLocalDockerSyncRepo(true);
+      setNewDaytonaSnapshotName(DEFAULT_DAYTONA_SNAPSHOT_NAME);
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -249,6 +254,21 @@ function ProjectMachinesPage() {
       return;
     }
 
+    if (newMachineType === "daytona") {
+      const snapshotName = newDaytonaSnapshotName.trim();
+      if (!snapshotName) {
+        toast.error("Snapshot name is required");
+        return;
+      }
+      const metadata: Record<string, unknown> = { snapshotName };
+      createMachine.mutate({
+        name: trimmedName,
+        type: newMachineType,
+        metadata,
+      });
+      return;
+    }
+
     createMachine.mutate({ name: trimmedName, type: newMachineType });
   };
 
@@ -297,6 +317,21 @@ function ProjectMachinesPage() {
                     <SelectItem value="local">Local (Host:Port)</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+            )}
+            {newMachineType === "daytona" && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Snapshot Name</label>
+                  <Input
+                    placeholder="iterate-sandbox-<sha>"
+                    value={newDaytonaSnapshotName}
+                    onChange={(e) => setNewDaytonaSnapshotName(e.target.value)}
+                    disabled={createMachine.isPending}
+                    autoComplete="off"
+                    data-1p-ignore
+                  />
+                </div>
               </div>
             )}
             {isNonProd && newMachineType === "local" && (

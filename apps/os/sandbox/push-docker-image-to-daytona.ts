@@ -1,7 +1,7 @@
 /**
  * Push local Docker sandbox image to Daytona as a snapshot.
  *
- * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N]
+ * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
  * By default, uses the most recently built :local image.
  *
@@ -34,17 +34,28 @@ const { values } = parseArgs({
     cpu: { type: "string", short: "c", default: "2" },
     memory: { type: "string", short: "m", default: "4" },
     disk: { type: "string", short: "d", default: "10" },
+    updateDoppler: { type: "boolean", default: true },
   },
   strict: true,
 });
 
 execSync("daytona --version", { stdio: "ignore" });
 
+const daytonaOrgId = process.env.DAYTONA_ORG_ID ?? "";
+if (daytonaOrgId) {
+  execSync(`daytona organization use ${daytonaOrgId}`, { stdio: "ignore" });
+}
+
 const baseImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox";
 const localImageRef = `${baseImageName}:local`;
 
 // Find the image to push - prefer explicit --image, then :local
 const imageRef = values.image ?? localImageRef;
+if (values.image) {
+  console.log(`Using image from --image: ${imageRef}`);
+} else {
+  console.log(`Using default image tag: ${imageRef}`);
+}
 
 // Verify image exists
 try {
@@ -73,28 +84,114 @@ const dateStr = createdAt.toISOString().slice(0, 10).replace(/-/g, "");
 // Default snapshot name includes image ID so it's clear what we're uploading
 const defaultName = `iterate-sandbox-${dateStr}-${imageId}-${builtBy}`;
 const snapshotName = values.name ?? defaultName;
+if (values.name) {
+  console.log(`Using snapshot name from --name: ${snapshotName}`);
+} else {
+  console.log(
+    [
+      "Inferring snapshot name from image metadata",
+      "(created date + image id) and ITERATE_USER:",
+      snapshotName,
+    ].join(" "),
+  );
+}
 
 console.log(`Pushing Daytona snapshot: ${snapshotName}`);
 console.log(`  image=${imageRef}`);
 console.log(`  cpu=${values.cpu}, memory=${values.memory}, disk=${values.disk}`);
 
-execSync(
-  [
-    "daytona",
-    "snapshot",
-    "push",
-    imageRef,
-    "--name",
-    snapshotName,
-    "--cpu",
-    values.cpu!,
-    "--memory",
-    values.memory!,
-    "--disk",
-    values.disk!,
-  ].join(" "),
-  {
-    cwd: repoRoot,
-    stdio: "inherit",
-  },
-);
+const snapshotAlreadyExists = (() => {
+  try {
+    const pageLimit = 100;
+    for (let page = 1; ; page += 1) {
+      const output = execSync(
+        [
+          "daytona",
+          "snapshot",
+          "list",
+          "--format",
+          "json",
+          "--limit",
+          String(pageLimit),
+          "--page",
+          String(page),
+        ].join(" "),
+        {
+          cwd: repoRoot,
+          stdio: "pipe",
+          encoding: "utf-8",
+        },
+      );
+      const snapshots = JSON.parse(output) as Array<{ name?: string }>;
+      if (snapshots.some((snapshot) => snapshot.name === snapshotName)) {
+        return true;
+      }
+      if (snapshots.length < pageLimit) {
+        return false;
+      }
+    }
+  } catch (error) {
+    console.warn("Warning: unable to list snapshots to check for conflicts.", error);
+    return false;
+  }
+})();
+
+if (snapshotAlreadyExists) {
+  console.log("Snapshot already exists (matched by name). Skipping upload.");
+} else {
+  execSync(
+    [
+      "daytona",
+      "snapshot",
+      "push",
+      imageRef,
+      "--name",
+      snapshotName,
+      "--cpu",
+      values.cpu!,
+      "--memory",
+      values.memory!,
+      "--disk",
+      values.disk!,
+    ].join(" "),
+    {
+      cwd: repoRoot,
+      stdio: "inherit",
+    },
+  );
+}
+
+if (values.updateDoppler) {
+  const dopplerInfo = JSON.parse(
+    execSync("doppler configs get --json", {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    }),
+  ) as { name?: string; project?: string };
+  const dopplerConfig = dopplerInfo.name;
+  const dopplerProject = dopplerInfo.project ?? "os";
+  if (!dopplerConfig) {
+    throw new Error("Unable to determine Doppler config name.");
+  }
+  console.log(
+    [
+      `Updating Doppler (${dopplerProject}/${dopplerConfig}):`,
+      `DAYTONA_SNAPSHOT_NAME=${snapshotName}`,
+      "VITE_DAYTONA_SNAPSHOT_NAME='${DAYTONA_SNAPSHOT_NAME}'",
+    ].join(" "),
+  );
+  execSync(
+    [
+      "doppler secrets set",
+      `DAYTONA_SNAPSHOT_NAME=${snapshotName}`,
+      "VITE_DAYTONA_SNAPSHOT_NAME='${DAYTONA_SNAPSHOT_NAME}'",
+      "--project",
+      dopplerProject,
+      "--config",
+      dopplerConfig,
+    ].join(" "),
+    { cwd: repoRoot, stdio: "inherit" },
+  );
+}
+
+console.log(`snapshot_name=${snapshotName}`);

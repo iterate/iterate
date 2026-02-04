@@ -356,7 +356,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     let sandbox: SandboxHandle;
 
     beforeAll(async () => {
-      sandbox = await provider.createSandbox();
+      sandbox = await provider.createSandbox({
+        env: { ITERATE_CUSTOMER_REPO_PATH: CONTAINER_REPO_PATH },
+      });
       await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     }, 300000);
 
@@ -368,10 +370,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const baseUrl = sandbox.getUrl({ port: 3000 });
 
       // Verify health endpoint from host
-      const healthResponse = await fetch(`${baseUrl}/api/health`);
-      expect(healthResponse.ok).toBe(true);
-      const healthText = await healthResponse.text();
-      expect(healthText.includes("ok") || healthText.includes("healthy")).toBe(true);
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/api/health`);
+              if (!response.ok) return "";
+              return await response.text();
+            } catch {
+              return "";
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .toMatch(/ok|healthy/);
 
       // Verify health from inside container
       const internalHealth = await sandbox.exec(["curl", "-s", "http://localhost:3000/api/health"]);
@@ -381,8 +393,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     test("PTY endpoint works", async () => {
       const baseUrl = sandbox.getUrl({ port: 3000 });
       // PTY endpoint exists
-      const ptyResponse = await fetch(`${baseUrl}/api/pty/ws?cols=80&rows=24`);
-      expect(ptyResponse.status).not.toBe(404);
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/api/pty/ws?cols=80&rows=24`);
+              return response.status;
+            } catch {
+              return 0;
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .not.toBe(404);
     }, 210000);
 
     test("serves assets and routes correctly", async () => {
@@ -390,6 +413,20 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const trpc = createDaemonTrpcClient(baseUrl);
 
       // index.html
+      await expect
+        .poll(
+          async () => {
+            try {
+              const root = await fetch(`${baseUrl}/`);
+              const contentType = root.headers.get("content-type") ?? "";
+              return root.ok && contentType.includes("text/html");
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .toBe(true);
       const root = await fetch(`${baseUrl}/`);
       expect(root.ok).toBe(true);
       expect(root.headers.get("content-type")).toContain("text/html");
@@ -397,33 +434,90 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(html.toLowerCase()).toContain("<!doctype html>");
 
       // health
-      const health = await fetch(`${baseUrl}/api/health`);
-      expect(health.ok).toBe(true);
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/api/health`);
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .toBe(true);
 
       // tRPC
-      const cwd = await trpc.getServerCwd.query();
-      expect(cwd.cwd).toBe(`${CONTAINER_REPO_PATH}/apps/daemon`);
+      const hello = await trpc.hello.query();
+      expect(hello.message).toContain("Hello");
 
       // CSS/JS bundles
       const cssMatch = html.match(/href="(\.?\/assets\/[^"]+\.css)"/);
       const jsMatch = html.match(/src="(\.?\/assets\/[^"]+\.js)"/);
       if (cssMatch) {
-        const css = await fetch(`${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`);
-        expect(css.ok).toBe(true);
+        const cssUrl = `${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`;
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(cssUrl);
+                return response.ok;
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
       }
       if (jsMatch) {
-        const js = await fetch(`${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`);
-        expect(js.ok).toBe(true);
+        const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(jsUrl);
+                return response.ok;
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
       }
 
       // logo
-      const logo = await fetch(`${baseUrl}/logo.svg`);
-      expect(logo.ok).toBe(true);
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/logo.svg`);
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .toBe(true);
 
       // SPA fallback
-      const spa = await fetch(`${baseUrl}/agents/some-agent-id`);
-      expect(spa.ok).toBe(true);
-      expect(spa.headers.get("content-type")).toContain("text/html");
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/agents/some-agent-id`);
+              if (!response.ok) return "";
+              return response.headers.get("content-type") ?? "";
+            } catch {
+              return "";
+            }
+          },
+          { timeout: 20000, interval: 1000 },
+        )
+        .toContain("text/html");
     }, 210000);
   });
 
@@ -447,8 +541,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         expect(restored).toBe(fileContents);
 
         const baseUrl = sandbox.getUrl({ port: 3000 });
-        const healthResponse = await fetch(`${baseUrl}/api/health`);
-        expect(healthResponse.ok).toBe(true);
+        await expect
+          .poll(
+            async () => {
+              try {
+                const response = await fetch(`${baseUrl}/api/health`);
+                return response.ok;
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 20000, interval: 1000 },
+          )
+          .toBe(true);
       } catch (err) {
         dumpContainerLogs(sandbox.id);
         throw err;

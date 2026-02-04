@@ -140,7 +140,7 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): SandboxPro
     async createSandbox(opts?: CreateSandboxOptions): Promise<SandboxHandle> {
       const daytona = new Daytona({
         apiKey: process.env.DAYTONA_API_KEY,
-        organizationId: process.env.DAYTONA_ORGANIZATION_ID,
+        organizationId: process.env.DAYTONA_ORG_ID,
         apiUrl: process.env.DAYTONA_API_URL,
         target: process.env.DAYTONA_TARGET,
       });

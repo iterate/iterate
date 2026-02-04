@@ -28,16 +28,23 @@ export async function createMachineProvider(
 
   switch (type) {
     case "daytona": {
-      if (!env.DAYTONA_SNAPSHOT_NAME) {
-        throw new Error("DAYTONA_SNAPSHOT_NAME is required for Daytona machines");
+      if (!env.DAYTONA_SNAPSHOT_NAME && !env.VITE_DAYTONA_SNAPSHOT_NAME) {
+        throw new Error(
+          "DAYTONA_SNAPSHOT_NAME or VITE_DAYTONA_SNAPSHOT_NAME is required for Daytona machines",
+        );
       }
+      const typedMeta = metadata as { snapshotName?: string };
+      const snapshotName =
+        typedMeta.snapshotName ?? env.DAYTONA_SNAPSHOT_NAME ?? env.VITE_DAYTONA_SNAPSHOT_NAME;
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
-        snapshotName: env.DAYTONA_SNAPSHOT_NAME,
+        organizationId: env.DAYTONA_ORG_ID,
+        snapshotName,
         autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
         autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
         buildProxyUrl,
+        appStage: env.APP_STAGE,
       });
     }
 

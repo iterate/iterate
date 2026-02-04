@@ -1,4 +1,5 @@
 import { Daytona } from "@daytonaio/sdk";
+import { slugify } from "../utils/slug.ts";
 import type {
   MachineProvider,
   CreateMachineConfig,
@@ -16,17 +17,32 @@ const DEFAULT_DAEMON_PORT = 3000;
 
 export interface DaytonaProviderConfig {
   apiKey: string;
+  organizationId?: string;
   snapshotName: string; // iterate-sandbox-{commitSha}
   autoStopInterval: number; // minutes, 0 = disabled
   autoDeleteInterval: number; // minutes, -1 = disabled, 0 = delete on stop
   externalId: string;
   buildProxyUrl: (port: number) => string;
+  dopplerConfig?: string;
+  appStage?: string;
 }
 
 export function createDaytonaProvider(config: DaytonaProviderConfig): MachineProvider {
-  const { apiKey, snapshotName, autoStopInterval, autoDeleteInterval, externalId, buildProxyUrl } =
-    config;
-  const daytona = new Daytona({ apiKey });
+  const {
+    apiKey,
+    organizationId,
+    snapshotName,
+    autoStopInterval,
+    autoDeleteInterval,
+    externalId,
+    buildProxyUrl,
+    dopplerConfig,
+    appStage,
+  } = config;
+  const daytona = new Daytona({
+    apiKey,
+    organizationId,
+  });
 
   const getNativeUrl = (port: number) => `https://${port}-${externalId}.proxy.daytona.works`;
 
@@ -34,8 +50,18 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
     type: "daytona",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
+      const configSlug = slugify(dopplerConfig ?? appStage ?? "unknown").slice(0, 30);
+      const projectSlug = slugify(machineConfig.envVars["ITERATE_PROJECT_SLUG"] ?? "project").slice(
+        0,
+        30,
+      );
+      const machineSlugRaw = slugify(machineConfig.name);
+      const machineSlug = (
+        machineSlugRaw === "unnamed" ? slugify(machineConfig.machineId) : machineSlugRaw
+      ).slice(0, 30);
+      const sandboxName = `${configSlug}--${projectSlug}--${machineSlug}`.slice(0, 63);
       const sandbox = await daytona.create({
-        name: machineConfig.machineId,
+        name: sandboxName,
         snapshot: snapshotName,
         envVars: machineConfig.envVars,
         autoStopInterval,
