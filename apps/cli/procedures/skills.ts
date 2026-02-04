@@ -10,7 +10,7 @@ const Harness = z.enum(["claude-code", "opencode"]);
 type Harness = z.infer<typeof Harness>;
 
 /** Flatten path for Claude (can't handle nested). e.g. "cat/skill" -> "cat--skill" */
-export const flattenPathForClaude = (p: string) => p.split(path.sep).join("--");
+export const flattenPathForClaude = (p: string) => p.split("/").join("--");
 
 const getTargetDir = (harness: Harness) =>
   harness === "claude-code"
@@ -33,9 +33,8 @@ async function findSkills(skillsDir: string) {
       // Skip if SKILL.md is directly in skills/ root (empty path would clobber target dir)
       if (relativePath) {
         skills.push({ relativePath, absolutePath: dir });
-        return; // Don't recurse into skill folders
+        return;
       }
-      // Continue scanning if this was the root (shouldn't have SKILL.md but handle gracefully)
     }
 
     for (const e of entries) {
