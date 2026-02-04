@@ -7,7 +7,7 @@ ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 # In local development this behaviour can be toggled on and off inthe os UI and is
 # implemented in providers/local-docker.ts
 if [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
-  "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
+  bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
 fi
 
 # Allow interactive shell in a fresh container - e.g.:

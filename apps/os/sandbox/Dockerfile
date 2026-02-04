@@ -9,10 +9,6 @@ ARG SANDBOX_BUN_VERSION=1.3.6
 ARG SANDBOX_GO_VERSION=1.23.4
 ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
 
-ARG GIT_SHA=unknown
-ENV GIT_SHA=$GIT_SHA
-LABEL org.opencontainers.image.revision=$GIT_SHA
-
 # Install curl first (may not be present in all base images)
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
@@ -150,5 +146,9 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
 # Copy home skeleton into /home/iterate
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+LABEL org.opencontainers.image.revision=$GIT_SHA
 
 ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/entry.sh"]

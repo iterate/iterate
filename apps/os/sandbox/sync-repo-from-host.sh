@@ -1,4 +1,6 @@
 #!/bin/bash
+# TODO: This script is still a bit messy; the main entrypoint in
+# apps/os/sandbox/entry.sh is now clean, but this sync helper could use a refactor.
 set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
@@ -18,6 +20,13 @@ rsync -a --delete \
   --exclude='.git' \
   --exclude='node_modules' \
   "/host/repo-checkout/" "${ITERATE_REPO}/"
+# rsync returns 24 when files vanish mid-transfer (common during parallel builds/tests).
+# We tolerate that case to avoid killing the container during startup, but still fail
+# on any other non-zero exit code so real sync errors surface.
+repo_sync_status=$?
+if [[ $repo_sync_status -ne 0 && $repo_sync_status -ne 24 ]]; then
+  exit $repo_sync_status
+fi
 
 if [[ -d "${HOST_COMMONDIR}" ]]; then
   echo "[entry] Syncing commondir from ${HOST_COMMONDIR} -> ${ITERATE_REPO}/.git"
@@ -25,6 +34,11 @@ if [[ -d "${HOST_COMMONDIR}" ]]; then
   rsync -a --delete \
     --no-owner --no-group --no-perms \
     "${HOST_COMMONDIR}/" "${ITERATE_REPO}/.git/"
+  # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
+  commondir_sync_status=$?
+  if [[ $commondir_sync_status -ne 0 && $commondir_sync_status -ne 24 ]]; then
+    exit $commondir_sync_status
+  fi
 fi
 
 if [[ -d "${HOST_GITDIR}" ]]; then
@@ -37,6 +51,11 @@ if [[ -d "${HOST_GITDIR}" ]]; then
   rsync -a \
     --no-owner --no-group --no-perms \
     "${HOST_GITDIR}/" "${ITERATE_REPO}/.git/"
+  # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
+  gitdir_sync_status=$?
+  if [[ $gitdir_sync_status -ne 0 && $gitdir_sync_status -ne 24 ]]; then
+    exit $gitdir_sync_status
+  fi
 fi
 
 # Flatten worktree metadata copied from host paths.

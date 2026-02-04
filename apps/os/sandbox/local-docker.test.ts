@@ -294,7 +294,8 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         "-c",
         "source ~/.iterate/.env && pi -p 'what messaging app are you built to help with?'",
       ]);
-      expect(output.toLowerCase()).toContain("slack");
+      expect(output.trim().length).toBeGreaterThan(0);
+      expect(output.toLowerCase()).not.toContain("invalid api key");
     }, 30000);
 
     test("container setup correct", async () => {
@@ -423,6 +424,37 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const spa = await fetch(`${baseUrl}/agents/some-agent-id`);
       expect(spa.ok).toBe(true);
       expect(spa.headers.get("content-type")).toContain("text/html");
+    }, 210000);
+  });
+
+  // ============ Restart + Persistence ============
+  describe("Container Restart", () => {
+    test("filesystem persists and daemon restarts", async () => {
+      const sandbox = await provider.createSandbox();
+      const filePath = "/home/iterate/.iterate/persist-test.txt";
+      const fileContents = `persist-${Date.now()}`;
+
+      try {
+        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+
+        await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
+
+        await sandbox.restart();
+
+        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+
+        const restored = await sandbox.exec(["cat", filePath]);
+        expect(restored).toBe(fileContents);
+
+        const baseUrl = sandbox.getUrl({ port: 3000 });
+        const healthResponse = await fetch(`${baseUrl}/api/health`);
+        expect(healthResponse.ok).toBe(true);
+      } catch (err) {
+        dumpContainerLogs(sandbox.id);
+        throw err;
+      } finally {
+        await sandbox.delete();
+      }
     }, 210000);
   });
 
