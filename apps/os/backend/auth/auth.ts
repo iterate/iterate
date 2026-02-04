@@ -33,12 +33,7 @@ function parseEmailPatterns(value: string) {
 }
 
 function matchesEmailPattern(email: string, patterns: string[]) {
-  const result = patterns.some((pattern) => minimatch(email, pattern));
-  // Debug logging for signup allowlist issues
-  if (!result) {
-    console.log("[DEBUG] Email pattern mismatch", { email, patterns, result });
-  }
-  return result;
+  return patterns.some((pattern) => minimatch(email, pattern));
 }
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
