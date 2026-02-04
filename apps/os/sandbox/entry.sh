@@ -7,11 +7,7 @@ ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 # In local development this behaviour can be toggled on and off inthe os UI and is
 # implemented in providers/local-docker.ts
 if [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
-  sync_script="${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
-  sync_tmp="/tmp/sync-repo-from-host.sh"
-  cp "$sync_script" "$sync_tmp"
-  chmod +x "$sync_tmp"
-  bash "$sync_tmp"
+  bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
 fi
 
 # This is primarily useful for tests of the local-docker provider,

@@ -50,31 +50,14 @@ if [[ -d "${HOST_GITDIR}" ]]; then
   fi
 
   echo "[entry] Syncing gitdir from ${HOST_GITDIR} -> ${ITERATE_REPO}/.git"
-  set +e
-  echo "[entry] DEBUG: HOST_GITDIR contents:"
-  ls -la "${HOST_GITDIR}/" | head -10 || true
-  echo "[entry] DEBUG: HOST_GITDIR/HEAD: $(cat ${HOST_GITDIR}/HEAD 2>/dev/null || echo 'NO HEAD')"
-  echo "[entry] DEBUG: .git/HEAD before: $(cat ${ITERATE_REPO}/.git/HEAD 2>/dev/null || echo 'NO HEAD')"
   mkdir -p "${ITERATE_REPO}/.git"
-  
-  # Try direct cp first to see if that works
-  echo "[entry] DEBUG: copying HEAD directly with cp..."
-  echo "[entry] DEBUG: source file exists: $(test -f "${HOST_GITDIR}/HEAD" && echo yes || echo no)"
-  echo "[entry] DEBUG: dest dir writable: $(test -w "${ITERATE_REPO}/.git" && echo yes || echo no)"
-  cp -v "${HOST_GITDIR}/HEAD" "${ITERATE_REPO}/.git/HEAD"
-  CP_EXIT=$?
-  echo "[entry] DEBUG: cp exit code: $CP_EXIT"
-  echo "[entry] DEBUG: .git/HEAD after cp: $(cat ${ITERATE_REPO}/.git/HEAD 2>/dev/null || echo 'NO HEAD')"
-  
-  # Now rsync the rest
-  echo "[entry] DEBUG: running rsync..."
-  rsync -av \
+
+  set +e
+  rsync -a --force \
     --no-owner --no-group --no-perms \
-    "${HOST_GITDIR}/" "${ITERATE_REPO}/.git/" 2>&1
+    "${HOST_GITDIR}/" "${ITERATE_REPO}/.git/"
   # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
   gitdir_sync_status=$?
-  echo "[entry] DEBUG: rsync exit code: $gitdir_sync_status"
-  echo "[entry] DEBUG: .git/HEAD after rsync: $(cat ${ITERATE_REPO}/.git/HEAD 2>/dev/null || echo 'NO HEAD')"
   set -e
   if [[ $gitdir_sync_status -ne 0 && $gitdir_sync_status -ne 24 ]]; then
     exit $gitdir_sync_status
@@ -90,5 +73,3 @@ if [[ -f "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh" ]]; then
   echo "[entry] Syncing home-skeleton"
   bash "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh"
 fi
-
-echo "[entry] sync-repo-from-host.sh COMPLETED SUCCESSFULLY"
