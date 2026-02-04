@@ -33,10 +33,7 @@ export default workflow({
       },
       steps: [
         ...utils.setupRepo,
-        {
-          name: "Install Doppler CLI",
-          uses: "dopplerhq/cli-action@v2",
-        },
+        ...utils.setupDoppler({ config: "dev" }),
         uses("docker/setup-buildx-action@v3"),
         {
           name: "Build sandbox image (local only, no push)",
