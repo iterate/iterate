@@ -146,35 +146,10 @@ function resolveLocalDockerMounts(opts?: {
   };
 }
 
-interface DockerContainer {
-  Ports?: Array<{ PublicPort?: number }>;
-}
-
-/** Find a block of consecutive available host ports by querying Docker */
-async function findAvailablePortBlock(count: number): Promise<number> {
-  const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
-
-  const usedPorts = new Set<number>();
-  for (const container of containers) {
-    for (const port of container.Ports ?? []) {
-      if (port.PublicPort) {
-        usedPorts.add(port.PublicPort);
-      }
-    }
-  }
-
-  // Find a contiguous block of `count` available ports
-  for (let basePort = 10000; basePort <= 11000 - count; basePort++) {
-    let blockAvailable = true;
-    for (let i = 0; i < count; i++) {
-      if (usedPorts.has(basePort + i)) {
-        blockAvailable = false;
-        break;
-      }
-    }
-    if (blockAvailable) return basePort;
-  }
-  throw new Error(`No available port block of size ${count} in range 10000-11000`);
+interface DockerInspect {
+  NetworkSettings?: {
+    Ports?: Record<string, Array<{ HostPort?: string }> | null>;
+  };
 }
 
 function rewriteLocalhost(value: string): string {
@@ -190,6 +165,40 @@ function sanitizeEnvVars(envVars: Record<string, string>): string[] {
     const sanitizedValue = String(value).replace(/[\u0000-\u001f]/g, "");
     return `${key}=${sanitizedValue}`;
   });
+}
+
+async function resolveHostPorts(containerId: string): Promise<Record<string, number>> {
+  const inspect = await dockerApi<DockerInspect>("GET", `/containers/${containerId}/json`);
+  const ports = inspect.NetworkSettings?.Ports ?? {};
+  const resolved: Record<string, number> = {};
+
+  for (const daemon of DAEMON_DEFINITIONS) {
+    const key = `${daemon.internalPort}/tcp`;
+    const bindings = ports[key];
+    const hostPortRaw = Array.isArray(bindings) ? bindings[0]?.HostPort : undefined;
+    if (!hostPortRaw) {
+      throw new Error(`No host port mapped for ${key}`);
+    }
+    const hostPort = Number(hostPortRaw);
+    if (Number.isNaN(hostPort)) {
+      throw new Error(`Invalid host port for ${key}: ${hostPortRaw}`);
+    }
+    resolved[daemon.id] = hostPort;
+  }
+
+  const pidnapKey = `${PIDNAP_PORT}/tcp`;
+  const pidnapBindings = ports[pidnapKey];
+  const pidnapHostPortRaw = Array.isArray(pidnapBindings) ? pidnapBindings[0]?.HostPort : undefined;
+  if (!pidnapHostPortRaw) {
+    throw new Error(`No host port mapped for ${pidnapKey}`);
+  }
+  const pidnapHostPort = Number(pidnapHostPortRaw);
+  if (Number.isNaN(pidnapHostPort)) {
+    throw new Error(`Invalid host port for ${pidnapKey}: ${pidnapHostPortRaw}`);
+  }
+  resolved["pidnap"] = pidnapHostPort;
+
+  return resolved;
 }
 
 // NOTE: Workerd runtime: do not use child_process/execSync here (no exec allowed).
@@ -309,24 +318,16 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
     type: "local-docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
-      const ports: Record<string, number> = {};
       const portBindings: Record<string, Array<{ HostPort: string }>> = {};
       const exposedPorts: Record<string, object> = {};
 
-      const totalPorts = DAEMON_DEFINITIONS.length + 1;
-      const basePort = await findAvailablePortBlock(totalPorts);
-
-      DAEMON_DEFINITIONS.forEach((daemon, index) => {
-        const hostPort = basePort + index;
+      DAEMON_DEFINITIONS.forEach((daemon) => {
         const internalPortKey = `${daemon.internalPort}/tcp`;
-        ports[daemon.id] = hostPort;
-        portBindings[internalPortKey] = [{ HostPort: String(hostPort) }];
+        portBindings[internalPortKey] = [{ HostPort: "0" }];
         exposedPorts[internalPortKey] = {};
       });
 
-      const pidnapHostPort = basePort + DAEMON_DEFINITIONS.length;
-      ports["pidnap"] = pidnapHostPort;
-      portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: String(pidnapHostPort) }];
+      portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: "0" }];
       exposedPorts[`${PIDNAP_PORT}/tcp`] = {};
 
       const projectSlugRaw = machineConfig.envVars["ITERATE_PROJECT_SLUG"] ?? "project";
@@ -394,6 +395,8 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       const newContainerId = createResponse.Id;
 
       await dockerApi("POST", `/containers/${newContainerId}/start`, {});
+
+      const ports = await resolveHostPorts(newContainerId);
 
       return {
         externalId: newContainerId,

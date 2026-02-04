@@ -38,35 +38,10 @@ const DAEMON_PORTS = [
   { id: "opencode", internalPort: 4096 },
 ] as const;
 
-interface DockerContainer {
-  Ports?: Array<{ PublicPort?: number }>;
-}
-
-/** Find a block of consecutive available host ports by querying Docker */
-async function findAvailablePortBlock(count: number): Promise<number> {
-  const containers = await dockerApi<DockerContainer[]>("GET", "/containers/json?all=true");
-
-  const usedPorts = new Set<number>();
-  for (const container of containers) {
-    for (const port of container.Ports ?? []) {
-      if (port.PublicPort) {
-        usedPorts.add(port.PublicPort);
-      }
-    }
-  }
-
-  // Find a contiguous block of `count` available ports
-  for (let basePort = 10000; basePort <= 11000 - count; basePort++) {
-    let blockAvailable = true;
-    for (let i = 0; i < count; i++) {
-      if (usedPorts.has(basePort + i)) {
-        blockAvailable = false;
-        break;
-      }
-    }
-    if (blockAvailable) return basePort;
-  }
-  throw new Error(`No available port block of size ${count} in range 10000-11000`);
+interface DockerInspect {
+  NetworkSettings?: {
+    Ports?: Record<string, Array<{ HostPort?: string }> | null>;
+  };
 }
 
 function getDefaultComposeProjectName(repoRoot: string): string {
@@ -120,6 +95,7 @@ class LocalDockerSandboxHandle implements SandboxHandle {
   constructor(
     private containerId: string,
     private ports: Record<number, number>, // containerPort -> hostPort
+    private internalPorts: number[],
   ) {
     this.id = containerId;
   }
@@ -223,6 +199,7 @@ class LocalDockerSandboxHandle implements SandboxHandle {
 
   async restart(): Promise<void> {
     await dockerApi("POST", `/containers/${this.containerId}/restart`, {});
+    this.ports = await resolveHostPorts(this.containerId, this.internalPorts);
   }
 
   async delete(): Promise<void> {
@@ -232,6 +209,29 @@ class LocalDockerSandboxHandle implements SandboxHandle {
       // Best effort cleanup
     }
   }
+}
+
+async function resolveHostPorts(
+  containerId: string,
+  internalPorts: number[],
+): Promise<Record<number, number>> {
+  const inspect = await dockerApi<DockerInspect>("GET", `/containers/${containerId}/json`);
+  const ports = inspect.NetworkSettings?.Ports ?? {};
+  const resolved: Record<number, number> = {};
+  for (const internalPort of internalPorts) {
+    const key = `${internalPort}/tcp`;
+    const bindings = ports[key];
+    const hostPortRaw = Array.isArray(bindings) ? bindings[0]?.HostPort : undefined;
+    if (!hostPortRaw) {
+      throw new Error(`No host port mapped for ${key}`);
+    }
+    const hostPort = Number(hostPortRaw);
+    if (Number.isNaN(hostPort)) {
+      throw new Error(`Invalid host port for ${key}: ${hostPortRaw}`);
+    }
+    resolved[internalPort] = hostPort;
+  }
+  return resolved;
 }
 
 export function createLocalDockerProvider(
@@ -245,26 +245,17 @@ export function createLocalDockerProvider(
     async createSandbox(opts?: CreateSandboxOptions): Promise<SandboxHandle> {
       const imageName = resolveBaseImage(repoRoot);
 
-      // Allocate ports
-      const totalPorts = DAEMON_PORTS.length + 1; // +1 for pidnap
-      const basePort = await findAvailablePortBlock(totalPorts);
-
-      const ports: Record<number, number> = {};
       const portBindings: Record<string, Array<{ HostPort: string }>> = {};
       const exposedPorts: Record<string, object> = {};
 
-      DAEMON_PORTS.forEach((daemon, index) => {
-        const hostPort = basePort + index;
+      DAEMON_PORTS.forEach((daemon) => {
         const internalPortKey = `${daemon.internalPort}/tcp`;
-        ports[daemon.internalPort] = hostPort;
-        portBindings[internalPortKey] = [{ HostPort: String(hostPort) }];
+        portBindings[internalPortKey] = [{ HostPort: "0" }];
         exposedPorts[internalPortKey] = {};
       });
 
       // Pidnap port
-      const pidnapHostPort = basePort + DAEMON_PORTS.length;
-      ports[PIDNAP_PORT] = pidnapHostPort;
-      portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: String(pidnapHostPort) }];
+      portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: "0" }];
       exposedPorts[`${PIDNAP_PORT}/tcp`] = {};
 
       // Container name
@@ -325,7 +316,9 @@ export function createLocalDockerProvider(
       // Start container
       await dockerApi("POST", `/containers/${containerId}/start`, {});
 
-      const handle = new LocalDockerSandboxHandle(containerId, ports);
+      const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
+      const ports = await resolveHostPorts(containerId, internalPorts);
+      const handle = new LocalDockerSandboxHandle(containerId, ports, internalPorts);
 
       // Wait for entry.sh to complete (pidnap will be listening)
       // This ensures sync-home-skeleton has finished and won't overwrite our env vars

@@ -51,6 +51,75 @@ function dumpContainerLogs(containerId: string): void {
   }
 }
 
+async function waitForValue<T>(
+  getValue: () => Promise<T | undefined>,
+  opts: { timeoutMs: number; intervalMs: number },
+): Promise<T> {
+  const start = Date.now();
+  while (Date.now() - start < opts.timeoutMs) {
+    const value = await getValue();
+    if (value !== undefined) return value;
+    await new Promise((r) => setTimeout(r, opts.intervalMs));
+  }
+  throw new Error(`Timed out after ${opts.timeoutMs}ms waiting for value`);
+}
+
+async function waitForCondition(
+  check: () => Promise<boolean>,
+  opts: { timeoutMs: number; intervalMs: number },
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < opts.timeoutMs) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, opts.intervalMs));
+  }
+  throw new Error(`Timed out after ${opts.timeoutMs}ms waiting for condition`);
+}
+
+async function execWithTimeout(
+  sandbox: SandboxHandle,
+  cmd: string[],
+  timeoutMs: number,
+  label: string,
+): Promise<string> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      sandbox.exec(cmd),
+      new Promise<string>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`Timed out after ${timeoutMs}ms: ${label}`));
+        }, timeoutMs);
+      }),
+    ]);
+    return result;
+  } catch (err) {
+    dumpContainerLogs(sandbox.id);
+    throw err;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+async function waitForHealthyOrThrow(
+  sandbox: SandboxHandle,
+  process: string,
+  timeoutMs: number,
+): Promise<void> {
+  await Promise.race([
+    sandbox.waitForServiceHealthy({ process, timeoutMs }),
+    new Promise<void>((_resolve, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(`Timed out after ${timeoutMs}ms waiting for ${process} to become healthy`),
+        );
+      }, timeoutMs);
+    }),
+  ]);
+}
+
 type SandboxTestOptions = {
   providerOptions?: LocalDockerProviderOptions;
   sandboxOptions?: CreateSandboxOptions | (() => CreateSandboxOptions | undefined);
@@ -59,13 +128,14 @@ type SandboxTestOptions = {
 
 function createSandboxTest(options: SandboxTestOptions = {}) {
   return baseTest.extend<{ sandbox: SandboxHandle }>({
-    sandbox: async ({}, runWithSandbox) => {
+    sandbox: async ({ task: _task }, runWithSandbox) => {
       const provider = createLocalDockerProvider(options.providerOptions);
       const resolvedOptions =
         typeof options.sandboxOptions === "function"
           ? options.sandboxOptions()
           : options.sandboxOptions;
       const sandbox = await provider.createSandbox(resolvedOptions);
+      console.log("[container] id:", sandbox.id);
       try {
         if (options.waitFor) {
           for (const wait of options.waitFor) {
@@ -94,21 +164,16 @@ function getAgentEnv(): Record<string, string> {
   return env;
 }
 
-const testWithSandbox = createSandboxTest();
-const testWithBackend = createSandboxTest({
-  waitFor: [{ process: "daemon-backend" }],
-});
-const testWithBackendAndFrontend = createSandboxTest({
+const testWithSandbox = createSandboxTest().concurrent;
+const testWithAgentEnv = createSandboxTest({
   sandboxOptions: () => ({ env: getAgentEnv() }),
-  waitFor: [{ process: "daemon-backend" }, { process: "daemon-frontend" }],
-});
+}).concurrent;
 const testWithCustomerRepo = createSandboxTest({
   sandboxOptions: () => ({ env: { ITERATE_CUSTOMER_REPO_PATH: CONTAINER_REPO_PATH } }),
-  waitFor: [{ process: "daemon-backend" }],
-});
+}).concurrent;
 const testWithHostSync = createSandboxTest({
   providerOptions: { syncFromHostRepo: true },
-});
+}).concurrent;
 
 // ============ Tests ============
 
@@ -124,9 +189,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
     30000,
   );
 
-  testWithBackend(
+  testWithSandbox(
     "dynamically added env var available in shell and pidnap",
     async ({ sandbox }) => {
+      await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
       const pidnapUrl = sandbox.getUrl({ port: 9876 });
       const client = createPidnapRpcClient(pidnapUrl);
 
@@ -145,19 +211,18 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
       // Step 3: Wait for pidnap to auto-reload opencode with new env vars
       // Note: daemon-backend has inheritGlobalEnv: false, but opencode inherits global env
       // opencode has reloadDelay: 500ms and inheritGlobalEnv: true (default)
-      // Use expect.poll to retry until the env var appears (up to 10s)
-      await expect
-        .poll(
-          async () => {
-            const info = await client.processes.get({
-              target: "opencode",
-              includeEffectiveEnv: true,
-            });
-            return info.effectiveEnv?.DYNAMIC_TEST_VAR;
-          },
-          { timeout: 10000, interval: 500 },
-        )
-        .toBe("added_at_runtime");
+      // Retry until the env var appears (up to 10s)
+      const value = await waitForValue(
+        async () => {
+          const info = await client.processes.get({
+            target: "opencode",
+            includeEffectiveEnv: true,
+          });
+          return info.effectiveEnv?.DYNAMIC_TEST_VAR;
+        },
+        { timeoutMs: 10000, intervalMs: 500 },
+      );
+      expect(value).toBe("added_at_runtime");
     },
     60000,
   );
@@ -185,7 +250,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
  * - All staged/unstaged/untracked changes match exactly
  */
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
-  baseTest(
+  baseTest.concurrent(
     "container git state matches host worktree exactly",
     async () => {
       let worktreePath: string | undefined;
@@ -298,7 +363,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
 describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
   // ============ Container Setup ============
   describe("Container Setup", () => {
-    testWithBackendAndFrontend("agent CLIs installed", async ({ sandbox }) => {
+    testWithSandbox("agent CLIs installed", async ({ sandbox }) => {
       const opencode = await sandbox.exec(["opencode", "--version"]);
       expect(opencode).toMatch(/\d+\.\d+\.\d+/);
 
@@ -309,66 +374,80 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(pi).toMatch(/\d+\.\d+\.\d+/);
     });
 
-    testWithBackendAndFrontend(
+    testWithAgentEnv(
       "opencode answers secret question",
       async ({ sandbox }) => {
         if (!process.env.OPENAI_API_KEY) {
           throw new Error("OPENAI_API_KEY environment variable is required");
         }
-        const output = await sandbox.exec([
-          "bash",
-          "-c",
-          "source ~/.iterate/.env && opencode run 'what messaging app are you built to help with?'",
-        ]);
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
+        const output = await execWithTimeout(
+          sandbox,
+          [
+            "bash",
+            "-c",
+            "source ~/.iterate/.env && opencode run 'what messaging app are you built to help with?'",
+          ],
+          45000,
+          "opencode secret question",
+        );
         expect(output.toLowerCase()).toContain("slack");
       },
-      30000,
+      60000,
     );
 
-    testWithBackendAndFrontend(
+    testWithAgentEnv(
       "claude answers secret question",
       async ({ sandbox }) => {
         if (!process.env.ANTHROPIC_API_KEY) {
           throw new Error("ANTHROPIC_API_KEY environment variable is required");
         }
-        const output = await sandbox.exec([
-          "bash",
-          "-c",
-          "source ~/.iterate/.env && claude -p 'what messaging app are you built to help with?'",
-        ]);
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
+        const output = await execWithTimeout(
+          sandbox,
+          [
+            "bash",
+            "-c",
+            "source ~/.iterate/.env && claude -p 'what messaging app are you built to help with?'",
+          ],
+          45000,
+          "claude secret question",
+        );
         expect(output.toLowerCase()).toContain("slack");
       },
-      30000,
+      60000,
     );
 
-    testWithBackendAndFrontend(
+    testWithAgentEnv(
       "pi answers secret question",
       async ({ sandbox }) => {
         if (!process.env.ANTHROPIC_API_KEY) {
           throw new Error("ANTHROPIC_API_KEY environment variable is required");
         }
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         // TODO: In future, verify agent instructions are passed to agents. We used to ask for the word "Slack" here,
         // but that question was too unreliable.
-        const output = await sandbox.exec([
-          "bash",
-          "-c",
-          "source ~/.iterate/.env && pi -p 'what is 50 minus 8?'",
-        ]);
+        const output = await execWithTimeout(
+          sandbox,
+          ["bash", "-c", "source ~/.iterate/.env && pi -p 'what is 50 minus 8?'"],
+          45000,
+          "pi secret question",
+        );
         expect(output.trim().length).toBeGreaterThan(0);
         expect(output.toLowerCase()).not.toContain("invalid api key");
         expect(output).toContain("42");
       },
-      30000,
+      60000,
     );
 
-    testWithBackendAndFrontend("container setup correct", async ({ sandbox }) => {
+    testWithSandbox("container setup correct", async ({ sandbox }) => {
       // repo cloned
       const ls = await sandbox.exec(["ls", CONTAINER_REPO_PATH]);
       expect(ls).toContain("README.md");
       expect(ls).toContain("apps");
     });
 
-    testWithBackendAndFrontend("git operations work", async ({ sandbox }) => {
+    testWithSandbox("git operations work", async ({ sandbox }) => {
       const init = await sandbox.exec(["git", "init", "/tmp/test-repo"]);
       expect(init).toContain("Initialized");
 
@@ -413,27 +492,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       expect(containerCommit).toBe(gitInfo!.commit);
     });
 
-    testWithBackendAndFrontend(
-      "shell sources ~/.iterate/.env automatically",
-      async ({ sandbox }) => {
-        // Write env var to ~/.iterate/.env
-        await sandbox.exec([
-          "sh",
-          "-c",
-          'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
-        ]);
+    testWithSandbox("shell sources ~/.iterate/.env automatically", async ({ sandbox }) => {
+      // Write env var to ~/.iterate/.env
+      await sandbox.exec([
+        "sh",
+        "-c",
+        'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
+      ]);
 
-        // Start a new login shell and check if env var is available
-        const envOutput = await sandbox.exec([
-          "bash",
-          "-l",
-          "-c",
-          "env | grep TEST_ITERATE_ENV_VAR",
-        ]);
+      // Start a new login shell and check if env var is available
+      const envOutput = await sandbox.exec(["bash", "-l", "-c", "env | grep TEST_ITERATE_ENV_VAR"]);
 
-        expect(envOutput).toContain("hello_from_env_file");
-      },
-    );
+      expect(envOutput).toContain("hello_from_env_file");
+    });
   });
 
   // ============ Daemon ============
@@ -441,6 +512,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     testWithCustomerRepo(
       "daemon accessible",
       async ({ sandbox }) => {
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         const baseUrl = sandbox.getUrl({ port: 3000 });
 
         // Verify health endpoint from host
@@ -473,6 +545,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     testWithCustomerRepo(
       "PTY endpoint works",
       async ({ sandbox }) => {
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         const baseUrl = sandbox.getUrl({ port: 3000 });
         // PTY endpoint exists
         await expect
@@ -495,24 +568,23 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     testWithCustomerRepo(
       "serves assets and routes correctly",
       async ({ sandbox }) => {
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         const baseUrl = sandbox.getUrl({ port: 3000 });
         const trpc = createDaemonTrpcClient(baseUrl);
 
         // index.html
-        await expect
-          .poll(
-            async () => {
-              try {
-                const root = await fetch(`${baseUrl}/`);
-                const contentType = root.headers.get("content-type") ?? "";
-                return root.ok && contentType.includes("text/html");
-              } catch {
-                return false;
-              }
-            },
-            { timeout: 20000, interval: 1000 },
-          )
-          .toBe(true);
+        await waitForCondition(
+          async () => {
+            try {
+              const root = await fetch(`${baseUrl}/`);
+              const contentType = root.headers.get("content-type") ?? "";
+              return root.ok && contentType.includes("text/html");
+            } catch {
+              return false;
+            }
+          },
+          { timeoutMs: 20000, intervalMs: 1000 },
+        );
         const root = await fetch(`${baseUrl}/`);
         expect(root.ok).toBe(true);
         expect(root.headers.get("content-type")).toContain("text/html");
@@ -520,19 +592,17 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         expect(html.toLowerCase()).toContain("<!doctype html>");
 
         // health
-        await expect
-          .poll(
-            async () => {
-              try {
-                const response = await fetch(`${baseUrl}/api/health`);
-                return response.ok;
-              } catch {
-                return false;
-              }
-            },
-            { timeout: 20000, interval: 1000 },
-          )
-          .toBe(true);
+        await waitForCondition(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/api/health`);
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+          { timeoutMs: 20000, intervalMs: 1000 },
+        );
 
         // tRPC
         const hello = await trpc.hello.query();
@@ -543,67 +613,60 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         const jsMatch = html.match(/src="(\.?\/assets\/[^"]+\.js)"/);
         if (cssMatch) {
           const cssUrl = `${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`;
-          await expect
-            .poll(
-              async () => {
-                try {
-                  const response = await fetch(cssUrl);
-                  return response.ok;
-                } catch {
-                  return false;
-                }
-              },
-              { timeout: 20000, interval: 1000 },
-            )
-            .toBe(true);
-        }
-        if (jsMatch) {
-          const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
-          await expect
-            .poll(
-              async () => {
-                try {
-                  const response = await fetch(jsUrl);
-                  return response.ok;
-                } catch {
-                  return false;
-                }
-              },
-              { timeout: 20000, interval: 1000 },
-            )
-            .toBe(true);
-        }
-
-        // logo
-        await expect
-          .poll(
+          await waitForCondition(
             async () => {
               try {
-                const response = await fetch(`${baseUrl}/logo.svg`);
+                const response = await fetch(cssUrl);
                 return response.ok;
               } catch {
                 return false;
               }
             },
-            { timeout: 20000, interval: 1000 },
-          )
-          .toBe(true);
-
-        // SPA fallback
-        await expect
-          .poll(
+            { timeoutMs: 20000, intervalMs: 1000 },
+          );
+        }
+        if (jsMatch) {
+          const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
+          await waitForCondition(
             async () => {
               try {
-                const response = await fetch(`${baseUrl}/agents/some-agent-id`);
-                if (!response.ok) return "";
-                return response.headers.get("content-type") ?? "";
+                const response = await fetch(jsUrl);
+                return response.ok;
               } catch {
-                return "";
+                return false;
               }
             },
-            { timeout: 20000, interval: 1000 },
-          )
-          .toContain("text/html");
+            { timeoutMs: 20000, intervalMs: 1000 },
+          );
+        }
+
+        // logo
+        await waitForCondition(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/logo.svg`);
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+          { timeoutMs: 20000, intervalMs: 1000 },
+        );
+
+        // SPA fallback
+        const contentType = await waitForValue(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/agents/some-agent-id`);
+              if (!response.ok) return undefined;
+              return response.headers.get("content-type") ?? "";
+            } catch {
+              return undefined;
+            }
+          },
+          { timeoutMs: 20000, intervalMs: 1000 },
+        );
+        expect(contentType).toContain("text/html");
       },
       210000,
     );
@@ -617,60 +680,59 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
         const filePath = "/home/iterate/.iterate/persist-test.txt";
         const fileContents = `persist-${Date.now()}`;
 
-        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
 
         await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
         await sandbox.restart();
 
-        await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 240000);
 
         const restored = await sandbox.exec(["cat", filePath]);
         expect(restored).toBe(fileContents);
 
         const baseUrl = sandbox.getUrl({ port: 3000 });
-        await expect
-          .poll(
-            async () => {
-              try {
-                const response = await fetch(`${baseUrl}/api/health`);
-                return response.ok;
-              } catch {
-                return false;
-              }
-            },
-            { timeout: 20000, interval: 1000 },
-          )
-          .toBe(true);
+        await waitForCondition(
+          async () => {
+            try {
+              const response = await fetch(`${baseUrl}/api/health`);
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+          { timeoutMs: 180000, intervalMs: 1000 },
+        );
       },
-      210000,
+      300000,
     );
   });
 
   // ============ Pidnap ============
   describe("Pidnap", () => {
-    testWithBackend(
+    testWithSandbox(
       "processes.get returns running state for daemon-backend",
       async ({ sandbox }) => {
         const baseUrl = sandbox.getUrl({ port: 9876 });
-        // daemon-backend is already running (waited in fixture)
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         const client = createPidnapRpcClient(baseUrl);
         const result = await client.processes.get({ target: "daemon-backend" });
         expect(result.state).toBe("running");
       },
-      210000,
+      240000,
     );
 
-    testWithBackend(
+    testWithSandbox(
       "processes.get fails for non-existent service",
       async ({ sandbox }) => {
         const baseUrl = sandbox.getUrl({ port: 9876 });
+        await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
         const client = createPidnapRpcClient(baseUrl);
         await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
           /Process not found/i,
         );
       },
-      30000,
+      60000,
     );
   });
 });
