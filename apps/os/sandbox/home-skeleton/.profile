@@ -1,4 +1,4 @@
-# Source .bashrc for bash login shells
+# Source .bashrc for bash login shells (where PATH and env vars are set)
 if [ -n "$BASH_VERSION" ]; then
     if [ -f "$HOME/.bashrc" ]; then
         . "$HOME/.bashrc"

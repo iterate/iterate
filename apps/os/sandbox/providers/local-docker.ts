@@ -19,7 +19,7 @@ import type {
 } from "./types.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPO_ROOT = join(__dirname, "../../../../..");
+const DEFAULT_REPO_ROOT = join(__dirname, "../../../..");
 
 export interface LocalDockerProviderOptions {
   /** Override the repo root to mount into the container. Defaults to the iterate monorepo root. */
@@ -233,6 +233,19 @@ async function resolveHostPorts(
   return resolved;
 }
 
+async function waitForEntrypointSignal(handle: SandboxHandle, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await handle.exec(["test", "-f", "/tmp/reached-entrypoint"]);
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  throw new Error("Timeout waiting for /tmp/reached-entrypoint");
+}
+
 export function createLocalDockerProvider(
   providerOpts?: LocalDockerProviderOptions,
 ): SandboxProvider {
@@ -264,6 +277,11 @@ export function createLocalDockerProvider(
       // Git mounts for repo sync (opt-in for tests that need host parity)
       const binds: string[] = [];
       const gitInfo = providerOpts?.syncFromHostRepo ? getLocalDockerGitInfo(repoRoot) : null;
+      if (providerOpts?.syncFromHostRepo && !gitInfo) {
+        throw new Error(
+          `syncFromHostRepo requested but failed to get git info for repoRoot: ${repoRoot}`,
+        );
+      }
       if (gitInfo) {
         binds.push(`${gitInfo.repoRoot}:/host/repo-checkout:ro`);
         binds.push(`${gitInfo.gitDir}:/host/gitdir:ro`);
@@ -322,38 +340,54 @@ export function createLocalDockerProvider(
       const ports = await resolveHostPorts(containerId, internalPorts);
       const handle = new LocalDockerSandboxHandle(containerId, ports, internalPorts);
 
-      // Wait for entry.sh to complete (pidnap will be listening)
-      // This ensures sync-home-skeleton has finished and won't overwrite our env vars
+      // Write env vars to ~/.iterate/.env if any were provided
       if (Object.keys(iterateEnv).length > 0) {
         const maxWaitMs = 30000;
-        const start = Date.now();
-        while (Date.now() - start < maxWaitMs) {
-          try {
-            await handle.exec(["curl", "-sf", "http://localhost:9876/rpc/health"]);
-            break;
-          } catch {
+
+        if (opts?.command) {
+          // Command override: wait for container to be ready for exec
+          const start = Date.now();
+          while (Date.now() - start < maxWaitMs) {
+            try {
+              await handle.exec(["true"]);
+              break;
+            } catch {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          }
+
+          // entry.sh touches this file after sync-repo-from-host completes.
+          await waitForEntrypointSignal(handle, maxWaitMs);
+        } else {
+          // Default entrypoint: wait for pidnap health
+          const start = Date.now();
+          while (Date.now() - start < maxWaitMs) {
+            try {
+              await handle.exec(["curl", "-sf", "http://localhost:9876/rpc/health"]);
+              break;
+            } catch {
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          }
+
+          await waitForEntrypointSignal(handle, maxWaitMs);
+
+          // Wait for sync scripts to finish so they don't overwrite our env vars
+          const syncStart = Date.now();
+          while (Date.now() - syncStart < maxWaitMs) {
+            const running = await handle.exec([
+              "bash",
+              "-c",
+              "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
+            ]);
+            if (!running.trim()) break;
             await new Promise((r) => setTimeout(r, 500));
           }
         }
 
-        // Ensure initial sync scripts have finished before writing env vars
-        const syncStart = Date.now();
-        while (Date.now() - syncStart < maxWaitMs) {
-          const running = await handle.exec([
-            "bash",
-            "-c",
-            "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
-          ]);
-          if (!running.trim()) {
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 500));
-        }
-
-        // Write env vars to ~/.iterate/.env (appending to existing content)
-        // First add a newline in case the file doesn't end with one
-        await handle.exec(["sh", "-c", "echo '' >> ~/.iterate/.env"]);
+        // Write env vars to ~/.iterate/.env
         for (const [key, value] of Object.entries(iterateEnv)) {
+          if (value === undefined) continue;
           const encoded = Buffer.from(`export ${key}="${value}"\n`).toString("base64");
           await handle.exec(["sh", "-c", `echo '${encoded}' | base64 -d >> ~/.iterate/.env`]);
         }

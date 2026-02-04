@@ -10,6 +10,12 @@ if [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
   bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
 fi
 
+# This is primarily useful for tests of the local-docker provider,
+# where we want to exec commands in the container _after_ the initial sync.
+# A bit weird to have this here so we might move it to a local docker specific
+# place later.
+touch /tmp/reached-entrypoint
+
 # Allow interactive shell in a fresh container - e.g.:
 # docker run --rm -it ghcr.io/iterate/sandbox:local /bin/bash
 if [[ $# -gt 0 ]]; then

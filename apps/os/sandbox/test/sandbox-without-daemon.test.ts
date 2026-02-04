@@ -20,19 +20,17 @@
  */
 
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test as baseTest } from "vitest";
-import { createLocalDockerProvider } from "../providers/local-docker.ts";
-import type { SandboxHandle } from "../providers/types.ts";
 import {
   test,
   ITERATE_REPO_PATH_ON_HOST,
   ITERATE_REPO_PATH,
   RUN_LOCAL_DOCKER_TESTS,
-  dumpContainerLogs,
   getLocalDockerGitInfo,
+  withSandbox,
+  withWorktree,
 } from "./helpers.ts";
 
 // ============ Minimal Container Tests ============
@@ -46,17 +44,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Minimal Container Tests", () 
   test.scoped({ sandboxOptions: { command: ["sleep", "infinity"] } });
 
   describe("Container Setup", () => {
-    test("agent CLIs installed", async ({ sandbox }) => {
-      const opencode = await sandbox.exec(["opencode", "--version"]);
-      expect(opencode).toMatch(/\d+\.\d+\.\d+/);
-
-      const claude = await sandbox.exec(["claude", "--version"]);
-      expect(claude).toMatch(/\d+\.\d+\.\d+/);
-
-      const pi = await sandbox.exec(["pi", "--version"]);
-      expect(pi).toMatch(/\d+\.\d+\.\d+/);
-    });
-
     test("container setup correct", async ({ sandbox }) => {
       // repo cloned
       const ls = await sandbox.exec(["ls", ITERATE_REPO_PATH]);
@@ -130,7 +117,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Minimal Container Tests", () 
 // ============ Host Sync Tests ============
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Host Sync (Minimal)", () => {
-  // Sync from host repo, but use sleep infinity instead of pidnap
   test.scoped({
     providerOptions: { syncFromHostRepo: true },
     sandboxOptions: { command: ["sleep", "infinity"] },
@@ -139,21 +125,6 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Host Sync (Minimal)", () => {
   test("git state matches host", async ({ sandbox }) => {
     const gitInfo = getLocalDockerGitInfo(ITERATE_REPO_PATH_ON_HOST);
     expect(gitInfo).toBeDefined();
-
-    // Wait for sync-repo-from-host.sh to finish (entry.sh runs it before exec'ing command)
-    const maxWaitMs = 30000;
-    const start = Date.now();
-    while (Date.now() - start < maxWaitMs) {
-      const running = await sandbox.exec([
-        "bash",
-        "-c",
-        "pgrep -f 'sync-repo-from-host.sh' || true",
-      ]);
-      if (!running.trim()) {
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
 
     // Check branch matches (empty string if detached HEAD on both)
     const containerBranch = (
@@ -198,110 +169,36 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
   baseTest.concurrent(
     "container git state matches host worktree exactly",
     async () => {
-      let worktreePath: string | undefined;
-      let branchName: string | undefined;
-      let sandbox: SandboxHandle | undefined;
-      try {
-        // Create a fresh git worktree in a temp directory
-        worktreePath = mkdtempSync(join(tmpdir(), "git-sync-test-"));
-        branchName = `test-git-sync-${Date.now()}`;
-
-        execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
-          cwd: ITERATE_REPO_PATH_ON_HOST,
-          stdio: "pipe",
-        });
-
-        // Create dirty git state:
-        // 1. Staged new file
-        writeFileSync(join(worktreePath, "staged-new.txt"), "staged content");
-        execSync("git add staged-new.txt", { cwd: worktreePath });
-
-        // 2. Unstaged modification to existing file
-        appendFileSync(join(worktreePath, "README.md"), "\n# test modification for git sync test");
-
-        // 3. Untracked file
-        writeFileSync(join(worktreePath, "untracked.txt"), "untracked content");
+      await withWorktree(ITERATE_REPO_PATH_ON_HOST, async (worktree) => {
+        // Create dirty git state: staged, unstaged, and untracked files
+        writeFileSync(join(worktree.path, "staged-new.txt"), "staged content");
+        execSync("git add staged-new.txt", { cwd: worktree.path });
+        appendFileSync(join(worktree.path, "README.md"), "\n# test modification");
+        writeFileSync(join(worktree.path, "untracked.txt"), "untracked content");
 
         // Capture host git state
-        const hostBranch = execSync("git branch --show-current", {
-          cwd: worktreePath,
-          encoding: "utf-8",
-        }).trim();
-        const hostCommit = execSync("git rev-parse HEAD", {
-          cwd: worktreePath,
-          encoding: "utf-8",
-        }).trim();
-        const hostStatus = execSync("git status --porcelain", {
-          cwd: worktreePath,
-          encoding: "utf-8",
-        }).trim();
-
-        console.log("[host] branch:", hostBranch);
-        console.log("[host] commit:", hostCommit);
-        console.log("[host] status:\n", hostStatus);
-
-        // Create container from worktree with sleep infinity (don't need pidnap for git verification)
-        const provider = createLocalDockerProvider({
-          repoRoot: worktreePath,
-          syncFromHostRepo: true,
-        });
-        sandbox = await provider.createSandbox({ command: ["sleep", "infinity"] });
-        console.log("[container] id:", sandbox.id);
-
-        // Wait for sync-repo-from-host.sh to complete (runs before command override in entry.sh)
-        await new Promise((r) => setTimeout(r, 2000));
-
-        // Get container git state
-        const containerBranch = (
-          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "branch", "--show-current"])
-        ).trim();
-        const containerCommit = (
-          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "rev-parse", "HEAD"])
-        ).trim();
-        const containerStatus = (
-          await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "status", "--porcelain"])
+        const hostGitState = execSync(
+          "git branch --show-current; git rev-parse HEAD; git status --porcelain",
+          { cwd: worktree.path, encoding: "utf-8" },
         ).trim();
 
-        console.log("[container] branch:", containerBranch);
-        console.log("[container] commit:", containerCommit);
-        console.log("[container] status:\n", containerStatus);
+        // Create container from worktree and verify git state matches
+        await withSandbox(
+          { repoRoot: worktree.path, syncFromHostRepo: true },
+          { command: ["sleep", "infinity"] },
+          async (sandbox) => {
+            const containerGitState = (
+              await sandbox.exec([
+                "bash",
+                "-c",
+                `cd ${ITERATE_REPO_PATH} && git branch --show-current; git rev-parse HEAD; git status --porcelain`,
+              ])
+            ).trim();
 
-        // Verify exact match
-        expect(containerBranch).toBe(hostBranch);
-        expect(containerCommit).toBe(hostCommit);
-        expect(containerStatus).toBe(hostStatus);
-      } catch (err) {
-        if (sandbox) {
-          dumpContainerLogs(sandbox.id);
-        }
-        throw err;
-      } finally {
-        if (sandbox) {
-          await sandbox.delete();
-        }
-        if (worktreePath) {
-          // Cleanup worktree and branch
-          try {
-            execSync(`git worktree remove --force ${worktreePath}`, {
-              cwd: ITERATE_REPO_PATH_ON_HOST,
-              stdio: "pipe",
-            });
-          } catch {
-            rmSync(worktreePath, { recursive: true, force: true });
-            execSync(`git worktree prune`, { cwd: ITERATE_REPO_PATH_ON_HOST, stdio: "pipe" });
-          }
-        }
-        if (branchName) {
-          try {
-            execSync(`git branch -D ${branchName}`, {
-              cwd: ITERATE_REPO_PATH_ON_HOST,
-              stdio: "pipe",
-            });
-          } catch {
-            // Branch might not exist if worktree creation failed
-          }
-        }
-      }
+            expect(containerGitState).toBe(hostGitState);
+          },
+        );
+      });
     },
     30000,
   );

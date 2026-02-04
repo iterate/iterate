@@ -4,7 +4,8 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTRPCClient, httpLink } from "@trpc/client";
@@ -248,59 +249,76 @@ export function dumpContainerLogs(containerId: string): void {
   }
 }
 
-export async function execWithTimeout(
-  sandbox: SandboxHandle,
-  cmd: string[],
-  timeoutMs: number,
-  label: string,
-): Promise<string> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+/** Creates a temp directory and cleans it up after the callback completes. */
+export async function withTempDir<T>(
+  prefix: string,
+  fn: (tempDir: string) => Promise<T>,
+): Promise<T> {
+  const tempDir = mkdtempSync(join(tmpdir(), prefix));
   try {
-    const result = await Promise.race([
-      sandbox.exec(cmd),
-      new Promise<string>((_resolve, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(`Timed out after ${timeoutMs}ms: ${label}`));
-        }, timeoutMs);
-      }),
-    ]);
-    return result;
-  } catch (err) {
-    dumpContainerLogs(sandbox.id);
-    throw err;
+    return await fn(tempDir);
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+}
+
+/** Creates a git worktree and cleans it up after the callback completes. */
+export async function withWorktree<T>(
+  repoRoot: string,
+  fn: (worktree: WorktreeInfo) => Promise<T>,
+): Promise<T> {
+  const path = mkdtempSync(join(tmpdir(), "git-worktree-"));
+  const branch = `test-worktree-${Date.now()}`;
+
+  execSync(`git worktree add -b ${branch} ${path}`, {
+    cwd: repoRoot,
+    stdio: "pipe",
+  });
+
+  try {
+    return await fn({ path, branch });
+  } finally {
+    // Cleanup worktree
+    try {
+      execSync(`git worktree remove --force ${path}`, { cwd: repoRoot, stdio: "pipe" });
+    } catch {
+      rmSync(path, { recursive: true, force: true });
+      execSync(`git worktree prune`, { cwd: repoRoot, stdio: "pipe" });
+    }
+    // Cleanup branch
+    try {
+      execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "pipe" });
+    } catch {
+      // Branch might not exist if worktree creation failed
     }
   }
 }
 
-export async function waitForHealthyOrThrow(
-  sandbox: SandboxHandle,
-  process: string,
-  timeoutMs: number,
-): Promise<void> {
-  await Promise.race([
-    sandbox.waitForServiceHealthy({ process, timeoutMs }),
-    new Promise<void>((_resolve, reject) => {
-      setTimeout(() => {
-        reject(
-          new Error(`Timed out after ${timeoutMs}ms waiting for ${process} to become healthy`),
-        );
-      }, timeoutMs);
-    }),
-  ]);
-}
-
-export function getAgentEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  if (process.env.ANTHROPIC_API_KEY) {
-    env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+/**
+ * Sandbox lifecycle helper: logs container id, dumps logs on error, cleans up.
+ * Used by both the vitest fixture and tests needing dynamic provider options.
+ */
+export async function withSandbox<T>(
+  providerOptions: LocalDockerProviderOptions,
+  sandboxOptions: CreateSandboxOptions | undefined,
+  fn: (sandbox: SandboxHandle) => Promise<T>,
+): Promise<T> {
+  const provider = createLocalDockerProvider(providerOptions);
+  const sandbox = await provider.createSandbox(sandboxOptions);
+  console.log("[container] id:", sandbox.id);
+  try {
+    return await fn(sandbox);
+  } catch (err) {
+    dumpContainerLogs(sandbox.id);
+    throw err;
+  } finally {
+    await sandbox.delete();
   }
-  if (process.env.OPENAI_API_KEY) {
-    env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  }
-  return env;
 }
 
 // ============ Vitest Fixtures ============
@@ -317,17 +335,6 @@ export const test = baseTest.extend<{
   providerOptions: {},
   sandboxOptions: undefined,
   sandbox: async ({ providerOptions, sandboxOptions }, use) => {
-    const provider = createLocalDockerProvider(providerOptions);
-    const sandbox = await provider.createSandbox(sandboxOptions);
-    console.log("[container] id:", sandbox.id);
-    try {
-      // eslint-disable-next-line react-hooks/rules-of-hooks -- vitest fixture callback, not a React hook
-      await use(sandbox);
-    } catch (err) {
-      dumpContainerLogs(sandbox.id);
-      throw err;
-    } finally {
-      await sandbox.delete();
-    }
+    await withSandbox(providerOptions, sandboxOptions, use);
   },
 });

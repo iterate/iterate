@@ -74,8 +74,10 @@ RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
 
 USER iterate
 
-# Primary reason for this Dockerfile: keep wrapper scripts at absolute PATH top
-# (e.g. wrap claude/codex with dangerously skipped permissions).
+# PATH setup for iterate tools. These ENV statements set PATH for non-shell contexts
+# (e.g. `docker exec container opencode`). Login shells reset PATH via /etc/profile,
+# so home-skeleton/.profile must ALSO set up these paths for `bash -l` and SSH to work.
+# Keep both in sync! The .iterate/bin paths go first to allow wrapper scripts.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Git config for iterate user

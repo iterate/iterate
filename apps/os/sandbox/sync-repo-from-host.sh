@@ -31,7 +31,7 @@ fi
 if [[ -d "${HOST_COMMONDIR}" ]]; then
   echo "[entry] Syncing commondir from ${HOST_COMMONDIR} -> ${ITERATE_REPO}/.git"
   mkdir -p "${ITERATE_REPO}/.git"
-  rsync -a --delete \
+  rsync -a --delete --force \
     --no-owner --no-group --no-perms \
     "${HOST_COMMONDIR}/" "${ITERATE_REPO}/.git/"
   # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
