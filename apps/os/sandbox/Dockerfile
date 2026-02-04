@@ -57,6 +57,10 @@ RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
     echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
     chmod +x /usr/local/bin/iterate
 
+RUN echo '#!/bin/sh' > /usr/local/bin/helloworld && \
+    echo 'echo "Hello, world it is 17.22"' >> /usr/local/bin/helloworld && \
+    chmod +x /usr/local/bin/helloworld
+
 # Replicate CLI shim - directs users to iterate tool replicate
 RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
     echo 'echo "Error: The replicate CLI is not installed." >&2' >> /usr/local/bin/replicate && \
