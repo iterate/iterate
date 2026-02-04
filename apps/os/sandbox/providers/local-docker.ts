@@ -9,9 +9,8 @@ import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dockerApi } from "../../../backend/providers/local-docker.ts";
-import { execInContainer } from "../helpers/test-helpers.ts";
-import { getLocalDockerGitInfo } from "../helpers/local-docker-utils.ts";
+import { dockerApi } from "../../backend/providers/local-docker.ts";
+import { execInContainer, getLocalDockerGitInfo } from "../tests/helpers.ts";
 import type {
   CreateSandboxOptions,
   SandboxHandle,

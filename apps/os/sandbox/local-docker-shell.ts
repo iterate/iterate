@@ -3,7 +3,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { getLocalDockerGitInfo } from "./tests/helpers/local-docker-utils.ts";
+import { getLocalDockerGitInfo } from "./tests/helpers.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 const gitInfo = getLocalDockerGitInfo(repoRoot);
