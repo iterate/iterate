@@ -43,23 +43,8 @@ Merge tasks into processes with an explicit dependency system.
 ### Config Schema
 
 ```typescript
-// Health check can be an async function that returns true when healthy
-const HealthCheck = v.union([
-  v.function(), // async () => boolean
-  v.object({
-    type: v.literal("http"),
-    url: v.string(),
-    interval: v.optional(v.number()), // ms, default 1000
-    timeout: v.optional(v.number()), // ms, default 5000
-  }),
-  v.object({
-    type: v.literal("command"),
-    command: v.string(),
-    args: v.optional(v.array(v.string())),
-    interval: v.optional(v.number()),
-    timeout: v.optional(v.number()),
-  }),
-]);
+// Health check is an async function that returns true when healthy
+const HealthCheck = v.function(); // async () => boolean
 
 const ProcessEntry = v.object({
   name: v.string(),
@@ -127,7 +112,10 @@ export default defineConfig({
       name: "daemon",
       definition: { command: "tsx", args: ["server.ts"] },
       options: { restartPolicy: "always" },
-      healthCheck: { type: "http", url: "http://localhost:3000/health" },
+      healthCheck: async () => {
+        const res = await fetch("http://localhost:3000/health");
+        return res.ok;
+      },
       dependsOn: [
         { process: "db-migrate", condition: "completed" },
         { process: "egress-proxy", condition: "healthy" }, // waits for health check to pass
@@ -159,7 +147,7 @@ The `dependency-failed` state is explicit and distinct from `failed` - it means 
 
 ### Health Check Design
 
-Health checks determine when a process is considered "healthy" for the `condition: "healthy"` dependency type.
+Health checks determine when a process is considered "healthy" for the `condition: "healthy"` dependency type. A health check is simply an async function that returns `true` when healthy.
 
 ```typescript
 interface HealthCheckRunner {
@@ -185,18 +173,26 @@ class HealthCheckRunner {
   ) {}
 
   async runCheck(): Promise<boolean> {
+    // Use AbortController to properly clean up timeout on success
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+
     try {
       const result = await Promise.race([
         this.check(),
-        new Promise<boolean>((_, reject) =>
-          setTimeout(() => reject(new Error("Health check timeout")), this.timeoutMs),
-        ),
+        new Promise<boolean>((_, reject) => {
+          controller.signal.addEventListener("abort", () =>
+            reject(new Error("Health check timeout")),
+          );
+        }),
       ]);
       this.healthy = result;
       return result;
     } catch {
       this.healthy = false;
       return false;
+    } finally {
+      clearTimeout(timeoutId); // Always clean up the timer
     }
   }
 
@@ -241,8 +237,8 @@ function onProcessStateChange(process: Process) {
     }
   }
 
-  // If this process failed, mark dependents as dependency-failed
-  if (process.state === "failed") {
+  // If this process failed (either directly or via dependency), cascade to dependents
+  if (process.state === "failed" || process.state === "dependency-failed") {
     for (const dependent of getDependents(process.name)) {
       if (dependent.state === "pending") {
         dependent.state = "dependency-failed";
