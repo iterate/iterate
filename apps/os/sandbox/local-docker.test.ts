@@ -102,7 +102,10 @@ type SandboxTestOptions = {
 };
 
 function createSandboxTest(options: SandboxTestOptions = {}) {
-  return baseTest.extend<{ sandbox: SandboxHandle }>({
+  return baseTest.extend<{ sandbox: SandboxHandle; expect: typeof expect }>({
+    expect: async ({}, useExpect) => {
+      await useExpect(expect);
+    },
     sandbox: async ({ task: _task }, runWithSandbox) => {
       const provider = createLocalDockerProvider(options.providerOptions);
       const resolvedOptions =
@@ -166,7 +169,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
 
   testWithSandbox(
     "dynamically added env var available in shell and pidnap",
-    async ({ sandbox }) => {
+    async ({ sandbox, expect }) => {
       await waitForHealthyOrThrow(sandbox, "daemon-backend", 180000);
       const pidnapUrl = sandbox.getUrl({ port: 9876 });
       const client = createPidnapRpcClient(pidnapUrl);
