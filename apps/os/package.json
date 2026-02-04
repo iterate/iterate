@@ -7,7 +7,7 @@
     "deploy:prd": "doppler run --config prd -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy:stg": "doppler run --config stg -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy": "pnpm deploy:${APP_STAGE}",
-    "dev": "doppler run -- sh -c 'ITERATE_REPO_SHA=${ITERATE_REPO_SHA:-$(git rev-parse HEAD)} ITERATE_REPO_BRANCH=${ITERATE_REPO_BRANCH:-$(git branch --show-current)} tsx ./alchemy.run.ts cli --dev --stage dev-${ITERATE_USER:-$(id -un)}'",
+    "dev": "doppler run -- sh -c 'ITERATE_REPO_SHA=${ITERATE_REPO_SHA:-$(git rev-parse HEAD)} ITERATE_REPO_BRANCH=${ITERATE_REPO_BRANCH:-$(git branch --show-current || echo main)} tsx ./alchemy.run.ts cli --dev --stage dev-${ITERATE_USER:-$(id -un)}'",
     "dev:tunnel": "DEV_TUNNEL=1 pnpm dev",
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",

@@ -123,6 +123,14 @@ test.describe("Daytona iterate repo sync", () => {
       await daemonLink.waitFor({ timeout: 10_000 });
       daemonUrl = (await daemonLink.getAttribute("href"))!;
       console.log(`[machine] Daemon URL: ${daemonUrl}`);
+
+      // Capture machine ID from the URL for cleanup
+      // URL format: /org/.../proj/.../mach_xxx/...
+      const machineIdMatch = page.url().match(/mach_[a-z0-9]+/);
+      if (machineIdMatch) {
+        ctx.machineId = machineIdMatch[0];
+        console.log(`[machine] Machine ID: ${ctx.machineId}`);
+      }
     });
 
     // Note: We skip verifying the initial marker file content because xterm.js doesn't
@@ -223,6 +231,7 @@ async function createTestContext() {
 
   let devServerProcess: ChildProcess | null = null;
   let newSha: string | undefined;
+  let machineId: string | undefined;
 
   const startDevServer = async (sha: string, branch: string) => {
     // Kill any existing dev server
@@ -300,11 +309,36 @@ async function createTestContext() {
     set newSha(value: string | undefined) {
       newSha = value;
     },
+    get machineId() {
+      return machineId;
+    },
+    set machineId(value: string | undefined) {
+      machineId = value;
+    },
     startDevServer,
     stopDevServer,
 
     async [Symbol.asyncDispose]() {
       console.log("[cleanup] Starting cleanup...");
+
+      // Delete machine via API (before killing dev server so we still have API access)
+      if (machineId) {
+        try {
+          console.log(`[cleanup] Deleting machine: ${machineId}`);
+          const response = await fetch(`http://localhost:5173/backend/trpc/machine.delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ machineId }),
+          });
+          if (response.ok) {
+            console.log("[cleanup] Machine deleted");
+          } else {
+            console.log(`[cleanup] Failed to delete machine: ${response.status}`);
+          }
+        } catch (e) {
+          console.log(`[cleanup] Failed to delete machine: ${e}`);
+        }
+      }
 
       // Kill dev server
       await stopDevServer();

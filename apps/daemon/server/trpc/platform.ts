@@ -408,7 +408,8 @@ export async function syncIterateRepo(expectedSha: string, branch = "main"): Pro
     const status = await git.status(["--porcelain"]);
     if (!status.isClean()) {
       console.log(`[platform] Iterate repo is dirty, stashing`);
-      const stash = await git.stash();
+      // Use --include-untracked to stash untracked files too, avoiding conflicts
+      const stash = await git.stash(["--include-untracked"]);
       console.log(`[platform] Stashed changes: ${stash}`);
     }
 

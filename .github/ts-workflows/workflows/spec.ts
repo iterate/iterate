@@ -56,7 +56,7 @@ export default workflow({
     },
     "daytona-sync-spec": {
       ...utils.runsOn,
-      if: "github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[daytona-sync]')",
+      if: "github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '[daytona-sync-spec]')",
       steps: [
         { uses: "actions/checkout@v4" },
         { uses: "pnpm/action-setup@v4" },
