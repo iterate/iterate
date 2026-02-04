@@ -30,10 +30,15 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y btop build-essential fd-find gh git inotify-tools jq make rsync sqlite3 sudo tini tmux && \
+    apt-get install -y btop build-essential fd-find gh git inotify-tools jq locales make rsync sqlite3 sudo tini tmux && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -s $(which fdfind) /usr/local/bin/fd
+
+# Configure UTF-8 locale (required for btop and other tools)
+RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
