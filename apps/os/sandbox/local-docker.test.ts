@@ -299,13 +299,16 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       if (!process.env.ANTHROPIC_API_KEY) {
         throw new Error("ANTHROPIC_API_KEY environment variable is required");
       }
+      // TODO: In future, verify agent instructions are passed to agents. We used to ask for the word "Slack" here,
+      // but that question was too unreliable.
       const output = await sandbox.exec([
         "bash",
         "-c",
-        "source ~/.iterate/.env && pi -p 'what messaging app are you built to help with?'",
+        "source ~/.iterate/.env && pi -p 'what is 50 minus 8?'",
       ]);
       expect(output.trim().length).toBeGreaterThan(0);
       expect(output.toLowerCase()).not.toContain("invalid api key");
+      expect(output).toContain("42");
     }, 30000);
 
     test("container setup correct", async () => {
@@ -336,6 +339,21 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
       const syncProvider = createLocalDockerProvider({ syncFromHostRepo: true });
       const syncSandbox = await syncProvider.createSandbox();
       try {
+        // Wait for sync-repo-from-host.sh to finish (entry.sh runs it on startup)
+        const maxWaitMs = 30000;
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+          const running = await syncSandbox.exec([
+            "bash",
+            "-c",
+            "pgrep -f 'sync-repo-from-host.sh' || true",
+          ]);
+          if (!running.trim()) {
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
         // Check branch matches (empty string if detached HEAD on both)
         const containerBranch = (
           await syncSandbox.exec(["git", "-C", CONTAINER_REPO_PATH, "branch", "--show-current"])
