@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "composite": true,
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -18,10 +17,9 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["client/*"],
-      "@server/*": ["server/*"]
+      "@/*": ["./client/*"],
+      "@server/*": ["./server/*"]
     }
   },
   "include": ["client/**/*", "server/**/*", "config/**/*", "./server.ts"],

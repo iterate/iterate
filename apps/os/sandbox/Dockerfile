@@ -25,6 +25,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       git \
       inotify-tools \
       jq \
+      locales \
       make \
       openssh-client \
       rsync \
@@ -42,6 +43,11 @@ RUN corepack enable
 # Global npm tools (as root for system-wide access)
 RUN corepack prepare pnpm@10.24.0 --activate && \
     npm install -g tsx serve
+
+# Configure UTF-8 locale (required for btop and other tools)
+RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
 
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \

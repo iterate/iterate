@@ -1,6 +1,7 @@
 import { trpcRouter as daemonRouter } from "@iterate-com/daemon/server/trpc/router.ts";
 import { startServer } from "@iterate-com/daemon/server/start.ts";
 import z from "zod";
+import { skillsRouter } from "./procedures/skills.ts";
 import { tasksRouter } from "./procedures/tasks.ts";
 import { toolsRouter } from "./procedures/tools.ts";
 import { t } from "./trpc.ts";
@@ -14,6 +15,9 @@ export const router = t.router({
 
   /** Scheduled task management */
   task: tasksRouter,
+
+  /** Agent skills management */
+  skills: skillsRouter,
 
   server: {
     start: t.procedure

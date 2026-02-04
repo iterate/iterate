@@ -35,7 +35,7 @@
   "scripts": {
     "dev:website": "doppler run -- vite dev",
     "build": "doppler run -- vite build",
-    "typecheck": "tsc -build",
+    "typecheck": "tsgo -build",
     "deploy": "doppler run --config prd -- vite build && doppler run --config prd -- wrangler deploy",
     "test:e2e:vitest": "VITEST_RUN_E2E=true pnpm vitest run --passWithNoTests"
   },

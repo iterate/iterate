@@ -6,7 +6,7 @@
     "iterate": "./main.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@iterate-com/daemon": "workspace:*",
