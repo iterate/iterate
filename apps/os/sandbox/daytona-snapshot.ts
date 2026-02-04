@@ -29,6 +29,7 @@ if (!commitSha || !/^[0-9a-f]{40}$/i.test(commitSha)) {
   process.exit(1);
 }
 
+const forceRebuild = process.argv.includes("--force");
 const snapshotName = `iterate-sandbox-${commitSha}`;
 
 console.log(`Creating snapshot: ${snapshotName}`);
@@ -96,6 +97,27 @@ const image = Image.fromDockerfile(dockerfileTargetPath);
 
 const snapshot = await (async () => {
   try {
+    // Delete existing snapshot if --force flag is passed
+    if (forceRebuild) {
+      console.log(`--force: Deleting existing snapshot ${snapshotName} if it exists...`);
+      try {
+        const existing = await daytona.snapshot.get(snapshotName);
+        await daytona.snapshot.delete(existing);
+        console.log(`Deleted existing snapshot ${snapshotName}`);
+      } catch (deleteError) {
+        // Ignore 404 errors (snapshot doesn't exist)
+        if (
+          deleteError instanceof Error &&
+          "statusCode" in deleteError &&
+          deleteError.statusCode === 404
+        ) {
+          console.log(`Snapshot ${snapshotName} doesn't exist, nothing to delete`);
+        } else {
+          throw deleteError;
+        }
+      }
+    }
+
     return await daytona.snapshot.create(
       {
         name: snapshotName,
