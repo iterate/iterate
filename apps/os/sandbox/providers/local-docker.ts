@@ -368,8 +368,35 @@ export function createLocalDockerProvider(
 
         // entry.sh touches this file after sync-repo-from-host completes.
         await waitForEntrypointSignal(handle, maxWaitMs);
-        // Temporary: allow 5s for git sync to settle.
-        await new Promise((r) => setTimeout(r, 5000));
+
+        if (gitInfo?.commit) {
+          // Wait for host gitdir sync to be visible in the container.
+          // Without this, Host Sync (Minimal) and Git Worktree Sync tests can race.
+          let synced = false;
+          for (let i = 0; i < 25; i += 1) {
+            try {
+              const [branch, commit] = (
+                await handle.exec([
+                  "bash",
+                  "-c",
+                  "cd /home/iterate/src/github.com/iterate/iterate && git branch --show-current; git rev-parse HEAD",
+                ])
+              )
+                .trim()
+                .split("\n");
+              if (commit === gitInfo.commit && (!gitInfo.branch || branch === gitInfo.branch)) {
+                synced = true;
+                break;
+              }
+            } catch {
+              // Ignore transient git failures during sync
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (!synced) {
+            throw new Error("Timed out waiting for git sync");
+          }
+        }
       }
 
       // Write env vars to ~/.iterate/.env if any were provided
