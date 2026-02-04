@@ -94,9 +94,12 @@ async attemptRecovery(health: MachineHealth) {
   // Level 3: Full machine restart
   if (await this.restartMachine()) return
 
-  // Level 4: Signal permanent failure, request substitution
-  await this.signalBricked()
-  await this.requestSubstitution()
+  // Level 4: Signal permanent failure, request substitution from Project DO
+  await this.project.onMachineBricked({
+    machineId: this.id,
+    lastHealth: health,
+    recoveryAttempts: this.recoveryAttempts,
+  })
 }
 ```
 
@@ -120,12 +123,15 @@ async attemptRecovery(health: MachineHealth) {
 - Mark machine as permanently bricked in state
 - Notify parent `Project` DO to substitute machine
 
-### 5. Typesafe Daemon/Pidnap Interaction
+### 5. Typesafe Daemon/Pidnap Interaction via oRPC
 
-Machine DO exposes methods for typesafe interaction:
+Machine DO uses typesafe pidnap oRPC client for daemon interaction:
 
 ```typescript
 class Machine extends DurableObject {
+  // oRPC client for typesafe pidnap communication
+  private pidnapClient: PidnapORPCClient;
+
   // Lifecycle
   async start(): Promise<void>;
   async stop(): Promise<void>;
@@ -135,10 +141,16 @@ class Machine extends DurableObject {
   async getHealth(): Promise<MachineHealth>;
   async getDaemonVersion(): Promise<string>;
 
-  // Pidnap
-  async listServices(): Promise<Service[]>;
-  async restartService(name: string): Promise<void>;
-  async getServiceLogs(name: string, lines?: number): Promise<string>;
+  // Pidnap (via oRPC client)
+  async listServices(): Promise<Service[]> {
+    return this.pidnapClient.services.list();
+  }
+  async restartService(name: string): Promise<void> {
+    return this.pidnapClient.services.restart({ name });
+  }
+  async getServiceLogs(name: string, lines?: number): Promise<string> {
+    return this.pidnapClient.services.logs({ name, lines });
+  }
 
   // Code management
   async refreshCode(targetRef: string): Promise<void>;
