@@ -9,6 +9,11 @@
  * 1. New thread @mention - Bot mentioned at the start of a new thread
  * 2. Mid-thread @mention - Bot mentioned in an existing thread (joining conversation)
  * 3. FYI message - No mention, but agent already exists for this thread
+ *
+ * Backslash commands (handled directly, not forwarded to agent):
+ * - \debug - Returns agent session link for debugging
+ * - \new - Resets agent session (starts fresh)
+ * - \compact - Compacts agent context (future)
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -19,11 +24,13 @@ import type {
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
+  KnownBlock,
 } from "@slack/types";
-import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
+import { getAgent, createAgent, appendToAgent, resetAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { getSlackClient } from "../services/slack-client.ts";
 
 const logger = console;
 
@@ -70,6 +77,152 @@ type MessageCase =
   | "reaction_added"
   | "reaction_removed"
   | "ignored";
+
+/**
+ * Supported backslash commands.
+ * These are handled directly by the daemon, not forwarded to the agent.
+ */
+type BackslashCommand = "debug" | "new" | "compact";
+
+/**
+ * Parse a backslash command from message text.
+ * Commands must start with a backslash and be at the start of the message (after @mention).
+ * Returns null if no command found.
+ */
+function parseBackslashCommand(text: string): BackslashCommand | null {
+  // Remove bot mention and trim
+  const cleanText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+
+  // Check for backslash commands at the start
+  const match = cleanText.match(/^\\(debug|new|compact)\b/i);
+  if (!match) return null;
+
+  return match[1].toLowerCase() as BackslashCommand;
+}
+
+/**
+ * Build the terminal URL with opencode attach command pre-filled.
+ */
+function buildAgentSessionUrl(sessionId: string): string {
+  const baseUrl = process.env.ITERATE_OS_BASE_URL || "https://os.iterate.com";
+  const orgSlug = process.env.ITERATE_ORG_SLUG || "";
+  const projectSlug = process.env.ITERATE_PROJECT_SLUG || "";
+  const machineId = process.env.ITERATE_MACHINE_ID || "";
+  const repoPath =
+    process.env.ITERATE_CUSTOMER_REPO_PATH || "/home/iterate/src/github.com/iterate/iterate";
+
+  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${repoPath}`;
+  const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy/3000`;
+
+  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+}
+
+interface BackslashCommandResult {
+  handled: boolean;
+  response?: {
+    text: string;
+    blocks?: KnownBlock[];
+  };
+}
+
+/**
+ * Handle a backslash command.
+ * Returns { handled: true, response } if command was processed.
+ * Returns { handled: false } if not a backslash command.
+ */
+async function handleBackslashCommand(
+  command: BackslashCommand,
+  channel: string,
+  threadTs: string,
+  agentSlug: string | null,
+  existingAgent: Awaited<ReturnType<typeof getAgent>>,
+): Promise<BackslashCommandResult> {
+  switch (command) {
+    case "debug": {
+      // Return agent session info
+      if (!existingAgent) {
+        return {
+          handled: true,
+          response: {
+            text: "No agent found for this thread. Start a conversation by @mentioning the bot first.",
+          },
+        };
+      }
+
+      const sessionId = existingAgent.harnessSessionId;
+      if (!sessionId) {
+        return {
+          handled: true,
+          response: {
+            text: `Agent exists (${agentSlug}) but has no session ID.`,
+          },
+        };
+      }
+
+      const sessionUrl = buildAgentSessionUrl(sessionId);
+
+      return {
+        handled: true,
+        response: {
+          text: `Agent: ${agentSlug}\nSession: ${sessionId}\n<${sessionUrl}|Attach to agent session>`,
+          blocks: [
+            {
+              type: "section" as const,
+              text: {
+                type: "mrkdwn" as const,
+                text: `*Agent:* \`${agentSlug}\`\n*Session:* \`${sessionId}\``,
+              },
+            },
+            {
+              type: "actions" as const,
+              elements: [
+                {
+                  type: "button" as const,
+                  text: { type: "plain_text" as const, text: "Open Agent Session", emoji: true },
+                  url: sessionUrl,
+                  action_id: "open_agent_session",
+                },
+              ],
+            },
+          ],
+        },
+      };
+    }
+
+    case "new": {
+      // Reset agent - create fresh session
+      const workingDirectory = await getCustomerRepoPath();
+      const newAgentSlug = agentSlug || `slack-${sanitizeThreadId(threadTs)}`;
+
+      await resetAgent({
+        slug: newAgentSlug,
+        harnessType: "opencode",
+        workingDirectory,
+        initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
+      });
+
+      return {
+        handled: true,
+        response: {
+          text: `Agent reset. New session created for \`${newAgentSlug}\`. The next message will start a fresh conversation.`,
+        },
+      };
+    }
+
+    case "compact": {
+      // Future: implement context compaction
+      return {
+        handled: true,
+        response: {
+          text: "Context compaction is not yet implemented. This will allow reducing context size while preserving important information.",
+        },
+      };
+    }
+
+    default:
+      return { handled: false };
+  }
+}
 
 interface ParsedMessage {
   case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
@@ -141,10 +294,45 @@ slackRouter.post("/webhook", async (c) => {
   // From here on, parsed is a ParsedMessage (not a reaction)
   const { event, threadTs } = parsed as ParsedMessage;
   const channel = event.channel || "";
+  const messageText = event.text || "";
 
   try {
     // Check for associated agent first, then fall back to slack-{thread_ts}
     const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
+
+    // Check for backslash commands - these are handled directly without forwarding to agent
+    const backslashCommand = parseBackslashCommand(messageText);
+    if (backslashCommand) {
+      const result = await handleBackslashCommand(
+        backslashCommand,
+        channel,
+        threadTs,
+        agentSlug,
+        existingAgent,
+      );
+
+      if (result.handled && result.response) {
+        // Send response via Slack API
+        try {
+          const slack = getSlackClient();
+          await slack.chat.postMessage({
+            channel,
+            thread_ts: threadTs,
+            text: result.response.text,
+            blocks: result.response.blocks,
+          });
+        } catch (slackError) {
+          logger.error("[Slack Webhook] Failed to send backslash command response", slackError);
+        }
+      }
+
+      return c.json({
+        success: true,
+        case: "backslash_command",
+        command: backslashCommand,
+        eventId,
+      });
+    }
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {
