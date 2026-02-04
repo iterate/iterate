@@ -509,6 +509,21 @@ githubApp.post("/webhook", async (c) => {
     }
   }
 
+  if (eventType === "commit_comment") {
+    const parseResult = CommitCommentEvent.safeParse(payload);
+    if (parseResult.success) {
+      waitUntil(
+        handleCommitComment({
+          payload: parseResult.data,
+          db: c.var.db,
+          env: c.env,
+        }).catch((err) => {
+          logger.error("[GitHub Webhook] handleCommitComment error", err);
+        }),
+      );
+    }
+  }
+
   return c.json({ received: true });
 });
 
@@ -565,6 +580,24 @@ const WorkflowRunEvent = z.object({
 
 type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
 
+// Zod schema for GitHub commit_comment event payload
+const CommitCommentEvent = z.object({
+  action: z.literal("created"),
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    commit_id: z.string(), // The SHA of the commit
+    user: z.object({
+      login: z.string(),
+    }),
+  }),
+  repository: z.object({
+    full_name: z.string(),
+  }),
+});
+
+type CommitCommentEvent = z.infer<typeof CommitCommentEvent>;
+
 /**
  * Handle a workflow_run event. Checks if this is an event we care about
  * and takes appropriate action.
@@ -588,10 +621,12 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
   }
 
   const headSha = workflow_run.head_sha;
+  const snapshotName = `iterate-sandbox-${headSha}`;
 
   logger.info("[GitHub Webhook] Processing CI completion", {
     workflowRunId: workflow_run.id,
     headSha,
+    snapshotName,
   });
 
   // Get all projects with active machines
@@ -630,7 +665,10 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
         projectSlug: project.slug,
         name: machineName,
         type: activeMachine.type,
-        metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
+        metadata: {
+          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          snapshotName, // Override to use the CI-built snapshot
+        },
       });
 
       logger.info("[GitHub Webhook] Created machine", {
@@ -671,5 +709,108 @@ type HandleWorkflowRunParams = {
   db: DB;
   env: CloudflareEnv;
 };
+
+type HandleCommitCommentParams = {
+  payload: CommitCommentEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+/**
+ * Handle a commit_comment event. Looks for [refresh] tag to trigger machine recreation.
+ * This allows manual testing of the webhook flow by commenting on any commit.
+ */
+async function handleCommitComment({ payload, db, env }: HandleCommitCommentParams) {
+  const { comment, repository } = payload;
+
+  // Only process comments on iterate/iterate repo
+  if (repository.full_name !== "iterate/iterate") {
+    logger.debug("[GitHub Webhook] commit_comment not from iterate/iterate", {
+      repo: repository.full_name,
+    });
+    return;
+  }
+
+  // Look for [refresh] tag in comment body
+  if (!comment.body.includes("[refresh]")) {
+    logger.debug("[GitHub Webhook] commit_comment missing [refresh] tag", {
+      commentId: comment.id,
+      user: comment.user.login,
+    });
+    return;
+  }
+
+  const commitSha = comment.commit_id;
+  const snapshotName = `iterate-sandbox-${commitSha}`;
+
+  logger.info("[GitHub Webhook] Processing [refresh] comment", {
+    commentId: comment.id,
+    user: comment.user.login,
+    commitSha,
+    snapshotName,
+  });
+
+  // Get all projects with active machines
+  const projectsWithActiveMachines = await db.query.project.findMany({
+    with: {
+      organization: true,
+      machines: {
+        where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+        limit: 1,
+      },
+    },
+  });
+
+  const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
+
+  logger.info("[GitHub Webhook] Found projects to update from comment", {
+    total: projectsWithActiveMachines.length,
+    withActiveMachines: projectsToUpdate.length,
+  });
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const project of projectsToUpdate) {
+    try {
+      const activeMachine = project.machines[0];
+      const machineName = `refresh-${commitSha.slice(0, 7)}`;
+
+      await createMachineForProject({
+        db,
+        env,
+        projectId: project.id,
+        organizationId: project.organizationId,
+        organizationSlug: project.organization.slug,
+        projectSlug: project.slug,
+        name: machineName,
+        type: activeMachine.type,
+        metadata: {
+          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          snapshotName,
+          triggeredBy: `commit_comment:${comment.id}`,
+          triggeredByUser: comment.user.login,
+        },
+      });
+
+      logger.info("[GitHub Webhook] Created machine from comment", {
+        projectId: project.id,
+        machineName,
+      });
+      successCount++;
+    } catch (err) {
+      logger.error("[GitHub Webhook] Failed to create machine from comment", {
+        projectId: project.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      errorCount++;
+    }
+  }
+
+  logger.info("[GitHub Webhook] Completed machine recreation from comment", {
+    successCount,
+    errorCount,
+  });
+}
 
 // #endregion ========== Webhook Handler ==========

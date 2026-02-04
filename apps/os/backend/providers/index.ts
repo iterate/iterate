@@ -28,12 +28,15 @@ export async function createMachineProvider(
 
   switch (type) {
     case "daytona": {
-      if (!env.DAYTONA_SNAPSHOT_NAME) {
+      // Allow metadata.snapshotName to override env var (used by webhook for specific commits)
+      const snapshotName =
+        (metadata.snapshotName as string | undefined) ?? env.DAYTONA_SNAPSHOT_NAME;
+      if (!snapshotName) {
         throw new Error("DAYTONA_SNAPSHOT_NAME is required for Daytona machines");
       }
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
-        snapshotName: env.DAYTONA_SNAPSHOT_NAME,
+        snapshotName,
         autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
         autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
