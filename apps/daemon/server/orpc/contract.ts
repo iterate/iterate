@@ -69,6 +69,8 @@ export const workerContract = oc.router({
             name: z.string(),
           }),
         ),
+        iterateRepoSha: z.string().nullish(),
+        iterateRepoBranch: z.string().nullish(),
       }),
     ),
   }),

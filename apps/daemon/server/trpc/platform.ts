@@ -369,6 +369,76 @@ async function cloneRepoInternal(url: string, targetPath: string, branch: string
   }
 }
 
+let lastSyncedIterateSha: string | null = null;
+
+/**
+ * Sync the iterate repo to the expected sha if needed.
+ */
+export async function syncIterateRepo(expectedSha: string, branch = "main"): Promise<void> {
+  console.log(
+    `[platform] syncIterateRepo called with expectedSha=${expectedSha}, branch=${branch}`,
+  );
+
+  // Skip if we already synced to this sha
+  if (lastSyncedIterateSha === expectedSha) {
+    console.log(`[platform] Already synced to ${expectedSha}, skipping`);
+    return;
+  }
+
+  const iterateRepoPath = process.env.ITERATE_REPO;
+  if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+    console.log(`[platform] ITERATE_REPO not set or missing .git: ${iterateRepoPath}`);
+    return;
+  }
+
+  const git = simpleGit(iterateRepoPath);
+  const currentSha = (await git.revparse(["HEAD"])).trim();
+
+  // Skip if already at expected sha
+  if (currentSha.startsWith(expectedSha) || expectedSha.startsWith(currentSha)) {
+    lastSyncedIterateSha = expectedSha;
+    return;
+  }
+
+  console.log(
+    `[platform] Syncing iterate repo: ${currentSha} -> ${expectedSha} (branch: ${branch})`,
+  );
+
+  try {
+    const status = await git.status(["--porcelain"]);
+    if (!status.isClean()) {
+      console.log(`[platform] Iterate repo is dirty, stashing`);
+      // Use --include-untracked to stash untracked files too, avoiding conflicts
+      const stash = await git.stash(["--include-untracked"]);
+      console.log(`[platform] Stashed changes: ${stash}`);
+    }
+
+    // Fetch the specific sha/branch from origin
+    // Use refspec to ensure we get the branch even if it doesn't exist locally
+    console.log(`[platform] Fetching origin ${branch}...`);
+    await git.fetch(["origin", `${branch}:refs/remotes/origin/${branch}`, "--force"]);
+
+    // Checkout the branch (create if it doesn't exist locally)
+    console.log(`[platform] Checking out ${branch}...`);
+    try {
+      await git.checkout([branch]);
+    } catch {
+      // Branch doesn't exist locally, create it tracking the remote
+      console.log(`[platform] Creating local branch ${branch} tracking origin/${branch}`);
+      await git.checkout(["-b", branch, `origin/${branch}`]);
+    }
+
+    // Reset to the expected sha
+    console.log(`[platform] Resetting to ${expectedSha}...`);
+    await git.reset(["--hard", expectedSha]);
+    lastSyncedIterateSha = expectedSha;
+    console.log(`[platform] Sync complete`);
+  } catch (error) {
+    console.error(`[platform] Failed to sync iterate repo:`, error);
+    throw error;
+  }
+}
+
 export const platformRouter = createTRPCRouter({
   /**
    * Trigger an immediate refresh of bootstrap data from the control plane.
@@ -385,6 +455,20 @@ export const platformRouter = createTRPCRouter({
       console.error("[platform] Failed to refresh env:", err);
       return { success: false };
     }
+  }),
+
+  /**
+   * Get the current iterate repo SHA. Used by E2E tests to verify repo sync.
+   */
+  getIterateRepoSha: publicProcedure.query(async () => {
+    const iterateRepoPath = process.env.ITERATE_REPO;
+    if (!iterateRepoPath || !existsSync(join(iterateRepoPath, ".git"))) {
+      return { sha: null, path: iterateRepoPath ?? null };
+    }
+
+    const git = simpleGit(iterateRepoPath);
+    const sha = (await git.revparse(["HEAD"])).trim();
+    return { sha, path: iterateRepoPath };
   }),
 });
 

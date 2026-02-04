@@ -7,6 +7,53 @@ This document covers detailed testing patterns used in this codebase.
 - Use vi mocks and vi fake timers for time-based assertions
 - Prefer `.toMatchInlineSnapshot()` for snapshot tests
 - Tests are colocated next to source files as `*.test.ts`
+- Avoid `beforeEach`/`afterEach` - use disposable objects instead
+
+## Prefer Flat Tests with Disposable Objects
+
+Avoid `beforeEach`/`afterEach` hooks - they scatter setup across multiple closures, making tests harder to understand. Instead, use `await using` with `Symbol.asyncDispose` for cleanup.
+
+See: https://www.epicweb.dev/better-test-setup-with-disposable-objects
+
+```typescript
+// Bad: setup scattered across hooks
+describe("myFeature", () => {
+  let server: TestServer;
+  beforeEach(async () => {
+    server = await createServer();
+  });
+  afterEach(async () => {
+    await server.close();
+  });
+  it("does something", async () => {
+    // what setup does this test have? have to read the hooks
+  });
+});
+
+// Good: explicit setup with automatic cleanup
+async function createTestServer() {
+  const server = await startServer();
+  return {
+    server,
+    async [Symbol.asyncDispose]() {
+      await server.close();
+    },
+  };
+}
+
+it("does something", async () => {
+  await using ctx = await createTestServer();
+  // setup is explicit, cleanup is automatic
+  ctx.server.get("/foo");
+});
+```
+
+Benefits:
+
+- Test setup is explicit and visible in each test
+- Cleanup runs even if test throws (assertions fail, etc.)
+- No shared mutable state between tests
+- Easier to understand what each test needs
 
 ## Using pluckFields with Inline Snapshots
 
