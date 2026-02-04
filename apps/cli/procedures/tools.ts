@@ -1,14 +1,19 @@
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import dedent from "dedent";
-import { WebClient } from "@slack/web-api";
+import { LogLevel, WebClient } from "@slack/web-api";
 import { Resend } from "resend";
+import Replicate from "replicate";
 import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
-function getSlackClient() {
-  const token = process.env.ITERATE_SLACK_ACCESS_TOKEN;
-  if (!token) throw new Error("ITERATE_SLACK_ACCESS_TOKEN environment variable is required");
-  return new WebClient(token);
+// add debug logging by default so that agents always see the message_ts info etc. when they send messages
+function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
+  return new WebClient(token, { logLevel });
 }
 
 function getResendClient() {
@@ -17,8 +22,15 @@ function getResendClient() {
   return new Resend(apiKey);
 }
 
+function getReplicateClient() {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is required");
+  return new Replicate({ auth: token });
+}
+
 export const toolsRouter = t.router({
   slack: t.procedure
+    .meta({ description: "Run arbitrary Slack API code" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
@@ -116,4 +128,85 @@ export const toolsRouter = t.router({
         };
       }),
   }),
+  replicate: t.procedure
+    .meta({ description: "Run AI models via Replicate API" })
+    .input(
+      z.object({
+        code: z.string().meta({ positional: true }).describe(dedent`
+          A JavaScript script that uses a Replicate client named \`replicate\`. For example:
+
+          // Generate an image
+          const output = await replicate.run("black-forest-labs/flux-schnell", {
+            input: { prompt: "a photo of a cat" }
+          });
+          console.log(output);
+        `),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const require = createRequire(import.meta.url);
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const _execute = new AsyncFunction("replicate", "require", input.code);
+      const result = await _execute(getReplicateClient(), require);
+      return result;
+    }),
+  printenv: t.procedure
+    .meta({ description: "List environment variables from ~/.iterate/.env" })
+    .input(z.object({}).optional())
+    .query(() => {
+      const envFilePath = join(homedir(), ".iterate/.env");
+      let content: string;
+      try {
+        content = readFileSync(envFilePath, "utf-8");
+      } catch (error) {
+        return {
+          success: false,
+          error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
+          activeEnvVars: [],
+          recommendedEnvVars: [],
+        };
+      }
+
+      const lines = content.split("\n");
+      type EnvVar = { name: string; description?: string };
+      const activeEnvVars: EnvVar[] = [];
+      const recommendedEnvVars: EnvVar[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        // Look for description in previous line (comment)
+        const getDescription = (): string | undefined => {
+          if (i > 0) {
+            const prevLine = lines[i - 1]?.trim();
+            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
+              return prevLine.replace(/^#\s*/, "");
+            }
+          }
+          return undefined;
+        };
+
+        // Match recommended env vars: #[recommended] FOO_BAR="..."
+        const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
+        if (recommendedMatch) {
+          recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
+          continue;
+        }
+
+        // Match active env vars: FOO_BAR="..." (not commented)
+        const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
+        if (activeMatch) {
+          activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
+          continue;
+        }
+      }
+
+      return {
+        success: true,
+        activeEnvVars,
+        recommendedEnvVars,
+        envFilePath,
+      };
+    }),
 });

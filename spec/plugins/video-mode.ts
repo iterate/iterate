@@ -26,22 +26,22 @@ const setupHighlight = async (locator: Locator, style: string, pauseMs: number) 
   } catch {
     // Element may not be ready yet, ignore
   }
-
   await new Promise((resolve) => setTimeout(resolve, pauseMs));
 
   return {
-    [Symbol.asyncDispose]: async () => {
-      try {
-        await locator.evaluate((el) => {
+    [Symbol.dispose]: () => {
+      // Fire-and-forget cleanup - don't wait for it
+      locator
+        .evaluate((el) => {
           const prev = el.getAttribute("data-video-prev-style");
           if (typeof prev === "string") {
             el.setAttribute("style", prev);
             el.removeAttribute("data-video-prev-style");
           }
+        })
+        .catch(() => {
+          // Element may be gone or not actionable, ignore
         });
-      } catch {
-        // Element may be gone, ignore
-      }
     },
   };
 };
@@ -66,7 +66,7 @@ export const videoMode = (options: VideoModeOptions = {}): Plugin => {
       const stack = new Error().stack || "";
       if (stack.includes("test-helpers.ts")) return next();
 
-      await using _ = await setupHighlight(locator, highlightStyle, pauseBefore);
+      using _ = await setupHighlight(locator, highlightStyle, pauseBefore);
       return await next();
     },
 

@@ -1,3 +1,6 @@
+// REFACTOR: This entire file can be deleted once we unify tasks and processes.
+// Tasks become processes with restartPolicy: "never" and the dependency system
+// handles sequencing. The TaskStateSchema can be merged into RestartingProcessState.
 import * as v from "valibot";
 import { LazyProcess, ProcessDefinition } from "./lazy-process.ts";
 import type { Logger } from "./logger.ts";

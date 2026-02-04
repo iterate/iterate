@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { simpleGit } from "simple-git";
-
+import { fetchBootstrapData } from "../bootstrap-refresh.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
 // Store for platform-injected env vars
@@ -20,21 +20,56 @@ const clonedReposStatus: Map<
   }
 > = new Map();
 
+type EnvVarSource =
+  | { type: "global"; description: string }
+  | { type: "connection"; provider: "github" | "slack" | "google" }
+  | { type: "user"; envVarId: string }
+  | { type: "recommended"; provider: "google"; userEmail: string };
+
+type ParsedSecret = {
+  secretKey: string;
+  secretScope: string;
+  machineId?: string;
+  userId?: string;
+  userEmail?: string;
+};
+
+type UnifiedEnvVar = {
+  key: string;
+  value: string;
+  secret: ParsedSecret | null;
+  description: string | null;
+  source: EnvVarSource;
+};
+
 /**
  * Apply environment variables to the daemon process.
  * This function:
  * 1. Replaces vars in memory and process.env (removes stale keys)
  * 2. Writes them to ~/.iterate/.env file in dotenv format for pidnap
+ *
+ * Recommended env vars (user-scoped secrets) are written as comments so the
+ * agent can discover them and tell the user how to enable them.
  */
-export async function applyEnvVars(vars: Record<string, string>): Promise<{
+export async function applyEnvVars(envVars: UnifiedEnvVar[]): Promise<{
   injectedCount: number;
   removedCount: number;
   envFilePath: string;
 }> {
   const envFilePath = join(homedir(), ".iterate/.env");
 
+  // Split into active vars and recommended vars
+  const activeVars = envVars.filter((v) => v.source.type !== "recommended");
+  const recommendedVars = envVars.filter((v) => v.source.type === "recommended");
+
+  // Build the new vars record
+  const newVars: Record<string, string> = {};
+  for (const v of activeVars) {
+    newVars[v.key] = v.value;
+  }
+
   // Find keys to remove (were in platformEnvVars but not in new vars)
-  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in vars));
+  const keysToRemove = Object.keys(platformEnvVars).filter((key) => !(key in newVars));
 
   // Remove stale keys from process.env and platformEnvVars
   for (const key of keysToRemove) {
@@ -46,10 +81,12 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
   for (const key of Object.keys(platformEnvVars)) {
     delete platformEnvVars[key];
   }
-  Object.assign(platformEnvVars, vars);
-  Object.assign(process.env, vars);
+  Object.assign(platformEnvVars, newVars);
+  Object.assign(process.env, newVars);
 
-  console.log(`[platform] Applied env vars: ${Object.keys(vars)}. Removed stale: ${keysToRemove}.`);
+  console.log(
+    `[platform] Applied env vars: ${Object.keys(newVars)}. Removed stale: ${keysToRemove}.`,
+  );
 
   // Write env vars in dotenv format for pidnap to parse. This file is NOT sourced
   // by bash - pidnap reads it directly using the dotenv library and injects vars
@@ -85,12 +122,34 @@ export async function applyEnvVars(vars: Record<string, string>): Promise<{
 NODE_USE_ENV_PROXY=1
 `;
 
-  const envFileContent =
-    envFileHeader +
-    Object.entries(platformEnvVars)
-      // Double-quoted values in dotenv format. Escape backslashes and double quotes.
-      .map(([key, value]) => `${key}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
-      .join("\n");
+  // Format active env vars
+  const activeLines = activeVars.map((v) => {
+    const escapedValue = v.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const line = `${v.key}="${escapedValue}"`;
+    if (v.description) {
+      return `# ${v.description}\n${line}`;
+    }
+    return line;
+  });
+
+  // Format recommended env vars as comments (so agent can discover them)
+  let recommendedSection = "";
+  if (recommendedVars.length > 0) {
+    const recommendedLines = recommendedVars.map((v) => {
+      const escapedValue = v.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const userEmail = v.source.type === "recommended" ? v.source.userEmail : "";
+      return `# ${v.description || `Scoped to ${userEmail}`}\n#[recommended] ${v.key}="${escapedValue}"`;
+    });
+    recommendedSection = `
+# =====================================
+# RECOMMENDED (user-scoped secrets)
+# To enable these, add them to your project's env vars in the Iterate dashboard.
+# =====================================
+${recommendedLines.join("\n")}
+`;
+  }
+
+  const envFileContent = envFileHeader + activeLines.join("\n") + recommendedSection;
 
   // Check if content changed before writing
   mkdirSync(dirname(envFilePath), { recursive: true });
@@ -117,7 +176,7 @@ NODE_USE_ENV_PROXY=1
   }
 
   return {
-    injectedCount: Object.keys(vars).length,
+    injectedCount: activeVars.length,
     removedCount: keysToRemove.length,
     envFilePath,
   };
@@ -206,9 +265,14 @@ export function cloneRepos(repos: RepoInfo[]): void {
  * Note: This only returns customer repos (from projectRepo table).
  * The iterate/iterate repo is baked into the Docker image and not tracked here.
  */
-export function getCustomerRepoPath(): string | null {
-  const values = Array.from(clonedReposStatus.values());
-  return values.find((info) => info.status === "cloned" && info.path)?.path || null;
+export async function getCustomerRepoPath(): Promise<string> {
+  if (!process.env.ITERATE_CUSTOMER_REPO_PATH) {
+    await fetchBootstrapData();
+  }
+  if (!process.env.ITERATE_CUSTOMER_REPO_PATH) {
+    throw new Error("ITERATE_CUSTOMER_REPO_PATH is not set");
+  }
+  return process.env.ITERATE_CUSTOMER_REPO_PATH;
 }
 
 /**

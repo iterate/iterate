@@ -14,9 +14,8 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["backend/*"]
+      "@/*": ["./backend/*"]
     },
     "types": ["@cloudflare/workers-types", "vite/client"]
   },

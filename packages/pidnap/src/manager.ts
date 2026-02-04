@@ -45,14 +45,25 @@ export const CronProcessEntry = v.object({
 });
 export type CronProcessEntry = v.InferOutput<typeof CronProcessEntry>;
 
+// REFACTOR: Add dependsOn field here to support process dependencies
+// Example new schema:
+// export const DependencyCondition = v.picklist(["completed", "healthy", "started"]);
+// export const ProcessDependency = v.object({
+//   process: v.string(),
+//   condition: v.optional(DependencyCondition), // defaults based on target's restartPolicy
+// });
 export const RestartingProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
+  // REFACTOR: Add this field:
+  // dependsOn: v.optional(v.array(ProcessDependency)),
 });
 export type RestartingProcessEntry = v.InferOutput<typeof RestartingProcessEntry>;
 
+// REFACTOR: This entire type can be deleted. Tasks become processes with restartPolicy: "never"
+// For backward compatibility, we can auto-convert tasks to processes during config parsing.
 export const TaskEntryConfig = v.object({
   name: v.string(),
   definition: ProcessDefinition,

@@ -7,9 +7,17 @@ import {
   jsonb,
   index,
   integer,
+  check,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
+
+// Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars, not reserved
+const slugCheck = (columnName: string, constraintName: string) =>
+  check(
+    constraintName,
+    sql`${sql.identifier(columnName)} ~ '^[a-z0-9-]+$' AND ${sql.identifier(columnName)} ~ '[a-z]' AND length(${sql.identifier(columnName)}) <= 50 AND ${sql.identifier(columnName)} NOT IN ('prj', 'org')`,
+  );
 import type { SlackEvent } from "@slack/web-api";
 
 // Organization roles: owner, admin, member (simplified from OS)
@@ -133,12 +141,16 @@ export const verification = pgTable("better_auth_verification", (t) => ({
 // #endregion ========== Better Auth Schema ==========
 
 // #region ========== Organization & Project ==========
-export const organization = pgTable("organization", (t) => ({
-  id: iterateId("org"),
-  name: t.text().notNull(),
-  slug: t.text().notNull().unique(), // URL-safe slug
-  ...withTimestamps,
-}));
+export const organization = pgTable(
+  "organization",
+  (t) => ({
+    id: iterateId("org"),
+    name: t.text().notNull(),
+    slug: t.text().notNull().unique(), // URL-safe slug: alphanumeric only, must contain letter
+    ...withTimestamps,
+  }),
+  () => [slugCheck("slug", "organization_slug_valid")],
+);
 
 export const organizationRelations = relations(organization, ({ many, one }) => ({
   projects: many(project),
@@ -222,14 +234,18 @@ export const project = pgTable(
   (t) => ({
     id: iterateId("prj"),
     name: t.text().notNull(),
-    slug: t.text().notNull(), // URL-safe slug (unique within org)
+    slug: t.text().notNull(), // URL-safe slug: alphanumeric only, must contain letter
     organizationId: t
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.organizationId, t.slug), uniqueIndex().on(t.organizationId, t.name)],
+  (t) => [
+    uniqueIndex().on(t.organizationId, t.slug),
+    uniqueIndex().on(t.organizationId, t.name),
+    slugCheck("slug", "project_slug_valid"),
+  ],
 );
 
 export const projectRelations = relations(project, ({ one, many }) => ({
@@ -257,6 +273,7 @@ export const projectEnvVar = pgTable(
     machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     value: t.text().notNull(), // Plain text - secrets go in the secret table
+    description: t.text(), // Optional description (shown as comment in .env file)
     type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
@@ -289,6 +306,7 @@ export const secret = pgTable(
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
     encryptedValue: t.text().notNull(),
+    description: t.text(), // Human-readable description for UI and .env comments
     egressProxyRule: t.text(), // URL pattern for egress proxy (e.g. "api.openai.com/*")
     metadata: jsonb().$type<SecretMetadata>(), // OAuth metadata, expiry, etc.
     lastSuccessAt: t.timestamp({ withTimezone: true }), // Last successful use

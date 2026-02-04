@@ -96,8 +96,16 @@ function createMockControlPlane(
       if (path === "machines/getEnv") {
         state.getEnvReceived = true;
         console.log("[mock-server] Received getEnv, returning env vars");
+        // Convert Record<string, string> to array format expected by daemon
+        const envVarsArray = Object.entries(envVars).map(([key, value]) => ({
+          key,
+          value,
+          secret: null,
+          description: null,
+          source: { type: "global", description: "Test env var" },
+        }));
         const response = {
-          json: { envVars, repos: [] },
+          json: { envVars: envVarsArray, repos: [] },
           meta: [],
         };
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -238,7 +246,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
   }, 600_000); // 10 min timeout for snapshot build
 
   // TODO: unskip once x-api-key header issue is fixed (see https://github.com/iterate/iterate/actions/runs/21475375981)
-  test.skip(
+  test(
     "sandbox boots, bootstraps with control plane, and agents answer the secret",
     async () => {
       // Validate required env vars
@@ -432,9 +440,11 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log('Running: opencode run "what messaging platform is this agent for"');
         console.log("");
 
+        const SOURCE_ENV_CMD = "set -a && source ~/.iterate/.env && set +a";
         const opencodePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && opencode run \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && opencode run \\"what messaging platform is this agent for\\""`,
         );
+
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("opencode timed out")), OPENCODE_TIMEOUT_MS),
         );
@@ -469,7 +479,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log("");
 
         const claudePromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && claude -p \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && claude -p \\"what messaging platform is this agent for\\""`,
         );
         const claudeTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("claude timed out")), OPENCODE_TIMEOUT_MS),
@@ -504,7 +514,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona Integration", () => {
         console.log("");
 
         const piPromise = sandbox.process.executeCommand(
-          'bash -c "source ~/.iterate/.env && pi -p \\"what messaging platform is this agent for\\""',
+          `bash -c "${SOURCE_ENV_CMD} && pi -p \\"what messaging platform is this agent for\\""`,
         );
         const piTimeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("pi timed out")), OPENCODE_TIMEOUT_MS),

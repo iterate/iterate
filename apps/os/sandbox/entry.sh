@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# We need to Sync the files before pidnap can load the config file
+# Once that's done, pidnap takes over
+
 # Sandbox entrypoint: sets up agent environment and starts pidnap process manager,
 # which runs our daemon and the opencode server under supervision.
 #
@@ -17,8 +20,6 @@ set -euo pipefail
 ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
 ITERATE_REPO_LOCAL_DOCKER_MOUNT="/local-iterate-repo"
 SANDBOX_DIR="$ITERATE_REPO/apps/os/sandbox"
-
-echo "=== iterate sandbox ==="
 
 # --- Local Docker: sync host repo into container ---
 if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
@@ -52,45 +53,21 @@ if [[ -d "$ITERATE_REPO_LOCAL_DOCKER_MOUNT" ]]; then
   "$ITERATE_REPO/apps/os/sandbox/setup-home.sh"
 fi
 
-# --- Start pidnap process manager ---
-echo "Starting pidnap..."
-echo ""
-echo "Reminder - logs will be in /var/log/pidnap/"
-echo "  pidnap status         - show manager status"
-echo "  pidnap processes list  - list all processes"
-echo ""
 export ITERATE_REPO
 
-# Egress proxy environment variables
-# These enable services to use the mitmproxy for outbound traffic interception
-PROXY_PORT=8888
-MITMPROXY_DIR="$HOME/.mitmproxy"
-CA_CERT_PATH="$MITMPROXY_DIR/mitmproxy-ca-cert.pem"
-
-export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
-export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
-export http_proxy="http://127.0.0.1:$PROXY_PORT"
-export https_proxy="http://127.0.0.1:$PROXY_PORT"
-export NO_PROXY="localhost,127.0.0.1"
-export no_proxy="localhost,127.0.0.1"
-export SSL_CERT_FILE="$CA_CERT_PATH"
-export SSL_CERT_DIR="$MITMPROXY_DIR"
-export REQUESTS_CA_BUNDLE="$CA_CERT_PATH"
-export CURL_CA_BUNDLE="$CA_CERT_PATH"
-export NODE_EXTRA_CA_CERTS="$CA_CERT_PATH"
-export GIT_SSL_CAINFO="$CA_CERT_PATH"
-
-# Configure git to use magic string for GitHub auth (egress proxy resolves it)
-# This rewrites https://github.com/ URLs to include the magic string token
-# The magic string is URL-encoded to be valid in a URL context
-# Egress proxy URL-decodes before matching
-GITHUB_MAGIC_TOKEN='getIterateSecret%28%7BsecretKey%3A%20%22github.access_token%22%7D%29'
-git config --global "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "https://github.com/"
-git config --global --add "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "git@github.com:"
-echo "Configured git for GitHub auth via egress proxy"
-
-# Signal readiness via file (more reliable than stdout for docker log detection)
+# Signal readiness for tests and stuff
 touch /tmp/.iterate-sandbox-ready
 
-# Node is not an init system, tini is good
-exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts"
+# Setup console logging via named pipe (FIFO)
+# Using a FIFO keeps pidnap as direct child of tini for proper signal handling
+CONSOLE_LOG="/var/log/pidnap/console"
+CONSOLE_FIFO="/tmp/pidnap-console-fifo"
+mkdir -p "$(dirname "$CONSOLE_LOG")"
+rm -f "$CONSOLE_FIFO"
+mkfifo "$CONSOLE_FIFO"
+
+# Background process reads from FIFO and writes to both file and stdout
+tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
+
+# Pidnap take the wheel - redirect stdout/stderr to FIFO
+exec tini -sg -- pidnap init -c "$SANDBOX_DIR/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1

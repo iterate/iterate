@@ -3,13 +3,24 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, TanStackStart, Tunnel, WorkerLoader } from "alchemy/cloudflare";
+import {
+  DurableObjectNamespace,
+  TanStackStart,
+  Tunnel,
+  WorkerLoader,
+  Worker,
+} from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import {
+  GLOBAL_SECRETS_CONFIG,
+  type GlobalSecretEnvVarName,
+} from "./scripts/seed-global-secrets.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..");
@@ -274,6 +285,7 @@ const Env = z.object({
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
   ANTHROPIC_API_KEY: Required,
+  REPLICATE_API_TOKEN: Required,
   SLACK_CLIENT_ID: Required,
   SLACK_CLIENT_SECRET: Required,
   SLACK_SIGNING_SECRET: Required,
@@ -298,7 +310,9 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URL: Optional,
   SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
-} satisfies Record<string, z.ZodType<unknown, string | undefined>>);
+} satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
+  [K in GlobalSecretEnvVarName]: typeof Required;
+});
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
@@ -335,19 +349,15 @@ async function setupDatabase() {
   const seedGlobalSecrets = async (origin: string) => {
     // Seed global secrets (OpenAI, Anthropic keys) into the database
     // These are the lowest priority secrets, overridable at org/project/user level
+
     const res = await Exec("db-seed-secrets", {
       env: {
         PSCALE_DATABASE_URL: origin,
         DATABASE_URL: origin,
         ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        RESEND_BOT_API_KEY: process.env.RESEND_BOT_API_KEY,
-      } satisfies Record<
-        import("./scripts/seed-global-secrets.ts").GlobalSecretEnvVarName,
-        string | undefined
-      >,
-      command: "tsx ./scripts/seed-global-secrets.ts",
+        ...Object.fromEntries(GLOBAL_SECRETS_CONFIG.map((c) => [c.envVar, process.env[c.envVar]])),
+      },
+      command: "tsx ./scripts/seed-global-secrets.ts --run",
     });
 
     if (res.exitCode !== 0) {
@@ -471,6 +481,26 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const devGitRef = getCurrentGitRef();
   console.log(`Current git branch: ${devGitRef}`);
 
+  const PROXY_ROOT_DOMAIN = isDevelopment ? "local.iterate.town" : "iterate.town";
+
+  const PROJECT_INGRESS_PROXY = DurableObjectNamespace<ProjectIngressProxy>(
+    "project-ingress-proxy",
+    {
+      className: "ProjectIngressProxy",
+      sqlite: true,
+    },
+  );
+
+  const proxyWorker = await Worker("proxy", {
+    name: isProduction ? "os-proxy" : isStaging ? "os-proxy-staging" : undefined,
+    entrypoint: "./proxy/worker.ts",
+    bindings: {
+      PROJECT_INGRESS_PROXY,
+      PROXY_ROOT_DOMAIN,
+    },
+    adopt: true,
+  });
+
   const worker = await TanStackStart("os", {
     bindings: {
       ...dbConfig,
@@ -479,6 +509,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
+      PROXY_ROOT_DOMAIN,
+      PROXY_WORKER: proxyWorker,
       // In dev, pass the current git branch for Daytona sandboxes
       ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
     },
@@ -490,7 +522,20 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
             Cache-Control: public, immutable, max-age=31536000
       `,
     },
-    domains,
+    routes: [
+      ...domains.map((domain) => ({
+        pattern: `${domain}/*`,
+        adopt: true,
+      })),
+      {
+        pattern: `${PROXY_ROOT_DOMAIN}/*`,
+        adopt: true,
+      },
+      {
+        pattern: `*.${PROXY_ROOT_DOMAIN}/*`,
+        adopt: true,
+      },
+    ],
     wrangler: {
       main: "./backend/worker.ts",
     },
@@ -503,7 +548,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     },
   });
 
-  return worker;
+  return { worker, proxyWorker };
 }
 
 if (process.env.GITHUB_OUTPUT) {
@@ -525,7 +570,7 @@ const dbConfig = await setupDatabase();
 const envSecrets = await setupEnvironmentVariables();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)
-export const worker = await deployWorker(dbConfig, envSecrets);
+export const { worker, proxyWorker } = await deployWorker(dbConfig, envSecrets);
 
 // Create tunnel resource BEFORE finalize so it's properly tracked
 // (fixes bug where tunnel was created after finalize, causing orphan deletion)

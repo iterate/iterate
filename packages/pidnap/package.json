@@ -31,7 +31,7 @@
   "scripts": {
     "cli:dev": "tsx src/cli.ts",
     "build": "tsdown",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test": "vitest",
     "prepack": "pnpm build",
     "docker:dev": "docker build -t pidnap -f Dockerfile.example . && docker run --rm --name pidnap-dev pidnap",

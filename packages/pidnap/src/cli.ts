@@ -200,6 +200,16 @@ const cliRouter = os.router({
     .handler(async ({ input }) => {
       process.title = "pidnap";
       const initLogger = logger({ name: "pidnap" });
+
+      // Add global error handlers to catch unhandled errors
+      process.on("uncaughtException", (error, origin) => {
+        initLogger.error(`Uncaught exception (${origin}):`, error);
+      });
+
+      process.on("unhandledRejection", (reason, _promise) => {
+        initLogger.error("Unhandled promise rejection:", reason);
+      });
+
       try {
         // Resolve config file path
         const configPath = resolve(process.cwd(), input.config);

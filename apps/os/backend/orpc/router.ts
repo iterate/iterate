@@ -1,6 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq, and, or, isNull } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
@@ -11,6 +11,7 @@ import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
+import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
@@ -230,28 +231,12 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const { project } = machine;
   const machineId = machine.id;
 
-  // Run all DB queries in parallel
-  const [projectEnvVars, githubConnection, slackSecret, projectRepos] = await Promise.all([
-    db.query.projectEnvVar.findMany({
-      where: and(
-        eq(schema.projectEnvVar.projectId, project.id),
-        // Include project-level vars (machineId is null) and machine-specific vars
-        or(isNull(schema.projectEnvVar.machineId), eq(schema.projectEnvVar.machineId, machineId)),
-      ),
-    }),
+  // Get unified env vars using shared function
+  const [unifiedEnvVars, githubConnection, projectRepos] = await Promise.all([
+    getUnifiedEnvVars(db, project.id),
     db.query.projectConnection.findFirst({
       where: (conn, { and: whereAnd, eq: whereEq }) =>
         whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
-    }),
-    // Check if Slack secret exists (to conditionally inject magic string)
-    db.query.secret.findFirst({
-      columns: { id: true },
-      where: (s, { and: whereAnd, eq: whereEq, isNull: whereIsNull }) =>
-        whereAnd(
-          whereEq(s.projectId, project.id),
-          whereEq(s.key, "slack.access_token"),
-          whereIsNull(s.userId), // Only match project-scoped secrets
-        ),
     }),
     db.query.projectRepo.findMany({
       where: eq(schema.projectRepo.projectId, project.id),
@@ -267,7 +252,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     }
   }
 
-  // Process env vars and fetch repo info in parallel
+  // Process repo info
   type RepoInfo = {
     url: string;
     branch: string;
@@ -276,18 +261,9 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     name: string;
   };
 
-  const [decryptedEnvVars, repoResults] = await Promise.all([
-    // Env vars are now stored plain text (secrets go in the secret table)
-    Promise.resolve(
-      projectEnvVars.map((envVar) => ({
-        key: envVar.key,
-        value: envVar.value,
-        machineId: envVar.machineId,
-      })),
-    ),
-    // Fetch repo info for all repos
+  const repoResults =
     installationToken && projectRepos.length > 0
-      ? Promise.all(
+      ? await Promise.all(
           projectRepos.map(async (repo): Promise<RepoInfo | null> => {
             const repoInfo = await getRepositoryById(installationToken, repo.externalId);
             if (!repoInfo) {
@@ -304,54 +280,50 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
             };
           }),
         )
-      : Promise.resolve([]),
-  ]);
-
-  // Build envVars object - project-level first, then machine-specific (overrides)
-  const envVars: Record<string, string> = {};
-  // First, add project-level env vars (machineId is null)
-  for (const item of decryptedEnvVars) {
-    if (item && !item.machineId) envVars[item.key] = item.value;
-  }
-  // Then, add machine-specific env vars (overrides project-level)
-  for (const item of decryptedEnvVars) {
-    if (item && item.machineId) envVars[item.key] = item.value;
-  }
-
-  // Always use magic strings for API keys - egress proxy resolves them at request time
-  // Secret lookup priority: user > project > org > global
-  // Use single quotes inside the magic string so it's valid when embedded in JSON configs
-  envVars["OPENAI_API_KEY"] = "getIterateSecret({secretKey: 'openai_api_key'})";
-  envVars["ANTHROPIC_API_KEY"] = "getIterateSecret({secretKey: 'anthropic_api_key'})";
-
-  // GitHub CLI needs GH_TOKEN/GITHUB_TOKEN env vars - use magic string for egress proxy resolution
-  envVars["GH_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
-  envVars["GITHUB_TOKEN"] = "getIterateSecret({secretKey: 'github.access_token'})";
-
-  // Slack token via magic string (only if Slack is connected to this project)
-  if (slackSecret) {
-    envVars["ITERATE_SLACK_ACCESS_TOKEN"] = "getIterateSecret({secretKey: 'slack.access_token'})";
-  }
-
-  // Resend API key for email replies via magic string (egress proxy resolves at request time)
-  // From address uses stage prefix for routing (e.g., dev-mmkal@mail.iterate.com, prd@mail.iterate.com)
-  envVars["ITERATE_RESEND_API_KEY"] = "getIterateSecret({secretKey: 'resend.api_key'})";
-  envVars["ITERATE_RESEND_FROM_ADDRESS"] = `${env.VITE_APP_STAGE}@${env.RESEND_BOT_DOMAIN}`;
+      : [];
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
-  // Set customer repo path for opencode server working directory
-  if (repos.length > 0) {
-    envVars["ITERATE_CUSTOMER_REPO_PATH"] = repos[0].path;
-  }
+  // Add daemon-specific env vars not shown in frontend
+  const daemonEnvVars: typeof unifiedEnvVars = [
+    ...unifiedEnvVars,
+    {
+      key: "ITERATE_RESEND_FROM_ADDRESS",
+      value: `${env.VITE_APP_STAGE}@${env.RESEND_BOT_DOMAIN}`,
+      secret: null,
+      description: null,
+      egressProxyRule: null,
+      source: { type: "global", description: "Iterate-provided Resend from address" },
+      createdAt: null,
+    },
+    {
+      key: "ITERATE_CUSTOMER_REPO_PATH",
+      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/placeholder-repo",
+      secret: null,
+      description: null,
+      egressProxyRule: null,
+      source: { type: "global", description: "Customer repo path" },
+      createdAt: null,
+    },
+  ];
 
   logger.info("Returning env data for machine", {
     machineId,
-    envVarCount: Object.keys(envVars).length,
+    envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
   });
 
-  return { envVars, repos };
+  // Return the unified list - daemon will handle formatting for .env file
+  return {
+    envVars: daemonEnvVars.map((v) => ({
+      key: v.key,
+      value: v.value,
+      secret: v.secret,
+      description: v.description,
+      source: v.source,
+    })),
+    repos,
+  };
 });
 
 export const workerRouter = os.router({

@@ -88,8 +88,16 @@ function createMockControlPlane(
       if (path === "machines/getEnv") {
         state.getEnvReceived = true;
         console.log("[mock-server] Received getEnv, returning env vars");
+        // Convert Record<string, string> to array format expected by daemon
+        const envVarsArray = Object.entries(envVars).map(([key, value]) => ({
+          key,
+          value,
+          secret: null,
+          description: null,
+          source: { type: "global", description: "Test env var" },
+        }));
         const response = {
-          json: { envVars, repos: [] },
+          json: { envVars: envVarsArray, repos: [] },
           meta: [],
         };
         res.writeHead(200, { "Content-Type": "application/json" });

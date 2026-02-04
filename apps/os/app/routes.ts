@@ -33,7 +33,6 @@ export const routes = rootRoute("root.tsx", [
         route("/access-tokens", "org/project/access-tokens.tsx"),
         route("/machines", "org/project/machines.tsx"),
         route("/machines/$machineId", "org/project/machine-detail.tsx"),
-        route("/repo", "org/project/repo.tsx"),
         route("/connectors", "org/project/connectors.tsx"),
         route("/env-vars", "org/project/env-vars.tsx"),
         route("/approvals", "org/project/approvals.tsx"),

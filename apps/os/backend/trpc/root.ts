@@ -9,6 +9,7 @@ import { envVarRouter } from "./routers/env-var.ts";
 import { accessTokenRouter } from "./routers/access-token.ts";
 import { billingRouter } from "./routers/billing.ts";
 import { eventRouter } from "./routers/event.ts";
+import { secretRouter } from "./routers/secret.ts";
 
 export const appRouter = router({
   user: userRouter,
@@ -21,6 +22,7 @@ export const appRouter = router({
   accessToken: accessTokenRouter,
   billing: billingRouter,
   event: eventRouter,
+  secret: secretRouter,
 });
 
 export type AppRouter = typeof appRouter;
