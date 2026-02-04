@@ -287,6 +287,7 @@ const Env = z.object({
   GITHUB_APP_SLUG: Required,
   GITHUB_APP_ID: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
+  GITHUB_WEBHOOK_SECRET: Required,
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
