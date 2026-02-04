@@ -12,8 +12,6 @@
  *
  * Backslash commands (handled directly, not forwarded to agent):
  * - \debug - Returns agent session link for debugging
- * - \new - Resets agent session (starts fresh)
- * - \compact - Compacts agent context (future)
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -188,7 +186,7 @@ const backslashCommandRegex = new RegExp(
 
 /**
  * Parse a backslash command from message text.
- * Returns null if no command found.
+ * Returns undefined if no command found.
  */
 function parseBackslashCommand(text: string): BackslashCommand | undefined {
   // Remove bot mention before checking
@@ -280,17 +278,13 @@ slackRouter.post("/webhook", async (c) => {
       const response = await handler({ channel, threadTs, agentSlug, existingAgent });
 
       // Send response via Slack API
-      try {
-        const slack = getSlackClient();
-        await slack.chat.postMessage({
-          channel,
-          thread_ts: threadTs,
-          text: response.text,
-          blocks: response.blocks,
-        });
-      } catch (slackError) {
-        logger.error("[Slack Webhook] Failed to send backslash command response", slackError);
-      }
+      const slack = getSlackClient();
+      await slack.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text: response.text,
+        blocks: response.blocks,
+      });
 
       return c.json({
         success: true,
