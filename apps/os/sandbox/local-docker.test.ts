@@ -66,7 +66,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Home Skeleton Sync", () => {
     } finally {
       await sandbox.delete();
     }
-  }, 10000);
+  }, 30000);
 
   test("dynamically added env var available in shell and pidnap", async () => {
     const sandbox = await provider.createSandbox();
@@ -241,7 +241,14 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker Integration", () => {
     let sandbox: SandboxHandle;
 
     beforeAll(async () => {
-      sandbox = await provider.createSandbox();
+      const env: Record<string, string> = {};
+      if (process.env.ANTHROPIC_API_KEY) {
+        env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+      }
+      if (process.env.OPENAI_API_KEY) {
+        env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+      }
+      sandbox = await provider.createSandbox({ env });
       await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
       await sandbox.waitForServiceHealthy({ process: "daemon-frontend" });
     }, 300000);

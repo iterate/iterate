@@ -294,13 +294,6 @@ export function createLocalDockerProvider(
       if (iterateEnv.ITERATE_EGRESS_PROXY_URL) {
         iterateEnv.ITERATE_EGRESS_PROXY_URL = rewriteLocalhost(iterateEnv.ITERATE_EGRESS_PROXY_URL);
       }
-      if (process.env.ANTHROPIC_API_KEY) {
-        iterateEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-      }
-      if (process.env.OPENAI_API_KEY) {
-        iterateEnv.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-      }
-
       const labels: Record<string, string> = {
         "com.iterate.test": "true",
         "com.iterate.container_name": containerName,

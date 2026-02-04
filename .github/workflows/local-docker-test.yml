@@ -3,7 +3,6 @@
 name: Local Docker Tests
 permissions:
   contents: read
-  packages: write
 on:
   push:
     branches:
@@ -21,6 +20,11 @@ on:
       - .github/workflows/local-docker-test.yml
   workflow_dispatch: {}
 jobs:
+  build-daytona-snapshot:
+    uses: ./.github/workflows/build-snapshot.yml
+    secrets: inherit
+    with:
+      doppler_config: dev
   build-sandbox-image:
     uses: ./.github/workflows/build-sandbox-image.yml
     secrets: inherit

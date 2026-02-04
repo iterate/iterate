@@ -1,6 +1,13 @@
 /**
  * Build local Docker sandbox image.
  *
+ * Why no registry push?
+ * We don't push to a registry (ghcr.io, etc.) because downloading from a registry
+ * to Daytona is extremely slow (10+ minutes). Daytona's native --dockerfile build
+ * is much faster since it builds directly on their infra. For local Docker testing,
+ * we just --load the image locally. depot.dev's registry might help in the future
+ * if we need registry-based workflows.
+ *
  * Git worktree handling:
  * In a git worktree, .git is a file (not a directory) pointing to the real .git
  * folder in the main checkout. That path doesn't exist inside the container, so
