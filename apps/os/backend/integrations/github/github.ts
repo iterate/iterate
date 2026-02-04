@@ -508,7 +508,7 @@ type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
 githubApp.post("/webhook", async (c) => {
   const body = await c.req.text();
   const signature = c.req.header("x-hub-signature-256");
-  const event = c.req.header("x-github-event");
+  const eventType = c.req.header("x-github-event");
   const deliveryId = c.req.header("x-github-delivery");
 
   // Verify signature
@@ -518,41 +518,58 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  // Route to appropriate handler based on event type
-  if (event === "workflow_run") {
-    const parseResult = WorkflowRunEvent.safeParse(JSON.parse(body));
-    if (parseResult.success) {
-      const payload = parseResult.data;
-      const workflowRunId = payload.workflow_run.id.toString();
+  // Insert raw event immediately after signature verification for deduplication.
+  // Uses ON CONFLICT DO NOTHING with unique index on externalId.
+  // This pattern allows this handler to become an outbox consumer later -
+  // the event table acts as the inbox, and processing happens in background.
+  const externalId = deliveryId ?? null;
+  const payload = JSON.parse(body);
 
+  const [inserted] = await c.var.db
+    .insert(schema.event)
+    .values({
+      type: `github:${eventType}`,
+      payload: { ...payload, _delivery_id: deliveryId },
+      externalId,
+    })
+    .onConflictDoNothing({ target: schema.event.externalId })
+    .returning({ id: schema.event.id });
+
+  if (!inserted) {
+    // Duplicate delivery - already processed
+    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", { deliveryId });
+    return c.json({ received: true, duplicate: true });
+  }
+
+  // Route to appropriate handler based on event type
+  if (eventType === "workflow_run") {
+    const parseResult = WorkflowRunEvent.safeParse(payload);
+    if (parseResult.success) {
       // Process in background, return immediately
       waitUntil(
         handleWorkflowRun({
-          payload,
-          deliveryId,
+          payload: parseResult.data,
           db: c.var.db,
           env: c.env,
         }).catch((err) => {
           logger.error("[GitHub Webhook] handleWorkflowRun error", err);
         }),
       );
-
-      return c.json({ received: true, workflowRunId });
     }
   }
 
-  // Event type we don't handle or couldn't parse
-  logger.debug("[GitHub Webhook] Unhandled event", { event });
   return c.json({ received: true });
 });
 
 /**
  * Handle a workflow_run event. Checks if this is an event we care about
  * and takes appropriate action.
+ *
+ * NOTE: This function could become an outbox consumer in the future.
+ * The event is already persisted in the events table before this runs.
  */
-async function handleWorkflowRun({ payload, deliveryId, db, env }: HandleWorkflowRunParams) {
+async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) {
   const { workflow_run } = payload;
-  const workflowRunId = workflow_run.id.toString();
 
   // Check if this is an iterate/iterate CI completion on main
   if (!IterateCICompletion.safeParse(payload).success) {
@@ -566,21 +583,11 @@ async function handleWorkflowRun({ payload, deliveryId, db, env }: HandleWorkflo
     return;
   }
 
-  // Dedup check using workflow_run.id as externalId
-  const existing = await db.query.event.findFirst({
-    where: (e, { eq: whereEq }) => whereEq(e.externalId, workflowRunId),
-  });
-  if (existing) {
-    logger.debug("[GitHub Webhook] Duplicate, skipping", { workflowRunId });
-    return;
-  }
-
   const headSha = workflow_run.head_sha;
 
   logger.info("[GitHub Webhook] Processing CI completion", {
-    workflowRunId,
+    workflowRunId: workflow_run.id,
     headSha,
-    deliveryId,
   });
 
   // Get all projects with active machines
@@ -636,20 +643,6 @@ async function handleWorkflowRun({ payload, deliveryId, db, env }: HandleWorkflo
     }
   }
 
-  // Save event for deduplication
-  await db.insert(schema.event).values({
-    type: "github:ci-completed",
-    payload: {
-      workflow_run_id: workflow_run.id,
-      head_sha: headSha,
-      head_branch: workflow_run.head_branch,
-      delivery_id: deliveryId,
-      machines_created: successCount,
-      machines_failed: errorCount,
-    },
-    externalId: workflowRunId,
-  });
-
   logger.info("[GitHub Webhook] Completed machine recreation", {
     successCount,
     errorCount,
@@ -671,7 +664,6 @@ const IterateCICompletion = z.object({
 
 type HandleWorkflowRunParams = {
   payload: WorkflowRunEvent;
-  deliveryId: string | undefined;
   db: DB;
   env: CloudflareEnv;
 };

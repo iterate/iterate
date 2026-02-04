@@ -75,7 +75,11 @@ describe("GitHub Webhook Handler", () => {
         },
       },
       insert: vi.fn().mockReturnValue({
-        values: vi.fn().mockResolvedValue(undefined),
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
+          }),
+        }),
       }),
     };
 
@@ -183,7 +187,7 @@ describe("GitHub Webhook Handler", () => {
       const payload = { ...validWorkflowRunPayload, action: "requested" };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
 
     it("acknowledges non-success conclusions", async () => {
@@ -194,7 +198,7 @@ describe("GitHub Webhook Handler", () => {
       };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
 
     it("acknowledges non-main branches", async () => {
@@ -205,7 +209,7 @@ describe("GitHub Webhook Handler", () => {
       };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
 
     it("acknowledges non-ci.yml workflows", async () => {
@@ -219,7 +223,7 @@ describe("GitHub Webhook Handler", () => {
       };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
 
     it("acknowledges non-iterate/iterate repos", async () => {
@@ -233,14 +237,14 @@ describe("GitHub Webhook Handler", () => {
       };
       const res = await makeRequest(app, payload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
 
     it("accepts valid CI completion events", async () => {
       const { app } = createTestApp();
       const res = await makeRequest(app, validWorkflowRunPayload);
       const json = await res.json();
-      expect(json).toMatchObject({ received: true, workflowRunId: "12345" });
+      expect(json).toMatchObject({ received: true });
     });
   });
 });

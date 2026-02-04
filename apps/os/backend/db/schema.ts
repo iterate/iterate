@@ -540,7 +540,13 @@ export const event = pgTable(
     externalId: t.text(), // Provider event ID for deduplication (e.g., Slack event_id)
     ...withTimestamps,
   }),
-  (t) => [index().on(t.projectId), index().on(t.type)],
+  (t) => [
+    index().on(t.projectId),
+    index().on(t.type),
+    uniqueIndex("event_external_id_unique")
+      .on(t.externalId)
+      .where(sql`${t.externalId} IS NOT NULL`),
+  ],
 );
 
 export const eventRelations = relations(event, ({ one }) => ({
