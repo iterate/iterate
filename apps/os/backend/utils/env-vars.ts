@@ -1,5 +1,5 @@
 import { eq, and, isNull, or } from "drizzle-orm";
-import { logger } from "backend/tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { parseMagicString, type ParsedSecret } from "../egress-proxy/egress-proxy.ts";

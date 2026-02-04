@@ -12,7 +12,7 @@
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "vitest",
-    "typecheck": "tsc -b",
+    "typecheck": "tsgo -b",
     "db:reset": "doppler run -- tsx -e \"(async () => { const postgres = (await import('postgres')).default; const sql = postgres('postgres://postgres:postgres@localhost:5432/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os'); await sql.unsafe('CREATE DATABASE os'); await sql.end(); })()\" && pnpm db:migrate",
     "super-reset": "pnpm db:reset",
     "db:migrate": "drizzle-kit migrate",
