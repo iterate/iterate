@@ -14,21 +14,12 @@ if [[ ! -d "/host/repo-checkout" ]]; then
 fi
 
 echo "[entry] Syncing repo from /host/repo-checkout -> ${ITERATE_REPO}"
-set +e
 rsync -a --delete --force \
   --filter=':- .gitignore' \
   --filter=':- .git/info/exclude' \
   --exclude='.git' \
   --exclude='node_modules' \
   "/host/repo-checkout/" "${ITERATE_REPO}/"
-repo_sync_status=$?
-set -e
-# rsync returns 24 when files vanish mid-transfer (common during parallel builds/tests).
-# We tolerate that case to avoid killing the container during startup, but still fail
-# on any other non-zero exit code so real sync errors surface.
-if [[ $repo_sync_status -ne 0 && $repo_sync_status -ne 23 && $repo_sync_status -ne 24 ]]; then
-  exit $repo_sync_status
-fi
 
 if [[ -d "${HOST_COMMONDIR}" ]]; then
   echo "[entry] Syncing commondir from ${HOST_COMMONDIR} -> ${ITERATE_REPO}/.git"
@@ -37,11 +28,6 @@ if [[ -d "${HOST_COMMONDIR}" ]]; then
   rsync -a --force \
     --no-owner --no-group --no-perms \
     "${HOST_COMMONDIR}/" "${ITERATE_REPO}/.git/"
-  # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
-  commondir_sync_status=$?
-  if [[ $commondir_sync_status -ne 0 && $commondir_sync_status -ne 24 ]]; then
-    exit $commondir_sync_status
-  fi
 fi
 
 if [[ -d "${HOST_GITDIR}" ]]; then
@@ -52,16 +38,9 @@ if [[ -d "${HOST_GITDIR}" ]]; then
   echo "[entry] Syncing gitdir from ${HOST_GITDIR} -> ${ITERATE_REPO}/.git"
   mkdir -p "${ITERATE_REPO}/.git"
 
-  set +e
   rsync -a --force \
     --no-owner --no-group --no-perms \
     "${HOST_GITDIR}/" "${ITERATE_REPO}/.git/"
-  # Same rsync semantics as above: 24 is acceptable, anything else is fatal.
-  gitdir_sync_status=$?
-  set -e
-  if [[ $gitdir_sync_status -ne 0 && $gitdir_sync_status -ne 24 ]]; then
-    exit $gitdir_sync_status
-  fi
 fi
 
 # Flatten worktree metadata copied from host paths.
