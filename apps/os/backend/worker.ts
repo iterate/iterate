@@ -193,6 +193,18 @@ export default class extends WorkerEntrypoint {
   declare env: CloudflareEnv;
 
   fetch(request: Request) {
+    const url = new URL(request.url);
+    const requestDomain = url.hostname;
+
+    // on root domain, redirect to the first allowed domain, which will be the os domain
+    if (requestDomain === this.env.PROXY_ROOT_DOMAIN)
+      return Response.redirect(`https://${this.env.ALLOWED_DOMAINS.split(",")[0]}${url.pathname}`);
+
+    // Check if the request is for the proxy worker
+    const [_, ...rest] = requestDomain.split(".");
+    if (rest.join(".") === this.env.PROXY_ROOT_DOMAIN) return this.env.PROXY_WORKER.fetch(request);
+
+    // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
   }
 }
