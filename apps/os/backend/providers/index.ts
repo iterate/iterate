@@ -28,14 +28,15 @@ export async function createMachineProvider(
 
   switch (type) {
     case "daytona": {
-      if (!env.DAYTONA_SNAPSHOT_NAME && !env.VITE_DAYTONA_SNAPSHOT_NAME) {
+      // Allow metadata.snapshotName to override env var (used by webhook for specific commits)
+      const typedMeta = metadata as { snapshotName?: string };
+      const snapshotName =
+        typedMeta.snapshotName ?? env.DAYTONA_SNAPSHOT_NAME ?? env.VITE_DAYTONA_SNAPSHOT_NAME;
+      if (!snapshotName) {
         throw new Error(
           "DAYTONA_SNAPSHOT_NAME or VITE_DAYTONA_SNAPSHOT_NAME is required for Daytona machines",
         );
       }
-      const typedMeta = metadata as { snapshotName?: string };
-      const snapshotName =
-        typedMeta.snapshotName ?? env.DAYTONA_SNAPSHOT_NAME ?? env.VITE_DAYTONA_SNAPSHOT_NAME;
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
         organizationId: env.DAYTONA_ORG_ID,

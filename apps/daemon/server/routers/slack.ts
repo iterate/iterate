@@ -9,6 +9,9 @@
  * 1. New thread @mention - Bot mentioned at the start of a new thread
  * 2. Mid-thread @mention - Bot mentioned in an existing thread (joining conversation)
  * 3. FYI message - No mention, but agent already exists for this thread
+ *
+ * Backslash commands (handled directly, not forwarded to agent):
+ * - \debug - Returns agent session link for debugging
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -19,11 +22,14 @@ import type {
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
+  KnownBlock,
 } from "@slack/types";
+import { z } from "zod/v4";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { getSlackClient } from "../services/slack-client.ts";
 
 const logger = console;
 
@@ -70,6 +76,124 @@ type MessageCase =
   | "reaction_added"
   | "reaction_removed"
   | "ignored";
+
+/**
+ * Environment variables required for building session URLs.
+ * Will throw if any are missing - this indicates a misconfiguration.
+ */
+const SessionEnv = z.object({
+  ITERATE_OS_BASE_URL: z.string(),
+  ITERATE_ORG_SLUG: z.string(),
+  ITERATE_PROJECT_SLUG: z.string(),
+  ITERATE_MACHINE_ID: z.string(),
+  ITERATE_CUSTOMER_REPO_PATH: z.string(),
+});
+
+/**
+ * Build the terminal URL with opencode attach command pre-filled.
+ */
+function buildAgentSessionUrl(sessionId: string): string {
+  const env = SessionEnv.parse(process.env);
+
+  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${env.ITERATE_CUSTOMER_REPO_PATH}`;
+  const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
+
+  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+}
+
+/**
+ * Backslash command response type.
+ */
+interface BackslashCommandResponse {
+  text: string;
+  blocks?: KnownBlock[];
+}
+
+/**
+ * Parameters passed to backslash command handlers.
+ */
+interface BackslashCommandParams {
+  channel: string;
+  threadTs: string;
+  agentSlug: string | null;
+  existingAgent: Awaited<ReturnType<typeof getAgent>>;
+}
+
+/**
+ * Backslash command handler function type.
+ */
+type BackslashCommandHandler = (
+  params: BackslashCommandParams,
+) => Promise<BackslashCommandResponse>;
+
+/**
+ * Registry of backslash commands.
+ * Add new commands here - they will be automatically detected and handled.
+ */
+const backslashCommands = {
+  debug: async ({ agentSlug, existingAgent }): Promise<BackslashCommandResponse> => {
+    if (!existingAgent) {
+      return {
+        text: "No agent found for this thread. Start a conversation by @mentioning the bot first.",
+      };
+    }
+
+    const sessionId = existingAgent.harnessSessionId;
+    if (!sessionId) {
+      return {
+        text: `Agent exists (${agentSlug}) but has no session ID.`,
+      };
+    }
+
+    const sessionUrl = buildAgentSessionUrl(sessionId);
+
+    return {
+      text: `Agent: ${agentSlug}\nSession: ${sessionId}\n<${sessionUrl}|Attach to agent session>`,
+      blocks: [
+        {
+          type: "section" as const,
+          text: {
+            type: "mrkdwn" as const,
+            text: `*Agent:* \`${agentSlug}\`\n*Session:* \`${sessionId}\``,
+          },
+        },
+        {
+          type: "actions" as const,
+          elements: [
+            {
+              type: "button" as const,
+              text: { type: "plain_text" as const, text: "Open Agent Session", emoji: true },
+              url: sessionUrl,
+              action_id: "open_agent_session",
+            },
+          ],
+        },
+      ],
+    };
+  },
+} satisfies Record<string, BackslashCommandHandler>;
+
+type BackslashCommand = keyof typeof backslashCommands;
+
+/**
+ * Regex to detect backslash commands anywhere in the message.
+ * Built dynamically from the command registry.
+ */
+const backslashCommandRegex = new RegExp(
+  `\\\\(${Object.keys(backslashCommands).join("|")})\\b`,
+  "i",
+);
+
+/**
+ * Parse a backslash command from message text.
+ * Returns undefined if no command found.
+ */
+function parseBackslashCommand(text: string): BackslashCommand | undefined {
+  // Remove bot mention before checking
+  const cleanText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
+  const match = cleanText.match(backslashCommandRegex);
+  return match?.[1].toLowerCase() as BackslashCommand | undefined;
+}
 
 interface ParsedMessage {
   case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
@@ -141,10 +265,34 @@ slackRouter.post("/webhook", async (c) => {
   // From here on, parsed is a ParsedMessage (not a reaction)
   const { event, threadTs } = parsed as ParsedMessage;
   const channel = event.channel || "";
+  const messageText = event.text || "";
 
   try {
     // Check for associated agent first, then fall back to slack-{thread_ts}
     const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
+
+    // Check for backslash commands - these are handled directly without forwarding to agent
+    const commandName = parseBackslashCommand(messageText);
+    if (commandName) {
+      const handler = backslashCommands[commandName];
+      const response = await handler({ channel, threadTs, agentSlug, existingAgent });
+
+      // Send response via Slack API
+      const slack = getSlackClient();
+      await slack.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text: response.text,
+        blocks: response.blocks,
+      });
+
+      return c.json({
+        success: true,
+        case: "backslash_command",
+        command: commandName,
+        eventId,
+      });
+    }
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {

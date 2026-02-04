@@ -3,7 +3,8 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter '!./apps/daemon' dev",
+    "dev": "pnpm -r --parallel dev",
+    "dev:daytona-head": "DAYTONA_SNAPSHOT_NAME=iterate-sandbox-$(git rev-parse HEAD) pnpm dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",

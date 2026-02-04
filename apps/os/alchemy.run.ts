@@ -223,6 +223,7 @@ const Env = z.object({
   GITHUB_APP_SLUG: Required,
   GITHUB_APP_ID: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
+  GITHUB_WEBHOOK_SECRET: Required,
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
@@ -233,7 +234,7 @@ const Env = z.object({
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
-  APP_STAGE: Optional,
+  APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
   // ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
@@ -252,6 +253,12 @@ type EnvSecrets = {
 };
 
 async function setupEnvironmentVariables(): Promise<EnvSecrets> {
+  if (process.env.APP_STAGE && process.env.APP_STAGE !== app.stage)
+    throw new Error(`APP_STAGE=${process.env.APP_STAGE} but app.stage=${app.stage}!`);
+
+  if (process.env.VITE_APP_STAGE && process.env.VITE_APP_STAGE !== app.stage)
+    throw new Error(`VITE_APP_STAGE=${process.env.VITE_APP_STAGE} but app.stage=${app.stage}!`);
+
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
   if (!parsed.success) {
     throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);

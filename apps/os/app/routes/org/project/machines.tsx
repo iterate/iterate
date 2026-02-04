@@ -34,7 +34,6 @@ import {
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
 import { HeaderActions } from "../../../components/header-actions.tsx";
-import { isNonProd } from "../../../../env-client.ts";
 
 type MachineType = "daytona" | "local-docker" | "local";
 
@@ -92,7 +91,16 @@ function ProjectMachinesPage() {
     });
   };
 
-  const defaultType: MachineType = isNonProd ? "local-docker" : "daytona";
+  // Fetch daemon definitions and available machine types for the form
+  const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
+  const { data: machineTypes } = useSuspenseQuery(
+    trpc.machine.getAvailableMachineTypes.queryOptions(),
+  );
+
+  // Default to first enabled type
+  const defaultType =
+    machineTypes.find((t) => !t.disabledReason)?.type ?? machineTypes[0]?.type ?? "daytona";
+
   const [newMachineType, setNewMachineType] = useState<MachineType>(defaultType);
   const [newMachineName, setNewMachineName] = useState(`${defaultType}-${dateSlug()}`);
   const [newLocalHost, setNewLocalHost] = useState("localhost");
@@ -103,9 +111,6 @@ function ProjectMachinesPage() {
   const [newDaytonaSnapshotName, setNewDaytonaSnapshotName] = useState(
     DEFAULT_DAYTONA_SNAPSHOT_NAME,
   );
-
-  // Fetch daemon definitions for the form
-  const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
     organizationSlug: params.organizationSlug,
@@ -294,7 +299,7 @@ function ProjectMachinesPage() {
                 data-1p-ignore
               />
             </div>
-            {isNonProd && (
+            {machineTypes.length > 1 && (
               <div className="space-y-2">
                 <label className="text-sm font-medium">Machine Type</label>
                 <Select
@@ -313,9 +318,16 @@ function ProjectMachinesPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="local-docker">Local Docker</SelectItem>
-                    <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
-                    <SelectItem value="local">Local (Host:Port)</SelectItem>
+                    {machineTypes.map((mt) => (
+                      <SelectItem
+                        key={mt.type}
+                        value={mt.type}
+                        disabled={Boolean(mt.disabledReason)}
+                      >
+                        {mt.label}
+                        {mt.disabledReason && ` (${mt.disabledReason})`}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -335,7 +347,7 @@ function ProjectMachinesPage() {
                 </div>
               </div>
             )}
-            {isNonProd && newMachineType === "local" && (
+            {newMachineType === "local" && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Host</label>
@@ -373,7 +385,7 @@ function ProjectMachinesPage() {
                 </div>
               </div>
             )}
-            {isNonProd && newMachineType === "local-docker" && (
+            {newMachineType === "local-docker" && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Docker Image</label>
