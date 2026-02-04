@@ -38,11 +38,17 @@ slackEdgeApp.post("/", async (c) => {
     logger.warn(`Project connection lookup not yet implemented for Slack team ${teamId}`);
   }
 
+  // Extract event_id for dedup - generate hash from payload if missing
+  const externalId =
+    (typedPayload.event_id as string | undefined) ??
+    `payload:${Buffer.from(JSON.stringify(typedPayload)).toString("base64").slice(0, 64)}`;
+
   try {
     await db.insert(schema.event).values({
       type: getSlackEventType(typedPayload),
       payload: typedPayload,
       projectId,
+      externalId,
     });
   } catch (error) {
     logger.error("Failed to store Slack event", error);

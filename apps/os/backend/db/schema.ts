@@ -537,15 +537,13 @@ export const event = pgTable(
     type: t.text().notNull(), // e.g., "slack:webhook-received"
     payload: t.jsonb().$type<SlackEvent | Record<string, unknown>>().notNull(),
     projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
-    externalId: t.text(), // Provider event ID for deduplication (e.g., Slack event_id)
+    externalId: t.text().notNull(), // Provider event ID for deduplication (e.g., Slack event_id, GitHub delivery_id)
     ...withTimestamps,
   }),
   (t) => [
     index().on(t.projectId),
     index().on(t.type),
-    uniqueIndex("event_type_external_id_unique")
-      .on(t.type, t.externalId)
-      .where(sql`${t.externalId} IS NOT NULL`),
+    uniqueIndex("event_type_external_id_unique").on(t.type, t.externalId),
   ],
 );
 

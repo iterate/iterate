@@ -243,6 +243,7 @@ export const testingRouter = router({
           type: input.type,
           payload: input.payload,
           projectId: ctx.project.id,
+          externalId: `test:${crypto.randomUUID()}`,
         })
         .returning();
 

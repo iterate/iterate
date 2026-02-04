@@ -469,7 +469,11 @@ githubApp.post("/webhook", async (c) => {
   // Uses ON CONFLICT DO NOTHING with unique index on externalId.
   // This pattern allows this handler to become an outbox consumer later -
   // the event table acts as the inbox, and processing happens in background.
-  const externalId = deliveryId ?? null;
+  if (!deliveryId) {
+    logger.warn("[GitHub Webhook] Missing x-github-delivery header");
+    return c.json({ error: "Missing delivery ID" }, 400);
+  }
+  const externalId = deliveryId;
   const payload = JSON.parse(body);
 
   const [inserted] = await c.var.db
