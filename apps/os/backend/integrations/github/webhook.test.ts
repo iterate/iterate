@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
-import { githubWebhookApp } from "./webhook.ts";
+import { githubApp } from "./github.ts";
 
 // Mock the dependencies
 vi.mock("../../../env.ts", () => ({
@@ -89,7 +89,7 @@ describe("GitHub Webhook Handler", () => {
       c.env = mockEnv as never;
       await next();
     });
-    app.route("/", githubWebhookApp);
+    app.route("/", githubApp);
 
     return { app, mockDb };
   }
@@ -99,7 +99,7 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const body = JSON.stringify(validWorkflowRunPayload);
 
-      const res = await app.request("/", {
+      const res = await app.request("/webhook", {
         method: "POST",
         body,
         headers: {
@@ -116,7 +116,7 @@ describe("GitHub Webhook Handler", () => {
       const { app } = createTestApp();
       const body = JSON.stringify(validWorkflowRunPayload);
 
-      const res = await app.request("/", {
+      const res = await app.request("/webhook", {
         method: "POST",
         body,
         headers: {
@@ -134,7 +134,7 @@ describe("GitHub Webhook Handler", () => {
       const body = JSON.stringify(validWorkflowRunPayload);
       const signature = await generateSignature(WEBHOOK_SECRET, body);
 
-      const res = await app.request("/", {
+      const res = await app.request("/webhook", {
         method: "POST",
         body,
         headers: {
@@ -158,7 +158,7 @@ describe("GitHub Webhook Handler", () => {
       const body = JSON.stringify(payload);
       const signature = await generateSignature(WEBHOOK_SECRET, body);
 
-      return app.request("/", {
+      return app.request("/webhook", {
         method: "POST",
         body,
         headers: {
