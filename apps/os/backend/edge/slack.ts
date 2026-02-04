@@ -38,10 +38,7 @@ slackEdgeApp.post("/", async (c) => {
     logger.warn(`Project connection lookup not yet implemented for Slack team ${teamId}`);
   }
 
-  // Extract event_id for dedup - generate hash from payload if missing
-  const externalId =
-    (typedPayload.event_id as string | undefined) ??
-    `payload:${Buffer.from(JSON.stringify(typedPayload)).toString("base64").slice(0, 64)}`;
+  const externalId = typedPayload.event_id as string;
 
   try {
     await db.insert(schema.event).values({

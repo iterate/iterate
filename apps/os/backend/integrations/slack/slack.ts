@@ -416,9 +416,7 @@ slackApp.post("/webhook", async (c) => {
     return c.json({ challenge: payload.challenge });
   }
   // Extract event_id for dedup - generate hash from payload if missing
-  const slackEventId =
-    (payload.event_id as string | undefined) ??
-    `payload:${Buffer.from(JSON.stringify(payload)).toString("base64").slice(0, 64)}`;
+  const slackEventId = payload.event_id as string;
   const teamId =
     (payload.team_id as string) ||
     ((payload.team as Record<string, unknown>)?.id as string) ||
