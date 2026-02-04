@@ -1,6 +1,9 @@
 /**
  * Minimal Sandbox Tests (No Pidnap/Daemon)
  *
+ * These are reasonably fast, though there are currently three tests that do hit LLMs.
+ * (we'll fix that shortly)
+ *
  * These tests run against a container using `sleep infinity` as the command,
  * bypassing pidnap process supervision entirely. This is useful for fast tests
  * that only need basic container functionality (git, shell, file system, CLI tools).
@@ -170,6 +173,47 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
     "container git state matches host worktree exactly",
     async () => {
       await withWorktree(ITERATE_REPO_PATH_ON_HOST, async (worktree) => {
+        // DEBUG: inspect worktree structure
+        console.log("\n=== DEBUG: Worktree Info ===");
+        console.log("worktree.path:", worktree.path);
+        console.log("worktree.branch:", worktree.branch);
+
+        // Check .git in worktree
+        const gitPath = join(worktree.path, ".git");
+        const gitStat = execSync(`ls -la "${gitPath}" 2>&1 || echo "NOT FOUND"`, {
+          encoding: "utf-8",
+        });
+        console.log(".git stat:", gitStat.trim());
+
+        // If .git is a file, show its contents
+        try {
+          const gitFileContent = execSync(`cat "${gitPath}" 2>/dev/null || echo "NOT A FILE"`, {
+            encoding: "utf-8",
+          });
+          console.log(".git file content:", gitFileContent.trim());
+        } catch {
+          console.log(".git is a directory");
+        }
+
+        // Show git rev-parse outputs from worktree
+        const gitDir = execSync("git rev-parse --git-dir", {
+          cwd: worktree.path,
+          encoding: "utf-8",
+        }).trim();
+        const gitCommonDir = execSync("git rev-parse --git-common-dir", {
+          cwd: worktree.path,
+          encoding: "utf-8",
+        }).trim();
+        console.log("git rev-parse --git-dir:", gitDir);
+        console.log("git rev-parse --git-common-dir:", gitCommonDir);
+
+        // Show what getLocalDockerGitInfo returns
+        const { getLocalDockerGitInfo } = await import("../test/helpers.ts");
+        const gitInfo = getLocalDockerGitInfo(worktree.path);
+        console.log("getLocalDockerGitInfo result:", JSON.stringify(gitInfo, null, 2));
+
+        console.log("=== END DEBUG ===\n");
+
         // Create dirty git state: staged, unstaged, and untracked files
         writeFileSync(join(worktree.path, "staged-new.txt"), "staged content");
         execSync("git add staged-new.txt", { cwd: worktree.path });
@@ -187,6 +231,47 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
           { repoRoot: worktree.path, syncFromHostRepo: true },
           { command: ["sleep", "infinity"] },
           async (sandbox) => {
+            // DEBUG: show container git state
+            console.log("\n=== DEBUG: Container State ===");
+
+            // Check /host mounts
+            const hostMounts = await sandbox.exec([
+              "bash",
+              "-c",
+              `ls -la /host/ 2>&1 || echo "NO /host"`,
+            ]);
+            console.log("/host contents:\n", hostMounts);
+
+            const gitdirMount = await sandbox.exec([
+              "bash",
+              "-c",
+              `ls -la /host/gitdir/ 2>&1 | head -10 || echo "NO /host/gitdir"`,
+            ]);
+            console.log("/host/gitdir contents:\n", gitdirMount);
+
+            const gitdirHead = await sandbox.exec([
+              "bash",
+              "-c",
+              `cat /host/gitdir/HEAD 2>&1 || echo "NO HEAD"`,
+            ]);
+            console.log("/host/gitdir/HEAD:", gitdirHead.trim());
+
+            const containerGitDir = await sandbox.exec([
+              "bash",
+              "-c",
+              `cd ${ITERATE_REPO_PATH} && ls -la .git/ | head -20`,
+            ]);
+            console.log(".git directory contents:\n", containerGitDir);
+
+            const containerHead = await sandbox.exec([
+              "bash",
+              "-c",
+              `cd ${ITERATE_REPO_PATH} && cat .git/HEAD`,
+            ]);
+            console.log(".git/HEAD:", containerHead.trim());
+
+            console.log("=== END CONTAINER DEBUG ===\n");
+
             const containerGitState = (
               await sandbox.exec([
                 "bash",

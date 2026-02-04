@@ -4,7 +4,7 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,9 @@ export const RUN_LOCAL_DOCKER_TESTS =
   !!process.env.RUN_LOCAL_DOCKER_TESTS &&
   process.env.RUN_LOCAL_DOCKER_TESTS !== "0" &&
   process.env.RUN_LOCAL_DOCKER_TESTS !== "false";
+
+/** Default poll options for sandbox integration tests (services take time to start) */
+export const POLL_DEFAULTS = { timeout: 20_000, interval: 500 } as const;
 
 // ============ Docker API Helpers ============
 
@@ -169,9 +172,23 @@ export function getLocalDockerGitInfo(repoRoot: string): LocalDockerGitInfo | un
     const commonDirRaw = runGit("git rev-parse --git-common-dir");
     const branch = runGit("git branch --show-current") || undefined;
 
+    const gitDirResolved = resolvePath(gitDirRaw);
+    let gitDir = gitDirResolved;
+    try {
+      if (statSync(gitDirResolved).isFile()) {
+        const gitFile = readFileSync(gitDirResolved, "utf-8").trim();
+        const match = gitFile.match(/^gitdir:\s*(.+)$/);
+        if (match) {
+          gitDir = resolvePath(match[1]);
+        }
+      }
+    } catch {
+      // Fall back to the resolved gitDir if we can't inspect the path
+    }
+
     return {
       repoRoot: realpathSync(repoRoot),
-      gitDir: resolvePath(gitDirRaw),
+      gitDir,
       commonDir: resolvePath(commonDirRaw),
       commit,
       branch,
@@ -274,6 +291,7 @@ export async function withWorktree<T>(
 ): Promise<T> {
   const path = mkdtempSync(join(tmpdir(), "git-worktree-"));
   const branch = `test-worktree-${Date.now()}`;
+  const keepWorktree = process.env.KEEP_WORKTREE === "true";
 
   execSync(`git worktree add -b ${branch} ${path}`, {
     cwd: repoRoot,
@@ -283,18 +301,22 @@ export async function withWorktree<T>(
   try {
     return await fn({ path, branch });
   } finally {
-    // Cleanup worktree
-    try {
-      execSync(`git worktree remove --force ${path}`, { cwd: repoRoot, stdio: "pipe" });
-    } catch {
-      rmSync(path, { recursive: true, force: true });
-      execSync(`git worktree prune`, { cwd: repoRoot, stdio: "pipe" });
-    }
-    // Cleanup branch
-    try {
-      execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "pipe" });
-    } catch {
-      // Branch might not exist if worktree creation failed
+    if (keepWorktree) {
+      console.log(`[debug] Keeping worktree at ${path}`);
+    } else {
+      // Cleanup worktree
+      try {
+        execSync(`git worktree remove --force ${path}`, { cwd: repoRoot, stdio: "pipe" });
+      } catch {
+        rmSync(path, { recursive: true, force: true });
+        execSync(`git worktree prune`, { cwd: repoRoot, stdio: "pipe" });
+      }
+      // Cleanup branch
+      try {
+        execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "pipe" });
+      } catch {
+        // Branch might not exist if worktree creation failed
+      }
     }
   }
 }
@@ -310,6 +332,7 @@ export async function withSandbox<T>(
 ): Promise<T> {
   const provider = createLocalDockerProvider(providerOptions);
   const sandbox = await provider.createSandbox(sandboxOptions);
+  const keepContainer = process.env.KEEP_SANDBOX_CONTAINER === "true";
   console.log("[container] id:", sandbox.id);
   try {
     return await fn(sandbox);
@@ -317,7 +340,11 @@ export async function withSandbox<T>(
     dumpContainerLogs(sandbox.id);
     throw err;
   } finally {
-    await sandbox.delete();
+    if (keepContainer) {
+      console.log(`[debug] Keeping container ${sandbox.id}`);
+    } else {
+      await sandbox.delete();
+    }
   }
 }
 

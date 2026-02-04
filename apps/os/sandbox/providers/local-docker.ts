@@ -10,7 +10,12 @@ import { randomBytes } from "node:crypto";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dockerApi } from "../../backend/providers/local-docker.ts";
-import { execInContainer, getLocalDockerGitInfo } from "../test/helpers.ts";
+import {
+  execInContainer,
+  getLocalDockerGitInfo,
+  createDaemonTrpcClient,
+  createPidnapRpcClient,
+} from "../test/helpers.ts";
 import type {
   CreateSandboxOptions,
   SandboxHandle,
@@ -208,6 +213,14 @@ class LocalDockerSandboxHandle implements SandboxHandle {
       // Best effort cleanup
     }
   }
+
+  daemonTrpcClient() {
+    return createDaemonTrpcClient(this.getUrl({ port: 3000 }));
+  }
+
+  pidnapOrpcClient() {
+    return createPidnapRpcClient(this.getUrl({ port: 9876 }));
+  }
 }
 
 async function resolveHostPorts(
@@ -339,26 +352,56 @@ export function createLocalDockerProvider(
       const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
       const ports = await resolveHostPorts(containerId, internalPorts);
       const handle = new LocalDockerSandboxHandle(containerId, ports, internalPorts);
+      const maxWaitMs = 30000;
+
+      if (opts?.command) {
+        // Command override: wait for container to be ready for exec
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+          try {
+            await handle.exec(["true"]);
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
+
+        // entry.sh touches this file after sync-repo-from-host completes.
+        await waitForEntrypointSignal(handle, maxWaitMs);
+
+        if (gitInfo?.commit) {
+          const syncStart = Date.now();
+          let lastBranch = "";
+          let lastCommit = "";
+          while (Date.now() - syncStart < maxWaitMs) {
+            try {
+              const state = await handle.exec([
+                "bash",
+                "-c",
+                "cd /home/iterate/src/github.com/iterate/iterate && git branch --show-current; git rev-parse HEAD",
+              ]);
+              const [branch, commit] = state.trim().split("\n");
+              lastBranch = branch ?? "";
+              lastCommit = commit ?? "";
+              if (commit === gitInfo.commit && (!gitInfo.branch || branch === gitInfo.branch)) {
+                return handle;
+              }
+            } catch {
+              // Ignore transient git failures during sync
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          throw new Error(
+            `Timed out waiting for git sync. Expected ${gitInfo.branch ?? "<detached>"} ${
+              gitInfo.commit
+            }, got ${lastBranch || "<unknown>"} ${lastCommit || "<unknown>"}`,
+          );
+        }
+      }
 
       // Write env vars to ~/.iterate/.env if any were provided
       if (Object.keys(iterateEnv).length > 0) {
-        const maxWaitMs = 30000;
-
-        if (opts?.command) {
-          // Command override: wait for container to be ready for exec
-          const start = Date.now();
-          while (Date.now() - start < maxWaitMs) {
-            try {
-              await handle.exec(["true"]);
-              break;
-            } catch {
-              await new Promise((r) => setTimeout(r, 200));
-            }
-          }
-
-          // entry.sh touches this file after sync-repo-from-host completes.
-          await waitForEntrypointSignal(handle, maxWaitMs);
-        } else {
+        if (!opts?.command) {
           // Default entrypoint: wait for pidnap health
           const start = Date.now();
           while (Date.now() - start < maxWaitMs) {

@@ -1,5 +1,5 @@
 /**
- * Local Docker + Pidnap Integration Tests
+ * Local Docker + Pidnap Integration Tests (SLOW!)
  *
  * Tests that require the full pidnap process supervision and daemon-backend.
  * Uses the default entry.sh entrypoint which starts pidnap.
@@ -17,22 +17,15 @@
  */
 
 import { describe } from "vitest";
-import {
-  test,
-  ITERATE_REPO_PATH,
-  RUN_LOCAL_DOCKER_TESTS,
-  createDaemonTrpcClient,
-  createPidnapRpcClient,
-} from "./helpers.ts";
+import { test, ITERATE_REPO_PATH, RUN_LOCAL_DOCKER_TESTS, POLL_DEFAULTS } from "./helpers.ts";
 
 // ============ Pidnap-Specific Tests ============
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
-      const pidnapUrl = sandbox.getUrl({ port: 9876 });
-      const client = createPidnapRpcClient(pidnapUrl);
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 30000 });
+      const client = sandbox.pidnapOrpcClient();
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
       // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
@@ -49,39 +42,28 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
       // Step 3: Wait for pidnap to auto-reload opencode with new env vars
       // Note: daemon-backend has inheritGlobalEnv: false, but opencode inherits global env
       // opencode has reloadDelay: 500ms and inheritGlobalEnv: true (default)
-      // Retry until the env var appears (up to 10s)
       await expect
-        .poll(
-          async () => {
-            const info = await client.processes.get({
-              target: "opencode",
-              includeEffectiveEnv: true,
-            });
-            return info.effectiveEnv?.DYNAMIC_TEST_VAR;
-          },
-          { timeout: 10000, interval: 500 },
-        )
+        .poll(async () => {
+          const info = await client.processes.get({
+            target: "opencode",
+            includeEffectiveEnv: true,
+          });
+          return info.effectiveEnv?.DYNAMIC_TEST_VAR;
+        }, POLL_DEFAULTS)
         .toBe("added_at_runtime");
-    }, 60000);
+    }, 50000);
   });
 
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
-      const baseUrl = sandbox.getUrl({ port: 9876 });
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
-      const client = createPidnapRpcClient(baseUrl);
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+      const client = sandbox.pidnapOrpcClient();
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
-    }, 240000);
-
-    test("processes.get fails for non-existent service", async ({ sandbox, expect }) => {
-      const baseUrl = sandbox.getUrl({ port: 9876 });
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
-      const client = createPidnapRpcClient(baseUrl);
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
         /Process not found/i,
       );
-    }, 60000);
+    }, 50000);
   });
 });
 
@@ -91,68 +73,75 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
   test.scoped({ sandboxOptions: { env: { ITERATE_CUSTOMER_REPO_PATH: ITERATE_REPO_PATH } } });
 
   test("daemon accessible", async ({ sandbox, expect }) => {
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     const baseUrl = sandbox.getUrl({ port: 3000 });
 
     // Verify health endpoint from host
     await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`${baseUrl}/api/health`);
-            if (!response.ok) return "";
-            return await response.text();
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
+      .poll(async () => {
+        const response = await fetch(`${baseUrl}/api/health`);
+        if (!response.ok) return "";
+        return await response.text();
+      }, POLL_DEFAULTS)
       .toMatch(/ok|healthy/);
 
     // Verify health from inside container
     const internalHealth = await sandbox.exec(["curl", "-s", "http://localhost:3000/api/health"]);
     expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
-  }, 210000);
+  }, 50000);
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
+    // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    await sandbox.waitForServiceHealthy({ process: "daemon-frontend" });
+
     const baseUrl = sandbox.getUrl({ port: 3000 });
-    // PTY endpoint exists
+
+    // First verify the proxy is working by polling for health endpoint
     await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`${baseUrl}/api/pty/ws?cols=80&rows=24`);
-            return response.status;
-          } catch {
-            return 0;
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
-      .not.toBe(404);
-  }, 210000);
+      .poll(async () => {
+        const response = await fetch(`${baseUrl}/api/health`).catch(() => null);
+        return response?.ok ?? false;
+      }, POLL_DEFAULTS)
+      .toBe(true);
+
+    // Now test the WebSocket PTY endpoint (proxied through Vite to backend)
+    const wsUrl = `${baseUrl.replace(/^http/, "ws")}/api/pty/ws?cols=80&rows=24`;
+
+    await expect
+      .poll(async () => {
+        return new Promise<string>((resolve) => {
+          const ws = new WebSocket(wsUrl);
+          const timeout = setTimeout(() => {
+            ws.close();
+            resolve("timeout");
+          }, 3000);
+          ws.onopen = () => {
+            clearTimeout(timeout);
+            ws.close();
+            resolve("connected");
+          };
+          ws.onerror = () => {
+            clearTimeout(timeout);
+            resolve("error");
+          };
+        });
+      }, POLL_DEFAULTS)
+      .toBe("connected");
+  }, 50000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     const baseUrl = sandbox.getUrl({ port: 3000 });
-    const trpc = createDaemonTrpcClient(baseUrl);
+    const trpc = sandbox.daemonTrpcClient();
 
     // index.html
     await expect
-      .poll(
-        async () => {
-          try {
-            const root = await fetch(`${baseUrl}/`);
-            const contentType = root.headers.get("content-type") ?? "";
-            return root.ok && contentType.includes("text/html");
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
+      .poll(async () => {
+        const root = await fetch(`${baseUrl}/`);
+        const contentType = root.headers.get("content-type") ?? "";
+        return root.ok && contentType.includes("text/html");
+      }, POLL_DEFAULTS)
       .toBe(true);
     const root = await fetch(`${baseUrl}/`);
     expect(root.ok).toBe(true);
@@ -162,17 +151,10 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
 
     // health
     await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`${baseUrl}/api/health`);
-            return response.ok;
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
+      .poll(async () => {
+        const response = await fetch(`${baseUrl}/api/health`);
+        return response.ok;
+      }, POLL_DEFAULTS)
       .toBe(true);
 
     // tRPC
@@ -185,67 +167,39 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
     if (cssMatch) {
       const cssUrl = `${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`;
       await expect
-        .poll(
-          async () => {
-            try {
-              const response = await fetch(cssUrl);
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-          { timeout: 20000, interval: 1000 },
-        )
+        .poll(async () => {
+          const response = await fetch(cssUrl);
+          return response.ok;
+        }, POLL_DEFAULTS)
         .toBe(true);
     }
     if (jsMatch) {
       const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
       await expect
-        .poll(
-          async () => {
-            try {
-              const response = await fetch(jsUrl);
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-          { timeout: 20000, interval: 1000 },
-        )
+        .poll(async () => {
+          const response = await fetch(jsUrl);
+          return response.ok;
+        }, POLL_DEFAULTS)
         .toBe(true);
     }
 
     // logo
     await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`${baseUrl}/logo.svg`);
-            return response.ok;
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
+      .poll(async () => {
+        const response = await fetch(`${baseUrl}/logo.svg`);
+        return response.ok;
+      }, POLL_DEFAULTS)
       .toBe(true);
 
     // SPA fallback
     await expect
-      .poll(
-        async () => {
-          try {
-            const response = await fetch(`${baseUrl}/agents/some-agent-id`);
-            if (!response.ok) return "";
-            return response.headers.get("content-type") ?? "";
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 20000, interval: 1000 },
-      )
+      .poll(async () => {
+        const response = await fetch(`${baseUrl}/agents/some-agent-id`);
+        if (!response.ok) return "";
+        return response.headers.get("content-type") ?? "";
+      }, POLL_DEFAULTS)
       .toContain("text/html");
-  }, 210000);
+  }, 50000);
 });
 
 // ============ Container Restart Tests ============
@@ -255,13 +209,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
 
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 180000 });
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
 
     await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
     await sandbox.restart();
 
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 240000 });
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
 
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);
@@ -270,15 +224,11 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
     await expect
       .poll(
         async () => {
-          try {
-            const response = await fetch(`${baseUrl}/api/health`);
-            return response.ok;
-          } catch {
-            return false;
-          }
+          const response = await fetch(`${baseUrl}/api/health`);
+          return response.ok;
         },
-        { timeout: 180000, interval: 1000 },
+        { timeout: 60_000, interval: 500 }, // longer timeout for container restart
       )
       .toBe(true);
-  }, 300000);
+  }, 90000);
 });

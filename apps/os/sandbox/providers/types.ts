@@ -1,3 +1,7 @@
+import type { TRPCClient } from "@trpc/client";
+import type { Client as PidnapClient } from "pidnap/client";
+import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
+
 export interface WaitHealthyResponse {
   healthy: boolean;
   state: string;
@@ -18,6 +22,10 @@ export interface SandboxHandle {
   stop(): Promise<void>;
   restart(): Promise<void>;
   delete(): Promise<void>;
+  /** Get a tRPC client for the daemon backend on port 3000 */
+  daemonTrpcClient(): TRPCClient<TRPCRouter>;
+  /** Get a pidnap oRPC client on port 9876 */
+  pidnapOrpcClient(): PidnapClient;
 }
 
 export interface CreateSandboxOptions {
