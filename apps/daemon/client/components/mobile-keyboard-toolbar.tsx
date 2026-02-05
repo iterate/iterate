@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils.ts";
 
 interface MobileKeyboardToolbarProps {
   onKeyPress: (key: string) => void;
+  ctrlActive?: boolean;
+  onCtrlToggle?: () => void;
 }
 
 // Common terminal keys that are hard to type on mobile keyboards
@@ -37,34 +39,31 @@ const EXTENDED_KEYS = [
   { label: "Ins", key: "\x1b[2~" },
 ] as const;
 
-export function MobileKeyboardToolbar({ onKeyPress }: MobileKeyboardToolbarProps) {
+export function MobileKeyboardToolbar({
+  onKeyPress,
+  ctrlActive = false,
+  onCtrlToggle,
+}: MobileKeyboardToolbarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [ctrlActive, setCtrlActive] = useState(false);
 
   const handleKeyPress = (
     keyDef: (typeof PRIMARY_KEYS)[number] | (typeof EXTENDED_KEYS)[number],
   ) => {
     if ("modifier" in keyDef && keyDef.modifier) {
-      setCtrlActive(!ctrlActive);
+      onCtrlToggle?.();
       return;
     }
 
-    if (ctrlActive && keyDef.label.length === 1) {
-      // Convert letter to ctrl code
-      const code = keyDef.label.toUpperCase().charCodeAt(0) - 64;
-      onKeyPress(String.fromCharCode(code));
-      setCtrlActive(false);
-    } else if ("key" in keyDef) {
+    if ("key" in keyDef) {
       onKeyPress(keyDef.key);
-    }
-
-    if (!("modifier" in keyDef)) {
-      setCtrlActive(false);
     }
   };
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 bg-zinc-900 border-t border-zinc-700 safe-area-inset-bottom">
+    <div
+      className="fixed inset-x-0 bottom-0 z-50 bg-zinc-900 border-t border-zinc-700"
+      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+    >
       {/* Extended keys panel - slides up when expanded */}
       <div
         className={cn(

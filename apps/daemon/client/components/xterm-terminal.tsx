@@ -51,6 +51,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const fitAddonRef = useRef<FitAddon | null>(null);
     const mobileInputRef = useRef<HTMLInputElement>(null);
     const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
+    const [ctrlActive, setCtrlActive] = useState(false);
     const isMobile = useIsMobile();
 
     const wsUrl = useMemo(() => {
@@ -80,11 +81,22 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       (e: React.ChangeEvent<HTMLInputElement>) => {
         const value = e.target.value;
         if (value && socket.readyState === WebSocket.OPEN) {
-          socket.send(value);
+          if (ctrlActive && value.length === 1) {
+            // Convert letter to Ctrl code (A=1, B=2, etc.)
+            const code = value.toUpperCase().charCodeAt(0) - 64;
+            if (code >= 1 && code <= 26) {
+              socket.send(String.fromCharCode(code));
+              setCtrlActive(false);
+            } else {
+              socket.send(value);
+            }
+          } else {
+            socket.send(value);
+          }
         }
         e.target.value = "";
       },
-      [socket],
+      [socket, ctrlActive],
     );
 
     // Handle key presses from the mobile toolbar
@@ -314,18 +326,26 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
                   if (socket.readyState === WebSocket.OPEN) {
                     socket.send("\r");
                   }
+                  setCtrlActive(false);
                 } else if (e.key === "Backspace") {
                   e.preventDefault();
                   if (socket.readyState === WebSocket.OPEN) {
                     socket.send("\x7f");
                   }
+                  setCtrlActive(false);
                 }
               }}
             />
           )}
         </div>
         {/* Mobile keyboard toolbar */}
-        {isMobile && <MobileKeyboardToolbar onKeyPress={handleToolbarKeyPress} />}
+        {isMobile && (
+          <MobileKeyboardToolbar
+            onKeyPress={handleToolbarKeyPress}
+            ctrlActive={ctrlActive}
+            onCtrlToggle={() => setCtrlActive((prev) => !prev)}
+          />
+        )}
       </div>
     );
   },
