@@ -83,10 +83,27 @@ try {
 }
 console.log(`Local image: ${localImageName}`);
 
-// Generate snapshot name
+// Generate snapshot name: iterate-sandbox-{sha} with optional -{user}-dirty suffix
 const gitSha = depotBuildInfo.gitSha ?? "unknown";
-const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-const defaultName = `iterate-sandbox-${dateStr}-${gitSha.slice(0, 12)}-${builtBy}`;
+
+// Check if repo has uncommitted changes
+const isDirty = (() => {
+  try {
+    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
+    return status.trim().length > 0;
+  } catch {
+    return false;
+  }
+})();
+
+// Format: iterate-sandbox-{sha}[-{user}][-dirty]
+let defaultName = `iterate-sandbox-${gitSha}`;
+if (builtBy !== "unknown") {
+  defaultName += `-${builtBy}`;
+}
+if (isDirty) {
+  defaultName += "-dirty";
+}
 const snapshotName = values.name ?? defaultName;
 
 if (values.name) {
