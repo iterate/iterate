@@ -28,10 +28,12 @@ export default workflow({
     "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
-    // Run on PR pushes to build snapshots for testing
-    pull_request: {
-      types: ["opened", "synchronize"],
-    },
+    // DISABLED: PR builds are too slow (~5 min) because Daytona can't pull from registry.
+    // We must use --load which transfers 2GB from Depot builder to runner.
+    // TODO: Re-enable when Daytona supports registry-based snapshot creation
+    // pull_request: {
+    //   types: ["opened", "synchronize"],
+    // },
     // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
