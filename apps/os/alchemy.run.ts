@@ -241,6 +241,10 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URL: Optional,
   SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
+  // DANGEROUS: When enabled, returns raw decrypted secrets instead of magic strings.
+  // This bypasses the egress proxy and exposes secrets directly in env vars.
+  // Only enable this for local development or trusted environments.
+  DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
