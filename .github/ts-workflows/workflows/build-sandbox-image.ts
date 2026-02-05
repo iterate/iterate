@@ -17,6 +17,14 @@ export default workflow({
   },
   on: {
     workflow_call: {
+      inputs: {
+        docker_platform: {
+          description: "Build platform for docker buildx (e.g. linux/amd64).",
+          required: false,
+          type: "string",
+          default: "linux/amd64",
+        },
+      },
       outputs: {
         image_ref: {
           description: "Local sandbox image ref (sha tag)",
@@ -39,6 +47,7 @@ export default workflow({
           name: "Build sandbox image (local only, no push)",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
           },
           run: "pnpm os docker:build",
         },

@@ -20,17 +20,7 @@ on:
       - .github/workflows/local-docker-test.yml
   workflow_dispatch: {}
 jobs:
-  build-daytona-snapshot:
-    uses: ./.github/workflows/build-snapshot.yml
-    secrets: inherit
-    with:
-      doppler_config: dev
-  build-sandbox-image:
-    uses: ./.github/workflows/build-sandbox-image.yml
-    secrets: inherit
   test:
-    needs:
-      - build-sandbox-image
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout code
@@ -52,12 +42,18 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: build-docker-image
+        env:
+          LOCAL_DOCKER_IMAGE_NAME: ghcr.io/iterate/sandbox:ci
+          SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
+        run: pnpm os docker:build
       - name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-          LOCAL_DOCKER_IMAGE_NAME: ${{ needs.build-sandbox-image.outputs.image_ref }}
+          LOCAL_DOCKER_IMAGE_NAME: ghcr.io/iterate/sandbox:local
         run: pnpm os docker:test
       - name: Upload test results
         if: failure()

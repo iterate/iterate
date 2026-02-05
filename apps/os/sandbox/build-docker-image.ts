@@ -29,6 +29,7 @@ import { join } from "node:path";
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 const baseImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local";
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 
 // Get resolved git directory path. For worktrees, this returns the actual .git
 // folder (e.g., /repo/.git/worktrees/branch-name), not the .git file in the worktree.
@@ -78,7 +79,7 @@ const buildArgs = [
   "buildx",
   "build",
   "--platform",
-  "linux/amd64",
+  buildPlatform,
   push ? "--push" : "--load",
   "-f",
   "apps/os/sandbox/Dockerfile",

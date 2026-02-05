@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:24
 
 # === Versions ===
@@ -119,9 +120,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
-# Copy repo. Avoid COPY --exclude (BuildKit-only; older parsers fail).
+# Copy repo, exclude git metadata from context.
 # If .git is a worktree file, replace with dir
-COPY --chown=iterate:iterate . .
+COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ . .
 RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)

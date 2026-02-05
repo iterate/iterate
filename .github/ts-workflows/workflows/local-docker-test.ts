@@ -1,17 +1,6 @@
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
-/**
- * Two parallel tracks:
- *
- * 1. Daytona build: Builds the local image, then pushes a Daytona snapshot.
- *    This is the production path for sandbox creation.
- *
- * 2. Docker + tests: Builds image locally (no registry push) and runs local
- *    Docker integration tests. Tests the same Dockerfile in a different env.
- *
- * Both tracks run in parallel since they're independent.
- */
 export default workflow({
   name: "Local Docker Tests",
   permissions: {
@@ -38,35 +27,28 @@ export default workflow({
     workflow_dispatch: {},
   },
   jobs: {
-    // ============ Track 1: Daytona build ============
-    "build-daytona-snapshot": {
-      uses: "./.github/workflows/build-snapshot.yml",
-      // @ts-expect-error - secrets inherit
-      secrets: "inherit",
-      with: {
-        doppler_config: "dev",
-      },
-    },
-
-    // ============ Track 2: Docker build + tests ============
-    "build-sandbox-image": {
-      uses: "./.github/workflows/build-sandbox-image.yml",
-      // @ts-expect-error - secrets inherit
-      secrets: "inherit",
-    },
     test: {
-      needs: ["build-sandbox-image"],
       ...utils.runsOn,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
+        uses("docker/setup-buildx-action@v3"),
+        {
+          name: "build-docker-image",
+          env: {
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+          },
+          run: "pnpm os docker:build",
+        },
         {
           name: "Run Local Docker Tests",
           env: {
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            LOCAL_DOCKER_IMAGE_NAME: "${{ needs.build-sandbox-image.outputs.image_ref }}",
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:local",
           },
           run: "pnpm os docker:test",
         },
