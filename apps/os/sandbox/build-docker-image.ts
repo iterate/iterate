@@ -25,9 +25,8 @@
  * Daytona), the Dockerfile's fallback stage copies .git from the build context.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
@@ -67,9 +66,17 @@ mkdirSync(cacheDir, { recursive: true });
  * - index (staging area)
  * - FETCH_HEAD, ORIG_HEAD, COMMIT_EDITMSG
  * - hooks/, info/
+ *
+ * Uses a fixed path based on git SHA so Docker can cache the build context.
  */
 function createDeterministicGitSnapshot(sourceDir: string, label: string): string {
-  const snapshotDir = mkdtempSync(join(tmpdir(), `git-snapshot-${label}-`));
+  // Use a fixed path in .cache based on git SHA - this ensures Docker sees
+  // the same build context path for the same commit
+  const snapshotDir = join(cacheDir, `git-snapshot-${label}-${gitSha}`);
+
+  // Clean and recreate to ensure fresh state
+  rmSync(snapshotDir, { recursive: true, force: true });
+  mkdirSync(snapshotDir, { recursive: true });
 
   // Essential single files (deterministic for a commit)
   const essentialFiles = ["HEAD", "config", "packed-refs", "shallow"];
@@ -98,25 +105,6 @@ const gitDirSnapshot = createDeterministicGitSnapshot(gitDir, "gitdir");
 const commonDirSnapshot = createDeterministicGitSnapshot(commonDir, "commondir");
 console.log(`  gitdir snapshot: ${gitDirSnapshot}`);
 console.log(`  commondir snapshot: ${commonDirSnapshot}`);
-
-// Cleanup snapshots on exit
-const cleanup = () => {
-  try {
-    rmSync(gitDirSnapshot, { recursive: true, force: true });
-    rmSync(commonDirSnapshot, { recursive: true, force: true });
-  } catch {
-    // Best effort cleanup
-  }
-};
-process.on("exit", cleanup);
-process.on("SIGINT", () => {
-  cleanup();
-  process.exit(130);
-});
-process.on("SIGTERM", () => {
-  cleanup();
-  process.exit(143);
-});
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
