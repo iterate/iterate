@@ -141,13 +141,7 @@ function parseDockerResponse<T>(text: string): T {
       if (parsedLines.length === 0) {
         return {} as T;
       }
-      try {
-        return parsedLines[parsedLines.length - 1] as T;
-      } catch {
-        // If even the last line isn't valid JSON, return empty object
-        // This handles cases where we just need to wait for stream completion
-        return {} as T;
-      }
+      return parsedLines[parsedLines.length - 1] as T;
     }
     return {} as T;
   }
