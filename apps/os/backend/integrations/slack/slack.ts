@@ -417,12 +417,10 @@ slackApp.post("/webhook", async (c) => {
     (payload.team_id as string) ||
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
-  const eventType = payload.type as string | undefined;
-  const eventSubtype = (payload.event as Record<string, unknown>)?.type as string | undefined;
   trackWebhookEvent(c.env, {
     distinctId: `slack:${teamId ?? "unknown"}`,
     event: "slack:webhook_received",
-    properties: { ...payload, _event_type: eventType, _event_subtype: eventSubtype },
+    properties: payload,
   });
 
   // URL verification - return immediately
