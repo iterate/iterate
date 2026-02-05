@@ -55,10 +55,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTRPCClient, httpLink } from "@trpc/client";
 import { Agent, request } from "undici";
 import { test as baseTest } from "vitest";
-import { createClient as createPidnapClient } from "pidnap/client";
 import { DockerProvider, DockerSandbox } from "../providers/docker/provider.ts";
 import { DaytonaProvider, DaytonaSandbox } from "../providers/daytona/provider.ts";
 import { getDockerHostConfig, dockerApi } from "../providers/docker/api.ts";
@@ -232,17 +230,6 @@ export async function waitForFileLogPattern(
 }
 
 // ============ Test Helpers ============
-
-export function createDaemonTrpcClient(baseUrl: string): ReturnType<typeof createTRPCClient> {
-  // Callers should cast the return value to TRPCClient<TRPCRouter> for type safety
-  return createTRPCClient({
-    links: [httpLink({ url: `${baseUrl}/api/trpc` })],
-  });
-}
-
-export function createPidnapRpcClient(baseUrl: string) {
-  return createPidnapClient(baseUrl);
-}
 
 /** Dump container logs to stdout for debugging test failures */
 export function dumpContainerLogs(containerId: string): void {

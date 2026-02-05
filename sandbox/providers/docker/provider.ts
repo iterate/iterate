@@ -264,6 +264,8 @@ export class DockerProvider extends SandboxProvider {
       await waitForEntrypointSignal(sandbox, maxWaitMs);
 
       if (this.gitInfo?.commit) {
+        // Worktree sync is occasionally still settling immediately after the signal.
+        // A short fixed delay has proven more stable than extra polling here.
         await new Promise((r) => setTimeout(r, 5000));
       }
     }

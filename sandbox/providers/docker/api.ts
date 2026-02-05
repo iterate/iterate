@@ -181,44 +181,6 @@ function stripDockerExecHeaders(buffer: Uint8Array): string {
 }
 
 /**
- * Get container logs.
- *
- * @param containerId - Container ID or name
- * @param opts - Log options
- * @returns Container logs
- */
-export async function getContainerLogs(
-  containerId: string,
-  opts: { stdout?: boolean; stderr?: boolean; tail?: number } = {},
-): Promise<string> {
-  const { stdout = true, stderr = true, tail = 100 } = opts;
-  const params = new URLSearchParams({
-    stdout: String(stdout),
-    stderr: String(stderr),
-    tail: String(tail),
-  });
-
-  const config = parseDockerHost();
-  const url = `${config.url}/containers/${containerId}/logs?${params}`;
-
-  if (config.socketPath) {
-    const { request } = await import("undici");
-    const dispatcher = await getUndiciDispatcher(config.socketPath);
-    const response = await request(url, {
-      method: "GET",
-      dispatcher: dispatcher as import("undici").Dispatcher,
-    });
-
-    const buffer = await response.body.arrayBuffer();
-    return stripDockerExecHeaders(new Uint8Array(buffer));
-  }
-
-  const response = await fetch(url);
-  const buffer = await response.arrayBuffer();
-  return stripDockerExecHeaders(new Uint8Array(buffer));
-}
-
-/**
  * Docker container inspect response types.
  */
 export interface DockerInspect {
