@@ -127,9 +127,7 @@ const cliRouter = os.router({
         const manager = new Manager(config, managerLogger);
 
         // Setup ORPC server with optional auth token middleware
-        // The /rpc prefix matches what clients (including local-docker provider) expect
         const handler = new RPCHandler(router, {
-          prefix: "/rpc",
           interceptors: [
             onError((error) => {
               managerLogger.error(error);
