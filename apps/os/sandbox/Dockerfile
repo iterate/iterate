@@ -138,14 +138,13 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 
 # === Git directory and metadata (MUST be last - changes every commit) ===
-# Overlay git directory pieces from BuildKit contexts (worktree-safe).
-# In a worktree, .git is a file that points at the real gitdir/commondir on disk.
-# The build script passes both as BuildKit contexts, then we copy them into
-# $ITERATE_REPO/.git and remove the indirection markers so git works in-container.
+# Copy a minimal synthetic .git directory that only contains:
+# - HEAD pointing to the commit SHA
+# - config with basic settings
+# - The commit and tree objects (loose object files)
+# This is 100% deterministic for a given commit SHA, ensuring full cache hits.
 # NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
-COPY --from=iterate-repo-commondir --chown=iterate:iterate . $ITERATE_REPO/.git
-COPY --from=iterate-repo-gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
-RUN rm -f $ITERATE_REPO/.git/commondir $ITERATE_REPO/.git/gitdir
+COPY --from=iterate-synthetic-git --chown=iterate:iterate . $ITERATE_REPO/.git
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA

@@ -4,28 +4,21 @@
  * Uses depot build for persistent layer caching across CI runs.
  * Depot handles caching automatically - no --cache-from/--cache-to needed.
  *
- * Git worktree handling:
- * In a git worktree, .git is a file (not a directory) pointing to the real .git
- * folder in the main checkout. That path doesn't exist inside the container, so
- * we can't just COPY .git directly.
+ * Synthetic .git directory for 100% cache hits:
+ * To ensure deterministic layer caching when the commit SHA hasn't changed, we
+ * create a minimal synthetic .git directory containing only:
+ * - HEAD pointing directly to the commit SHA
+ * - A minimal config file
+ * - The commit and tree objects as loose object files
  *
- * Solution: We pass --build-context iterate-repo-gitdir=<resolved-git-dir> and
- * --build-context iterate-repo-commondir=<resolved-commondir> to BuildKit, which
- * override the fallback stages in the Dockerfile. The Dockerfile's
- * COPY --from=iterate-repo-* then pulls from our host paths instead of the
- * fallback stages.
+ * This is 100% deterministic because git loose objects are named by their SHA
+ * and contain deterministic content. Unlike git bundles or pack files, loose
+ * objects don't include timestamps or vary with packing strategy.
  *
- * Cache optimization:
- * The raw .git directory contains files that change between runs even when the
- * commit is the same (logs/, index, FETCH_HEAD, etc.). To ensure 100% cache hits
- * when the commit hasn't changed, we create deterministic snapshots containing
- * only the essential git files needed for git operations in the container.
- *
- * For non-worktree builds or builders that don't support --build-context (like
- * Daytona), the Dockerfile's fallback stage copies .git from the build context.
+ * The Dockerfile simply COPYs this synthetic .git directory.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
@@ -40,10 +33,20 @@ const gitDir = execSync("git rev-parse --absolute-git-dir", {
   encoding: "utf-8",
 }).trim();
 
-const commonDir = execSync("git rev-parse --git-common-dir", {
+// --git-common-dir returns a relative path for non-worktree repos (e.g., ".git")
+// We need to resolve it to an absolute path for consistent snapshot handling
+let commonDir = execSync("git rev-parse --git-common-dir", {
   cwd: repoRoot,
   encoding: "utf-8",
 }).trim();
+
+// Resolve relative path to absolute
+if (!commonDir.startsWith("/")) {
+  commonDir = join(repoRoot, commonDir);
+}
+
+// Check if gitDir and commonDir point to the same location (non-worktree case)
+const isWorktree = gitDir !== commonDir;
 
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 
@@ -55,56 +58,58 @@ const cacheDir = join(repoRoot, ".cache");
 mkdirSync(cacheDir, { recursive: true });
 
 /**
- * Create a deterministic snapshot of a git directory.
+ * Create a minimal synthetic .git directory that is 100% deterministic.
  *
- * Only copies files that are deterministic for a given commit:
- * - HEAD, config, packed-refs (single files)
- * - refs/, objects/ (directories with actual git data)
+ * This creates a bare-minimum git directory with:
+ * - HEAD pointing directly to the commit SHA (detached HEAD)
+ * - A minimal config file
+ * - Empty objects and refs directories (required for git to recognize this as a repo)
  *
- * Excludes files that change between runs:
- * - logs/ (reflog with timestamps)
- * - index (staging area)
- * - FETCH_HEAD, ORIG_HEAD, COMMIT_EDITMSG
- * - hooks/, info/
+ * This is 100% deterministic because the only variable content is the SHA,
+ * which is captured in HEAD. We don't copy any objects - the container can
+ * use GIT_SHA env var for commit identification, or fetch from remote if
+ * full git history is needed.
  *
  * Uses a fixed path based on git SHA so Docker can cache the build context.
  */
-function createDeterministicGitSnapshot(sourceDir: string, label: string): string {
-  // Use a fixed path in .cache based on git SHA - this ensures Docker sees
-  // the same build context path for the same commit
-  const snapshotDir = join(cacheDir, `git-snapshot-${label}-${gitSha}`);
+function createDeterministicGitDir(): string {
+  // Use a fixed path in .cache based on git SHA
+  const gitDirPath = join(cacheDir, `synthetic-git-${gitSha}`);
 
   // Clean and recreate to ensure fresh state
-  rmSync(snapshotDir, { recursive: true, force: true });
-  mkdirSync(snapshotDir, { recursive: true });
+  rmSync(gitDirPath, { recursive: true, force: true });
+  mkdirSync(gitDirPath, { recursive: true });
 
-  // Essential single files (deterministic for a commit)
-  const essentialFiles = ["HEAD", "config", "packed-refs", "shallow"];
-  for (const file of essentialFiles) {
-    const src = join(sourceDir, file);
-    if (existsSync(src)) {
-      cpSync(src, join(snapshotDir, file));
-    }
-  }
+  // Create HEAD pointing to the SHA (detached HEAD format)
+  writeFileSync(join(gitDirPath, "HEAD"), `${gitSha}\n`);
 
-  // Essential directories (contain the actual git data)
-  const essentialDirs = ["refs", "objects"];
-  for (const dir of essentialDirs) {
-    const src = join(sourceDir, dir);
-    if (existsSync(src)) {
-      cpSync(src, join(snapshotDir, dir), { recursive: true });
-    }
-  }
+  // Create minimal config
+  writeFileSync(
+    join(gitDirPath, "config"),
+    `[core]
+\trepositoryformatversion = 0
+\tfilemode = true
+\tbare = false
+`,
+  );
 
-  return snapshotDir;
+  // Create empty objects directory (required for git to recognize this as a repo)
+  mkdirSync(join(gitDirPath, "objects"), { recursive: true });
+
+  // Create empty refs directory (required for git to recognize this as a repo)
+  mkdirSync(join(gitDirPath, "refs", "heads"), { recursive: true });
+
+  return gitDirPath;
 }
 
-// Create deterministic snapshots of git directories for cache-friendly builds
-console.log("Creating deterministic git snapshots for build context...");
-const gitDirSnapshot = createDeterministicGitSnapshot(gitDir, "gitdir");
-const commonDirSnapshot = createDeterministicGitSnapshot(commonDir, "commondir");
-console.log(`  gitdir snapshot: ${gitDirSnapshot}`);
-console.log(`  commondir snapshot: ${commonDirSnapshot}`);
+// Create deterministic synthetic .git directory for cache-friendly builds
+console.log("Creating deterministic synthetic .git directory...");
+console.log(`  isWorktree: ${isWorktree}`);
+console.log(`  gitDir: ${gitDir}`);
+console.log(`  commonDir: ${commonDir}`);
+
+const syntheticGitDir = createDeterministicGitDir();
+console.log(`  synthetic git dir: ${syntheticGitDir}`);
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
@@ -119,11 +124,9 @@ const buildArgs = [
   "apps/os/sandbox/Dockerfile",
   "-t",
   localImageName,
-  // Override the Dockerfile's gitdir/commondir stages with deterministic snapshots
+  // Override the Dockerfile's synthetic-git stage with our deterministic .git directory
   "--build-context",
-  `iterate-repo-gitdir=${gitDirSnapshot}`,
-  "--build-context",
-  `iterate-repo-commondir=${commonDirSnapshot}`,
+  `iterate-synthetic-git=${syntheticGitDir}`,
   "--build-arg",
   `GIT_SHA=${gitSha}`,
   "--label",
