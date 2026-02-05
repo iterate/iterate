@@ -1,16 +1,13 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build sandbox Docker image with ghcr.io registry layer caching.
- *
- * Uses docker buildx with --cache-from/--cache-to for persistent layer caching.
+ * Build sandbox Docker image.
  */
 export default workflow({
   name: "Build Sandbox Image",
   permissions: {
     contents: "read",
-    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     workflow_call: {
@@ -24,7 +21,7 @@ export default workflow({
       },
       outputs: {
         image_ref: {
-          description: "Local sandbox image ref (sha tag)",
+          description: "Local sandbox image ref",
           value: "${{ jobs.build.outputs.image_ref }}",
         },
       },
@@ -39,25 +36,19 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupBuildx,
-        ...utils.loginGhcr,
+        uses("docker/setup-buildx-action@v3"),
         {
           name: "Build sandbox image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
-            // Use local buildx with registry cache
-            DOCKER_BUILD_MODE: "local",
           },
           run: "pnpm os docker:build",
         },
         {
           id: "output",
           name: "Export image ref",
-          run: [
-            "GIT_SHA=$(git rev-parse HEAD)",
-            'echo "image_ref=ghcr.io/iterate/sandbox-cache:sha-$GIT_SHA" >> $GITHUB_OUTPUT',
-          ].join("\n"),
+          run: 'echo "image_ref=iterate-sandbox:ci" >> $GITHUB_OUTPUT',
         },
       ],
     },

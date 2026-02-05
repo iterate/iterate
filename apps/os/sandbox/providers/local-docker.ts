@@ -58,18 +58,11 @@ function resolveBaseImage(repoRoot: string): string {
     return process.env.LOCAL_DOCKER_IMAGE_NAME;
   }
 
-  const localDefault = "ghcr.io/iterate/sandbox:local";
+  // Try common local image names
+  const localDefault = "iterate-sandbox:local";
   try {
     execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
     return localDefault;
-  } catch {
-    // fall back
-  }
-
-  const bakedDefault = "ghcr.io/iterate/sandbox:main";
-  try {
-    execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
-    return bakedDefault;
   } catch {
     // fall back
   }

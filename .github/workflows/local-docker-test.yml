@@ -3,7 +3,6 @@
 name: Local Docker Tests
 permissions:
   contents: read
-  packages: write
 on:
   push:
     branches:
@@ -45,48 +44,15 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to ghcr.io
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: check-image
-        name: Check if image exists
-        run: |-
-          set -euo pipefail
-          # Use git SHA from checked out code (matches build script behavior)
-          # This handles PRs correctly - avoids GitHub's synthetic merge commit SHA
-          GIT_SHA=$(git rev-parse HEAD)
-          IMAGE_NAME="ghcr.io/iterate/sandbox-cache:sha-$GIT_SHA"
-          echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT
-          echo "git_sha=$GIT_SHA" >> $GITHUB_OUTPUT
-          # Check if image exists in registry (manifest inspect returns 0 if exists)
-          if docker manifest inspect "$IMAGE_NAME" > /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Image already exists: $IMAGE_NAME"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Image not found, will build: $IMAGE_NAME"
-          fi
-      - id: build
-        name: Build Docker image (if needed)
-        if: steps.check-image.outputs.exists != 'true'
+      - name: Build Docker image
         env:
           SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
-          DOCKER_BUILD_MODE: local
-          DOCKER_OUTPUT_MODE: push
         run: pnpm os docker:build
-      - name: Pull image from registry
-        run: docker pull ${{ steps.check-image.outputs.image_name }}
       - name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-          LOCAL_DOCKER_IMAGE_NAME: ${{ steps.check-image.outputs.image_name }}
         run: pnpm os docker:test
       - name: Upload test results
         if: failure()

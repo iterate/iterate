@@ -5,7 +5,6 @@ export default workflow({
   name: "Local Docker Tests",
   permissions: {
     contents: "read",
-    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     push: {
@@ -33,46 +32,13 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupBuildx,
-        ...utils.loginGhcr,
         {
-          id: "check-image",
-          name: "Check if image exists",
-          run: [
-            "set -euo pipefail",
-            "# Use git SHA from checked out code (matches build script behavior)",
-            "# This handles PRs correctly - avoids GitHub's synthetic merge commit SHA",
-            "GIT_SHA=$(git rev-parse HEAD)",
-            'IMAGE_NAME="ghcr.io/iterate/sandbox-cache:sha-$GIT_SHA"',
-            'echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT',
-            'echo "git_sha=$GIT_SHA" >> $GITHUB_OUTPUT',
-            "# Check if image exists in registry (manifest inspect returns 0 if exists)",
-            'if docker manifest inspect "$IMAGE_NAME" > /dev/null 2>&1; then',
-            '  echo "exists=true" >> $GITHUB_OUTPUT',
-            '  echo "Image already exists: $IMAGE_NAME"',
-            "else",
-            '  echo "exists=false" >> $GITHUB_OUTPUT',
-            '  echo "Image not found, will build: $IMAGE_NAME"',
-            "fi",
-          ].join("\n"),
-        },
-        {
-          id: "build",
-          name: "Build Docker image (if needed)",
-          if: "steps.check-image.outputs.exists != 'true'",
+          name: "Build Docker image",
           env: {
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
-            // Use local buildx with registry cache instead of remote Depot builders
-            DOCKER_BUILD_MODE: "local",
-            // Push to registry instead of loading locally (avoids 55s tarball overhead)
-            DOCKER_OUTPUT_MODE: "push",
           },
           run: "pnpm os docker:build",
-        },
-        {
-          name: "Pull image from registry",
-          run: "docker pull ${{ steps.check-image.outputs.image_name }}",
         },
         {
           name: "Run Local Docker Tests",
@@ -80,8 +46,6 @@ export default workflow({
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            // Use the pre-pulled image
-            LOCAL_DOCKER_IMAGE_NAME: "${{ steps.check-image.outputs.image_name }}",
           },
           run: "pnpm os docker:test",
         },

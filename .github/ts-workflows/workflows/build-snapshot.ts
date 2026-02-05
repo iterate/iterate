@@ -4,8 +4,6 @@ import * as utils from "../utils/index.ts";
 /**
  * Reusable workflow to build a Daytona snapshot.
  *
- * Uses docker buildx with ghcr.io registry caching for fast layer caching.
- *
  * Usage:
  *   build-snapshot:
  *     uses: ./.github/workflows/build-snapshot.yml
@@ -23,7 +21,6 @@ export default workflow({
   name: "Build Daytona Snapshot",
   permissions: {
     contents: "read",
-    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     workflow_call: {
@@ -83,16 +80,13 @@ EOF'`,
             "daytona snapshot list --limit 1",
           ].join("\n"),
         },
-        ...utils.setupBuildx,
-        ...utils.loginGhcr,
+        uses("docker/setup-buildx-action@v3"),
         {
           name: "Build sandbox image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             // Daytona requires AMD64 images regardless of runner architecture
             SANDBOX_BUILD_PLATFORM: "linux/amd64",
-            // Use local buildx with registry cache (same as local-docker-test)
-            DOCKER_BUILD_MODE: "local",
           },
           run: "pnpm os docker:build",
         },
@@ -101,7 +95,7 @@ EOF'`,
           name: "Build and push Daytona snapshot",
           env: {
             CI: "true",
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
