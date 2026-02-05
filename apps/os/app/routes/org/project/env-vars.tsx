@@ -243,8 +243,6 @@ function ProjectEnvVarsPage() {
     const key = formKey.trim();
     const value = formValue.trim();
     const description = formDescription.trim() || undefined;
-    // Allow empty value when editing an existing secret (keeps existing value)
-    const isEditingExistingSecret = editingEnvVar?.secret && formIsSecret;
     if (!key || (!value && !isEditingExistingSecret)) return;
 
     // Check if this key will override an existing one
@@ -306,6 +304,8 @@ function ProjectEnvVarsPage() {
   };
 
   const isPending = setEnvVar.isPending || createSecret.isPending;
+  // When editing an existing secret, allow empty value to keep existing
+  const isEditingExistingSecret = !!editingEnvVar?.secret && formIsSecret;
 
   const addSheet = (
     <Sheet open={addSheetOpen} onOpenChange={setAddSheetOpen}>
@@ -414,8 +414,7 @@ function ProjectEnvVarsPage() {
               type="submit"
               disabled={
                 !formKey.trim() ||
-                // Allow empty value when editing existing secret (keeps existing value)
-                (!formValue.trim() && !(editingEnvVar?.secret && formIsSecret)) ||
+                (!formValue.trim() && !isEditingExistingSecret) ||
                 isPending ||
                 hasBlockingSecretHint(formKey, formValue, formIsSecret, secretHintDismissed)
               }
