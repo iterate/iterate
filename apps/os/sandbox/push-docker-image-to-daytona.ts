@@ -46,18 +46,10 @@ const daytonaEnv = { ...process.env, CI: "true" };
 execSync("daytona --version", { stdio: "ignore", env: daytonaEnv });
 
 // Authenticate with Daytona API if key is provided
+// Note: "daytona organization use" doesn't work with API key auth - org is scoped to the key
 const daytonaApiKey = process.env.DAYTONA_API_KEY ?? "";
 if (daytonaApiKey) {
   execSync(`daytona login --api-key "${daytonaApiKey}"`, {
-    stdio: "ignore",
-    env: daytonaEnv,
-    input: "",
-  });
-}
-
-const daytonaOrgId = process.env.DAYTONA_ORG_ID ?? "";
-if (daytonaOrgId) {
-  execSync(`daytona organization use ${daytonaOrgId}`, {
     stdio: "ignore",
     env: daytonaEnv,
     input: "",
