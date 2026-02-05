@@ -53,8 +53,14 @@ export default workflow({
             'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
-            // Note: No login needed - CLI uses DAYTONA_API_KEY env var directly (since v0.128.0)
           ].join(" && "),
+        },
+        {
+          name: "Verify Daytona CLI authentication",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "doppler run -- daytona organization list",
         },
         uses("docker/setup-buildx-action@v3"),
         {
