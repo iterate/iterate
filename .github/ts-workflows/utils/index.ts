@@ -46,7 +46,10 @@ export const runsOnUbuntuLatest = {
 export const setupRepo = [
   {
     name: "Checkout code",
-    uses: "actions/checkout@v4",
+    ...uses("actions/checkout@v4", {
+      // Use PR head SHA instead of synthetic merge commit for better cache hits
+      ref: "${{ github.event.pull_request.head.sha || github.sha }}",
+    }),
   },
   {
     name: "Install Doppler CLI",
