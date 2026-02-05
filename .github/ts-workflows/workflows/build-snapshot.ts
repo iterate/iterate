@@ -76,6 +76,7 @@ export default workflow({
           name: "Build and push Daytona snapshot",
           env: {
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            DAYTONA_ORG_ID: "${{ secrets.DAYTONA_ORG_ID }}",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
