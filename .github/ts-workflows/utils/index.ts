@@ -10,6 +10,26 @@ export const setupDepot = [
   },
 ] as const satisfies Step[];
 
+/** Login to ghcr.io for Docker cache and image storage */
+export const loginGhcr = [
+  {
+    name: "Login to ghcr.io",
+    ...uses("docker/login-action@v3", {
+      registry: "ghcr.io",
+      username: "${{ github.actor }}",
+      password: "${{ secrets.GITHUB_TOKEN }}",
+    }),
+  },
+] as const satisfies Step[];
+
+/** Setup Docker Buildx for advanced build features */
+export const setupBuildx = [
+  {
+    name: "Setup Docker Buildx",
+    ...uses("docker/setup-buildx-action@v3"),
+  },
+] as const satisfies Step[];
+
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],
 };

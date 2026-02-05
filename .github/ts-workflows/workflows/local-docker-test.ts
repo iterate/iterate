@@ -5,7 +5,7 @@ export default workflow({
   name: "Local Docker Tests",
   permissions: {
     contents: "read",
-    "id-token": "write", // for Depot OIDC auth
+    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     push: {
@@ -33,13 +33,16 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupDepot,
+        ...utils.setupBuildx,
+        ...utils.loginGhcr,
         {
           name: "build-docker-image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+            // Use local buildx with registry cache instead of remote Depot builders
+            DOCKER_BUILD_MODE: "local",
           },
           run: "pnpm os docker:build",
         },
