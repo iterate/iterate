@@ -58,3 +58,9 @@ fi
 # files may have changed while dist/ is preserved (it's gitignored).
 echo "[entry] Rebuilding daemon frontend after sync"
 (cd "${ITERATE_REPO}/apps/daemon" && pnpm vite build)
+
+# Run database migrations after sync to ensure schema matches synced migration files.
+# The Docker image contains a pre-migrated db.sqlite, but when syncing from host the
+# drizzle/ migration files may have changed while db.sqlite is preserved (it's gitignored).
+echo "[entry] Running database migrations after sync"
+(cd "${ITERATE_REPO}/apps/daemon" && pnpm db:migrate)

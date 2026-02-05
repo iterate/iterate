@@ -74,15 +74,6 @@ RUN git config --global user.name "iterate" && \
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 RUN uv tool install mitmproxy
 
-# Generate mitmproxy CA certificate at build time.
-# This certificate is safe to share across all sandbox instances because:
-# 1. Each sandbox is network-isolated - they cannot communicate with each other
-# 2. The cert is only used for the local egress proxy within each sandbox
-# 3. No sandbox can intercept another sandbox's traffic
-RUN mkdir -p /home/iterate/.mitmproxy && \
-    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
-    PID=$! && sleep 2 && kill $PID 2>/dev/null || true
-
 # Configure npm for userspace global installs
 RUN mkdir -p ~/.npm-global && \
     npm config set prefix ~/.npm-global
@@ -153,6 +144,15 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
 # Run database migrations
 RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
+
+# Generate mitmproxy CA certificate at build time.
+# This certificate is safe to share across all sandbox instances because:
+# 1. Each sandbox is network-isolated - they cannot communicate with each other
+# 2. The cert is only used for the local egress proxy within each sandbox
+# 3. No sandbox can intercept another sandbox's traffic
+RUN mkdir -p /home/iterate/.mitmproxy && \
+    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    PID=$! && sleep 2 && kill $PID 2>/dev/null || true
 
 # Install mitmproxy CA certificate system-wide
 RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
