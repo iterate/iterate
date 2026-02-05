@@ -93,7 +93,8 @@ export default workflow({
   },
   jobs: {
     "build-and-test": {
-      ...utils.runsOn,
+      // Run on AMD64 to match Daytona snapshot builds and maximize shared Depot cache hits.
+      ...utils.runsOnUbuntuLatest,
       outputs: {
         test_result: "${{ steps.test.outcome }}",
       },
@@ -131,13 +132,39 @@ export default workflow({
           name: "Build Docker image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            // Use input platform if provided, otherwise auto-detect based on runner
-            SANDBOX_BUILD_PLATFORM:
-              "${{ inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}",
+            // Default to AMD64 to share cache with Daytona snapshot builds.
+            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            // Avoid builder -> runner --load transfer: save image to Depot Registry first.
+            SANDBOX_USE_DEPOT_REGISTRY: "true",
+            SANDBOX_DEPOT_SAVE_TAG:
+              "iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}",
           },
           run: [
             "echo '::group::Build timing'",
             "time pnpm os docker:build",
+            "echo '::endgroup::'",
+          ].join("\n"),
+        },
+        // Pull saved image from Depot Registry into local Docker daemon for test execution.
+        {
+          name: "Pull Docker image from Depot Registry",
+          env: {
+            IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+          },
+          run: [
+            "echo '::group::Pull timing'",
+            'build_info_path=".cache/depot-build-info.json"',
+            'depot_project_id="$(jq -r \'.depotProjectId\' "$build_info_path")"',
+            'depot_save_tag="$(jq -r \'.depotSaveTag\' "$build_info_path")"',
+            'image_ref="$(jq -r \'.depotRegistryImageName\' "$build_info_path")"',
+            'if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then',
+            '  echo "Missing Depot registry metadata in $build_info_path" >&2',
+            "  exit 1",
+            "fi",
+            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            'docker image inspect "$image_ref" > /dev/null',
+            'docker tag "$image_ref" "$IMAGE_NAME"',
+            "echo 'Pulled image: $image_ref'",
             "echo '::endgroup::'",
           ].join("\n"),
         },
