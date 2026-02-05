@@ -2,10 +2,9 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Reusable workflow to build a Daytona snapshot using Depot.
+ * Reusable workflow to build a Daytona snapshot.
  *
- * Uses Depot for persistent layer caching and saves images to Depot Registry
- * for fast Daytona pulls.
+ * Uses docker buildx with ghcr.io registry caching for fast layer caching.
  *
  * Usage:
  *   build-snapshot:
@@ -24,7 +23,7 @@ export default workflow({
   name: "Build Daytona Snapshot",
   permissions: {
     contents: "read",
-    "id-token": "write", // for Depot OIDC auth
+    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     workflow_call: {
@@ -84,13 +83,16 @@ EOF'`,
             "daytona snapshot list --limit 1",
           ].join("\n"),
         },
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupBuildx,
+        ...utils.loginGhcr,
         {
           name: "Build sandbox image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
             // Daytona requires AMD64 images regardless of runner architecture
             SANDBOX_BUILD_PLATFORM: "linux/amd64",
+            // Use local buildx with registry cache (same as local-docker-test)
+            DOCKER_BUILD_MODE: "local",
           },
           run: "pnpm os docker:build",
         },

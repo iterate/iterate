@@ -2,16 +2,15 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build sandbox Docker image using Depot with persistent layer caching.
+ * Build sandbox Docker image with ghcr.io registry layer caching.
  *
- * Images are saved to Depot Registry for fast Daytona pulls (global CDN).
- * For local Docker tests, we also --load the image locally.
+ * Uses docker buildx with --cache-from/--cache-to for persistent layer caching.
  */
 export default workflow({
   name: "Build Sandbox Image",
   permissions: {
     contents: "read",
-    "id-token": "write", // for Depot OIDC auth
+    packages: "write", // for ghcr.io cache push/pull
   },
   on: {
     workflow_call: {
@@ -40,19 +39,25 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupDepot,
+        ...utils.setupBuildx,
+        ...utils.loginGhcr,
         {
           name: "Build sandbox image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
+            // Use local buildx with registry cache
+            DOCKER_BUILD_MODE: "local",
           },
           run: "pnpm os docker:build",
         },
         {
           id: "output",
           name: "Export image ref",
-          run: 'echo "image_ref=registry.depot.dev/${DEPOT_PROJECT_ID}:sha-${{ github.sha }}" >> $GITHUB_OUTPUT',
+          run: [
+            "GIT_SHA=$(git rev-parse HEAD)",
+            'echo "image_ref=ghcr.io/iterate/sandbox-cache:sha-$GIT_SHA" >> $GITHUB_OUTPUT',
+          ].join("\n"),
         },
       ],
     },
