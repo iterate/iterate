@@ -6,4 +6,6 @@ if [ -f "$HOME/.iterate/.env" ]; then
   NODE_USE_ENV_PROXY=$(grep '^NODE_USE_ENV_PROXY=' "$HOME/.iterate/.env" | cut -d'=' -f2)
   export NODE_EXTRA_CA_CERTS NODE_USE_ENV_PROXY
 fi
-exec node --env-file-if-exists="$HOME/.iterate/.env" --import=tsx ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"
+# Run from iterate repo so tsx can be resolved from node_modules
+cd ~/src/github.com/iterate/iterate
+exec node --env-file-if-exists="$HOME/.iterate/.env" --import=tsx apps/cli/main.ts "$@"
