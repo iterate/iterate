@@ -6,6 +6,8 @@
 pnpm install
 pnpm docker:up
 pnpm os db:migrate
+docker buildx create --name iterate --driver docker-container --use
+pnpm docker:build
 pnpm os dev
 ```
 
@@ -36,4 +38,12 @@ Expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
 DEV_TUNNEL=1 pnpm dev        # → {app}-dev-{ITERATE_USER}.dev.iterate.com
 DEV_TUNNEL=bob pnpm dev      # → bob.dev.iterate.com (custom, no stage/app suffix)
 DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
+```
+
+## Daytona snapshots
+
+Build a daytona snapshot and write DAYTONA_SNAPSHOT_NAME to your daytona config (needs `brew install daytonaio/cli/daytona`)
+
+```bash
+pnpm os daytona:build
 ```
