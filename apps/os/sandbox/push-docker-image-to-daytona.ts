@@ -42,6 +42,12 @@ const { values } = parseArgs({
 
 execSync("daytona --version", { stdio: "ignore" });
 
+// Authenticate with Daytona API if key is provided
+const daytonaApiKey = process.env.DAYTONA_API_KEY ?? "";
+if (daytonaApiKey) {
+  execSync(`daytona login --api-key "${daytonaApiKey}"`, { stdio: "ignore" });
+}
+
 const daytonaOrgId = process.env.DAYTONA_ORG_ID ?? "";
 if (daytonaOrgId) {
   execSync(`daytona organization use ${daytonaOrgId}`, { stdio: "ignore" });
