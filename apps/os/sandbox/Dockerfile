@@ -144,7 +144,13 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
 # 3. No sandbox can intercept another sandbox's traffic
 RUN mkdir -p /home/iterate/.mitmproxy && \
     /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
-    PID=$! && sleep 2 && kill $PID 2>/dev/null || true
+    PID=$! && \
+    for i in $(seq 1 30); do \
+      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
+      sleep 0.5; \
+    done && \
+    kill $PID 2>/dev/null || true && \
+    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
 
 # Install mitmproxy CA certificate system-wide
 RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
