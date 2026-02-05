@@ -41,7 +41,7 @@ export default {
   },
   jobs: {
     release: {
-      ...utils.runsOnUbuntuLatest,
+      ...utils.runsOnFastStartingUbuntuLatest,
       steps: [
         {
           name: "Checkout code",

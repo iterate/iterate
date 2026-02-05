@@ -261,6 +261,13 @@ async function ensureImageAvailable(imageName: string): Promise<void> {
     // Image doesn't exist locally, try to pull it
   }
 
+  // Local dev tag wasn't built yet; don't try pulling from Docker Hub.
+  if (imageName.startsWith("iterate-sandbox:")) {
+    throw new Error(
+      `Local image '${imageName}' not found. Build it first with: pnpm os docker:build`,
+    );
+  }
+
   // Pull from registry (supports ghcr.io, docker.io, etc.)
   console.log(`[docker] Pulling image: ${imageName}`);
   // The Docker API POST /images/create streams progress, we just need to wait for completion

@@ -18,7 +18,7 @@ jobs:
     concurrency:
       group: global-nag-concurrency-group
       cancel-in-progress: false
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

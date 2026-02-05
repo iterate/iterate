@@ -45,6 +45,8 @@ export default {
           with: {
             timeout_minutes: 10,
             max_attempts: 3,
+            // This sometimes flakes: db:migrate currently uses unpooled postgres client and can exhaust
+            // PlanetScale connection slots transiently. Retry smooths over that until migration path is fixed.
             command: "cd apps/os && pnpm run deploy:prd",
           },
           env: {

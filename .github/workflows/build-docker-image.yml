@@ -78,7 +78,6 @@ on:
         default: dev
 jobs:
   build:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
       image_ref: ${{ steps.output.outputs.image_ref }}
       git_sha: ${{ steps.output.outputs.git_sha }}

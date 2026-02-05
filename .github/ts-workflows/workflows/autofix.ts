@@ -12,7 +12,7 @@ export default workflow({
   },
   jobs: {
     autofix: {
-      ...utils.runsOn,
+      ...utils.runsOnFastStartingUbuntuLatest,
       steps: [
         {
           name: "Checkout code",
