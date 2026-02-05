@@ -1,4 +1,5 @@
 import { defineConfig } from "drizzle-kit";
+import { resolveLocalDockerPostgresPort } from "./scripts/local-docker-postgres-port.ts";
 
 export default defineConfig({
   out: `backend/db/migrations`,
@@ -6,6 +7,9 @@ export default defineConfig({
   dialect: "postgresql",
   casing: "snake_case",
   dbCredentials: {
-    url: process.env.PSCALE_DATABASE_URL || "postgres://postgres:postgres@localhost:5432/os",
+    url:
+      process.env.PSCALE_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      `postgres://postgres:postgres@localhost:${resolveLocalDockerPostgresPort()}/os`,
   },
 });
