@@ -75,7 +75,7 @@ export default workflow({
             max_attempts: 3,
             retry_wait_seconds: 30,
             command:
-              "doppler run -- pnpm --filter @iterate-com/sandbox test -- test/provider-base-image.test.ts --maxWorkers=1",
+              "doppler run -- pnpm --filter @iterate-com/sandbox exec vitest run test/provider-base-image.test.ts --maxWorkers=1",
           }),
         },
         {
