@@ -105,8 +105,6 @@ RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
-# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
-RUN opencode run "Hello" || true
 # Ensure wrapper scripts win after all PATH modifications.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
@@ -163,6 +161,8 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
 
 # Copy home skeleton into /home/iterate
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
+RUN opencode run "Hello" || true
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
