@@ -86,14 +86,16 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             const code = value.toUpperCase().charCodeAt(0) - 64;
             if (code >= 1 && code <= 26) {
               socket.send(String.fromCharCode(code));
-              setCtrlActive(false);
             } else {
+              // Non-letter character, send as-is
               socket.send(value);
             }
           } else {
             socket.send(value);
           }
         }
+        // Always reset Ctrl state after any input
+        setCtrlActive(false);
         e.target.value = "";
       },
       [socket, ctrlActive],
@@ -295,13 +297,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
           {termSize.cols}x{termSize.rows}
         </div>
-        {/* Add bottom padding on mobile to account for toolbar */}
-        <div className={`relative h-full w-full overflow-hidden ${isMobile ? "pb-24" : ""}`}>
+        {/* Terminal container - leave space at bottom on mobile for toolbar */}
+        <div className="relative h-full w-full overflow-hidden">
           <div
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
-            className="absolute inset-0"
+            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-24" : "bottom-0"}`}
             onClick={() => {
               termRef.current?.focus();
               focusMobileInput();
