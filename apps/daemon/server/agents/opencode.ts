@@ -140,13 +140,15 @@ async function stopTracking(sessionId: string): Promise<void> {
   const tracking = trackedSessions.get(sessionId);
   if (!tracking) return;
 
+  // Delete first to prevent duplicate calls (both session.idle and session.status fire)
+  trackedSessions.delete(sessionId);
+  logger.log(`[opencode] Stopped tracking session ${sessionId}`);
+
   try {
     await tracking.unacknowledge();
   } catch (error) {
     logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
   }
-  trackedSessions.delete(sessionId);
-  logger.log(`[opencode] Stopped tracking session ${sessionId}`);
 }
 
 /**
