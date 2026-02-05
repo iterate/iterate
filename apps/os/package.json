@@ -13,7 +13,7 @@
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
     "typecheck": "tsgo -b",
-    "db:reset": "doppler run -- tsx -e \"(async () => { const postgres = (await import('postgres')).default; const sql = postgres('postgres://postgres:postgres@localhost:5432/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os'); await sql.unsafe('CREATE DATABASE os'); await sql.end(); })()\" && pnpm db:migrate",
+    "db:reset": "doppler run -- tsx -e \"(async () => { const postgres = (await import('postgres')).default; const port = process.env.LOCAL_DOCKER_POSTGRES_PORT ?? '5432'; const sql = postgres('postgres://postgres:postgres@localhost:' + port + '/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os'); await sql.unsafe('CREATE DATABASE os'); await sql.end(); })()\" && pnpm db:migrate",
     "super-reset": "pnpm db:reset",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
