@@ -40,11 +40,10 @@ const buildMode = (process.env.DOCKER_BUILD_MODE ?? "depot") as "depot" | "local
 // Output mode: "load" loads into local Docker daemon, "push" pushes to registry (faster, no tarball overhead)
 const outputMode = (process.env.DOCKER_OUTPUT_MODE ?? "load") as "load" | "push";
 
-// Registry for cache layers (used in "local" mode)
+// Registry for cache layers and pushed images (used in "local" mode)
+// Uses the same package for both cache (:cache tag) and images (:sha-<sha> tags)
 const cacheRegistry = process.env.DOCKER_CACHE_REGISTRY ?? "ghcr.io/iterate/sandbox-cache";
-
-// Registry for pushed images (used when outputMode is "push")
-const imageRegistry = process.env.DOCKER_IMAGE_REGISTRY ?? "ghcr.io/iterate/sandbox";
+const imageRegistry = process.env.DOCKER_IMAGE_REGISTRY ?? cacheRegistry;
 
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
