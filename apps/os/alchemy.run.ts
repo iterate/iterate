@@ -477,6 +477,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       PROJECT_INGRESS_PROXY,
       PROXY_ROOT_DOMAIN,
+      ...dbConfig,
     },
     adopt: true,
   });

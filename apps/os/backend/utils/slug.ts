@@ -1,3 +1,5 @@
+import { fromString, typeid } from "typeid-js";
+
 // Reserved slugs that conflict with TypeID prefixes or routes
 const RESERVED_SLUGS = ["prj", "org"];
 
@@ -44,4 +46,13 @@ export function isValidSlug(slug: string): boolean {
     slug.length <= 50 &&
     !RESERVED_SLUGS.includes(slug)
   );
+}
+
+export function validateTypeId(id: string, prefix?: string): boolean {
+  try {
+    fromString(id, prefix);
+    return true;
+  } catch {
+    return false;
+  }
 }
