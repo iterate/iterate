@@ -32,7 +32,7 @@ ITERATE_EGRESS_PROXY_URL="${ITERATE_EGRESS_PROXY_URL:-https://dev-nick-os.dev.it
 ITERATE_OS_API_KEY="${ITERATE_OS_API_KEY:-test-dev-key}"
 
 log "Building Docker image..."
-LOCAL_DOCKER_IMAGE_NAME="ghcr.io/iterate/sandbox:test" pnpm --filter os docker:build
+LOCAL_DOCKER_IMAGE_NAME="iterate-sandbox:test" pnpm --filter os docker:build
 
 log ""
 log "Running egress proxy test in container..."
@@ -44,7 +44,7 @@ docker run --rm \
   -e ITERATE_EGRESS_PROXY_URL="$ITERATE_EGRESS_PROXY_URL" \
   -e ITERATE_OS_API_KEY="$ITERATE_OS_API_KEY" \
   -v "$REPO_ROOT:/local-iterate-repo:ro" \
-  ghcr.io/iterate/sandbox:test \
+  iterate-sandbox:test \
   /bin/bash -c '
 set -e
 

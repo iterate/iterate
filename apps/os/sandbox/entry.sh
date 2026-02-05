@@ -17,7 +17,7 @@ fi
 touch /tmp/reached-entrypoint
 
 # Allow interactive shell in a fresh container - e.g.:
-# docker run --rm -it ghcr.io/iterate/sandbox:local /bin/bash
+# docker run --rm -it iterate-sandbox:local /bin/bash
 if [[ $# -gt 0 ]]; then
   exec "$@"
 fi

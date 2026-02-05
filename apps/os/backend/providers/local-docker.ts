@@ -123,11 +123,26 @@ function parseDockerResponse<T>(text: string): T {
   try {
     return JSON.parse(text);
   } catch {
-    // If that fails, try parsing as NDJSON (take the last non-empty line)
+    // If that fails, try parsing as NDJSON (and surface streamed errors).
     const lines = text.trim().split("\n").filter(Boolean);
     if (lines.length > 0) {
+      const parsedLines: Array<{ error?: string; errorDetail?: { message?: string } }> = [];
+      for (const line of lines) {
+        try {
+          parsedLines.push(JSON.parse(line));
+        } catch {
+          // ignore invalid line; if everything is invalid we'll return empty object below
+        }
+      }
+      const errorLine = parsedLines.find((line) => line.error || line.errorDetail?.message);
+      if (errorLine) {
+        throw new Error(errorLine.errorDetail?.message ?? errorLine.error ?? "Docker stream error");
+      }
+      if (parsedLines.length === 0) {
+        return {} as T;
+      }
       try {
-        return JSON.parse(lines[lines.length - 1]);
+        return parsedLines[parsedLines.length - 1] as T;
       } catch {
         // If even the last line isn't valid JSON, return empty object
         // This handles cases where we just need to wait for stream completion

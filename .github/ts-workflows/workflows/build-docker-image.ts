@@ -33,7 +33,7 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "linux/amd64,linux/arm64",
         },
         image_name: {
           description: "Docker image name/tag",
@@ -72,7 +72,7 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "linux/amd64,linux/arm64",
         },
         image_name: {
           description: "Docker image name/tag",
@@ -91,7 +91,7 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOn,
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         image_ref: "${{ steps.output.outputs.image_ref }}",
         git_sha: "${{ steps.output.outputs.git_sha }}",
@@ -119,6 +119,18 @@ export default workflow({
           },
         },
         {
+          id: "build_meta",
+          name: "Compute build metadata",
+          run: [
+            "git_sha=$(git rev-parse HEAD)",
+            "depot_project_id=$(node -e \"const fs=require('node:fs'); const id=JSON.parse(fs.readFileSync('depot.json','utf8')).id || ''; process.stdout.write(id)\")",
+            'if [ -z "$depot_project_id" ]; then echo "Missing depot.json project id" >&2; exit 1; fi',
+            'echo "git_sha=$git_sha" >> $GITHUB_OUTPUT',
+            'echo "depot_project_id=$depot_project_id" >> $GITHUB_OUTPUT',
+            'echo "depot_save_tag=sha-$git_sha" >> $GITHUB_OUTPUT',
+          ].join("\n"),
+        },
+        {
           name: "Install dependencies",
           run: "pnpm install",
         },
@@ -132,20 +144,18 @@ export default workflow({
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name }}",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
+            DEPOT_PROJECT_ID: "${{ steps.build_meta.outputs.depot_project_id }}",
+            DEPOT_SAVE_TAG: "${{ steps.build_meta.outputs.depot_save_tag }}",
           },
-          run: [
-            "echo '::group::Build timing'",
-            "time pnpm os docker:build",
-            "echo '::endgroup::'",
-          ].join("\n"),
+          run: "pnpm os docker:build",
         },
         // Export outputs
         {
           id: "output",
           name: "Export outputs",
           run: [
-            'echo "image_ref=${{ inputs.image_name }}" >> $GITHUB_OUTPUT',
-            'echo "git_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT',
+            'echo "image_ref=registry.depot.dev/${{ steps.build_meta.outputs.depot_project_id }}:${{ steps.build_meta.outputs.depot_save_tag }}" >> $GITHUB_OUTPUT',
+            'echo "git_sha=${{ steps.build_meta.outputs.git_sha }}" >> $GITHUB_OUTPUT',
           ].join("\n"),
         },
       ],

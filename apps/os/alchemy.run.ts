@@ -441,8 +441,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   };
   if (isDevelopment) {
     Object.assign(localDockerBindings, {
-      LOCAL_DOCKER_IMAGE_NAME:
-        process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+      LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local",
       ...localDockerEnvVars,
     });
   }

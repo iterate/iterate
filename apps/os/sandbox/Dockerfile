@@ -145,6 +145,7 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
 RUN mkdir -p /home/iterate/.mitmproxy && \
     /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
     PID=$! && \
+    # Cert generation is not immediate; poll for CA file before continuing.
     for i in $(seq 1 30); do \
       [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
       sleep 0.5; \
