@@ -9,13 +9,10 @@
  * create a minimal synthetic .git directory containing only:
  * - HEAD pointing directly to the commit SHA
  * - A minimal config file
- * - The commit and tree objects as loose object files
+ * - Empty objects and refs directories
  *
- * This is 100% deterministic because git loose objects are named by their SHA
- * and contain deterministic content. Unlike git bundles or pack files, loose
- * objects don't include timestamps or vary with packing strategy.
- *
- * The Dockerfile simply COPYs this synthetic .git directory.
+ * This is 100% deterministic because the only variable content is the SHA.
+ * The container can use GIT_SHA env var for commit identification.
  */
 import { execFileSync, execSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -25,29 +22,6 @@ const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
-
-// Get resolved git directory path. For worktrees, this returns the actual .git
-// folder (e.g., /repo/.git/worktrees/branch-name), not the .git file in the worktree.
-const gitDir = execSync("git rev-parse --absolute-git-dir", {
-  cwd: repoRoot,
-  encoding: "utf-8",
-}).trim();
-
-// --git-common-dir returns a relative path for non-worktree repos (e.g., ".git")
-// We need to resolve it to an absolute path for consistent snapshot handling
-let commonDir = execSync("git rev-parse --git-common-dir", {
-  cwd: repoRoot,
-  encoding: "utf-8",
-}).trim();
-
-// Resolve relative path to absolute
-if (!commonDir.startsWith("/")) {
-  commonDir = join(repoRoot, commonDir);
-}
-
-// Check if gitDir and commonDir point to the same location (non-worktree case)
-const isWorktree = gitDir !== commonDir;
-
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 
 // Local tag for Docker daemon (used by local-docker provider and tests)
@@ -103,13 +77,8 @@ function createDeterministicGitDir(): string {
 }
 
 // Create deterministic synthetic .git directory for cache-friendly builds
-console.log("Creating deterministic synthetic .git directory...");
-console.log(`  isWorktree: ${isWorktree}`);
-console.log(`  gitDir: ${gitDir}`);
-console.log(`  commonDir: ${commonDir}`);
-
 const syntheticGitDir = createDeterministicGitDir();
-console.log(`  synthetic git dir: ${syntheticGitDir}`);
+console.log(`Synthetic .git directory: ${syntheticGitDir}`);
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
