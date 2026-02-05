@@ -3,6 +3,7 @@
 name: Sandbox Tests
 permissions:
   contents: read
+  id-token: write
 on:
   push:
     branches:
@@ -43,17 +44,18 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build Docker image
         env:
-          DOCKER_IMAGE_NAME: ghcr.io/iterate/sandbox:ci
+          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
           SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
-        run: pnpm sandbox docker:build
+        run: pnpm docker:build
       - name: Run Docker Provider Tests
         env:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: docker
-          SANDBOX_TEST_SNAPSHOT_ID: ghcr.io/iterate/sandbox:ci
+          SANDBOX_TEST_SNAPSHOT_ID: iterate-sandbox:ci
+          SANDBOX_TEST_BASE_DOCKER_IMAGE: iterate-sandbox:ci
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-        run: pnpm sandbox test
+        run: pnpm sandbox test -- --maxWorkers=1
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
@@ -95,8 +97,9 @@ jobs:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: daytona
           SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.daytona-build.outputs.snapshot_name }}
+          SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT: ${{ needs.daytona-build.outputs.snapshot_name }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm sandbox test
+        run: doppler run -- pnpm sandbox test -- --maxWorkers=1
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

@@ -19,6 +19,7 @@ export default workflow({
   name: "Daytona Provider Tests",
   permissions: {
     contents: "read",
+    "id-token": "write",
   },
   on: {
     push: {
@@ -64,6 +65,8 @@ export default workflow({
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "daytona",
             SANDBOX_TEST_SNAPSHOT_ID:
+              "${{ github.event.inputs.snapshot_name || needs.build-snapshot.outputs.snapshot_name }}",
+            SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT:
               "${{ github.event.inputs.snapshot_name || needs.build-snapshot.outputs.snapshot_name }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },

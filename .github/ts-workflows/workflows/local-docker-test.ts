@@ -149,10 +149,11 @@ export default workflow({
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "docker",
             SANDBOX_TEST_SNAPSHOT_ID: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+            SANDBOX_TEST_BASE_DOCKER_IMAGE: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "pnpm sandbox test",
+          run: "pnpm sandbox test -- --maxWorkers=1",
         },
         // Upload test artifacts on failure
         {
