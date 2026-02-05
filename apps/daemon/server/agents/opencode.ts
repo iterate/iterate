@@ -236,9 +236,12 @@ async function ensureEventSubscription(workingDirectory: string): Promise<void> 
  * Calls acknowledge immediately and sets up listener to call unacknowledge on idle.
  */
 async function trackSession(sessionId: string, params: AppendParams): Promise<void> {
+  logger.log(`[opencode] trackSession called for ${sessionId}`);
   // Call acknowledge immediately
   try {
+    logger.log(`[opencode] Calling acknowledge for ${sessionId}`);
     await params.acknowledge();
+    logger.log(`[opencode] Acknowledge completed for ${sessionId}`);
   } catch (error) {
     logger.error(`[opencode] Error calling acknowledge for session ${sessionId}:`, error);
   }

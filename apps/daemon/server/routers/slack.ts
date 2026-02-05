@@ -25,6 +25,7 @@ import type {
   KnownBlock,
 } from "@slack/types";
 import { z } from "zod/v4";
+import { x } from "tinyexec";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -34,13 +35,33 @@ import { getSlackClient } from "../services/slack-client.ts";
 const logger = console;
 
 /**
- * Create acknowledge callback - adds :eyes: emoji.
+ * Run a slack command via the iterate CLI.
+ * The CLI loads env vars from ~/.iterate/.env (including proxy settings and SLACK_BOT_TOKEN).
+ * We don't pass env explicitly - let the CLI script handle it via --env-file-if-exists.
+ */
+async function runSlackCommand(code: string): Promise<void> {
+  logger.log("[slack] runSlackCommand:", code.slice(0, 80) + "...");
+  const result = await x("iterate", ["tool", "slack", code], { throwOnError: false });
+  logger.log("[slack] CLI result:", {
+    exitCode: result.exitCode,
+    stdout: result.stdout.slice(0, 200),
+    stderr: result.stderr.slice(0, 200),
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Exit code ${result.exitCode}`);
+  }
+}
+
+/**
+ * Create acknowledge callback - adds emoji reaction.
  */
 function createAcknowledge(channel: string, timestamp: string, emoji: string) {
   return async () => {
     try {
-      await getSlackClient().reactions.add({ channel, timestamp, name: emoji });
-      logger.log(`[slack] Added :eyes: to ${channel}/${timestamp}`);
+      await runSlackCommand(
+        `await slack.reactions.add({ channel: "${channel}", timestamp: "${timestamp}", name: "${emoji}" })`,
+      );
+      logger.log(`[slack] Added :${emoji}: to ${channel}/${timestamp}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (!msg.includes("already_reacted")) {
@@ -51,13 +72,15 @@ function createAcknowledge(channel: string, timestamp: string, emoji: string) {
 }
 
 /**
- * Create unacknowledge callback - removes :eyes: emoji.
+ * Create unacknowledge callback - removes emoji reaction.
  */
 function createUnacknowledge(channel: string, timestamp: string, emoji: string) {
   return async () => {
     try {
-      await getSlackClient().reactions.remove({ channel, timestamp, name: emoji });
-      logger.log(`[slack] Removed :eyes: from ${channel}/${timestamp}`);
+      await runSlackCommand(
+        `await slack.reactions.remove({ channel: "${channel}", timestamp: "${timestamp}", name: "${emoji}" })`,
+      );
+      logger.log(`[slack] Removed :${emoji}: from ${channel}/${timestamp}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (!msg.includes("no_reaction")) {

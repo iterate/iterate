@@ -23,6 +23,11 @@ warn_if_newer() {
   rel="${src#${HOME_SKELETON}/}"
   dest="$HOME/$rel"
 
+  # Skip .iterate/.env - managed by daemon
+  if [ "$rel" = ".iterate/.env" ]; then
+    return
+  fi
+
   if [ -e "$dest" ]; then
     src_mtime=$(get_mtime "$src")
     dest_mtime=$(get_mtime "$dest")
@@ -36,6 +41,7 @@ while IFS= read -r -d '' src; do
   warn_if_newer "$src"
 done < <(find "$HOME_SKELETON" \( -type f -o -type l \) -print0)
 
-rsync -a "$HOME_SKELETON/" "$HOME/"
+# Exclude .iterate/.env because it's managed by the daemon (platform injects env vars)
+rsync -a --exclude='.iterate/.env' "$HOME_SKELETON/" "$HOME/"
 
 chmod +x "$HOME/.local/bin/"* "$HOME/.iterate/bin/"* 2>/dev/null || true
