@@ -5,18 +5,29 @@
  * Depot handles caching automatically - no --cache-from/--cache-to needed.
  *
  * Minimal .git directory for deterministic caching + working git status:
- * We create a minimal .git by packing only HEAD commit + current tree objects.
+ * We create a minimal .git by packing just the objects needed for HEAD.
+ * This allows `git status` to work in the container (showing dirty files)
+ * while keeping the build context 100% deterministic for the same SHA.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { createMinimalGitDirForSha } from "./minimal-git-dir.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 const builtBy = process.env.ITERATE_USER ?? "unknown";
+const useDepotRegistry = process.env.SANDBOX_USE_DEPOT_REGISTRY === "true";
+const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
 
 // Detect multi-platform builds (comma-separated platforms)
 const isMultiPlatform = buildPlatform.includes(",");
@@ -24,69 +35,148 @@ const isMultiPlatform = buildPlatform.includes(",");
 // Local tag for Docker daemon (used by local-docker provider and tests)
 const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
 
-const depotProjectId =
-  process.env.DEPOT_PROJECT_ID ??
-  (() => {
-    const depotConfigPath = join(repoRoot, "depot.json");
-    if (!existsSync(depotConfigPath)) {
-      return undefined;
-    }
-    try {
-      const depotConfig = JSON.parse(readFileSync(depotConfigPath, "utf-8")) as { id?: string };
-      return depotConfig.id;
-    } catch {
-      return undefined;
-    }
-  })();
+// Registry image name for multi-platform builds (can't --load multiple platforms)
+const registryImageName = process.env.REGISTRY_IMAGE_NAME;
 
-// Back-compat: PUSH=1 used to indicate "registry push".
-// We now save to Depot registry; if PUSH=1 and no explicit save tag, use sha-<gitSha>.
-const legacyPushRequested = process.env.PUSH === "1" || process.env.PUSH?.toLowerCase() === "true";
+function readDepotProjectId(): string {
+  const depotConfigPath = join(repoRoot, "depot.json");
+  const config = JSON.parse(readFileSync(depotConfigPath, "utf-8")) as { id?: string };
+  if (!config.id) {
+    throw new Error("Missing depot project id in depot.json");
+  }
+  return config.id;
+}
 
-const depotSaveTag = process.env.DEPOT_SAVE_TAG ?? (legacyPushRequested ? `sha-${gitSha}` : null);
-const useDepotSave = Boolean(depotSaveTag);
-const registryImageName =
-  depotProjectId && depotSaveTag ? `registry.depot.dev/${depotProjectId}:${depotSaveTag}` : null;
+const depotProjectId = useDepotRegistry ? readDepotProjectId() : null;
+const depotRegistryImageName =
+  useDepotRegistry && depotSaveTag ? `registry.depot.dev/${depotProjectId}:${depotSaveTag}` : null;
 
 // Ensure cache directory exists
 const cacheDir = join(repoRoot, ".cache");
 mkdirSync(cacheDir, { recursive: true });
 
-const minimalGitDir = createMinimalGitDirForSha({
-  repoRoot,
-  cacheDir,
-  gitSha,
-  log: (message) => {
-    console.log(message);
-  },
-});
+/**
+ * Create a minimal .git directory with packed objects for HEAD.
+ *
+ * This creates a functional git directory that allows `git status` to work
+ * while being 100% deterministic for the same commit SHA.
+ *
+ * Contains:
+ * - HEAD pointing to the commit SHA
+ * - A minimal config file
+ * - Packed objects for HEAD (commit + trees + blobs)
+ *
+ * The pack file is deterministic because `git pack-objects` produces
+ * identical output for identical input objects.
+ */
+function createMinimalGitDir(): string {
+  const gitDirPath = join(cacheDir, `minimal-git-${gitSha}`);
+
+  // Check if we already have a valid cached version
+  const packDir = join(gitDirPath, "objects", "pack");
+  if (existsSync(packDir)) {
+    const packFiles = readdirSync(packDir).filter((f) => f.endsWith(".pack"));
+    if (packFiles.length > 0) {
+      console.log(`Using cached minimal .git for ${gitSha}`);
+      return gitDirPath;
+    }
+  }
+
+  console.log(`Creating minimal .git with packed objects for ${gitSha}...`);
+
+  // Clean and recreate
+  rmSync(gitDirPath, { recursive: true, force: true });
+  mkdirSync(gitDirPath, { recursive: true });
+
+  // Create HEAD pointing to the SHA (detached HEAD format)
+  writeFileSync(join(gitDirPath, "HEAD"), `${gitSha}\n`);
+
+  // Create minimal config
+  writeFileSync(
+    join(gitDirPath, "config"),
+    `[core]
+\trepositoryformatversion = 0
+\tfilemode = true
+\tbare = false
+`,
+  );
+
+  // Create required directories
+  mkdirSync(join(gitDirPath, "objects", "pack"), { recursive: true });
+  mkdirSync(join(gitDirPath, "refs", "heads"), { recursive: true });
+
+  // Get all objects reachable from HEAD (commit, trees, blobs)
+  // Using --no-object-names to get just SHAs, one per line
+  const objectList = execSync(`git rev-list --objects ${gitSha} --no-object-names`, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024, // 100MB buffer for large repos
+  }).trim();
+
+  // Pack the objects deterministically
+  // --threads=1 ensures deterministic output
+  // Output goes to pack-HASH.pack and pack-HASH.idx
+  const packBasename = join(packDir, "pack");
+  execSync(`git pack-objects --threads=1 ${packBasename}`, {
+    cwd: repoRoot,
+    input: objectList,
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
+  });
+
+  // Verify pack was created
+  const createdPacks = readdirSync(packDir).filter((f) => f.endsWith(".pack"));
+  if (createdPacks.length === 0) {
+    throw new Error("Failed to create git pack file");
+  }
+
+  const packSize = createdPacks
+    .map((f) => statSync(join(packDir, f)).size)
+    .reduce((a, b) => a + b, 0);
+
+  console.log(`Created pack file: ${(packSize / 1024 / 1024).toFixed(1)}MB`);
+
+  return gitDirPath;
+}
+
+// Create minimal .git directory with packed objects for cache-friendly builds
+const minimalGitDir = createMinimalGitDir();
 console.log(`Minimal .git directory: ${minimalGitDir}`);
 
-// Multi-platform builds can't be loaded into local daemon, must be saved.
-if (isMultiPlatform && !depotSaveTag) {
-  console.error("Error: Multi-platform builds require DEPOT_SAVE_TAG to save to Depot registry.");
-  console.error("Example: DEPOT_SAVE_TAG=sha-$(git rev-parse HEAD)");
+// Multi-platform builds require pushing to a registry (can't --load multiple platforms)
+if (isMultiPlatform && !registryImageName) {
+  console.error("Error: Multi-platform builds require REGISTRY_IMAGE_NAME environment variable");
+  console.error("Example: REGISTRY_IMAGE_NAME=ghcr.io/iterate/sandbox:latest");
   process.exit(1);
 }
 
-if (depotSaveTag && !depotProjectId) {
-  console.error("Error: DEPOT_SAVE_TAG set but Depot project ID is missing.");
-  console.error("Set DEPOT_PROJECT_ID or ensure depot.json is present.");
+if (useDepotRegistry && isMultiPlatform) {
+  console.error("Error: SANDBOX_USE_DEPOT_REGISTRY is only supported for single-platform builds");
+  console.error("Use REGISTRY_IMAGE_NAME for multi-platform builds.");
   process.exit(1);
 }
 
-// Determine output mode: --save to Depot registry, --load for local daemon
-const outputArgs = useDepotSave
-  ? ["--save", "--save-tag", depotSaveTag!]
-  : ["--load", "-t", localImageName];
+if (useDepotRegistry && !depotSaveTag) {
+  console.error("Error: SANDBOX_DEPOT_SAVE_TAG is required when SANDBOX_USE_DEPOT_REGISTRY=true");
+  console.error("Example: SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-ci-1234");
+  process.exit(1);
+}
+
+// Determine output mode:
+// - --load for local daemon (default, needed by Daytona and local dev)
+// - --save for Depot Registry (single-platform CI fast path)
+// - --push for explicit registry image names (multi-platform builds)
+const outputArgs = isMultiPlatform
+  ? ["--push", "-t", registryImageName!]
+  : useDepotRegistry
+    ? ["--save", "--save-tag", depotSaveTag!]
+    : ["--load", "-t", localImageName];
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
-const projectArgs = depotProjectId ? ["--project", depotProjectId] : [];
 const buildArgs = [
   "depot",
   "build",
-  ...projectArgs,
   "--platform",
   buildPlatform,
   "--progress=plain", // Show all layer details for cache analysis
@@ -106,9 +196,13 @@ const buildArgs = [
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
 const buildCommand = buildArgs.map(quoteArg).join(" ");
 
-if (useDepotSave) {
-  console.log(`Depot registry build: ${buildPlatform}`);
-  console.log(`Depot image: ${registryImageName}`);
+if (isMultiPlatform) {
+  console.log(`Multi-platform build: ${buildPlatform}`);
+  console.log(`Registry image: ${registryImageName}`);
+} else if (useDepotRegistry) {
+  console.log(`Depot registry image: ${depotRegistryImageName}`);
+  console.log(`Depot save tag: ${depotSaveTag}`);
+  console.log(`Platform: ${buildPlatform}`);
 } else {
   console.log(`Local image tag: ${localImageName}`);
   console.log(`Platform: ${buildPlatform}`);
@@ -131,15 +225,16 @@ writeFileSync(
   buildInfoPath,
   JSON.stringify(
     {
-      depotProjectId: depotProjectId ?? null,
-      depotSaveTag: depotSaveTag ?? null,
-      localImageName: useDepotSave ? null : localImageName,
-      registryImageName: useDepotSave ? registryImageName : null,
+      localImageName: isMultiPlatform || useDepotRegistry ? null : localImageName,
+      registryImageName: isMultiPlatform ? registryImageName : null,
+      depotRegistryImageName,
+      depotSaveTag: useDepotRegistry ? depotSaveTag : null,
+      depotProjectId,
       gitSha,
       builtBy,
       buildPlatform,
       isMultiPlatform,
-      isSavedToDepot: useDepotSave,
+      useDepotRegistry,
     },
     null,
     2,
@@ -148,5 +243,9 @@ writeFileSync(
 console.log(`Build info written to: ${buildInfoPath}`);
 
 // Output the image name for CI to use
-const outputImageName = useDepotSave ? registryImageName : localImageName;
+const outputImageName = isMultiPlatform
+  ? registryImageName!
+  : useDepotRegistry
+    ? depotRegistryImageName!
+    : localImageName;
 console.log(`image_name=${outputImageName}`);

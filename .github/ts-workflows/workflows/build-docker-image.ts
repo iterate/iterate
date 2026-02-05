@@ -33,13 +33,25 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64,linux/arm64",
+          default: "linux/amd64",
         },
         image_name: {
           description: "Docker image name/tag",
           required: false,
           type: "string",
           default: "iterate-sandbox:ci",
+        },
+        use_depot_registry: {
+          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        depot_registry_tag: {
+          description: "Optional Depot Registry tag override. Auto-generated when empty.",
+          required: false,
+          type: "string",
+          default: "",
         },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
@@ -72,13 +84,25 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64,linux/arm64",
+          default: "linux/amd64",
         },
         image_name: {
           description: "Docker image name/tag",
           required: false,
           type: "string",
           default: "iterate-sandbox:ci",
+        },
+        use_depot_registry: {
+          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        depot_registry_tag: {
+          description: "Optional Depot Registry tag override. Auto-generated when empty.",
+          required: false,
+          type: "string",
+          default: "",
         },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
@@ -91,7 +115,7 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOnDepotUbuntuForContainerThings,
+      ...utils.runsOn,
       outputs: {
         image_ref: "${{ steps.output.outputs.image_ref }}",
         git_sha: "${{ steps.output.outputs.git_sha }}",
@@ -119,18 +143,6 @@ export default workflow({
           },
         },
         {
-          id: "build_meta",
-          name: "Compute build metadata",
-          run: [
-            "git_sha=$(git rev-parse HEAD)",
-            "depot_project_id=$(node -e \"const fs=require('node:fs'); const id=JSON.parse(fs.readFileSync('depot.json','utf8')).id || ''; process.stdout.write(id)\")",
-            'if [ -z "$depot_project_id" ]; then echo "Missing depot.json project id" >&2; exit 1; fi',
-            'echo "git_sha=$git_sha" >> $GITHUB_OUTPUT',
-            'echo "depot_project_id=$depot_project_id" >> $GITHUB_OUTPUT',
-            'echo "depot_save_tag=sha-$git_sha" >> $GITHUB_OUTPUT',
-          ].join("\n"),
-        },
-        {
           name: "Install dependencies",
           run: "pnpm install",
         },
@@ -144,18 +156,32 @@ export default workflow({
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name }}",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
-            DEPOT_PROJECT_ID: "${{ steps.build_meta.outputs.depot_project_id }}",
-            DEPOT_SAVE_TAG: "${{ steps.build_meta.outputs.depot_save_tag }}",
+            SANDBOX_USE_DEPOT_REGISTRY: "${{ inputs.use_depot_registry && 'true' || 'false' }}",
+            SANDBOX_DEPOT_SAVE_TAG:
+              "${{ inputs.depot_registry_tag || format('iterate-sandbox-ci-{0}-{1}', github.run_id, github.run_attempt) }}",
           },
-          run: "pnpm os docker:build",
+          run: [
+            "echo '::group::Build timing'",
+            "time pnpm os docker:build",
+            "echo '::endgroup::'",
+          ].join("\n"),
         },
         // Export outputs
         {
           id: "output",
           name: "Export outputs",
           run: [
-            'echo "image_ref=registry.depot.dev/${{ steps.build_meta.outputs.depot_project_id }}:${{ steps.build_meta.outputs.depot_save_tag }}" >> $GITHUB_OUTPUT',
-            'echo "git_sha=${{ steps.build_meta.outputs.git_sha }}" >> $GITHUB_OUTPUT',
+            'if [ "${{ inputs.use_depot_registry }}" = "true" ]; then',
+            "  image_ref=\"$(jq -r '.depotRegistryImageName' .cache/depot-build-info.json)\"",
+            '  if [ "$image_ref" = "null" ]; then',
+            '    echo "Missing Depot registry image ref in .cache/depot-build-info.json" >&2',
+            "    exit 1",
+            "  fi",
+            '  echo "image_ref=$image_ref" >> $GITHUB_OUTPUT',
+            "else",
+            '  echo "image_ref=${{ inputs.image_name }}" >> $GITHUB_OUTPUT',
+            "fi",
+            'echo "git_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT',
           ].join("\n"),
         },
       ],

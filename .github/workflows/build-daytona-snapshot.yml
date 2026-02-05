@@ -31,21 +31,12 @@ on:
     outputs:
       snapshot_name:
         description: The name of the built snapshot (iterate-sandbox-{commitSha})
-        value: ${{ jobs.push-snapshot.outputs.snapshot_name }}
+        value: ${{ jobs.build.outputs.snapshot_name }}
       git_sha:
         description: Git SHA that was built
-        value: ${{ jobs.push-snapshot.outputs.git_sha }}
+        value: ${{ jobs.build.outputs.git_sha }}
 jobs:
-  build-image:
-    uses: ./.github/workflows/build-docker-image.yml
-    with:
-      ref: ${{ inputs.ref }}
-      image_name: iterate-sandbox:ci
-      doppler_config: ${{ inputs.doppler_config || 'dev' }}
-    secrets: inherit
-  push-snapshot:
-    needs:
-      - build-image
+  build:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
     outputs:
       snapshot_name: ${{ steps.push.outputs.snapshot_name }}
@@ -87,28 +78,41 @@ jobs:
           daytona snapshot list --limit 1
       - name: Setup Depot CLI
         uses: depot/setup-action@v1
-      - name: Pull built image from Depot
+      - name: Build sandbox image
         env:
-          IMAGE_REF: ${{ needs.build-image.outputs.image_ref }}
-          TARGET_IMAGE: iterate-sandbox:ci
+          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
+          SANDBOX_BUILD_PLATFORM: linux/amd64
+          SANDBOX_USE_DEPOT_REGISTRY: "true"
+          SANDBOX_DEPOT_SAVE_TAG: iterate-sandbox-daytona-${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
-          set -euo pipefail
-          project_id="${IMAGE_REF#registry.depot.dev/}"
-          project_id="${project_id%%:*}"
-          save_tag="${IMAGE_REF##*:}"
-          if [ -z "$project_id" ] || [ -z "$save_tag" ]; then
-            echo "Invalid Depot image ref: $IMAGE_REF" >&2
+          echo '::group::Build timing'
+          time pnpm os docker:build
+          echo '::endgroup::'
+      - name: Pull sandbox image from Depot Registry
+        env:
+          IMAGE_NAME: iterate-sandbox:ci
+        run: |-
+          echo '::group::Pull timing'
+          build_info_path=".cache/depot-build-info.json"
+          depot_project_id="$(jq -r '.depotProjectId' "$build_info_path")"
+          depot_save_tag="$(jq -r '.depotSaveTag' "$build_info_path")"
+          image_ref="$(jq -r '.depotRegistryImageName' "$build_info_path")"
+          if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then
+            echo "Missing Depot registry metadata in $build_info_path" >&2
             exit 1
           fi
-          depot pull --project "$project_id" "$save_tag" --platform linux/amd64 -t "$TARGET_IMAGE"
-          docker image inspect "$TARGET_IMAGE" > /dev/null
+          time depot pull --project "$depot_project_id" "$depot_save_tag"
+          docker image inspect "$image_ref" > /dev/null
+          docker tag "$image_ref" "$IMAGE_NAME"
+          echo 'Pulled image: $image_ref'
+          echo '::endgroup::'
       - id: push
         name: Push Daytona snapshot
         uses: nick-fields/retry@v3
         env:
           CI: "true"
           LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
-          SANDBOX_ITERATE_REPO_REF: ${{ needs.build-image.outputs.git_sha }}
+          SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
         with:
           timeout_minutes: 10
           max_attempts: 3

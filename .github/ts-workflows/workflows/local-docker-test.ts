@@ -4,8 +4,13 @@ import * as utils from "../utils/index.ts";
 /**
  * Build sandbox Docker image and run local Docker tests.
  *
- * Image build runs in reusable build-docker-image workflow.
- * Tests then pull that image from Depot into local Docker daemon.
+ * Build and test must run in the same job because tests need
+ * the image in the local Docker daemon (can't share between jobs).
+ *
+ * Can be triggered:
+ * - Automatically on push/PR to main with relevant path changes
+ * - Manually via workflow_dispatch to test any commit
+ * - Called by other workflows via workflow_call
  */
 export default workflow({
   name: "Local Docker Tests",
@@ -33,6 +38,7 @@ export default workflow({
         ".github/workflows/local-docker-test.yml",
       ],
     },
+    // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
         ref: {
@@ -42,7 +48,7 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
+          description: "Build platform (linux/amd64 or linux/arm64)",
           required: false,
           type: "string",
           default: "",
@@ -55,6 +61,7 @@ export default workflow({
         },
       },
     },
+    // Callable by other workflows
     workflow_call: {
       inputs: {
         ref: {
@@ -64,7 +71,7 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
+          description: "Build platform (linux/amd64 or linux/arm64). Auto-detects if empty.",
           required: false,
           type: "string",
           default: "",
@@ -79,36 +86,27 @@ export default workflow({
       outputs: {
         test_result: {
           description: "Test result (success or failure)",
-          value: "${{ jobs.test.outputs.test_result }}",
+          value: "${{ jobs.build-and-test.outputs.test_result }}",
         },
       },
     },
   },
   jobs: {
-    "build-image": {
-      uses: "./.github/workflows/build-docker-image.yml",
-      with: {
-        ref: "${{ inputs.ref }}",
-        docker_platform: "${{ inputs.docker_platform || 'linux/amd64,linux/arm64' }}",
-        image_name: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-        doppler_config: "dev",
-      },
-      // @ts-expect-error - secrets inherit
-      secrets: "inherit",
-    },
-    test: {
-      needs: ["build-image"],
-      ...utils.runsOnDepotUbuntuForContainerThings,
+    "build-and-test": {
+      // Run on AMD64 to match Daytona snapshot builds and maximize shared Depot cache hits.
+      ...utils.runsOnUbuntuLatest,
       outputs: {
         test_result: "${{ steps.test.outcome }}",
       },
       steps: [
+        // Checkout with configurable ref
         {
           name: "Checkout code",
           ...uses("actions/checkout@v4", {
             ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
           }),
         },
+        // Setup pnpm
         {
           name: "Setup pnpm",
           uses: "pnpm/action-setup@v4",
@@ -125,29 +123,52 @@ export default workflow({
           name: "Install dependencies",
           run: "pnpm install",
         },
+        // Setup Doppler
         ...utils.setupDoppler({ config: "dev" }),
+        // Setup Depot CLI
         ...utils.setupDepot,
+        // Build image
         {
-          name: "Pull image from Depot to local Docker",
+          name: "Build Docker image",
           env: {
-            IMAGE_REF: "${{ needs.build-image.outputs.image_ref }}",
-            TARGET_IMAGE: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            TARGET_PLATFORM:
-              "${{ (inputs.docker_platform != '' && !contains(inputs.docker_platform, ',')) && inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}",
+            LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+            // Default to AMD64 to share cache with Daytona snapshot builds.
+            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            // Avoid builder -> runner --load transfer: save image to Depot Registry first.
+            SANDBOX_USE_DEPOT_REGISTRY: "true",
+            SANDBOX_DEPOT_SAVE_TAG:
+              "iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}",
           },
           run: [
-            "set -euo pipefail",
-            'project_id="${IMAGE_REF#registry.depot.dev/}"',
-            'project_id="${project_id%%:*}"',
-            'save_tag="${IMAGE_REF##*:}"',
-            'if [ -z "$project_id" ] || [ -z "$save_tag" ]; then',
-            '  echo "Invalid Depot image ref: $IMAGE_REF" >&2',
-            "  exit 1",
-            "fi",
-            'depot pull --project "$project_id" "$save_tag" --platform "$TARGET_PLATFORM" -t "$TARGET_IMAGE"',
-            'docker image inspect "$TARGET_IMAGE" > /dev/null',
+            "echo '::group::Build timing'",
+            "time pnpm os docker:build",
+            "echo '::endgroup::'",
           ].join("\n"),
         },
+        // Pull saved image from Depot Registry into local Docker daemon for test execution.
+        {
+          name: "Pull Docker image from Depot Registry",
+          env: {
+            IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+          },
+          run: [
+            "echo '::group::Pull timing'",
+            'build_info_path=".cache/depot-build-info.json"',
+            'depot_project_id="$(jq -r \'.depotProjectId\' "$build_info_path")"',
+            'depot_save_tag="$(jq -r \'.depotSaveTag\' "$build_info_path")"',
+            'image_ref="$(jq -r \'.depotRegistryImageName\' "$build_info_path")"',
+            'if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then',
+            '  echo "Missing Depot registry metadata in $build_info_path" >&2',
+            "  exit 1",
+            "fi",
+            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            'docker image inspect "$image_ref" > /dev/null',
+            'docker tag "$image_ref" "$IMAGE_NAME"',
+            "echo 'Pulled image: $image_ref'",
+            "echo '::endgroup::'",
+          ].join("\n"),
+        },
+        // Run tests
         {
           id: "test",
           name: "Run Local Docker Tests",
@@ -159,6 +180,7 @@ export default workflow({
           },
           run: "pnpm os docker:test",
         },
+        // Upload test artifacts on failure
         {
           name: "Upload test results",
           if: "failure()",

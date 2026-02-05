@@ -29,7 +29,7 @@ on:
         type: string
         default: ""
       docker_platform:
-        description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64"
+        description: Build platform (linux/amd64 or linux/arm64)
         required: false
         type: string
         default: ""
@@ -46,7 +46,7 @@ on:
         type: string
         default: ""
       docker_platform:
-        description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64"
+        description: Build platform (linux/amd64 or linux/arm64). Auto-detects if empty.
         required: false
         type: string
         default: ""
@@ -58,20 +58,9 @@ on:
     outputs:
       test_result:
         description: Test result (success or failure)
-        value: ${{ jobs.test.outputs.test_result }}
+        value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
-  build-image:
-    uses: ./.github/workflows/build-docker-image.yml
-    with:
-      ref: ${{ inputs.ref }}
-      docker_platform: ${{ inputs.docker_platform || 'linux/amd64,linux/arm64' }}
-      image_name: ${{ inputs.image_name || 'iterate-sandbox:test' }}
-      doppler_config: dev
-    secrets: inherit
-  test:
-    needs:
-      - build-image
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+  build-and-test:
     outputs:
       test_result: ${{ steps.test.outcome }}
     steps:
@@ -96,22 +85,34 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Setup Depot CLI
         uses: depot/setup-action@v1
-      - name: Pull image from Depot to local Docker
+      - name: Build Docker image
         env:
-          IMAGE_REF: ${{ needs.build-image.outputs.image_ref }}
-          TARGET_IMAGE: ${{ inputs.image_name || 'iterate-sandbox:test' }}
-          TARGET_PLATFORM: ${{ (inputs.docker_platform != '' && !contains(inputs.docker_platform, ',')) && inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}
+          LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
+          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || 'linux/amd64' }}
+          SANDBOX_USE_DEPOT_REGISTRY: "true"
+          SANDBOX_DEPOT_SAVE_TAG: iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
-          set -euo pipefail
-          project_id="${IMAGE_REF#registry.depot.dev/}"
-          project_id="${project_id%%:*}"
-          save_tag="${IMAGE_REF##*:}"
-          if [ -z "$project_id" ] || [ -z "$save_tag" ]; then
-            echo "Invalid Depot image ref: $IMAGE_REF" >&2
+          echo '::group::Build timing'
+          time pnpm os docker:build
+          echo '::endgroup::'
+      - name: Pull Docker image from Depot Registry
+        env:
+          IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
+        run: |-
+          echo '::group::Pull timing'
+          build_info_path=".cache/depot-build-info.json"
+          depot_project_id="$(jq -r '.depotProjectId' "$build_info_path")"
+          depot_save_tag="$(jq -r '.depotSaveTag' "$build_info_path")"
+          image_ref="$(jq -r '.depotRegistryImageName' "$build_info_path")"
+          if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then
+            echo "Missing Depot registry metadata in $build_info_path" >&2
             exit 1
           fi
-          depot pull --project "$project_id" "$save_tag" --platform "$TARGET_PLATFORM" -t "$TARGET_IMAGE"
-          docker image inspect "$TARGET_IMAGE" > /dev/null
+          time depot pull --project "$depot_project_id" "$depot_save_tag"
+          docker image inspect "$image_ref" > /dev/null
+          docker tag "$image_ref" "$IMAGE_NAME"
+          echo 'Pulled image: $image_ref'
+          echo '::endgroup::'
       - id: test
         name: Run Local Docker Tests
         env:

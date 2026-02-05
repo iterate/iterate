@@ -8,7 +8,15 @@ import {
 } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useMemo } from "react";
-import { Home, Plug, Server, Settings, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import {
+  ExternalLink,
+  Home,
+  Plug,
+  Server,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+} from "lucide-react";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
@@ -257,6 +265,41 @@ function ProjectLayout() {
         </SidebarGroup>
 
         <OrgSidebarNav orgSlug={currentOrg.slug} />
+
+        {/* Admin deep-links section - only visible to system admins */}
+        {user.role === "admin" && currentProject && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin Links</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <a
+                      href={`https://eu.posthog.com/project/115112/groups/1/${currentProject.id}/events`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      <span>PostHog Events</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <a
+                      href={`https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events?filterCombination=%22and%22&needle=%7B%22value%22%3A%22${currentProject.id}%22%7D&calculations=%5B%7B%22operator%22%3A%22count%22%7D%5D&orderBy=%7B%22value%22%3A%22count%22%2C%22limit%22%3A10%2C%22order%22%3A%22desc%22%7D&timeframe=1h&conditions=%7B%7D&conditionCombination=%22and%22&alertTiming=%7B%22interval%22%3A300%2C%22window%22%3A900%2C%22timeBeforeFiring%22%3A600%2C%22timeBeforeResolved%22%3A600%7D`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      <span>CF Worker Logs</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarShell>
       <SidebarInset>
         <AppHeader
