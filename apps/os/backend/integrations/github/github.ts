@@ -482,7 +482,7 @@ githubApp.post("/webhook", async (c) => {
   trackWebhookEvent(c.env, {
     distinctId: `repo:${repo?.full_name ?? "unknown"}`,
     event: "github:webhook_received",
-    properties: payload,
+    properties: { ...payload, _event_type: xGithubEvent },
   });
 
   // Insert raw event immediately after signature verification for deduplication.
