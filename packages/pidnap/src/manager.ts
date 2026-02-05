@@ -398,34 +398,22 @@ export class Manager {
       throw new Error(`Process not found: ${target}`);
     }
 
-    // Stop the process first
     await proc.stop(timeout);
-
-    // Clean up state change listener
-    const unsubscribe = this.stateChangeUnsubscribes.get(proc.name);
-    if (unsubscribe) {
-      unsubscribe();
-      this.stateChangeUnsubscribes.delete(proc.name);
-    }
-
-    // Stop and remove scheduler if exists
-    const scheduler = this.schedulers.get(proc.name);
-    if (scheduler) {
-      scheduler.stop();
-      this.schedulers.delete(proc.name);
-    }
-
-    // Clean up env reload config and timers
-    this.envReloadConfig.delete(proc.name);
-    const timer = this.envReloadTimers.get(proc.name);
-    if (timer) {
-      clearTimeout(timer);
-      this.envReloadTimers.delete(proc.name);
-    }
-
-    // Remove from the map
+    this.cleanupProcessResources(proc.name);
     this.restartingProcesses.delete(proc.name);
     this.logger.info(`Removed process: ${proc.name}`);
+  }
+
+  /** Clean up all resources associated with a process (except the process itself) */
+  private cleanupProcessResources(name: string): void {
+    this.stateChangeUnsubscribes.get(name)?.();
+    this.stateChangeUnsubscribes.delete(name);
+    this.schedulers.get(name)?.stop();
+    this.schedulers.delete(name);
+    this.envReloadConfig.delete(name);
+    const timer = this.envReloadTimers.get(name);
+    if (timer) clearTimeout(timer);
+    this.envReloadTimers.delete(name);
   }
 
   /**
@@ -509,11 +497,17 @@ export class Manager {
       this.stateChangeUnsubscribes.set(proc.name, unsubscribe);
     }
 
+    // Set up schedulers BEFORE starting processes - if this fails, nothing is running yet
+    for (const entry of entries) {
+      if (entry.schedule) {
+        this.setupScheduler(entry);
+      }
+    }
+
     // Start processes with no dependencies (unless they have a schedule and runOnStart is false)
     for (const entry of entries) {
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
         const proc = this.restartingProcesses.get(entry.name)!;
-        // Skip starting scheduled processes unless runOnStart is true
         if (entry.schedule && !entry.schedule.runOnStart) {
           this.logger.info(`Process ${entry.name} has schedule, waiting for first trigger`);
           continue;
@@ -521,32 +515,6 @@ export class Manager {
         proc.start();
         this.logger.info(`Started process: ${entry.name}`);
       }
-    }
-
-    // Set up schedulers for processes with schedule config
-    // Wrap in try-catch to ensure cleanup on failure
-    try {
-      for (const entry of entries) {
-        if (entry.schedule) {
-          this.setupScheduler(entry);
-        }
-      }
-    } catch (err) {
-      this.logger.error(`Failed to set up schedulers, cleaning up:`, err);
-      // Stop all processes that were started
-      const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop());
-      await Promise.all(stopPromises);
-      // Clean up state change listeners
-      for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
-        unsubscribe();
-      }
-      this.stateChangeUnsubscribes.clear();
-      // Clean up any schedulers that were set up before the error
-      for (const scheduler of this.schedulers.values()) {
-        scheduler.stop();
-      }
-      this.schedulers.clear();
-      throw err;
     }
 
     this._state = "running";
