@@ -52,6 +52,17 @@ export const RestartingProcessInfoSchema = v.object({
 
 export type RestartingProcessInfo = v.InferOutput<typeof RestartingProcessInfoSchema>;
 
+// Wait for running response - includes logs
+export const WaitForRunningResponseSchema = v.object({
+  name: v.string(),
+  state: RestartingProcessState,
+  restarts: v.number(),
+  elapsedMs: v.number(),
+  logs: v.optional(v.string()),
+});
+
+export type WaitForRunningResponse = v.InferOutput<typeof WaitForRunningResponseSchema>;
+
 export const CronProcessInfoSchema = v.object({
   name: v.string(),
   state: CronProcessState,
@@ -110,6 +121,17 @@ export const processes = {
     )
     .output(RestartingProcessInfoSchema),
   remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
+  waitForRunning: oc
+    .input(
+      v.object({
+        target: ResourceTarget,
+        timeoutMs: v.optional(v.number()), // default 60000
+        pollIntervalMs: v.optional(v.number()), // default 500
+        includeLogs: v.optional(v.boolean()), // default true
+        logTailLines: v.optional(v.number()), // default 100
+      }),
+    )
+    .output(WaitForRunningResponseSchema),
 };
 
 export const tasks = {

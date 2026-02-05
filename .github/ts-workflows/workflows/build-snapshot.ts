@@ -47,6 +47,10 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
+          name: "Build local sandbox image",
+          run: "pnpm os docker:build",
+        },
+        {
           id: "build",
           name: "Build and push Daytona snapshot",
           env: {
@@ -54,8 +58,12 @@ export default workflow({
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
-            "pnpm os snapshot:daytona:${{ inputs.doppler_config }}",
-            'echo "snapshot_name=iterate-sandbox-${{ github.sha }}" >> $GITHUB_OUTPUT',
+            "set -euo pipefail",
+            "output_file=$(mktemp)",
+            "snapshot_name=iterate-sandbox-${{ github.sha }}",
+            'pnpm os daytona:build -- --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
+            'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
       ],

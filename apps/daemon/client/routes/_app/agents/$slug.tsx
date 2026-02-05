@@ -6,6 +6,8 @@ import type { SerializedAgent } from "../../../../server/trpc/router.ts";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 import { useEnsureAgentStarted } from "@/hooks/use-ensure-agent-started.ts";
 
+const OPENCODE_BASE_URL = "http://localhost:4096";
+
 const XtermTerminal = lazy(() =>
   import("@/components/xterm-terminal.tsx").then((mod) => ({
     default: mod.XtermTerminal,
@@ -21,7 +23,9 @@ function getAgentCommand(agent: SerializedAgent): string | undefined {
   switch (agent.harnessType) {
     case "opencode":
       // OpenCode uses SDK - attach to the session by ID
-      return agent.harnessSessionId ? `opencode attach ${agent.harnessSessionId}` : "opencode";
+      return agent.harnessSessionId
+        ? `opencode attach "${OPENCODE_BASE_URL}" --session ${agent.harnessSessionId} --dir "${agent.workingDirectory}"`
+        : "opencode";
     case "claude-code":
       // Claude CLI - use --resume if we have a session, otherwise start fresh
       return agent.initialPrompt ? `claude --prompt "${agent.initialPrompt}"` : "claude";

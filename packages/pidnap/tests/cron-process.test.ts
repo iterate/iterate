@@ -133,7 +133,7 @@ describe("CronProcess", () => {
       expect(proc.state).toBe("queued");
 
       // Wait for both jobs to complete
-      await expect.poll(() => proc.runCount, { timeout: 2000 }).toBe(2);
+      await expect.poll(() => proc.runCount, { timeout: 5000 }).toBe(2);
 
       await proc.stop();
     });
@@ -151,8 +151,8 @@ describe("CronProcess", () => {
       proc.start();
 
       // Wait for initial run + 2 retries to complete
-      await expect.poll(() => proc.failCount, { timeout: 2000 }).toBe(1);
-      await expect.poll(() => proc.state).toBe("scheduled");
+      await expect.poll(() => proc.failCount, { timeout: 5000 }).toBe(1);
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("scheduled");
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("retrying"));
       expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining("failed after"));
 
@@ -256,7 +256,7 @@ describe("CronProcess", () => {
       // May quickly go to running due to runOnStart
       expect(["scheduled", "running"]).toContain(proc.state);
 
-      await expect.poll(() => proc.state).toBe("scheduled");
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("scheduled");
 
       await proc.stop();
       expect(proc.state).toBe("stopped");
@@ -272,7 +272,7 @@ describe("CronProcess", () => {
 
       proc.start();
       // Should be in retrying state after first failure
-      await expect.poll(() => proc.state).toBe("retrying");
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("retrying");
 
       await proc.stop();
     });

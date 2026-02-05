@@ -20,6 +20,7 @@ dist
 !.dev.vars.example
 .env*
 !.env.example
+!apps/os/sandbox/home-skeleton/.iterate/.env
 
 .cursor/rules
 .rules

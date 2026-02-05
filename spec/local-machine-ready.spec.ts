@@ -21,10 +21,12 @@ test.describe("local machine ready status", () => {
     await page.getByRole("button", { name: "Create" }).click();
 
     // Machine should appear
-    await page.getByText(machineName).waitFor();
+    const machineRow = page.getByRole("link", { name: machineName });
+    await machineRow.waitFor();
 
     // Machine should show "Ready" status (not stuck on "Starting...")
     // The local machine should immediately be marked as ready since it doesn't need a daemon bootstrap
-    await page.getByText("Ready").waitFor({ timeout: 5000 });
+    // Use a more specific locator within the machine row to avoid matching section descriptions
+    await machineRow.locator("text=Ready").waitFor({ timeout: 5000 });
   });
 });

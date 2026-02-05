@@ -1,3 +1,4 @@
+import { readFileSync, existsSync } from "node:fs";
 import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
 import type { RestartingProcess } from "../restarting-process.ts";
@@ -8,6 +9,7 @@ import {
   type CronProcessInfo,
   type TaskEntryInfo,
   type ManagerStatus,
+  type WaitForRunningResponse,
 } from "./contract.ts";
 
 const os = implement(api).$context<{ manager: Manager }>();
@@ -90,8 +92,26 @@ const managerStatus = os.manager.status.handler(async ({ context }): Promise<Man
   };
 });
 
+// Helper to wait for manager to finish initialization (tasks completed)
+async function waitForManagerReady(
+  manager: Manager,
+  timeoutMs = 60_000,
+  pollIntervalMs = 500,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (manager.state === "running" || manager.state === "stopped") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
 // Processes handlers
 const getProcess = os.processes.get.handler(async ({ input, context }) => {
+  // Wait for manager to finish initialization before checking process existence
+  await waitForManagerReady(context.manager);
+
   const proc = context.manager.getProcessByTarget(input.target);
   if (!proc) {
     throw new ORPCError("NOT_FOUND", { message: `Process not found: ${input.target}` });
@@ -135,6 +155,108 @@ const removeProcess = os.processes.remove.handler(async ({ input, context }) => 
   await context.manager.removeProcessByTarget(input.target);
   return { success: true };
 });
+
+/** Read last N lines from a file */
+function tailFile(filePath: string, lines: number): string | undefined {
+  if (!existsSync(filePath)) return undefined;
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    const allLines = content.split("\n");
+    const tailLines = allLines.slice(-lines);
+    return tailLines.join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Wait for a process to reach "running" state.
+ *
+ * This handler automatically waits for the manager to finish initialization
+ * (tasks completed) before checking the process state. This avoids "process not found"
+ * errors when called during container startup while tasks are still running.
+ *
+ * NOTE: Ideally pidnap would treat tasks as processes with restartPolicy: "never"
+ * and register all processes at startup in a "pending" state. Until then, this
+ * handler works around the limitation by waiting for manager state === "running".
+ */
+const waitForRunning = os.processes.waitForRunning.handler(
+  async ({ input, context }): Promise<WaitForRunningResponse> => {
+    const timeoutMs = input.timeoutMs ?? 60_000;
+    const pollIntervalMs = input.pollIntervalMs ?? 500;
+    const includeLogs = input.includeLogs ?? true;
+    const logTailLines = input.logTailLines ?? 100;
+    const start = Date.now();
+
+    // Resolve target to name for log file lookup
+    const resolveTargetName = (): string | undefined => {
+      if (typeof input.target === "string") return input.target;
+      const proc = context.manager.getProcessByTarget(input.target);
+      return proc?.name;
+    };
+
+    // Phase 1: Wait for manager to reach "running" state (tasks completed)
+    // Processes aren't registered until tasks finish, so we must wait for this first
+    while (Date.now() - start < timeoutMs) {
+      if (context.manager.state === "running") {
+        break;
+      }
+      // Manager still initializing (running tasks) - keep waiting
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    // Check if we timed out waiting for manager
+    if (context.manager.state !== "running") {
+      const name = resolveTargetName() ?? String(input.target);
+      return {
+        name,
+        state: "idle",
+        restarts: 0,
+        elapsedMs: Date.now() - start,
+        logs: `Manager never reached running state (current: ${context.manager.state})`,
+      };
+    }
+
+    // Phase 2: Wait for the specific process to reach target state
+    while (Date.now() - start < timeoutMs) {
+      const proc = context.manager.getProcessByTarget(input.target);
+
+      if (proc) {
+        const state = proc.state;
+        const elapsedMs = Date.now() - start;
+
+        // Terminal success states
+        if (state === "running") {
+          const logs = includeLogs
+            ? tailFile(context.manager.getProcessLogPath(proc.name), logTailLines)
+            : undefined;
+          return { name: proc.name, state, restarts: proc.restarts, elapsedMs, logs };
+        }
+
+        // Terminal failure states - return immediately with logs
+        if (state === "stopped" || state === "max-restarts-reached") {
+          const logs = includeLogs
+            ? tailFile(context.manager.getProcessLogPath(proc.name), logTailLines)
+            : undefined;
+          return { name: proc.name, state, restarts: proc.restarts, elapsedMs, logs };
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    // Timeout - return current state with logs
+    const proc = context.manager.getProcessByTarget(input.target);
+    const name = proc?.name ?? resolveTargetName() ?? String(input.target);
+    const state = proc?.state ?? "idle";
+    const restarts = proc?.restarts ?? 0;
+    const logs = includeLogs
+      ? tailFile(context.manager.getProcessLogPath(name), logTailLines)
+      : undefined;
+
+    return { name, state, restarts, elapsedMs: timeoutMs, logs };
+  },
+);
 
 // Crons handlers
 const getCron = os.crons.get.handler(async ({ input, context }) => {
@@ -290,6 +412,7 @@ export const router = os.router({
     restart: restartProcess,
     reload: reloadProcess,
     remove: removeProcess,
+    waitForRunning: waitForRunning,
   },
   crons: {
     get: getCron,

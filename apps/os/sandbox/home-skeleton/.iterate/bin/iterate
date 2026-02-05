@@ -1,0 +1,2 @@
+#!/bin/sh
+exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"

@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm -r --parallel --filter '!./apps/daemon' dev",
     "dev:daytona-head": "DAYTONA_SNAPSHOT_NAME=iterate-sandbox-$(git rev-parse HEAD) pnpm dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
@@ -22,19 +22,19 @@
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
-    "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down",
-    "docker:clean": "docker compose down -v",
-    "snapshot:daytona": "pnpm os snapshot:daytona",
-    "snapshot:local-docker": "pnpm os snapshot:local-docker",
+    "docker:up": "tsx ./scripts/docker-compose.ts up -d",
+    "docker:down": "tsx ./scripts/docker-compose.ts down",
+    "docker:clean": "tsx ./scripts/docker-compose.ts down -v",
+    "docker:build": "pnpm os docker:build",
+    "daytona:build": "pnpm os daytona:build",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",
     "db:studio:staging": "PSCALE_DATABASE_URL=$(doppler secrets --config stg get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DANGEROUS_PRODUCTION_POSTGRES_URL) pnpm db:studio",
-    "db:query": "docker exec -it postgres-iterate psql -U postgres -d iterate",
-    "db:query:file": "docker exec -i postgres-iterate psql -U postgres -d iterate -f",
-    "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
+    "db:query": "tsx ./scripts/docker-compose.ts exec postgres psql -U postgres -d os",
+    "db:query:file": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -f",
+    "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
@@ -70,7 +70,8 @@
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {
-      "baseline-browser-mapping": "^2.9.14"
+      "baseline-browser-mapping": "^2.9.14",
+      "@babel/parser": "^7.28.0"
     }
   }
 }

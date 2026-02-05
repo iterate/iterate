@@ -243,6 +243,11 @@ export class Manager {
     return join(this.logDir, "cron", `${name}.log`);
   }
 
+  /** Get the log file path for a process (for external access) */
+  getProcessLogPath(name: string): string {
+    return this.processLogFile(name);
+  }
+
   private ensureLogDirs(): void {
     mkdirSync(this.logDir, { recursive: true });
     mkdirSync(join(this.logDir, "process"), { recursive: true });
