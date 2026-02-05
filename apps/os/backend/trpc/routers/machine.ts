@@ -73,6 +73,7 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
 
   return {
     ...machine,
+    metadata,
     displayInfo: provider.displayInfo,
     commands: provider.commands,
     terminalOptions: provider.terminalOptions,

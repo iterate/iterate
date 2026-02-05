@@ -1,4 +1,4 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
@@ -46,6 +46,16 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
+        uses("docker/setup-buildx-action@v3"),
+        {
+          name: "Build local sandbox image",
+          env: {
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+          },
+          run: "pnpm os docker:build",
+        },
         {
           id: "build",
           name: "Build and push Daytona snapshot",
@@ -54,8 +64,12 @@ export default workflow({
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
-            "pnpm os snapshot:daytona:${{ inputs.doppler_config }}",
-            'echo "snapshot_name=iterate-sandbox-${{ github.sha }}" >> $GITHUB_OUTPUT',
+            "set -euo pipefail",
+            "output_file=$(mktemp)",
+            "snapshot_name=iterate-sandbox-${{ github.sha }}",
+            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
+            'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
       ],

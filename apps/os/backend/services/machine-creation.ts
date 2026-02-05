@@ -131,10 +131,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
       GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
       GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
-      // In dev, use the current git branch for Daytona sandboxes
-      ...(type === "daytona" && env.ITERATE_DEV_GIT_REF
-        ? { ITERATE_GIT_REF: env.ITERATE_DEV_GIT_REF }
-        : {}),
     },
   });
 

@@ -3,6 +3,9 @@ import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Local Docker Tests",
+  permissions: {
+    contents: "read",
+  },
   on: {
     push: {
       branches: ["main"],
@@ -29,14 +32,25 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
+        uses("docker/setup-buildx-action@v3"),
+        {
+          name: "build-docker-image",
+          env: {
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+          },
+          run: "pnpm os docker:build",
+        },
         {
           name: "Run Local Docker Tests",
           env: {
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
           },
-          run: "pnpm os snapshot:local-docker:test",
+          run: "pnpm os docker:test",
         },
         {
           name: "Upload test results",

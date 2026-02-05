@@ -29,18 +29,23 @@ export async function createMachineProvider(
   switch (type) {
     case "daytona": {
       // Allow metadata.snapshotName to override env var (used by webhook for specific commits)
+      const typedMeta = metadata as { snapshotName?: string };
       const snapshotName =
-        (metadata.snapshotName as string | undefined) ?? env.DAYTONA_SNAPSHOT_NAME;
+        typedMeta.snapshotName ?? env.DAYTONA_SNAPSHOT_NAME ?? env.VITE_DAYTONA_SNAPSHOT_NAME;
       if (!snapshotName) {
-        throw new Error("DAYTONA_SNAPSHOT_NAME is required for Daytona machines");
+        throw new Error(
+          "DAYTONA_SNAPSHOT_NAME or VITE_DAYTONA_SNAPSHOT_NAME is required for Daytona machines",
+        );
       }
       return createDaytonaProvider({
         apiKey: env.DAYTONA_API_KEY,
+        organizationId: env.DAYTONA_ORG_ID,
         snapshotName,
         autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
         autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
         buildProxyUrl,
+        appStage: env.APP_STAGE,
       });
     }
 
@@ -50,14 +55,13 @@ export async function createMachineProvider(
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
       return createLocalDockerProvider({
-        imageName: "iterate-sandbox:local",
+        imageName: env.LOCAL_DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
         externalId,
-        metadata: metadata as {
-          containerId?: string;
-          port?: number;
-          ports?: Record<string, number>;
-        },
-        buildProxyUrl,
+        metadata,
+        composeProjectName: env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME || undefined,
+        repoCheckout: env.LOCAL_DOCKER_GIT_REPO_ROOT || env.LOCAL_DOCKER_REPO_CHECKOUT || undefined,
+        gitDir: env.LOCAL_DOCKER_GIT_GITDIR || env.LOCAL_DOCKER_GIT_DIR || undefined,
+        commonDir: env.LOCAL_DOCKER_GIT_COMMON_DIR || env.LOCAL_DOCKER_COMMON_DIR || undefined,
       });
     }
 

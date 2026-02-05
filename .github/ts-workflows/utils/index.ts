@@ -21,6 +21,10 @@ export const setupRepo = [
     uses: "actions/checkout@v4",
   },
   {
+    name: "Install Doppler CLI",
+    uses: "dopplerhq/cli-action@v2",
+  },
+  {
     name: "Setup pnpm",
     uses: "pnpm/action-setup@v4",
   },

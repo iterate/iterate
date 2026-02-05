@@ -146,7 +146,7 @@ describe("Manager - Reload & Remove", () => {
 
       const manager = new Manager(config, mockLogger);
       await manager.start();
-      await wait(600);
+      await expect.poll(() => manager.getProcessByTarget("test-proc")?.state).toBe("stopped");
 
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc?.state).toBe("stopped");
@@ -161,10 +161,8 @@ describe("Manager - Reload & Remove", () => {
         },
       });
 
-      await wait(400);
-
       // Should have restarted with new policy
-      expect(proc?.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc?.restarts ?? 0, { timeout: 2000 }).toBeGreaterThan(0);
 
       await manager.stop();
     });

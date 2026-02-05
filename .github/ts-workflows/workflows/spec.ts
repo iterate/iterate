@@ -24,8 +24,8 @@ export default workflow({
             cache: "pnpm",
           },
         },
-        { run: "pnpm docker:up" },
         { run: "pnpm install" },
+        { run: "pnpm docker:up" },
         { uses: "dopplerhq/cli-action@v2" },
         {
           name: "Setup Doppler",

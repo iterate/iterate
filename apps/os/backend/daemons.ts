@@ -20,6 +20,7 @@ export interface DaemonDefinition {
 
 export const DAEMON_DEFINITIONS: readonly DaemonDefinition[] = [
   { id: "iterate-daemon", name: "Iterate", internalPort: 3000, hasWebUI: true },
+  { id: "iterate-daemon-server", name: "Iterate Server", internalPort: 3001, hasWebUI: false },
   { id: "opencode", name: "OpenCode", internalPort: 4096, hasWebUI: true },
 ] as const;
 

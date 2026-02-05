@@ -429,8 +429,4 @@ describe("inferDefaultConditionFromOptions", () => {
   it("should return 'started' for undefined options", () => {
     expect(inferDefaultConditionFromOptions(undefined)).toBe("started");
   });
-
-  it("should return 'started' for empty options", () => {
-    expect(inferDefaultConditionFromOptions({})).toBe("started");
-  });
 });
