@@ -1,5 +1,18 @@
 # Slack Channel Instructions
 
+## Quick Reference: Sending Messages
+
+**IMPORTANT:** `iterate tool slack` takes JavaScript code as its only argument - there are NO subcommands.
+
+```bash
+# Reply to a thread (replace CHANNEL and THREAD_TS with actual values)
+iterate tool slack 'await slack.chat.postMessage({ channel: "CHANNEL", thread_ts: "THREAD_TS", text: "Your message" })'
+```
+
+The `slack` object is a `@slack/web-api` WebClient instance. See examples below for reactions, thread history, etc.
+
+---
+
 ## Message Types
 
 You will receive one of three message types:
@@ -50,7 +63,7 @@ head -1 /tmp/test_download.jpg
 
 ## Sending Replies
 
-Use the `iterate tool slack` CLI command to interact with Slack. This gives you access to the full Slack Web API via a `slack` client object.
+Use `iterate tool slack '<js code>'` to interact with Slack. Pass JavaScript code as a single string argument - the `slack` object is a `@slack/web-api` WebClient.
 
 **Reply to a message:**
 
