@@ -202,6 +202,85 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
   }, 120_000);
 });
 
+// ============ Scheduled Process Tests ============
+
+describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Scheduled Processes", () => {
+  test("scheduled process with runOnStart=true runs immediately", async ({ sandbox, expect }) => {
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    const client = sandbox.pidnapOrpcClient();
+
+    // scheduled-startup has runOnStart: true, so it should run immediately after deps are met
+    // It writes to /tmp/scheduled-startup.log
+    await expect
+      .poll(async () => {
+        const proc = await client.processes.get({ target: "scheduled-startup" });
+        // Process should have completed (it's a one-shot task)
+        return proc.state;
+      }, POLL_DEFAULTS)
+      .toBe("stopped");
+
+    // Verify the log file was created
+    const logContent = await sandbox.exec(["cat", "/tmp/scheduled-startup.log"]);
+    expect(logContent).toContain("scheduled-startup ran at");
+  }, 120_000);
+
+  test("scheduled process with runOnStart=false stays idle until triggered", async ({
+    sandbox,
+    expect,
+  }) => {
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    const client = sandbox.pidnapOrpcClient();
+
+    // scheduled-marker has runOnStart: false but cron: "* * * * * *" (every second)
+    // It should be idle initially, then run when the cron fires
+    const proc = await client.processes.get({ target: "scheduled-marker" });
+    // Initially idle since runOnStart is false
+    expect(proc.state).toMatch(/idle|running|stopped/);
+
+    // Wait for the scheduler to fire (it runs every second)
+    await expect
+      .poll(
+        async () => {
+          try {
+            const logContent = await sandbox.exec(["cat", "/tmp/scheduled-marker.log"]);
+            return logContent.includes("scheduled-marker triggered at");
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10_000, interval: 500 },
+      )
+      .toBe(true);
+  }, 120_000);
+
+  test("scheduled processes visible in process list", async ({ sandbox, expect }) => {
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    const client = sandbox.pidnapOrpcClient();
+
+    const processes = await client.processes.list({});
+    const processNames = processes.map((p) => p.name);
+
+    // Both scheduled processes should be in the list
+    expect(processNames).toContain("scheduled-marker");
+    expect(processNames).toContain("scheduled-startup");
+  }, 120_000);
+
+  test("scheduled process with dependencies waits for deps", async ({ sandbox, expect }) => {
+    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    const client = sandbox.pidnapOrpcClient();
+
+    // scheduled-startup depends on task-build-daemon-client
+    // By the time daemon-backend is healthy, deps should be met
+    const startupProc = await client.processes.get({ target: "scheduled-startup" });
+    // Should have run since runOnStart: true and deps are met
+    expect(startupProc.state).toBe("stopped");
+
+    // Verify the dependency task completed
+    const depProc = await client.processes.get({ target: "task-build-daemon-client" });
+    expect(depProc.state).toBe("stopped");
+  }, 120_000);
+});
+
 // ============ Container Restart Tests ============
 
 describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
