@@ -40,11 +40,20 @@ const { values } = parseArgs({
   allowNegative: true,
 });
 
-execSync("daytona --version", { stdio: "ignore" });
+// Ensure CI=true for non-interactive mode (Daytona CLI checks this)
+const daytonaEnv = { ...process.env, CI: "true" };
 
-const daytonaOrgId = process.env.DAYTONA_ORG_ID ?? "";
-if (daytonaOrgId) {
-  execSync(`daytona organization use ${daytonaOrgId}`, { stdio: "ignore" });
+execSync("daytona --version", { stdio: "ignore", env: daytonaEnv });
+
+// Authenticate with Daytona API if key is provided
+// Note: "daytona organization use" doesn't work with API key auth - org is scoped to the key
+const daytonaApiKey = process.env.DAYTONA_API_KEY ?? "";
+if (daytonaApiKey) {
+  execSync(`daytona login --api-key "${daytonaApiKey}"`, {
+    stdio: "ignore",
+    env: daytonaEnv,
+    input: "",
+  });
 }
 
 const baseImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox";
@@ -121,6 +130,7 @@ const snapshotAlreadyExists = (() => {
           cwd: repoRoot,
           stdio: "pipe",
           encoding: "utf-8",
+          env: daytonaEnv,
         },
       );
       const snapshots = JSON.parse(output) as Array<{ name?: string }>;
@@ -158,6 +168,7 @@ if (snapshotAlreadyExists) {
     {
       cwd: repoRoot,
       stdio: "inherit",
+      env: daytonaEnv,
     },
   );
 }

@@ -142,6 +142,23 @@ RUN pnpm install --frozen-lockfile --offline
 # Build daemon frontend
 RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
+# Run database migrations
+RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
+
+# Generate mitmproxy CA certificate at build time.
+# This certificate is safe to share across all sandbox instances because:
+# 1. Each sandbox is network-isolated - they cannot communicate with each other
+# 2. The cert is only used for the local egress proxy within each sandbox
+# 3. No sandbox can intercept another sandbox's traffic
+RUN mkdir -p /home/iterate/.mitmproxy && \
+    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    PID=$! && sleep 2 && kill $PID 2>/dev/null || true
+
+# Install mitmproxy CA certificate system-wide
+RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
+    sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
+    sudo update-ca-certificates
+
 # Copy home skeleton into /home/iterate
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 

@@ -39,20 +39,52 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOn,
+      // Must use AMD64 runner - Daytona requires AMD64 images and QEMU emulation segfaults
+      "runs-on": "ubuntu-24.04",
       outputs: {
         snapshot_name: "${{ steps.build.outputs.snapshot_name }}",
       },
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
+        {
+          name: "Install and configure Daytona CLI",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: [
+            // Install CLI
+            'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
+            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
+            "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
+            "daytona version",
+            // Configure CLI with API key (CLI doesn't use env vars, needs config file)
+            "mkdir -p ~/.config/daytona",
+            `doppler run -- bash -c 'cat > ~/.config/daytona/config.json << EOF
+{
+  "activeProfile": "ci",
+  "profiles": [{
+    "id": "ci",
+    "name": "ci",
+    "api": {
+      "url": "https://app.daytona.io/api",
+      "key": "$DAYTONA_API_KEY"
+    },
+    "activeOrganizationId": "$DAYTONA_ORG_ID"
+  }]
+}
+EOF'`,
+            // Verify auth works
+            "daytona snapshot list --limit 1",
+          ].join("\n"),
+        },
         uses("docker/setup-buildx-action@v3"),
         {
           name: "Build local sandbox image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
-            SANDBOX_BUILD_PLATFORM:
-              "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+            // Daytona requires AMD64 images regardless of runner architecture
+            SANDBOX_BUILD_PLATFORM: "linux/amd64",
           },
           run: "pnpm os docker:build",
         },
@@ -60,15 +92,18 @@ export default workflow({
           id: "build",
           name: "Build and push Daytona snapshot",
           env: {
-            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            CI: "true",
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
             "set -euo pipefail",
             "output_file=$(mktemp)",
             "snapshot_name=iterate-sandbox-${{ github.sha }}",
-            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
-            "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
+            // CLI is configured via config file, no doppler run needed
+            // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
+            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
+            "snapshot_name=$(grep -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },

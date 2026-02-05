@@ -22,6 +22,10 @@ vi.mock("../../services/machine-creation.ts", () => ({
   }),
 }));
 
+vi.mock("../../lib/posthog.ts", () => ({
+  trackWebhookEvent: vi.fn(),
+}));
+
 // Helper to generate valid signature
 async function generateSignature(secret: string, body: string): Promise<string> {
   const encoder = new TextEncoder();
