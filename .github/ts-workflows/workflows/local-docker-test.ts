@@ -5,6 +5,7 @@ export default workflow({
   name: "Local Docker Tests",
   permissions: {
     contents: "read",
+    "id-token": "write", // for Depot OIDC auth
   },
   on: {
     push: {
@@ -32,11 +33,11 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupDepot,
         {
           name: "build-docker-image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
           },
@@ -48,7 +49,7 @@ export default workflow({
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
           },
           run: "pnpm os docker:test",
         },

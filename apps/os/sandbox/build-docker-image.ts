@@ -1,12 +1,11 @@
 /**
- * Build local Docker sandbox image.
+ * Build Docker sandbox image using Depot.
  *
- * Why no registry push?
- * We don't push to a registry (ghcr.io, etc.) because downloading from a registry
- * to Daytona is extremely slow (10+ minutes). Daytona's native --dockerfile build
- * is much faster since it builds directly on their infra. For local Docker testing,
- * we just --load the image locally. depot.dev's registry might help in the future
- * if we need registry-based workflows.
+ * Uses depot.dev for:
+ * - Persistent layer caching on fast NVMe SSDs (no network transfer needed)
+ * - Shared cache across CI runs and developer machines
+ * - Native ARM builds (no QEMU emulation)
+ * - Depot Registry for fast image pulls (global CDN)
  *
  * Git worktree handling:
  * In a git worktree, .git is a file (not a directory) pointing to the real .git
@@ -23,11 +22,12 @@
  * Daytona), the Dockerfile's fallback stage copies .git from the build context.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
-const baseImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local";
+const DEPOT_PROJECT_ID = process.env.DEPOT_PROJECT_ID ?? "lds5v3fpw8";
+
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 
@@ -42,48 +42,36 @@ const commonDir = execSync("git rev-parse --git-common-dir", {
   cwd: repoRoot,
   encoding: "utf-8",
 }).trim();
+
 const isDirty =
   execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" }).trim().length > 0;
-
-function splitImageRef(image: string): { name: string; tag: string } {
-  const lastSlash = image.lastIndexOf("/");
-  const lastColon = image.lastIndexOf(":");
-  if (lastColon > lastSlash) {
-    return { name: image.slice(0, lastColon), tag: image.slice(lastColon + 1) };
-  }
-  return { name: image, tag: "latest" };
-}
-
-const imageName = baseImageName;
-const imageRepo = splitImageRef(baseImageName).name;
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 const gitShaShort = gitSha.slice(0, 7);
-const shortShaTag = `sha-${gitShaShort}${isDirty ? `-${builtBy}-dirty` : ""}`;
-const fullShaTag = `sha-${gitSha}${isDirty ? `-${builtBy}-dirty` : ""}`;
 
-const push = process.env.PUSH === "1";
-const cacheRef = process.env.SANDBOX_BUILD_CACHE_REF ?? "ghcr.io/iterate/sandbox:buildcache";
-const localCacheDir =
-  process.env.SANDBOX_BUILD_CACHE_DIR ?? join(repoRoot, ".cache", "buildx", "sandbox-local");
+// Tag for Depot Registry - this is the canonical image location
+const depotRegistryTag = isDirty ? `sha-${gitShaShort}-${builtBy}-dirty` : `sha-${gitSha}`;
+const depotImageUrl = `registry.depot.dev/${DEPOT_PROJECT_ID}:${depotRegistryTag}`;
 
-const tags = [`${imageRepo}:${shortShaTag}`, `${imageRepo}:${fullShaTag}`, imageName];
+// Local tag for Docker daemon (used by local-docker provider and tests)
+const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
 
-const cacheFrom = [`type=local,src=${localCacheDir}`, `type=registry,ref=${cacheRef}`];
-
-const cacheTo = push
-  ? [`type=registry,ref=${cacheRef},mode=max`]
-  : [`type=local,dest=${localCacheDir},mode=max`];
+// Ensure cache directory exists
+const cacheDir = join(repoRoot, ".cache");
+mkdirSync(cacheDir, { recursive: true });
 
 const buildArgs = [
-  "docker",
-  "buildx",
+  "depot",
   "build",
   "--platform",
   buildPlatform,
-  push ? "--push" : "--load",
+  "--load", // Load into local Docker daemon
+  "--save", // Save to Depot Registry
+  "--metadata-file",
+  join(cacheDir, "depot-metadata.json"),
   "-f",
   "apps/os/sandbox/Dockerfile",
-  ...tags.flatMap((tag) => ["-t", tag]),
+  "-t",
+  localImageName,
   // Override the Dockerfile's gitdir/commondir stages with host git paths.
   // See file header comment for why this is needed for worktree builds.
   "--build-context",
@@ -94,26 +82,51 @@ const buildArgs = [
   `GIT_SHA=${gitSha}`,
   "--label",
   `com.iterate.built_by=${builtBy}`,
-  ...cacheFrom.flatMap((value) => ["--cache-from", value]),
-  ...cacheTo.flatMap((value) => ["--cache-to", value]),
+  // Depot handles caching automatically - no --cache-from/--cache-to needed
   ".",
 ];
 
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
 const buildCommand = buildArgs.map(quoteArg).join(" ");
 
-if (!push) {
-  mkdirSync(localCacheDir, { recursive: true });
-}
-
-console.log("Docker image tags (preferred first):");
-for (const tag of tags) {
-  console.log(`  - ${tag}`);
-}
-console.log("Docker buildx command:");
+console.log(`Depot Registry image: ${depotImageUrl}`);
+console.log(`Local image tag: ${localImageName}`);
+console.log(`Platform: ${buildPlatform}`);
+console.log("Depot build command:");
 console.log(buildCommand);
 
 execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
 });
+
+// Read the actual image name from Depot's metadata file
+// --save uses build ID as tag, not our custom tag
+const metadataPath = join(cacheDir, "depot-metadata.json");
+const depotMetadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as {
+  "image.name"?: string;
+  "depot.build"?: { buildID?: string; projectID?: string };
+};
+const actualDepotImageUrl = depotMetadata["image.name"] ?? depotImageUrl;
+const buildID = depotMetadata["depot.build"]?.buildID;
+
+// Write the Depot build info for downstream scripts (e.g., push-docker-image-to-daytona.ts)
+const depotInfoPath = join(cacheDir, "depot-build-info.json");
+writeFileSync(
+  depotInfoPath,
+  JSON.stringify(
+    {
+      depotRegistryTag: buildID ?? depotRegistryTag,
+      depotImageUrl: actualDepotImageUrl,
+      localImageName,
+      gitSha,
+      builtBy,
+      buildPlatform,
+      buildID,
+    },
+    null,
+    2,
+  ),
+);
+console.log(`Depot Registry image: ${actualDepotImageUrl}`);
+console.log(`Depot build info written to: ${depotInfoPath}`);

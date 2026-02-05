@@ -1,9 +1,11 @@
-import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Reusable workflow to build a Daytona snapshot.
- * Call this from other workflows to avoid building the same snapshot multiple times.
+ * Reusable workflow to build a Daytona snapshot using Depot.
+ *
+ * Uses Depot for persistent layer caching and saves images to Depot Registry
+ * for fast Daytona pulls.
  *
  * Usage:
  *   build-snapshot:
@@ -20,6 +22,10 @@ import * as utils from "../utils/index.ts";
  */
 export default workflow({
   name: "Build Daytona Snapshot",
+  permissions: {
+    contents: "read",
+    "id-token": "write", // for Depot OIDC auth
+  },
   on: {
     workflow_call: {
       inputs: {
@@ -46,11 +52,11 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupDepot,
         {
-          name: "Build local sandbox image",
+          name: "Build sandbox image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
           },

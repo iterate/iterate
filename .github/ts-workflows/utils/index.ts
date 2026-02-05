@@ -1,6 +1,14 @@
-import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
+import { uses, type Step, type Workflow } from "@jlarky/gha-ts/workflow-types";
 
 export * from "./github-script.ts";
+
+/** Setup Depot CLI for Docker builds with persistent layer caching */
+export const setupDepot = [
+  {
+    name: "Setup Depot",
+    ...uses("depot/setup-action@v1"),
+  },
+] as const satisfies Step[];
 
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],

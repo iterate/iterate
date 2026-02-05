@@ -3,6 +3,7 @@
 name: Build Sandbox Image
 permissions:
   contents: read
+  id-token: write
 on:
   workflow_call:
     inputs:
@@ -40,12 +41,13 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - name: Build sandbox image (local only, no push)
+      - name: Setup Depot
+        uses: depot/setup-action@v1
+      - name: Build sandbox image
         env:
-          LOCAL_DOCKER_IMAGE_NAME: ghcr.io/iterate/sandbox:ci
+          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
           SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform }}
         run: pnpm os docker:build
       - id: output
         name: Export image ref
-        run: echo image_ref=ghcr.io/iterate/sandbox:sha-${{ github.sha }} >> $GITHUB_OUTPUT
+        run: echo "image_ref=registry.depot.dev/${DEPOT_PROJECT_ID}:sha-${{ github.sha }}" >> $GITHUB_OUTPUT

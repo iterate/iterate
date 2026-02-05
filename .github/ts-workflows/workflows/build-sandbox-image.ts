@@ -1,19 +1,17 @@
-import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build sandbox Docker image locally (no registry push).
+ * Build sandbox Docker image using Depot with persistent layer caching.
  *
- * We don't push to a registry because pulling from ghcr.io to Daytona is slow
- * (10+ mins). For local Docker tests, we just --load the image. Daytona builds
- * use the same local image build, then push the snapshot (see build-snapshot.ts).
- *
- * depot.dev's registry might help if we need registry-based workflows later.
+ * Images are saved to Depot Registry for fast Daytona pulls (global CDN).
+ * For local Docker tests, we also --load the image locally.
  */
 export default workflow({
   name: "Build Sandbox Image",
   permissions: {
     contents: "read",
+    "id-token": "write", // for Depot OIDC auth
   },
   on: {
     workflow_call: {
@@ -42,11 +40,11 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupDepot,
         {
-          name: "Build sandbox image (local only, no push)",
+          name: "Build sandbox image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
           },
           run: "pnpm os docker:build",
@@ -54,7 +52,7 @@ export default workflow({
         {
           id: "output",
           name: "Export image ref",
-          run: "echo image_ref=ghcr.io/iterate/sandbox:sha-${{ github.sha }} >> $GITHUB_OUTPUT",
+          run: 'echo "image_ref=registry.depot.dev/${DEPOT_PROJECT_ID}:sha-${{ github.sha }}" >> $GITHUB_OUTPUT',
         },
       ],
     },
