@@ -15,12 +15,19 @@
  * COPY --from=iterate-repo-* then pulls from our host paths instead of the
  * fallback stages.
  *
+ * Cache optimization:
+ * The raw .git directory contains files that change between runs even when the
+ * commit is the same (logs/, index, FETCH_HEAD, etc.). To ensure 100% cache hits
+ * when the commit hasn't changed, we create deterministic snapshots containing
+ * only the essential git files needed for git operations in the container.
+ *
  * For non-worktree builds or builders that don't support --build-context (like
  * Daytona), the Dockerfile's fallback stage copies .git from the build context.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
@@ -48,6 +55,69 @@ const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:l
 const cacheDir = join(repoRoot, ".cache");
 mkdirSync(cacheDir, { recursive: true });
 
+/**
+ * Create a deterministic snapshot of a git directory.
+ *
+ * Only copies files that are deterministic for a given commit:
+ * - HEAD, config, packed-refs (single files)
+ * - refs/, objects/ (directories with actual git data)
+ *
+ * Excludes files that change between runs:
+ * - logs/ (reflog with timestamps)
+ * - index (staging area)
+ * - FETCH_HEAD, ORIG_HEAD, COMMIT_EDITMSG
+ * - hooks/, info/
+ */
+function createDeterministicGitSnapshot(sourceDir: string, label: string): string {
+  const snapshotDir = mkdtempSync(join(tmpdir(), `git-snapshot-${label}-`));
+
+  // Essential single files (deterministic for a commit)
+  const essentialFiles = ["HEAD", "config", "packed-refs", "shallow"];
+  for (const file of essentialFiles) {
+    const src = join(sourceDir, file);
+    if (existsSync(src)) {
+      cpSync(src, join(snapshotDir, file));
+    }
+  }
+
+  // Essential directories (contain the actual git data)
+  const essentialDirs = ["refs", "objects"];
+  for (const dir of essentialDirs) {
+    const src = join(sourceDir, dir);
+    if (existsSync(src)) {
+      cpSync(src, join(snapshotDir, dir), { recursive: true });
+    }
+  }
+
+  return snapshotDir;
+}
+
+// Create deterministic snapshots of git directories for cache-friendly builds
+console.log("Creating deterministic git snapshots for build context...");
+const gitDirSnapshot = createDeterministicGitSnapshot(gitDir, "gitdir");
+const commonDirSnapshot = createDeterministicGitSnapshot(commonDir, "commondir");
+console.log(`  gitdir snapshot: ${gitDirSnapshot}`);
+console.log(`  commondir snapshot: ${commonDirSnapshot}`);
+
+// Cleanup snapshots on exit
+const cleanup = () => {
+  try {
+    rmSync(gitDirSnapshot, { recursive: true, force: true });
+    rmSync(commonDirSnapshot, { recursive: true, force: true });
+  } catch {
+    // Best effort cleanup
+  }
+};
+process.on("exit", cleanup);
+process.on("SIGINT", () => {
+  cleanup();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  cleanup();
+  process.exit(143);
+});
+
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
 const buildArgs = [
@@ -61,11 +131,11 @@ const buildArgs = [
   "apps/os/sandbox/Dockerfile",
   "-t",
   localImageName,
-  // Override the Dockerfile's gitdir/commondir stages with host git paths.
+  // Override the Dockerfile's gitdir/commondir stages with deterministic snapshots
   "--build-context",
-  `iterate-repo-gitdir=${gitDir}`,
+  `iterate-repo-gitdir=${gitDirSnapshot}`,
   "--build-context",
-  `iterate-repo-commondir=${commonDir}`,
+  `iterate-repo-commondir=${commonDirSnapshot}`,
   "--build-arg",
   `GIT_SHA=${gitSha}`,
   "--label",
