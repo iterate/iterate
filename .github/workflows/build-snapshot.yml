@@ -37,12 +37,30 @@ jobs:
         run: doppler setup --config ${{ inputs.doppler_config }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Install Daytona CLI
-        run: ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi && curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH" && sudo chmod +x daytona && sudo mv daytona /usr/local/bin/ && daytona version
-      - name: Verify Daytona CLI authentication
+      - name: Install and configure Daytona CLI
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- daytona snapshot list --limit 1
+        run: |-
+          ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
+          curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"
+          sudo chmod +x daytona && sudo mv daytona /usr/local/bin/
+          daytona version
+          mkdir -p ~/.config/daytona
+          doppler run -- bash -c 'cat > ~/.config/daytona/config.json << EOF
+          {
+            "activeProfile": "ci",
+            "profiles": [{
+              "id": "ci",
+              "name": "ci",
+              "api": {
+                "url": "https://app.daytona.io/api",
+                "key": "$DAYTONA_API_KEY"
+              },
+              "activeOrganizationId": "$DAYTONA_ORG_ID"
+            }]
+          }
+          EOF'
+          daytona snapshot list --limit 1
       - uses: docker/setup-buildx-action@v3
       - name: Build local sandbox image
         env:
@@ -53,12 +71,11 @@ jobs:
         name: Build and push Daytona snapshot
         env:
           CI: "true"
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
         run: |-
           set -euo pipefail
           output_file=$(mktemp)
           snapshot_name=iterate-sandbox-${{ github.sha }}
-          doppler run -- pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"
+          pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"
           snapshot_name=$(rg -m 1 '^snapshot_name=' "$output_file" | sed 's/^snapshot_name=//')
           echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"

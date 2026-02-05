@@ -47,21 +47,35 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
-          name: "Install Daytona CLI",
+          name: "Install and configure Daytona CLI",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
           run: [
+            // Install CLI
             'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
             'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
-          ].join(" && "),
-        },
-        {
-          name: "Verify Daytona CLI authentication",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          // organization commands don't work with API key auth, use snapshot list instead
-          run: "doppler run -- daytona snapshot list --limit 1",
+            // Configure CLI with API key (CLI doesn't use env vars, needs config file)
+            "mkdir -p ~/.config/daytona",
+            `doppler run -- bash -c 'cat > ~/.config/daytona/config.json << EOF
+{
+  "activeProfile": "ci",
+  "profiles": [{
+    "id": "ci",
+    "name": "ci",
+    "api": {
+      "url": "https://app.daytona.io/api",
+      "key": "$DAYTONA_API_KEY"
+    },
+    "activeOrganizationId": "$DAYTONA_ORG_ID"
+  }]
+}
+EOF'`,
+            // Verify auth works
+            "daytona snapshot list --limit 1",
+          ].join("\n"),
         },
         uses("docker/setup-buildx-action@v3"),
         {
@@ -78,15 +92,14 @@ export default workflow({
           name: "Build and push Daytona snapshot",
           env: {
             CI: "true",
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
             "set -euo pipefail",
             "output_file=$(mktemp)",
             "snapshot_name=iterate-sandbox-${{ github.sha }}",
-            // Use doppler run to inject DAYTONA_API_KEY from Doppler secrets
-            'doppler run -- pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            // CLI is configured via config file, no doppler run needed
+            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
             "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
