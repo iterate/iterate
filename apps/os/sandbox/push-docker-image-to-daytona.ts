@@ -1,7 +1,7 @@
 /**
  * Push local Docker sandbox image to Daytona as a snapshot.
  *
- * Usage: pnpm os daytona:build [--name NAME] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
+ * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
  * This script expects the image to already be built with `pnpm os docker:build`,
  * which loads the image into local Docker daemon.
@@ -32,6 +32,7 @@ const { values } = parseArgs({
   options: {
     name: { type: "string", short: "n" },
     tag: { type: "string", short: "t" },
+    image: { type: "string", short: "i" },
     cpu: { type: "string", short: "c", default: "2" },
     memory: { type: "string", short: "m", default: "4" },
     disk: { type: "string", short: "d", default: "10" },
@@ -76,7 +77,8 @@ if (existsSync(depotBuildInfoPath)) {
 }
 
 // Get the local image name (loaded by depot build --load)
-const localImageName = depotBuildInfo.localImageName ?? "iterate-sandbox:local";
+// CLI --image flag takes precedence, then depot-build-info.json, then default
+const localImageName = values.image ?? depotBuildInfo.localImageName ?? "iterate-sandbox:local";
 
 // Verify local image exists
 try {

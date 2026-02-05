@@ -1,4 +1,4 @@
-import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
@@ -8,6 +8,7 @@ export default workflow({
   name: "Build Sandbox Image",
   permissions: {
     contents: "read",
+    "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
     workflow_call: {
@@ -36,7 +37,7 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupDepot,
         {
           name: "Build sandbox image",
           env: {

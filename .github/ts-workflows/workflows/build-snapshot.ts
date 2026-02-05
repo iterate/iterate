@@ -1,4 +1,4 @@
-import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
@@ -21,6 +21,7 @@ export default workflow({
   name: "Build Daytona Snapshot",
   permissions: {
     contents: "read",
+    "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
     workflow_dispatch: {
@@ -90,7 +91,7 @@ EOF'`,
             "daytona snapshot list --limit 1",
           ].join("\n"),
         },
-        uses("docker/setup-buildx-action@v3"),
+        ...utils.setupDepot,
         {
           name: "Build sandbox image",
           env: {

@@ -60,3 +60,11 @@ export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
       },
     },
   ] as const satisfies Step[];
+
+/** Install Depot CLI for Docker builds with persistent layer caching */
+export const setupDepot = [
+  {
+    name: "Setup Depot CLI",
+    uses: "depot/setup-action@v1",
+  },
+] as const satisfies Step[];

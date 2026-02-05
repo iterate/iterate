@@ -1,7 +1,8 @@
 /**
- * Build Docker sandbox image.
+ * Build Docker sandbox image using Depot.
  *
- * Uses docker buildx build to create the sandbox image locally.
+ * Uses depot build for persistent layer caching across CI runs.
+ * Depot handles caching automatically - no --cache-from/--cache-to needed.
  *
  * Git worktree handling:
  * In a git worktree, .git is a file (not a directory) pointing to the real .git
@@ -47,14 +48,15 @@ const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:l
 const cacheDir = join(repoRoot, ".cache");
 mkdirSync(cacheDir, { recursive: true });
 
+// Use depot build for persistent layer caching
+// depot build accepts the same parameters as docker build
 const buildArgs = [
-  "docker",
-  "buildx",
+  "depot",
   "build",
   "--platform",
   buildPlatform,
   "--progress=plain", // Show all layer details for cache analysis
-  "--load",
+  "--load", // Load image into local Docker daemon
   "-f",
   "apps/os/sandbox/Dockerfile",
   "-t",
@@ -84,8 +86,8 @@ execFileSync(buildArgs[0], buildArgs.slice(1), {
   stdio: "inherit",
 });
 
-// Write build info for downstream scripts
-const buildInfoPath = join(cacheDir, "docker-build-info.json");
+// Write build info for downstream scripts (push-docker-image-to-daytona.ts reads this)
+const buildInfoPath = join(cacheDir, "depot-build-info.json");
 writeFileSync(
   buildInfoPath,
   JSON.stringify(

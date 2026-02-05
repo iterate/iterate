@@ -5,6 +5,7 @@ export default workflow({
   name: "Local Docker Tests",
   permissions: {
     contents: "read",
+    "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
     push: {
@@ -32,6 +33,7 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
+        ...utils.setupDepot,
         {
           name: "Build Docker image",
           env: {
