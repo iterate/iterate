@@ -37,6 +37,7 @@ const { values } = parseArgs({
     "update-doppler": { type: "boolean", default: true },
   },
   strict: true,
+  allowNegative: true,
 });
 
 execSync("daytona --version", { stdio: "ignore" });
