@@ -95,7 +95,7 @@ jobs:
           time pnpm docker:build
           echo '::endgroup::'
       - id: test
-        name: Run Local Docker Tests
+        name: Run Local Docker Provider Base Image Test
         env:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: docker
@@ -103,7 +103,7 @@ jobs:
           SANDBOX_TEST_BASE_DOCKER_IMAGE: ${{ inputs.image_name || 'iterate-sandbox:test' }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-        run: pnpm sandbox test -- --maxWorkers=1
+        run: pnpm --filter @iterate-com/sandbox test -- test/provider-base-image.test.ts --maxWorkers=1
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4

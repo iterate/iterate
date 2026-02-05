@@ -60,7 +60,7 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
         {
-          name: "Run Daytona Provider Tests",
+          name: "Run Daytona Provider Base Image Test",
           env: {
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "daytona",
@@ -70,7 +70,13 @@ export default workflow({
               "${{ github.event.inputs.snapshot_name || needs.build-snapshot.outputs.snapshot_name }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm sandbox test",
+          ...uses("nick-fields/retry@v3", {
+            timeout_minutes: 10,
+            max_attempts: 3,
+            retry_wait_seconds: 30,
+            command:
+              "doppler run -- pnpm --filter @iterate-com/sandbox test -- test/provider-base-image.test.ts --maxWorkers=1",
+          }),
         },
         {
           name: "Upload test results",

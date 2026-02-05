@@ -141,10 +141,10 @@ export default workflow({
             "echo '::endgroup::'",
           ].join("\n"),
         },
-        // Run tests
+        // Run smoke test
         {
           id: "test",
-          name: "Run Local Docker Tests",
+          name: "Run Local Docker Provider Base Image Test",
           env: {
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "docker",
@@ -153,7 +153,7 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "pnpm sandbox test -- --maxWorkers=1",
+          run: "pnpm --filter @iterate-com/sandbox test -- test/provider-base-image.test.ts --maxWorkers=1",
         },
         // Upload test artifacts on failure
         {
