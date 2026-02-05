@@ -59,7 +59,7 @@ const managerStatus = os.manager.status.handler(async ({ context }): Promise<Man
   };
 });
 
-// Helper to wait for manager to finish initialization (tasks completed)
+// Helper to wait for manager to finish initialization
 async function waitForManagerReady(
   manager: Manager,
   timeoutMs = 60_000,
@@ -140,8 +140,8 @@ function tailFile(filePath: string, lines: number): string | undefined {
  * Wait for a process to reach "running" state.
  *
  * This handler automatically waits for the manager to finish initialization
- * (tasks completed) before checking the process state. This avoids "process not found"
- * errors when called during container startup while tasks are still running.
+ * before checking the process state. This avoids "process not found"
+ * errors when called during container startup.
  */
 const waitForRunning = os.processes.waitForRunning.handler(
   async ({ input, context }): Promise<WaitForRunningResponse> => {
@@ -158,13 +158,12 @@ const waitForRunning = os.processes.waitForRunning.handler(
       return proc?.name;
     };
 
-    // Phase 1: Wait for manager to reach "running" state (tasks completed)
-    // Processes aren't registered until tasks finish, so we must wait for this first
+    // Phase 1: Wait for manager to reach "running" state
     while (Date.now() - start < timeoutMs) {
       if (context.manager.state === "running") {
         break;
       }
-      // Manager still initializing (running tasks) - keep waiting
+      // Manager still initializing - keep waiting
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
 

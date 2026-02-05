@@ -31,7 +31,7 @@ export const EnvOptions = v.object({
    * - number: delay in ms
    * - true or "immediately": reload immediately
    * - false: don't reload on env changes
-   * Default: 5000ms for processes/crons, false for tasks
+   * Default: 5000ms
    */
   reloadDelay: v.optional(EnvReloadDelay),
 });
@@ -105,7 +105,7 @@ export class Manager {
 
   // Dependency resolution
   private dependencyResolver = new DependencyResolver();
-  private stateChangeUnsubscribes: Array<() => void> = [];
+  private stateChangeUnsubscribes: Map<string, () => void> = new Map();
 
   // Env reload tracking
   private envReloadConfig: Map<string, EnvReloadDelay> = new Map();
@@ -401,6 +401,28 @@ export class Manager {
     // Stop the process first
     await proc.stop(timeout);
 
+    // Clean up state change listener
+    const unsubscribe = this.stateChangeUnsubscribes.get(proc.name);
+    if (unsubscribe) {
+      unsubscribe();
+      this.stateChangeUnsubscribes.delete(proc.name);
+    }
+
+    // Stop and remove scheduler if exists
+    const scheduler = this.schedulers.get(proc.name);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(proc.name);
+    }
+
+    // Clean up env reload config and timers
+    this.envReloadConfig.delete(proc.name);
+    const timer = this.envReloadTimers.get(proc.name);
+    if (timer) {
+      clearTimeout(timer);
+      this.envReloadTimers.delete(proc.name);
+    }
+
     // Remove from the map
     this.restartingProcesses.delete(proc.name);
     this.logger.info(`Removed process: ${proc.name}`);
@@ -484,7 +506,7 @@ export class Manager {
       const unsubscribe = proc.onStateChange((newState) => {
         this.onProcessStateChange(proc.name, newState);
       });
-      this.stateChangeUnsubscribes.push(unsubscribe);
+      this.stateChangeUnsubscribes.set(proc.name, unsubscribe);
     }
 
     // Start processes with no dependencies (unless they have a schedule and runOnStart is false)
@@ -606,10 +628,10 @@ export class Manager {
     this.schedulers.clear();
 
     // Unsubscribe from state changes
-    for (const unsubscribe of this.stateChangeUnsubscribes) {
+    for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
       unsubscribe();
     }
-    this.stateChangeUnsubscribes = [];
+    this.stateChangeUnsubscribes.clear();
 
     // Unsubscribe from env changes
     if (this.envChangeUnsubscribe) {
