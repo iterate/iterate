@@ -1,46 +1,14 @@
 import type { DependencyCondition, ProcessDependency, RestartingProcessEntry } from "./manager.ts";
 import type { RestartingProcess, RestartingProcessOptions } from "./restarting-process.ts";
 
+interface NormalizedDependency {
+  process: string;
+  condition: DependencyCondition;
+}
+
 interface DependencyNode {
   name: string;
-  dependsOn: Array<{ process: string; condition: DependencyCondition }>;
-}
-
-/**
- * Normalizes a ProcessDependency (string or object) to the object form
- */
-function normalizeDependency(
-  dep: ProcessDependency,
-  targetProcess: RestartingProcess | undefined,
-): { process: string; condition: DependencyCondition } {
-  if (typeof dep === "string") {
-    return {
-      process: dep,
-      condition: inferDefaultCondition(targetProcess),
-    };
-  }
-  return {
-    process: dep.process,
-    condition: dep.condition ?? inferDefaultCondition(targetProcess),
-  };
-}
-
-/**
- * Infer the default dependency condition based on the target process's restart policy
- */
-function inferDefaultCondition(targetProcess: RestartingProcess | undefined): DependencyCondition {
-  if (!targetProcess) return "completed";
-
-  // Access the private options via the lazyProcess or by checking state behavior
-  // For simplicity, we'll use "completed" for one-shot tasks (restartPolicy: "never")
-  // and "healthy" for long-running processes
-
-  // Since we can't easily access the options, we'll use a heuristic:
-  // If the process has a health check, default to "healthy"
-  // Otherwise, default to "started" for long-running processes
-  // This will be refined when we have more context
-
-  return "started";
+  dependsOn: NormalizedDependency[];
 }
 
 /**
@@ -82,11 +50,9 @@ export class DependencyResolver {
 
       if (entry.dependsOn) {
         for (const dep of entry.dependsOn) {
-          const targetProcess = processes.get(typeof dep === "string" ? dep : dep.process);
-          const targetEntry = entries.find(
-            (e) => e.name === (typeof dep === "string" ? dep : dep.process),
-          );
-          const normalized = this.normalizeDependencyWithEntry(dep, targetEntry);
+          const depName = typeof dep === "string" ? dep : dep.process;
+          const targetEntry = entries.find((e) => e.name === depName);
+          const normalized = this.normalizeDependency(dep, targetEntry);
           node.dependsOn.push(normalized);
         }
       }
@@ -95,10 +61,10 @@ export class DependencyResolver {
     }
   }
 
-  private normalizeDependencyWithEntry(
+  private normalizeDependency(
     dep: ProcessDependency,
     targetEntry: RestartingProcessEntry | undefined,
-  ): { process: string; condition: DependencyCondition } {
+  ): NormalizedDependency {
     const processName = typeof dep === "string" ? dep : dep.process;
     const explicitCondition = typeof dep === "object" ? dep.condition : undefined;
 
@@ -278,7 +244,7 @@ export class DependencyResolver {
   /**
    * Get dependency info for a process (for API responses)
    */
-  getDependencyInfo(processName: string): { process: string; condition: DependencyCondition }[] {
+  getDependencyInfo(processName: string): NormalizedDependency[] {
     const node = this.nodes.get(processName);
     return node?.dependsOn ?? [];
   }

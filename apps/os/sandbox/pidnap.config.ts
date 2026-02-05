@@ -156,6 +156,7 @@ export default defineConfig({
       envOptions: {
         inheritGlobalEnv: false,
       },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-frontend",

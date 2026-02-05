@@ -499,11 +499,8 @@ export class Manager {
       }
     }
 
-    // Check for failed dependencies
-    if (newState === "stopped" || newState === "max-restarts-reached") {
-      const proc = this.restartingProcesses.get(name);
-      // TODO: Check if this was an error exit and mark dependents as dependency-failed
-    }
+    // Note: Failed dependency handling (marking dependents as dependency-failed)
+    // could be added here in the future when dependency-failed state is implemented
   }
 
   /**
