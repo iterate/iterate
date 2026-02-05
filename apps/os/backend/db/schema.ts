@@ -234,18 +234,14 @@ export const project = pgTable(
   (t) => ({
     id: iterateId("prj"),
     name: t.text().notNull(),
-    slug: t.text().notNull(), // URL-safe slug: alphanumeric only, must contain letter
+    slug: t.text().notNull().unique(), // Globally unique URL-safe slug
     organizationId: t
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [
-    uniqueIndex().on(t.organizationId, t.slug),
-    uniqueIndex().on(t.organizationId, t.name),
-    slugCheck("slug", "project_slug_valid"),
-  ],
+  (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
 );
 
 export const projectRelations = relations(project, ({ one, many }) => ({

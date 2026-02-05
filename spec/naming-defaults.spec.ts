@@ -55,14 +55,34 @@ test.describe("naming defaults", () => {
     await toast.error(page, "organization with this name already exists").waitFor();
   });
 
-  test("project slug has no suffix when unique within org", async ({ page }) => {
-    const uniqueProjectName = `unique-project-${Date.now()}`;
+  test("first project slug matches org slug", async ({ page }) => {
+    const uniqueOrgName = `unique-org-${Date.now()}`;
     const testEmail = `naming-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
-    await createOrganization(page);
-    await createProject(page, uniqueProjectName);
+    await createOrganization(page, uniqueOrgName);
+    // First project should default to org name and get org slug
+    await createProject(page, uniqueOrgName);
 
-    await page.locator(`[data-project="${uniqueProjectName.toLowerCase()}"]`).waitFor();
+    // Project slug should match org slug
+    await page.locator(`[data-project="${uniqueOrgName.toLowerCase()}"]`).waitFor();
+  });
+
+  test("second project gets suffixed slug when using same name", async ({ page }) => {
+    const uniqueOrgName = `unique-org-${Date.now()}`;
+    const testEmail = `naming-${Date.now()}+test@nustom.com`;
+    await login(page, testEmail);
+    await createOrganization(page, uniqueOrgName);
+    // First project gets org slug
+    await createProject(page, uniqueOrgName);
+
+    // Create second project with same name - should get auto-suffixed slug
+    await page.locator("[data-group='organization']").getByText("Settings").click();
+    await page.getByText("New project").click();
+    await page.getByLabel("Project name").fill(uniqueOrgName);
+    await page.getByRole("button", { name: "Create project" }).click();
+
+    // Second project should have a suffixed slug (contains random chars)
+    await page.locator(`[data-project^="${uniqueOrgName.toLowerCase()}-"]`).waitFor();
   });
 
   test("duplicate project name within same org shows error", async ({ page }) => {

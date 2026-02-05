@@ -113,6 +113,13 @@
       "when": 1770215560228,
       "tag": "0015_event_external_id_not_null",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1770297200000,
+      "tag": "0016_globally_unique_project_slugs",
+      "breakpoints": true
     }
   ]
 }

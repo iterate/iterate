@@ -73,15 +73,23 @@ export const projectRouter = router({
     .input(
       z.object({
         name: z.string().min(1).max(100),
+        slug: z.string().min(1).max(50).optional(), // Optional: defaults to org slug if first project
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const baseSlug = slugify(input.name);
+      // Determine base slug: use provided slug, or org slug for first project, or slugify name
+      const orgProjects = await ctx.db.query.project.findMany({
+        where: eq(project.organizationId, ctx.organization.id),
+      });
+      const isFirstProject = orgProjects.length === 0;
+      const baseSlug = input.slug ?? (isFirstProject ? ctx.organization.slug : slugify(input.name));
+
+      // Check global uniqueness (project slugs are now globally unique)
       const existing = await ctx.db.query.project.findFirst({
-        where: and(eq(project.organizationId, ctx.organization.id), eq(project.slug, baseSlug)),
+        where: eq(project.slug, baseSlug),
       });
 
-      const slug = existing ? slugifyWithSuffix(input.name) : baseSlug;
+      const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
 
       const [newProject] = await ctx.db
         .insert(project)
