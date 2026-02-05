@@ -33,6 +33,40 @@ import { getSlackClient } from "../services/slack-client.ts";
 
 const logger = console;
 
+/**
+ * Create acknowledge callback - adds :eyes: emoji.
+ */
+function createAcknowledge(channel: string, timestamp: string, emoji: string) {
+  return async () => {
+    try {
+      await getSlackClient().reactions.add({ channel, timestamp, name: emoji });
+      logger.log(`[slack] Added :eyes: to ${channel}/${timestamp}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes("already_reacted")) {
+        logger.error(`[slack] Failed to add :${emoji}:`, error);
+      }
+    }
+  };
+}
+
+/**
+ * Create unacknowledge callback - removes :eyes: emoji.
+ */
+function createUnacknowledge(channel: string, timestamp: string, emoji: string) {
+  return async () => {
+    try {
+      await getSlackClient().reactions.remove({ channel, timestamp, name: emoji });
+      logger.log(`[slack] Removed :eyes: from ${channel}/${timestamp}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes("no_reaction")) {
+        logger.error(`[slack] Failed to remove :${emoji}:`, error);
+      }
+    }
+  };
+}
+
 export const slackRouter = new Hono();
 
 // Middleware to log request and response bodies
@@ -254,6 +288,10 @@ slackRouter.post("/webhook", async (c) => {
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
       await appendToAgent(existingAgent, message, {
         workingDirectory: await getCustomerRepoPath(),
+        acknowledge: async () =>
+          logger.log(`[slack] Processing reaction in ${channel}/${threadTs}`),
+        unacknowledge: async () =>
+          logger.log(`[slack] Finished processing reaction in ${channel}/${threadTs}`),
       });
       return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
     } catch (error) {
@@ -298,9 +336,12 @@ slackRouter.post("/webhook", async (c) => {
     if (parsed.case === "new_thread_mention") {
       if (existingAgent) {
         // Agent exists (either via association or slack-{thread_ts})
+        const workingDirectory = await getCustomerRepoPath();
         const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
         await appendToAgent(existingAgent, message, {
-          workingDirectory: await getCustomerRepoPath(),
+          workingDirectory,
+          acknowledge: createAcknowledge(channel, event.ts, "eyes"),
+          unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
         });
         return c.json({
           success: true,
@@ -313,15 +354,20 @@ slackRouter.post("/webhook", async (c) => {
 
       // No existing agent - create new slack-{thread_ts} agent
       const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
+      const workingDirectory = await getCustomerRepoPath();
       const agent = await createAgent({
         slug: newAgentSlug,
         harnessType: "opencode",
-        workingDirectory: await getCustomerRepoPath(),
+        workingDirectory,
         initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
       });
 
       const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
-      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
+      await appendToAgent(agent, message, {
+        workingDirectory,
+        acknowledge: createAcknowledge(channel, event.ts, "eyes"),
+        unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
+      });
       return c.json({
         success: true,
         agentSlug: newAgentSlug,
@@ -336,20 +382,25 @@ slackRouter.post("/webhook", async (c) => {
       let agent = existingAgent;
       let wasCreated = false;
       let finalAgentSlug = agentSlug;
+      const workingDirectory = await getCustomerRepoPath();
 
       if (!agent) {
         finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
         agent = await createAgent({
           slug: finalAgentSlug,
           harnessType: "opencode",
-          workingDirectory: await getCustomerRepoPath(),
+          workingDirectory,
           initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
         });
         wasCreated = true;
       }
 
       const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
-      await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
+      await appendToAgent(agent, message, {
+        workingDirectory,
+        acknowledge: createAcknowledge(channel, event.ts, "eyes"),
+        unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
+      });
       return c.json({
         success: true,
         agentSlug: finalAgentSlug,
@@ -372,6 +423,8 @@ slackRouter.post("/webhook", async (c) => {
       const message = formatFyiMessage(event, threadTs, eventId);
       await appendToAgent(existingAgent, message, {
         workingDirectory: await getCustomerRepoPath(),
+        acknowledge: createAcknowledge(channel, threadTs, "thinking_face"),
+        unacknowledge: createUnacknowledge(channel, threadTs, "thinking_face"),
       });
       return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }

@@ -163,6 +163,9 @@ emailRouter.post("/webhook", async (c) => {
       );
       await appendToAgent(existingAgent, message, {
         workingDirectory: await getCustomerRepoPath(),
+        acknowledge: async () => logger.log(`[email] Processing reply for ${threadSlug}`),
+        unacknowledge: async () =>
+          logger.log(`[email] Finished processing reply for ${threadSlug}`),
       });
       return c.json({
         success: true,
@@ -189,7 +192,11 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
+    await appendToAgent(agent, message, {
+      workingDirectory: await getCustomerRepoPath(),
+      acknowledge: async () => logger.log(`[email] Processing new email for ${threadSlug}`),
+      unacknowledge: async () => logger.log(`[email] Finished processing email for ${threadSlug}`),
+    });
 
     return c.json({
       success: true,
