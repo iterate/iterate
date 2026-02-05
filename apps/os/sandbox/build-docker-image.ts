@@ -1,7 +1,10 @@
 /**
  * Build Docker sandbox image using Depot.
  *
- * Uses depot build for persistent layer caching across CI runs.
+ * Uses depot bake for persistent layer caching across CI runs.
+ * Bake is more efficient than build for --load because it only transfers
+ * missing layers instead of the full image tarball.
+ *
  * Depot handles caching automatically - no --cache-from/--cache-to needed.
  *
  * Minimal .git directory for deterministic caching + working git status:
@@ -127,34 +130,33 @@ if (isMultiPlatform && !registryImageName) {
   process.exit(1);
 }
 
-// Determine output mode: --load for single platform (local daemon), --push for multi-platform (registry)
-const outputArgs = isMultiPlatform
-  ? ["--push", "-t", registryImageName!]
-  : ["--load", "-t", localImageName];
+// Use depot bake for efficient --load (only transfers missing layers)
+// Bake uses variables from docker-bake.hcl, passed via --set flags
+const bakeFile = join(import.meta.dirname, "docker-bake.hcl");
 
-// Use depot build for persistent layer caching
-// depot build accepts the same parameters as docker build
-const buildArgs = [
+const bakeArgs = [
   "depot",
-  "build",
-  "--platform",
-  buildPlatform,
-  "--progress=plain", // Show all layer details for cache analysis
-  ...outputArgs,
+  "bake",
   "-f",
-  "apps/os/sandbox/Dockerfile",
-  // Override the Dockerfile's iterate-synthetic-git stage with our minimal .git directory
-  "--build-context",
-  `iterate-synthetic-git=${minimalGitDir}`,
-  "--build-arg",
-  `GIT_SHA=${gitSha}`,
-  "--label",
-  `com.iterate.built_by=${builtBy}`,
-  ".",
+  bakeFile,
+  "--progress=plain",
+  // Pass variables to the bake file
+  "--set",
+  `sandbox.args.GIT_SHA=${gitSha}`,
+  "--set",
+  `sandbox.platform=${buildPlatform}`,
+  "--set",
+  `sandbox.tags=${isMultiPlatform ? registryImageName! : localImageName}`,
+  "--set",
+  `sandbox.labels.com\\.iterate\\.built_by=${builtBy}`,
+  "--set",
+  `sandbox.contexts.iterate-synthetic-git=${minimalGitDir}`,
+  // Output mode
+  isMultiPlatform ? "--push" : "--load",
 ];
 
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
-const buildCommand = buildArgs.map(quoteArg).join(" ");
+const buildCommand = bakeArgs.map(quoteArg).join(" ");
 
 if (isMultiPlatform) {
   console.log(`Multi-platform build: ${buildPlatform}`);
@@ -166,10 +168,10 @@ if (isMultiPlatform) {
 console.log("Build command:");
 console.log(buildCommand);
 
-// 15-minute timeout for depot build (fails fast instead of GitHub's 6-hour default)
+// 15-minute timeout for depot bake (fails fast instead of GitHub's 6-hour default)
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
-execFileSync(buildArgs[0], buildArgs.slice(1), {
+execFileSync(bakeArgs[0], bakeArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
   timeout: BUILD_TIMEOUT_MS,
