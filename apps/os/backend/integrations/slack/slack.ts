@@ -456,17 +456,6 @@ slackApp.post("/webhook", async (c) => {
           return;
         }
 
-        // Dedup check using external_id (Slack's event_id)
-        if (slackEventId) {
-          const existing = await db.query.event.findFirst({
-            where: (e, { eq }) => eq(e.externalId, slackEventId),
-          });
-          if (existing) {
-            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
-            return;
-          }
-        }
-
         // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
         logger.debug("[Slack Webhook] Looking up connection", { teamId });
         // Find connection and the single active machine for its project
@@ -496,6 +485,17 @@ slackApp.post("/webhook", async (c) => {
               }
             : undefined,
         });
+
+        // Dedup check using external_id (Slack's event_id)
+        if (slackEventId) {
+          const existing = await db.query.event.findFirst({
+            where: (e, { eq }) => eq(e.externalId, slackEventId),
+          });
+          if (existing) {
+            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
+            return;
+          }
+        }
 
         const projectId = connection?.projectId;
         if (!projectId) {

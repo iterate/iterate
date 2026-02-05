@@ -486,13 +486,15 @@ githubApp.post("/webhook", async (c) => {
 
   // Track webhook in PostHog with group association (non-blocking).
   // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
+  const db = c.var.db;
+  const env = c.env;
   waitUntil(
     (async () => {
       let groups: { organization: string; project: string } | undefined;
 
       // Look up project repo to get group association
       if (repoOwner && repoName) {
-        const projectRepoRecord = await c.var.db.query.projectRepo.findFirst({
+        const projectRepoRecord = await db.query.projectRepo.findFirst({
           where: (pr, { eq, and }) => and(eq(pr.owner, repoOwner), eq(pr.name, repoName)),
           with: { project: true },
         });
@@ -504,7 +506,7 @@ githubApp.post("/webhook", async (c) => {
         }
       }
 
-      trackWebhookEvent(c.env, {
+      trackWebhookEvent(env, {
         distinctId: `github:${repoFullName}`,
         event: "github:webhook_received",
         properties: { ...payload, _event_type: xGithubEvent },
