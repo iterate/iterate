@@ -44,6 +44,7 @@ export default {
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DAYTONA_SNAPSHOT_NAME: "${{ inputs.daytona_snapshot_name }}",
+            VITE_DAYTONA_SNAPSHOT_NAME: "${{ inputs.daytona_snapshot_name }}",
           },
           run: "pnpm run deploy:prd",
           "working-directory": "apps/os",
