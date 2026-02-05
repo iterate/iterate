@@ -5,9 +5,6 @@
  *
  * This script expects the image to already be built with `pnpm os docker:build`,
  * which loads the image into local Docker daemon.
- *
- * We use `daytona snapshot push` with local images because Daytona's registry
- * authentication doesn't work reliably with Depot Registry.
  */
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -31,7 +28,6 @@ const builtBy = process.env.ITERATE_USER ?? "unknown";
 const { values } = parseArgs({
   options: {
     name: { type: "string", short: "n" },
-    tag: { type: "string", short: "t" },
     image: { type: "string", short: "i" },
     cpu: { type: "string", short: "c", default: "2" },
     memory: { type: "string", short: "m", default: "4" },
@@ -61,11 +57,8 @@ if (daytonaApiKey) {
 // Read Depot build info to get local image name and git sha
 const depotBuildInfoPath = join(repoRoot, ".cache", "depot-build-info.json");
 let depotBuildInfo: {
-  depotRegistryTag?: string;
-  depotImageUrl?: string;
   localImageName?: string;
   gitSha?: string;
-  buildID?: string;
 } = {};
 
 if (existsSync(depotBuildInfoPath)) {
@@ -91,7 +84,7 @@ try {
 console.log(`Local image: ${localImageName}`);
 
 // Generate snapshot name
-const gitSha = depotBuildInfo.gitSha ?? depotBuildInfo.buildID ?? "unknown";
+const gitSha = depotBuildInfo.gitSha ?? "unknown";
 const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 const defaultName = `iterate-sandbox-${dateStr}-${gitSha.slice(0, 12)}-${builtBy}`;
 const snapshotName = values.name ?? defaultName;
