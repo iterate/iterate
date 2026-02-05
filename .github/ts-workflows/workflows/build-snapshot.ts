@@ -39,7 +39,8 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOn,
+      // Must use AMD64 runner - Daytona requires AMD64 images and QEMU emulation segfaults
+      "runs-on": "ubuntu-24.04",
       outputs: {
         snapshot_name: "${{ steps.build.outputs.snapshot_name }}",
       },
