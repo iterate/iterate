@@ -100,7 +100,8 @@ EOF'`,
             "output_file=$(mktemp)",
             "snapshot_name=iterate-sandbox-${{ github.sha }}",
             // CLI is configured via config file, no doppler run needed
-            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
+            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
             "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
