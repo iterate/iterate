@@ -62,7 +62,7 @@ USER iterate
 # PATH setup for iterate tools. These ENV statements set PATH for non-shell contexts
 # (e.g. `docker exec container opencode`). Login shells reset PATH via /etc/profile,
 # so home-skeleton/.profile must ALSO set up these paths for `bash -l` and SSH to work.
-# Keep both in sync! The .iterate/bin paths go first to allow wrapper scripts.
+# Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Git config for iterate user
@@ -104,6 +104,8 @@ RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
+# Ensure wrapper scripts win after all PATH modifications.
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
