@@ -161,6 +161,8 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
 
 # Copy home skeleton into /home/iterate
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
+RUN opencode run "Hello" || true
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
