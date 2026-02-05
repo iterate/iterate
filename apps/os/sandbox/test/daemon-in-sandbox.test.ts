@@ -257,7 +257,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Scheduled Processes", () => {
     await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
     const client = sandbox.pidnapOrpcClient();
 
-    const processes = await client.processes.list({});
+    const processes = await client.processes.list();
     const processNames = processes.map((p) => p.name);
 
     // Both scheduled processes should be in the list
