@@ -50,7 +50,7 @@ function hashDirectory(dirPath: string): string {
   const hash = createHash("sha256");
   const entries: string[] = [];
 
-  function walkDir(currentPath: string, relativePath: string = ""): void {
+  function walkDir(currentPath: string, relativePath = ""): void {
     const items = readdirSync(currentPath).sort();
     for (const item of items) {
       const fullPath = join(currentPath, item);
