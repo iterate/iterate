@@ -128,13 +128,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Host Sync (Minimal)", () => {
   test("git state matches host", async ({ sandbox }) => {
     const gitInfo = getLocalDockerGitInfo(ITERATE_REPO_PATH_ON_HOST);
     expect(gitInfo).toBeDefined();
-    expect(gitInfo?.branch).toBeTruthy();
+    // branch may be undefined in detached HEAD state (common in CI)
 
     // Check branch matches (empty string if detached HEAD on both)
     const containerBranch = (
       await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "branch", "--show-current"])
     ).trim();
-    expect(containerBranch).toBe(gitInfo!.branch);
+    expect(containerBranch).toBe(gitInfo!.branch ?? "");
 
     // Check commit matches
     const containerCommit = (
