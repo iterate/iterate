@@ -88,19 +88,30 @@ jobs:
       - name: Build Docker image
         env:
           LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
-          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}
+          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || 'linux/amd64' }}
+          SANDBOX_USE_DEPOT_REGISTRY: "true"
+          SANDBOX_DEPOT_SAVE_TAG: iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
           echo '::group::Build timing'
           time pnpm os docker:build
           echo '::endgroup::'
-      - name: Build Docker image (amd64 cache prewarm)
-        if: ${{ github.event_name == 'pull_request' && github.repository_owner == 'iterate' }}
+      - name: Pull Docker image from Depot Registry
         env:
-          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:cache-amd64
-          SANDBOX_BUILD_PLATFORM: linux/amd64
+          IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
         run: |-
-          echo '::group::Build timing (amd64 prewarm)'
-          time pnpm os docker:build
+          echo '::group::Pull timing'
+          build_info_path=".cache/depot-build-info.json"
+          depot_project_id="$(jq -r '.depotProjectId' "$build_info_path")"
+          depot_save_tag="$(jq -r '.depotSaveTag' "$build_info_path")"
+          image_ref="$(jq -r '.depotRegistryImageName' "$build_info_path")"
+          if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then
+            echo "Missing Depot registry metadata in $build_info_path" >&2
+            exit 1
+          fi
+          time depot pull --project "$depot_project_id" "$depot_save_tag"
+          docker image inspect "$image_ref" > /dev/null
+          docker tag "$image_ref" "$IMAGE_NAME"
+          echo 'Pulled image: $image_ref'
           echo '::endgroup::'
       - id: test
         name: Run Local Docker Tests
