@@ -59,7 +59,7 @@ function createAcknowledge(channel: string, timestamp: string, emoji: string) {
   return async () => {
     try {
       await runSlackCommand(
-        `await slack.reactions.add({ channel: "${channel}", timestamp: "${timestamp}", name: "${emoji}" })`,
+        `await slack.reactions.add(${JSON.stringify({ channel, timestamp, name: emoji })})`,
       );
       logger.log(`[slack] Added :${emoji}: to ${channel}/${timestamp}`);
     } catch (error) {
@@ -78,7 +78,7 @@ function createUnacknowledge(channel: string, timestamp: string, emoji: string) 
   return async () => {
     try {
       await runSlackCommand(
-        `await slack.reactions.remove({ channel: "${channel}", timestamp: "${timestamp}", name: "${emoji}" })`,
+        `await slack.reactions.remove(${JSON.stringify({ channel, timestamp, name: emoji })})`,
       );
       logger.log(`[slack] Removed :${emoji}: from ${channel}/${timestamp}`);
     } catch (error) {

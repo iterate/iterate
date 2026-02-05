@@ -151,24 +151,19 @@ async function stopTracking(sessionId: string): Promise<void> {
 
 /**
  * Handle a single event from opencode.
- * The SDK's event stream yields GlobalEvent objects with directory and payload fields.
+ * Events come directly as { type, properties } objects (not wrapped in GlobalEvent).
  */
 function handleEvent(event: unknown): void {
   if (!event || typeof event !== "object") return;
 
-  // GlobalEvent has { directory: string, payload: Event }
-  const globalEvent = event as {
-    directory?: string;
-    payload?: { type?: string; properties?: unknown };
-  };
-  const payload = globalEvent.payload;
-  if (!payload || typeof payload !== "object") return;
-
-  const eventType = payload.type;
+  // Events are { type: string, properties: { ... } }
+  const evt = event as { type?: string; properties?: unknown };
+  const eventType = evt.type;
+  if (!eventType) return;
 
   // Handle session.idle events - this fires when the agent finishes its turn
   if (eventType === "session.idle") {
-    const props = payload.properties as { sessionID?: string } | undefined;
+    const props = evt.properties as { sessionID?: string } | undefined;
     if (props?.sessionID && trackedSessions.has(props.sessionID)) {
       logger.log(`[opencode] Session ${props.sessionID} became idle`);
       stopTracking(props.sessionID);
@@ -177,9 +172,7 @@ function handleEvent(event: unknown): void {
 
   // Also handle session.status with type: idle
   if (eventType === "session.status") {
-    const props = payload.properties as
-      | { sessionID?: string; status?: { type?: string } }
-      | undefined;
+    const props = evt.properties as { sessionID?: string; status?: { type?: string } } | undefined;
     if (
       props?.sessionID &&
       props?.status?.type === "idle" &&
@@ -195,6 +188,8 @@ function handleEvent(event: unknown): void {
  * Process incoming events from opencode.
  */
 async function processEvents(stream: AsyncGenerator<unknown>): Promise<void> {
+  logger.log(`[opencode] Event subscription started`);
+
   for await (const event of stream) {
     try {
       handleEvent(event);
@@ -236,12 +231,9 @@ async function ensureEventSubscription(workingDirectory: string): Promise<void> 
  * Calls acknowledge immediately and sets up listener to call unacknowledge on idle.
  */
 async function trackSession(sessionId: string, params: AppendParams): Promise<void> {
-  logger.log(`[opencode] trackSession called for ${sessionId}`);
   // Call acknowledge immediately
   try {
-    logger.log(`[opencode] Calling acknowledge for ${sessionId}`);
     await params.acknowledge();
-    logger.log(`[opencode] Acknowledge completed for ${sessionId}`);
   } catch (error) {
     logger.error(`[opencode] Error calling acknowledge for session ${sessionId}:`, error);
   }
