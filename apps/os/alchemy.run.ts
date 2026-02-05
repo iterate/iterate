@@ -269,18 +269,29 @@ async function setupEnvironmentVariables(): Promise<EnvSecrets> {
 }
 
 async function setupDatabase() {
-  const migrate = async (origin: string) => {
+  const migrate = async (origin: string, pooled?: string) => {
     if (!origin) throw new Error("Database connection string is not set");
-    const res = await Exec("db-migrate", {
-      env: {
-        PSCALE_DATABASE_URL: origin,
-      },
-      command: "pnpm db:migrate",
-    });
+    const run = async (url: string) =>
+      Exec("db-migrate", {
+        env: {
+          PSCALE_DATABASE_URL: url,
+        },
+        command: "pnpm db:migrate",
+      });
 
-    if (res.exitCode !== 0) {
-      throw new Error(`Failed to run migrations: ${res.stderr}`);
+    const res = await run(origin);
+    if (res.exitCode === 0) return;
+
+    const output = [res.stdout, res.stderr].filter(Boolean).join("\n");
+    const hitConnectionLimit = /remaining connection slots are reserved/i.test(output);
+    if (hitConnectionLimit && pooled && pooled !== origin) {
+      const retry = await run(pooled);
+      if (retry.exitCode === 0) return;
+      const retryOutput = [retry.stdout, retry.stderr].filter(Boolean).join("\n");
+      throw new Error(`Failed to run migrations: ${retryOutput}`);
     }
+
+    throw new Error(`Failed to run migrations: ${output}`);
   };
 
   const seedGlobalSecrets = async (origin: string) => {
@@ -337,7 +348,7 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-    await migrate(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrl.unencrypted, role.connectionUrlPooled.unencrypted);
     await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
@@ -361,7 +372,7 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrl.unencrypted, role.connectionUrlPooled.unencrypted);
     await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
@@ -385,7 +396,7 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrl.unencrypted, role.connectionUrlPooled.unencrypted);
     await seedGlobalSecrets(role.connectionUrl.unencrypted);
 
     return {
