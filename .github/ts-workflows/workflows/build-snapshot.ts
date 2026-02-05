@@ -47,18 +47,13 @@ export default workflow({
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
-          name: "Install Daytona CLI and authenticate",
-          env: {
-            CI: "true",
-            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
-          },
+          name: "Install Daytona CLI",
           run: [
             'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
             'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
-            'daytona login --api-key "$DAYTONA_API_KEY" < /dev/null',
-            // Note: "daytona organization use" doesn't work with API key auth - org is scoped to the key
+            // Note: No login needed - CLI uses DAYTONA_API_KEY env var directly (since v0.128.0)
           ].join(" && "),
         },
         uses("docker/setup-buildx-action@v3"),
@@ -76,14 +71,15 @@ export default workflow({
           name: "Build and push Daytona snapshot",
           env: {
             CI: "true",
-            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
             "set -euo pipefail",
             "output_file=$(mktemp)",
             "snapshot_name=iterate-sandbox-${{ github.sha }}",
-            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            // Use doppler run to inject DAYTONA_API_KEY from Doppler secrets
+            'doppler run -- pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
             "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
