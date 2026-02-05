@@ -202,30 +202,5 @@ export default defineConfig({
       },
       dependsOn: ["task-build-daemon-client"],
     },
-    // Scheduled processes for testing cron functionality
-    {
-      name: "scheduled-marker",
-      definition: bash(`
-        echo "scheduled-marker triggered at $(date)" >> /tmp/scheduled-marker.log
-      `),
-      options: { restartPolicy: "never" },
-      schedule: {
-        cron: "* * * * * *", // Every second (6-field cron)
-        runOnStart: false,
-      },
-      dependsOn: ["task-build-daemon-client"],
-    },
-    {
-      name: "scheduled-startup",
-      definition: bash(`
-        echo "scheduled-startup ran at $(date)" >> /tmp/scheduled-startup.log
-      `),
-      options: { restartPolicy: "never" },
-      schedule: {
-        cron: "0 0 1 1 *", // Yearly (won't actually trigger during test)
-        runOnStart: true,
-      },
-      dependsOn: ["task-build-daemon-client"],
-    },
   ],
 });
