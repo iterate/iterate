@@ -459,6 +459,7 @@ export class Manager {
 
     // Build and validate dependency graph
     this.dependencyResolver.buildGraph(entries, this.restartingProcesses);
+    this.dependencyResolver.validateDependenciesExist();
     this.dependencyResolver.validateNoCycles();
 
     // Subscribe to state changes to start dependents

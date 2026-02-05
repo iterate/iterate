@@ -78,6 +78,27 @@ export class DependencyResolver {
   }
 
   /**
+   * Validate that all dependency references exist
+   * @throws Error if a dependency references a non-existent process
+   */
+  validateDependenciesExist(): void {
+    const allProcessNames = new Set(this.nodes.keys());
+    const errors: string[] = [];
+
+    for (const [name, node] of this.nodes) {
+      for (const dep of node.dependsOn) {
+        if (!allProcessNames.has(dep.process)) {
+          errors.push(`Process "${name}" depends on non-existent process "${dep.process}"`);
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`Invalid dependency configuration:\n  - ${errors.join("\n  - ")}`);
+    }
+  }
+
+  /**
    * Validate that there are no circular dependencies
    * @throws Error if circular dependency is detected
    */

@@ -116,6 +116,41 @@ describe("DependencyResolver", () => {
     });
   });
 
+  describe("validateDependenciesExist", () => {
+    it("should pass when all dependencies exist", () => {
+      const entries: RestartingProcessEntry[] = [
+        { name: "a", definition: { command: "echo" } },
+        { name: "b", definition: { command: "echo" }, dependsOn: ["a"] },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(() => resolver.validateDependenciesExist()).not.toThrow();
+    });
+
+    it("should throw when dependency references non-existent process", () => {
+      const entries: RestartingProcessEntry[] = [
+        { name: "a", definition: { command: "echo" }, dependsOn: ["nonexistent"] },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(() => resolver.validateDependenciesExist()).toThrow(
+        /Process "a" depends on non-existent process "nonexistent"/,
+      );
+    });
+
+    it("should report all non-existent dependencies", () => {
+      const entries: RestartingProcessEntry[] = [
+        { name: "a", definition: { command: "echo" }, dependsOn: ["x"] },
+        { name: "b", definition: { command: "echo" }, dependsOn: ["y", "z"] },
+      ];
+      resolver.buildGraph(entries, new Map());
+
+      expect(() => resolver.validateDependenciesExist()).toThrow(
+        /Invalid dependency configuration/,
+      );
+    });
+  });
+
   describe("getStartupOrder", () => {
     it("should return topological order", () => {
       const entries: RestartingProcessEntry[] = [
