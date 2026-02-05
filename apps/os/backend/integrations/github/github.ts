@@ -268,7 +268,7 @@ githubApp.get(
 
     const redirectPath =
       callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/repo` : "/");
+      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );
