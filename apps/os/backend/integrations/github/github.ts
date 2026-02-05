@@ -476,14 +476,46 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  // Track ALL webhooks in PostHog (non-blocking, before any filtering)
   const payload = JSON.parse(body);
-  const repo = payload.repository as { full_name?: string } | undefined;
-  trackWebhookEvent(c.env, {
-    distinctId: `github:${repo?.full_name ?? "unknown"}`,
-    event: "github:webhook_received",
-    properties: { ...payload, _event_type: xGithubEvent },
-  });
+  const repo = payload.repository as
+    | { full_name?: string; owner?: { login?: string }; name?: string }
+    | undefined;
+  const repoFullName = repo?.full_name ?? "unknown";
+  const repoOwner = repo?.owner?.login;
+  const repoName = repo?.name;
+
+  // Track webhook in PostHog with group association (non-blocking).
+  // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
+  const db = c.var.db;
+  const env = c.env;
+  waitUntil(
+    (async () => {
+      let groups: { organization: string; project: string } | undefined;
+
+      // Look up project repo to get group association
+      if (repoOwner && repoName) {
+        const projectRepoRecord = await db.query.projectRepo.findFirst({
+          where: (pr, { eq, and }) => and(eq(pr.owner, repoOwner), eq(pr.name, repoName)),
+          with: { project: true },
+        });
+        if (projectRepoRecord?.project) {
+          groups = {
+            organization: projectRepoRecord.project.organizationId,
+            project: projectRepoRecord.projectId,
+          };
+        }
+      }
+
+      trackWebhookEvent(env, {
+        distinctId: `github:${repoFullName}`,
+        event: "github:webhook_received",
+        properties: { ...payload, _event_type: xGithubEvent },
+        groups,
+      });
+    })().catch((err) => {
+      logger.error("[GitHub Webhook] PostHog tracking error", err);
+    }),
+  );
 
   // Insert raw event immediately after signature verification for deduplication.
   // Uses ON CONFLICT DO NOTHING with unique index on externalId.
