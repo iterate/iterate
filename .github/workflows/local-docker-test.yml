@@ -61,7 +61,7 @@ on:
         value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
   build-and-test:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
     outputs:
       test_result: ${{ steps.test.outcome }}
     steps:
@@ -89,7 +89,7 @@ jobs:
       - name: Build Docker image
         env:
           LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
-          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}
+          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || 'linux/amd64' }}
           SANDBOX_USE_DEPOT_REGISTRY: "true"
           SANDBOX_DEPOT_SAVE_TAG: iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
