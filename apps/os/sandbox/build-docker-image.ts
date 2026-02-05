@@ -53,6 +53,7 @@ const buildArgs = [
   "build",
   "--platform",
   buildPlatform,
+  "--progress=plain", // Show all layer details for cache analysis
   "--load",
   "-f",
   "apps/os/sandbox/Dockerfile",

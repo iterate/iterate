@@ -23,6 +23,16 @@ export default workflow({
     contents: "read",
   },
   on: {
+    workflow_dispatch: {
+      inputs: {
+        doppler_config: {
+          description: "Doppler config to use (dev, prd, etc.)",
+          required: false,
+          type: "string",
+          default: "dev",
+        },
+      },
+    },
     workflow_call: {
       inputs: {
         doppler_config: {
