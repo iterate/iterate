@@ -9,7 +9,7 @@ import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
-import { trackWebhookEvent } from "../../lib/posthog.ts";
+import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 
 import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
@@ -343,6 +343,15 @@ slackApp.get(
           },
         });
       });
+
+      // Link Slack team to org/project in PostHog (after transaction commits)
+      if (project) {
+        linkExternalIdToGroups(c.env, {
+          distinctId: `slack:${teamData.id}`,
+          organizationId: project.organizationId,
+          projectId,
+        });
+      }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
         const conflictData = JSON.parse(

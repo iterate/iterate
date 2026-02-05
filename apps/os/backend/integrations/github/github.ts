@@ -480,7 +480,7 @@ githubApp.post("/webhook", async (c) => {
   const payload = JSON.parse(body);
   const repo = payload.repository as { full_name?: string } | undefined;
   trackWebhookEvent(c.env, {
-    distinctId: `repo:${repo?.full_name ?? "unknown"}`,
+    distinctId: `github:${repo?.full_name ?? "unknown"}`,
     event: "github:webhook_received",
     properties: { ...payload, _event_type: xGithubEvent },
   });
