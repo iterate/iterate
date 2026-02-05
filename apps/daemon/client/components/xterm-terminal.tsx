@@ -44,324 +44,313 @@ const READY_STATE_MAP = {
   [WebSocket.CLOSED]: "disconnected",
 } as Record<number, string>;
 
-export const XtermTerminal = forwardRef<
-  XtermTerminalHandle,
-  XtermTerminalProps
->(function XtermTerminal(
-  { wsBase, initialCommand, ptyId, onParamsChange },
-  ref,
-) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const mobileInputRef = useRef<HTMLInputElement>(null);
-  const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
-  const [ctrlActive, setCtrlActive] = useState(false);
-  const isMobile = useIsMobile();
+export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>(
+  function XtermTerminal({ wsBase, initialCommand, ptyId, onParamsChange }, ref) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const termRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const mobileInputRef = useRef<HTMLInputElement>(null);
+    const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
+    const [ctrlActive, setCtrlActive] = useState(false);
+    const isMobile = useIsMobile();
 
-  const wsUrl = useMemo(() => {
-    const baseUri = new URL(document.baseURI);
-    const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
-    const base =
-      wsBase ||
-      `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
-    const params = new URLSearchParams();
-    if (ptyId) params.set("ptyId", ptyId);
-    if (initialCommand?.command && !ptyId) {
-      params.set("command", initialCommand.command);
-      if (initialCommand.autorun) params.set("autorun", "true");
-    }
-    const query = params.toString();
-    return `${base}/api/pty/ws${query ? `?${query}` : ""}`;
-  }, [wsBase, ptyId, initialCommand]);
+    const wsUrl = useMemo(() => {
+      const baseUri = new URL(document.baseURI);
+      const protocol = baseUri.protocol === "https:" ? "wss:" : "ws:";
+      const base = wsBase || `${protocol}//${baseUri.host}${baseUri.pathname.replace(/\/$/, "")}`;
+      const params = new URLSearchParams();
+      if (ptyId) params.set("ptyId", ptyId);
+      if (initialCommand?.command && !ptyId) {
+        params.set("command", initialCommand.command);
+        if (initialCommand.autorun) params.set("autorun", "true");
+      }
+      const query = params.toString();
+      return `${base}/api/pty/ws${query ? `?${query}` : ""}`;
+    }, [wsBase, ptyId, initialCommand]);
 
-  const socket = useWebSocket(wsUrl, undefined, {
-    maxRetries: MAX_RECONNECTION_ATTEMPTS,
-    minReconnectionDelay: 1000,
-    maxReconnectionDelay: 5000,
-  });
+    const socket = useWebSocket(wsUrl, undefined, {
+      maxRetries: MAX_RECONNECTION_ATTEMPTS,
+      minReconnectionDelay: 1000,
+      maxReconnectionDelay: 5000,
+    });
 
-  const connectionStatus = READY_STATE_MAP[socket.readyState] ?? "disconnected";
+    const connectionStatus = READY_STATE_MAP[socket.readyState] ?? "disconnected";
 
-  // Handle mobile keyboard input
-  const handleMobileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = e.target.value;
-      if (value && socket.readyState === WebSocket.OPEN) {
-        if (ctrlActive && value.length === 1) {
-          // Convert letter to Ctrl code (A=1, B=2, etc.)
-          const code = value.toUpperCase().charCodeAt(0) - 64;
-          if (code >= 1 && code <= 26) {
-            socket.send(String.fromCharCode(code));
+    // Handle mobile keyboard input
+    const handleMobileInput = useCallback(
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        if (value && socket.readyState === WebSocket.OPEN) {
+          if (ctrlActive && value.length === 1) {
+            // Convert letter to Ctrl code (A=1, B=2, etc.)
+            const code = value.toUpperCase().charCodeAt(0) - 64;
+            if (code >= 1 && code <= 26) {
+              socket.send(String.fromCharCode(code));
+            } else {
+              // Non-letter character, send as-is
+              socket.send(value);
+            }
           } else {
-            // Non-letter character, send as-is
             socket.send(value);
           }
-        } else {
-          socket.send(value);
         }
-      }
-      // Always reset Ctrl state after any input
-      setCtrlActive(false);
-      e.target.value = "";
-    },
-    [socket, ctrlActive],
-  );
-
-  // Handle key presses from the mobile toolbar
-  const handleToolbarKeyPress = useCallback(
-    (key: string) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(key);
-      }
-      // Reset Ctrl state after any toolbar key press (consistent with other input handlers)
-      setCtrlActive(false);
-    },
-    [socket],
-  );
-
-  // Focus mobile input to trigger keyboard on mobile devices
-  const focusMobileInput = useCallback(() => {
-    if (isMobile && mobileInputRef.current) {
-      mobileInputRef.current.focus();
-    }
-  }, [isMobile]);
-
-  useImperativeHandle(ref, () => ({
-    sendText: (text: string) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(text);
-      }
-    },
-    focus: () => {
-      termRef.current?.focus();
-    },
-  }));
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const container = containerRef.current;
-
-    const terminal = new Terminal({
-      fontSize: 14,
-      cursorBlink: true,
-      fontFamily:
-        '"JetBrainsMono Nerd Font", "JetBrains Mono", Monaco, Menlo, "Courier New", monospace',
-      theme: {
-        background: "#1e1e1e",
-        foreground: "#d4d4d4",
-        cursor: "#d4d4d4",
-        cursorAccent: "#1e1e1e",
-        selectionBackground: "#3a3a3a",
+        // Always reset Ctrl state after any input
+        setCtrlActive(false);
+        e.target.value = "";
       },
-      scrollback: 30000,
-      allowProposedApi: true,
-      allowTransparency: true,
-    });
+      [socket, ctrlActive],
+    );
 
-    termRef.current = terminal;
+    // Handle key presses from the mobile toolbar
+    const handleToolbarKeyPress = useCallback(
+      (key: string) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(key);
+        }
+        // Reset Ctrl state after any toolbar key press (consistent with other input handlers)
+        setCtrlActive(false);
+      },
+      [socket],
+    );
 
-    const fitAddon = new FitAddon();
-    fitAddonRef.current = fitAddon;
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new UnicodeGraphemesAddon());
-    terminal.loadAddon(new ClipboardAddon());
-
-    terminal.open(container);
-    // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
-    terminal.loadAddon(new LigaturesAddon());
-
-    try {
-      const webglAddon = new WebglAddon({ customGlyphs: true });
-      webglAddon.onContextLoss(() => webglAddon.dispose());
-      terminal.loadAddon(webglAddon);
-    } catch {
-      // Intentionally empty - xterm falls back to canvas renderer
-    }
-
-    const sendControl = (msg: object) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(COMMAND_PREFIX + JSON.stringify(msg));
+    // Focus mobile input to trigger keyboard on mobile devices
+    const focusMobileInput = useCallback(() => {
+      if (isMobile && mobileInputRef.current) {
+        mobileInputRef.current.focus();
       }
-    };
+    }, [isMobile]);
 
-    const sendResize = () => {
-      const { cols, rows } = terminal;
-      setTermSize({ cols, rows });
-      sendControl({ type: "resize", cols, rows });
-    };
+    useImperativeHandle(ref, () => ({
+      sendText: (text: string) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(text);
+        }
+      },
+      focus: () => {
+        termRef.current?.focus();
+      },
+    }));
 
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-      sendResize();
-    });
+    useEffect(() => {
+      if (!containerRef.current) return;
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (
-        event.shiftKey &&
-        (event.key === "PageUp" || event.key === "PageDown")
-      ) {
-        return false;
+      const container = containerRef.current;
+
+      const terminal = new Terminal({
+        fontSize: 14,
+        cursorBlink: true,
+        fontFamily:
+          '"JetBrainsMono Nerd Font", "JetBrains Mono", Monaco, Menlo, "Courier New", monospace',
+        theme: {
+          background: "#1e1e1e",
+          foreground: "#d4d4d4",
+          cursor: "#d4d4d4",
+          cursorAccent: "#1e1e1e",
+          selectionBackground: "#3a3a3a",
+        },
+        scrollback: 30000,
+        allowProposedApi: true,
+        allowTransparency: true,
+      });
+
+      termRef.current = terminal;
+
+      const fitAddon = new FitAddon();
+      fitAddonRef.current = fitAddon;
+      terminal.loadAddon(fitAddon);
+      terminal.loadAddon(new UnicodeGraphemesAddon());
+      terminal.loadAddon(new ClipboardAddon());
+
+      terminal.open(container);
+      // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
+      terminal.loadAddon(new LigaturesAddon());
+
+      try {
+        const webglAddon = new WebglAddon({ customGlyphs: true });
+        webglAddon.onContextLoss(() => webglAddon.dispose());
+        terminal.loadAddon(webglAddon);
+      } catch {
+        // Intentionally empty - xterm falls back to canvas renderer
       }
-      return true;
-    });
 
-    const handleOpen = () => {
-      terminal.reset();
+      const sendControl = (msg: object) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(COMMAND_PREFIX + JSON.stringify(msg));
+        }
+      };
+
+      const sendResize = () => {
+        const { cols, rows } = terminal;
+        setTermSize({ cols, rows });
+        sendControl({ type: "resize", cols, rows });
+      };
+
       requestAnimationFrame(() => {
         fitAddon.fit();
         sendResize();
       });
-      terminal.focus();
-      // On mobile, also focus the hidden input to trigger keyboard
-      if (mobileInputRef.current) {
-        // Small delay to ensure terminal is ready
-        setTimeout(() => mobileInputRef.current?.focus(), 100);
-      }
-    };
 
-    const handleMessage = (event: MessageEvent) => {
-      const data = typeof event.data === "string" ? event.data : "";
-      if (data.startsWith(COMMAND_PREFIX)) {
-        const parsed = JSON.parse(data.slice(COMMAND_PREFIX.length)) as {
-          type?: string;
-          ptyId?: string;
-          data?: string;
-        };
-        if (parsed.type === "ptyId" && parsed.ptyId) {
-          onParamsChange?.({ ptyId: parsed.ptyId });
-        } else if (parsed.type === "buffer" && parsed.data) {
-          terminal.reset();
-          terminal.write(parsed.data);
-        } else if (parsed.type === "commandExecuted") {
-          onParamsChange?.({ clearCommand: true });
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
+          return false;
         }
-        return;
-      }
-      terminal.write(event.data);
-    };
+        return true;
+      });
 
-    const handleClose = (event: CloseEvent) => {
-      if (event.code === NO_RECONNECT_CODE) {
-        socket.close();
-        termRef.current?.writeln(
-          `\r\n\x1b[31mSession closed by server\x1b[0m\r\n`,
-        );
-      } else if (socket.retryCount >= MAX_RECONNECTION_ATTEMPTS) {
-        termRef.current?.writeln(
-          `\r\n\x1b[31mMaximum reconnection attempts reached, giving up.\x1b[0m\r\n`,
-        );
-        socket.close();
-      } else {
-        termRef.current?.writeln(
-          `\r\n\x1b[31mConnection lost, trying to reconnect (attempt ${socket.retryCount})...\x1b[0m\r\n`,
-        );
-      }
-    };
-
-    socket.addEventListener("open", handleOpen);
-    socket.addEventListener("message", handleMessage);
-    socket.addEventListener("close", handleClose);
-
-    const dataDisposable = terminal.onData((data: string) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(data);
-      }
-    });
-
-    const resizeDisposable = terminal.onResize(() => sendResize());
-
-    const handleSendCommand = (event: Event) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send((event as CustomEvent<string>).detail);
-      }
-    };
-    window.addEventListener("terminal:send", handleSendCommand);
-
-    const handleWindowResize = () => fitAddon.fit();
-    window.addEventListener("resize", handleWindowResize);
-
-    const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        if (termRef.current) {
+      const handleOpen = () => {
+        terminal.reset();
+        requestAnimationFrame(() => {
           fitAddon.fit();
+          sendResize();
+        });
+        terminal.focus();
+        // On mobile, also focus the hidden input to trigger keyboard
+        if (mobileInputRef.current) {
+          // Small delay to ensure terminal is ready
+          setTimeout(() => mobileInputRef.current?.focus(), 100);
+        }
+      };
+
+      const handleMessage = (event: MessageEvent) => {
+        const data = typeof event.data === "string" ? event.data : "";
+        if (data.startsWith(COMMAND_PREFIX)) {
+          const parsed = JSON.parse(data.slice(COMMAND_PREFIX.length)) as {
+            type?: string;
+            ptyId?: string;
+            data?: string;
+          };
+          if (parsed.type === "ptyId" && parsed.ptyId) {
+            onParamsChange?.({ ptyId: parsed.ptyId });
+          } else if (parsed.type === "buffer" && parsed.data) {
+            terminal.reset();
+            terminal.write(parsed.data);
+          } else if (parsed.type === "commandExecuted") {
+            onParamsChange?.({ clearCommand: true });
+          }
+          return;
+        }
+        terminal.write(event.data);
+      };
+
+      const handleClose = (event: CloseEvent) => {
+        if (event.code === NO_RECONNECT_CODE) {
+          socket.close();
+          termRef.current?.writeln(`\r\n\x1b[31mSession closed by server\x1b[0m\r\n`);
+        } else if (socket.retryCount >= MAX_RECONNECTION_ATTEMPTS) {
+          termRef.current?.writeln(
+            `\r\n\x1b[31mMaximum reconnection attempts reached, giving up.\x1b[0m\r\n`,
+          );
+          socket.close();
+        } else {
+          termRef.current?.writeln(
+            `\r\n\x1b[31mConnection lost, trying to reconnect (attempt ${socket.retryCount})...\x1b[0m\r\n`,
+          );
+        }
+      };
+
+      socket.addEventListener("open", handleOpen);
+      socket.addEventListener("message", handleMessage);
+      socket.addEventListener("close", handleClose);
+
+      const dataDisposable = terminal.onData((data: string) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(data);
         }
       });
-    });
-    resizeObserver.observe(container);
 
-    return () => {
-      socket.removeEventListener("open", handleOpen);
-      socket.removeEventListener("message", handleMessage);
-      socket.removeEventListener("close", handleClose);
-      dataDisposable.dispose();
-      resizeDisposable.dispose();
-      window.removeEventListener("terminal:send", handleSendCommand);
-      window.removeEventListener("resize", handleWindowResize);
-      resizeObserver.disconnect();
-      terminal.dispose();
-      termRef.current = null;
-      container.innerHTML = "";
-    };
-  }, [socket, onParamsChange]);
+      const resizeDisposable = terminal.onResize(() => sendResize());
 
-  return (
-    <div className="absolute inset-0 bg-[#1e1e1e] p-4">
-      <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
-        {termSize.cols}x{termSize.rows}
-      </div>
-      {/* Terminal container - leave space at bottom on mobile for toolbar */}
-      <div className="relative h-full w-full overflow-hidden">
-        <div
-          ref={containerRef}
-          data-testid="terminal-container"
-          data-connection-status={connectionStatus}
-          className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-24" : "bottom-0"}`}
-          onClick={() => {
-            termRef.current?.focus();
-            focusMobileInput();
-          }}
-        />
-        {/* Hidden input for mobile keyboard - captures typed text */}
-        {isMobile && (
-          <input
-            ref={mobileInputRef}
-            type="text"
-            autoCapitalize="none"
-            autoCorrect="off"
-            autoComplete="off"
-            spellCheck={false}
-            className="absolute opacity-0 pointer-events-none"
-            style={{ top: -9999, left: -9999 }}
-            onChange={handleMobileInput}
-            onKeyDown={(e) => {
-              // Handle special keys that don't produce input events
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send("\r");
-                }
-                setCtrlActive(false);
-              } else if (e.key === "Backspace") {
-                e.preventDefault();
-                if (socket.readyState === WebSocket.OPEN) {
-                  socket.send("\x7f");
-                }
-                setCtrlActive(false);
-              }
+      const handleSendCommand = (event: Event) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send((event as CustomEvent<string>).detail);
+        }
+      };
+      window.addEventListener("terminal:send", handleSendCommand);
+
+      const handleWindowResize = () => fitAddon.fit();
+      window.addEventListener("resize", handleWindowResize);
+
+      const resizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => {
+          if (termRef.current) {
+            fitAddon.fit();
+          }
+        });
+      });
+      resizeObserver.observe(container);
+
+      return () => {
+        socket.removeEventListener("open", handleOpen);
+        socket.removeEventListener("message", handleMessage);
+        socket.removeEventListener("close", handleClose);
+        dataDisposable.dispose();
+        resizeDisposable.dispose();
+        window.removeEventListener("terminal:send", handleSendCommand);
+        window.removeEventListener("resize", handleWindowResize);
+        resizeObserver.disconnect();
+        terminal.dispose();
+        termRef.current = null;
+        container.innerHTML = "";
+      };
+    }, [socket, onParamsChange]);
+
+    return (
+      <div className="absolute inset-0 bg-[#1e1e1e] p-4">
+        <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
+          {termSize.cols}x{termSize.rows}
+        </div>
+        {/* Terminal container - leave space at bottom on mobile for toolbar */}
+        <div className="relative h-full w-full overflow-hidden">
+          <div
+            ref={containerRef}
+            data-testid="terminal-container"
+            data-connection-status={connectionStatus}
+            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-24" : "bottom-0"}`}
+            onClick={() => {
+              termRef.current?.focus();
+              focusMobileInput();
             }}
+          />
+          {/* Hidden input for mobile keyboard - captures typed text */}
+          {isMobile && (
+            <input
+              ref={mobileInputRef}
+              type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              className="absolute opacity-0 pointer-events-none"
+              style={{ top: -9999, left: -9999 }}
+              onChange={handleMobileInput}
+              onKeyDown={(e) => {
+                // Handle special keys that don't produce input events
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (socket.readyState === WebSocket.OPEN) {
+                    socket.send("\r");
+                  }
+                  setCtrlActive(false);
+                } else if (e.key === "Backspace") {
+                  e.preventDefault();
+                  if (socket.readyState === WebSocket.OPEN) {
+                    socket.send("\x7f");
+                  }
+                  setCtrlActive(false);
+                }
+              }}
+            />
+          )}
+        </div>
+        {/* Mobile keyboard toolbar */}
+        {isMobile && (
+          <MobileKeyboardToolbar
+            onKeyPress={handleToolbarKeyPress}
+            ctrlActive={ctrlActive}
+            onCtrlToggle={() => setCtrlActive((prev) => !prev)}
           />
         )}
       </div>
-      {/* Mobile keyboard toolbar */}
-      {isMobile && (
-        <MobileKeyboardToolbar
-          onKeyPress={handleToolbarKeyPress}
-          ctrlActive={ctrlActive}
-          onCtrlToggle={() => setCtrlActive((prev) => !prev)}
-        />
-      )}
-    </div>
-  );
-});
+    );
+  },
+);
