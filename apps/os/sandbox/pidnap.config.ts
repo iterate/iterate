@@ -92,17 +92,6 @@ export default defineConfig({
         cwd: `${iterateRepo}/apps/daemon`,
       },
     },
-    {
-      name: "task-build-daemon-client",
-      definition: {
-        command: "pnpm",
-        args: ["exec", "vite", "build", "--mode", "production"],
-        cwd: `${iterateRepo}/apps/daemon`,
-        env: {
-          NODE_ENV: "production",
-        },
-      },
-    },
   ],
   processes: [
     {
