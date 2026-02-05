@@ -52,3 +52,9 @@ if [[ -f "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh" ]]; then
   echo "[entry] Syncing home-skeleton"
   bash "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh"
 fi
+
+# Rebuild daemon frontend after sync to ensure the build matches synced source.
+# The Docker image contains a pre-built dist/, but when syncing from host the source
+# files may have changed while dist/ is preserved (it's gitignored).
+echo "[entry] Rebuilding daemon frontend after sync"
+(cd "${ITERATE_REPO}/apps/daemon" && pnpm vite build)
