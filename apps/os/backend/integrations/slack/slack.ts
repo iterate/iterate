@@ -421,16 +421,11 @@ slackApp.post("/webhook", async (c) => {
     return c.text("Invalid JSON", 400);
   }
 
-  // Track ALL webhooks in PostHog (non-blocking, before any filtering)
+  // Extract team ID for tracking and processing
   const teamId =
     (payload.team_id as string) ||
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
-  trackWebhookEvent(c.env, {
-    distinctId: `slack:${teamId ?? "unknown"}`,
-    event: "slack:webhook_received",
-    properties: payload,
-  });
 
   // URL verification - return immediately
   if (payload.type === "url_verification") {
@@ -452,6 +447,12 @@ slackApp.post("/webhook", async (c) => {
       try {
         if (!teamId) {
           logger.warn("[Slack Webhook] No team_id in payload");
+          // Still track the event, just without groups
+          trackWebhookEvent(env, {
+            distinctId: "slack:unknown",
+            event: "slack:webhook_received",
+            properties: payload,
+          });
           return;
         }
 
@@ -466,6 +467,7 @@ slackApp.post("/webhook", async (c) => {
           }
         }
 
+        // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
         logger.debug("[Slack Webhook] Looking up connection", { teamId });
         // Find connection and the single active machine for its project
         const connection = await db.query.projectConnection.findFirst({
@@ -480,6 +482,19 @@ slackApp.post("/webhook", async (c) => {
               },
             },
           },
+        });
+
+        // Track webhook in PostHog with group association
+        trackWebhookEvent(env, {
+          distinctId: `slack:${teamId}`,
+          event: "slack:webhook_received",
+          properties: payload,
+          groups: connection?.project
+            ? {
+                organization: connection.project.organizationId,
+                project: connection.projectId,
+              }
+            : undefined,
         });
 
         const projectId = connection?.projectId;
