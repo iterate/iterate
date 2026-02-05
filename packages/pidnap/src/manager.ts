@@ -524,10 +524,29 @@ export class Manager {
     }
 
     // Set up schedulers for processes with schedule config
-    for (const entry of entries) {
-      if (entry.schedule) {
-        this.setupScheduler(entry);
+    // Wrap in try-catch to ensure cleanup on failure
+    try {
+      for (const entry of entries) {
+        if (entry.schedule) {
+          this.setupScheduler(entry);
+        }
       }
+    } catch (err) {
+      this.logger.error(`Failed to set up schedulers, cleaning up:`, err);
+      // Stop all processes that were started
+      const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop());
+      await Promise.all(stopPromises);
+      // Clean up state change listeners
+      for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
+        unsubscribe();
+      }
+      this.stateChangeUnsubscribes.clear();
+      // Clean up any schedulers that were set up before the error
+      for (const scheduler of this.schedulers.values()) {
+        scheduler.stop();
+      }
+      this.schedulers.clear();
+      throw err;
     }
 
     this._state = "running";
