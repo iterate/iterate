@@ -50,7 +50,7 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "pnpm --filter @iterate-com/sandbox exec vitest run test/provider-base-image.test.ts --maxWorkers=1",
+          run: "pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
         },
         {
           name: "Upload test results",
