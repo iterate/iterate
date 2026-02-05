@@ -55,54 +55,6 @@ export default defineConfig({
         `,
       ),
     },
-    {
-      name: "task-generate-ca",
-      definition: bash(
-        `
-          if [ ! -f "${caCert}" ]; then
-            echo "Generating CA certificate..."
-            mkdir -p "${mitmproxyDir}"
-            mitmdump -p 0 --set confdir="${mitmproxyDir}" &
-            PID=$!
-            sleep 2
-            kill $PID 2>/dev/null || true
-          else
-            echo "CA certificate already exists"
-          fi
-          `,
-      ),
-    },
-    {
-      name: "task-install-ca",
-      definition: bash(
-        `
-          if [ -f "${caCert}" ]; then
-            sudo mkdir -p /usr/local/share/ca-certificates/iterate
-            sudo cp "${caCert}" /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt
-            sudo update-ca-certificates
-          fi
-        `,
-      ),
-    },
-    {
-      name: "task-db-migrate",
-      definition: {
-        command: "pnpm",
-        args: ["db:migrate"],
-        cwd: `${iterateRepo}/apps/daemon`,
-      },
-    },
-    {
-      name: "task-build-daemon-client",
-      definition: {
-        command: "pnpm",
-        args: ["exec", "vite", "build", "--mode", "production"],
-        cwd: `${iterateRepo}/apps/daemon`,
-        env: {
-          NODE_ENV: "production",
-        },
-      },
-    },
   ],
   processes: [
     {
