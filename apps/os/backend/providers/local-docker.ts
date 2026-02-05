@@ -85,7 +85,7 @@ export async function dockerApi<T>(
     }
 
     const text = await response.body.text();
-    return text ? JSON.parse(text) : ({} as T);
+    return parseDockerResponse<T>(text);
   }
 
   const response = await fetch(url, {
@@ -108,7 +108,34 @@ export async function dockerApi<T>(
   }
 
   const text = await response.text();
-  return text ? JSON.parse(text) : ({} as T);
+  return parseDockerResponse<T>(text);
+}
+
+/**
+ * Parse Docker API response, handling both JSON and NDJSON (newline-delimited JSON).
+ * Some endpoints like POST /images/create return streaming NDJSON progress updates.
+ * For NDJSON, we parse the last line which typically contains the final status.
+ */
+function parseDockerResponse<T>(text: string): T {
+  if (!text) return {} as T;
+
+  // Try parsing as regular JSON first
+  try {
+    return JSON.parse(text);
+  } catch {
+    // If that fails, try parsing as NDJSON (take the last non-empty line)
+    const lines = text.trim().split("\n").filter(Boolean);
+    if (lines.length > 0) {
+      try {
+        return JSON.parse(lines[lines.length - 1]);
+      } catch {
+        // If even the last line isn't valid JSON, return empty object
+        // This handles cases where we just need to wait for stream completion
+        return {} as T;
+      }
+    }
+    return {} as T;
+  }
 }
 
 // ============================================================================

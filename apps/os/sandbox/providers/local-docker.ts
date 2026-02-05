@@ -58,18 +58,11 @@ function resolveBaseImage(repoRoot: string): string {
     return process.env.LOCAL_DOCKER_IMAGE_NAME;
   }
 
-  const localDefault = "ghcr.io/iterate/sandbox:local";
+  // Try common local image names
+  const localDefault = "iterate-sandbox:local";
   try {
     execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
     return localDefault;
-  } catch {
-    // fall back
-  }
-
-  const bakedDefault = "ghcr.io/iterate/sandbox:main";
-  try {
-    execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
-    return bakedDefault;
   } catch {
     // fall back
   }
@@ -259,6 +252,22 @@ async function waitForEntrypointSignal(handle: SandboxHandle, timeoutMs: number)
   throw new Error("Timeout waiting for /tmp/reached-entrypoint");
 }
 
+async function ensureImageAvailable(imageName: string): Promise<void> {
+  // Check if image exists locally
+  try {
+    await dockerApi("GET", `/images/${encodeURIComponent(imageName)}/json`);
+    return; // Image exists locally
+  } catch {
+    // Image doesn't exist locally, try to pull it
+  }
+
+  // Pull from registry (supports ghcr.io, docker.io, etc.)
+  console.log(`[docker] Pulling image: ${imageName}`);
+  // The Docker API POST /images/create streams progress, we just need to wait for completion
+  await dockerApi("POST", `/images/create?fromImage=${encodeURIComponent(imageName)}`, undefined);
+  console.log(`[docker] Image pulled: ${imageName}`);
+}
+
 export function createLocalDockerProvider(
   providerOpts?: LocalDockerProviderOptions,
 ): SandboxProvider {
@@ -269,6 +278,9 @@ export function createLocalDockerProvider(
 
     async createSandbox(opts?: CreateSandboxOptions): Promise<SandboxHandle> {
       const imageName = resolveBaseImage(repoRoot);
+
+      // Ensure image is available (pulls from registry if not local)
+      await ensureImageAvailable(imageName);
 
       const portBindings: Record<string, Array<{ HostPort: string }>> = {};
       const exposedPorts: Record<string, object> = {};

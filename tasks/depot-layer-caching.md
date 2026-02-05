@@ -1,5 +1,5 @@
 ---
-state: todo
+state: done
 priority: high
 size: medium
 tags:

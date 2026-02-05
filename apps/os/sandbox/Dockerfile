@@ -2,7 +2,7 @@
 FROM node:24
 
 # === Versions ===
-ARG SANDBOX_CODEX_VERSION=0.93.0
+ARG SANDBOX_CODEX_VERSION=0.98.0
 ARG SANDBOX_OPENCODE_VERSION=1.1.41
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.12
 ARG SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
@@ -128,18 +128,10 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x apps/os/sandbox/*.sh
 
-# Overlay git directory pieces from BuildKit contexts (worktree-safe).
-# In a worktree, .git is a file that points at the real gitdir/commondir on disk.
-# The build script passes both as BuildKit contexts, then we copy them into
-# $ITERATE_REPO/.git and remove the indirection markers so git works in-container.
-COPY --from=iterate-repo-commondir --chown=iterate:iterate . $ITERATE_REPO/.git
-COPY --from=iterate-repo-gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
-RUN rm -f $ITERATE_REPO/.git/commondir $ITERATE_REPO/.git/gitdir
-
-# Install dependencies
+# Install dependencies (cacheable - only reruns when lockfile changes)
 RUN pnpm install --frozen-lockfile --offline
 
-# Build daemon frontend
+# Build daemon frontend (cacheable - only reruns when source changes)
 RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
 # Run database migrations
@@ -152,7 +144,13 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
 # 3. No sandbox can intercept another sandbox's traffic
 RUN mkdir -p /home/iterate/.mitmproxy && \
     /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
-    PID=$! && sleep 2 && kill $PID 2>/dev/null || true
+    PID=$! && \
+    for i in $(seq 1 30); do \
+      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
+      sleep 0.5; \
+    done && \
+    kill $PID 2>/dev/null || true && \
+    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
 
 # Install mitmproxy CA certificate system-wide
 RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
@@ -163,6 +161,16 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
 RUN opencode run "Hello" || true
+
+# === Git directory and metadata (MUST be last - changes every commit) ===
+# Copy a minimal .git directory with packed objects for HEAD.
+# This allows `git status` to work in the container, showing dirty files.
+# The pack file is deterministic for the same commit SHA, ensuring cache hits.
+# NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
+COPY --from=iterate-synthetic-git --chown=iterate:iterate . $ITERATE_REPO/.git
+
+# Rebuild the git index so `git status` works correctly
+RUN git reset HEAD
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
