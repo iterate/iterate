@@ -10,7 +10,7 @@
  * while keeping the build context 100% deterministic for the same SHA.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
@@ -108,10 +108,7 @@ function createMinimalGitDir(): string {
   }
 
   const packSize = createdPacks
-    .map((f) => {
-      const stats = require("fs").statSync(join(packDir, f));
-      return stats.size;
-    })
+    .map((f) => statSync(join(packDir, f)).size)
     .reduce((a, b) => a + b, 0);
 
   console.log(`Created pack file: ${(packSize / 1024 / 1024).toFixed(1)}MB`);

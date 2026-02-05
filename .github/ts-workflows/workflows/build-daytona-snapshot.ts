@@ -28,6 +28,10 @@ export default workflow({
     "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
+    // Run on PR pushes to build snapshots for testing
+    pull_request: {
+      types: ["opened", "synchronize"],
+    },
     // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
@@ -106,7 +110,8 @@ export default workflow({
           run: "pnpm install",
         },
         // Setup Doppler
-        ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
+        // For PRs, default to 'dev' config; for workflow_call/dispatch, use input
+        ...utils.setupDoppler({ config: "${{ inputs.doppler_config || 'dev' }}" }),
         // Install and configure Daytona CLI
         {
           name: "Install and configure Daytona CLI",

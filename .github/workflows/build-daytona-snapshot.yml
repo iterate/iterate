@@ -5,6 +5,10 @@ permissions:
   contents: read
   id-token: write
 on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
   workflow_dispatch:
     inputs:
       ref:
@@ -58,7 +62,7 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config ${{ inputs.doppler_config }} --project os
+        run: doppler setup --config ${{ inputs.doppler_config || 'dev' }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Install and configure Daytona CLI
