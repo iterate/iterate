@@ -4,6 +4,7 @@ name: CI
 permissions:
   contents: read
   deployments: write
+  id-token: write
 on:
   push:
     branches:
@@ -23,11 +24,11 @@ jobs:
         run: echo stage=${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
-  build-snapshot:
+  build-daytona-snapshot:
     needs:
       - variables
     if: needs.variables.outputs.stage == 'prd'
-    uses: ./.github/workflows/build-snapshot.yml
+    uses: ./.github/workflows/build-daytona-snapshot.yml
     secrets: inherit
     with:
       doppler_config: prd
@@ -35,15 +36,15 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     needs:
       - variables
-      - build-snapshot
+      - build-daytona-snapshot
     secrets: inherit
     with:
       stage: ${{ needs.variables.outputs.stage }}
-      daytona_snapshot_name: ${{ needs.build-snapshot.outputs.snapshot_name }}
+      daytona_snapshot_name: ${{ needs.build-daytona-snapshot.outputs.snapshot_name }}
   slack_failure:
     needs:
       - variables
-      - build-snapshot
+      - build-daytona-snapshot
       - deploy
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
@@ -54,8 +55,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node

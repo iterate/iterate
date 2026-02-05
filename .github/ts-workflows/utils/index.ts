@@ -23,10 +23,7 @@ export const setupRepo = [
       ref: "${{ github.event.pull_request.head.sha || github.sha }}",
     }),
   },
-  {
-    name: "Install Doppler CLI",
-    uses: "dopplerhq/cli-action@v2",
-  },
+  // Note: Doppler CLI is installed by setupDoppler - don't duplicate here
   {
     name: "Setup pnpm",
     uses: "pnpm/action-setup@v4",

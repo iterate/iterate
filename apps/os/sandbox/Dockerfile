@@ -138,13 +138,14 @@ RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 
 # === Git directory and metadata (MUST be last - changes every commit) ===
-# Copy a minimal synthetic .git directory that only contains:
-# - HEAD pointing to the commit SHA
-# - config with basic settings
-# - The commit and tree objects (loose object files)
-# This is 100% deterministic for a given commit SHA, ensuring full cache hits.
+# Copy a minimal .git directory with packed objects for HEAD.
+# This allows `git status` to work in the container, showing dirty files.
+# The pack file is deterministic for the same commit SHA, ensuring cache hits.
 # NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
 COPY --from=iterate-synthetic-git --chown=iterate:iterate . $ITERATE_REPO/.git
+
+# Rebuild the git index so `git status` works correctly
+RUN git reset HEAD
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA

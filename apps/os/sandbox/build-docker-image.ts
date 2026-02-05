@@ -4,18 +4,13 @@
  * Uses depot build for persistent layer caching across CI runs.
  * Depot handles caching automatically - no --cache-from/--cache-to needed.
  *
- * Synthetic .git directory for 100% cache hits:
- * To ensure deterministic layer caching when the commit SHA hasn't changed, we
- * create a minimal synthetic .git directory containing only:
- * - HEAD pointing directly to the commit SHA
- * - A minimal config file
- * - Empty objects and refs directories
- *
- * This is 100% deterministic because the only variable content is the SHA.
- * The container can use GIT_SHA env var for commit identification.
+ * Minimal .git directory for deterministic caching + working git status:
+ * We create a minimal .git by packing just the objects needed for HEAD.
+ * This allows `git status` to work in the container (showing dirty files)
+ * while keeping the build context 100% deterministic for the same SHA.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
@@ -24,33 +19,49 @@ const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8"
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 
+// Detect multi-platform builds (comma-separated platforms)
+const isMultiPlatform = buildPlatform.includes(",");
+
 // Local tag for Docker daemon (used by local-docker provider and tests)
 const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
+
+// Registry image name for multi-platform builds (can't --load multiple platforms)
+const registryImageName = process.env.REGISTRY_IMAGE_NAME;
 
 // Ensure cache directory exists
 const cacheDir = join(repoRoot, ".cache");
 mkdirSync(cacheDir, { recursive: true });
 
 /**
- * Create a minimal synthetic .git directory that is 100% deterministic.
+ * Create a minimal .git directory with packed objects for HEAD.
  *
- * This creates a bare-minimum git directory with:
- * - HEAD pointing directly to the commit SHA (detached HEAD)
+ * This creates a functional git directory that allows `git status` to work
+ * while being 100% deterministic for the same commit SHA.
+ *
+ * Contains:
+ * - HEAD pointing to the commit SHA
  * - A minimal config file
- * - Empty objects and refs directories (required for git to recognize this as a repo)
+ * - Packed objects for HEAD (commit + trees + blobs)
  *
- * This is 100% deterministic because the only variable content is the SHA,
- * which is captured in HEAD. We don't copy any objects - the container can
- * use GIT_SHA env var for commit identification, or fetch from remote if
- * full git history is needed.
- *
- * Uses a fixed path based on git SHA so Docker can cache the build context.
+ * The pack file is deterministic because `git pack-objects` produces
+ * identical output for identical input objects.
  */
-function createDeterministicGitDir(): string {
-  // Use a fixed path in .cache based on git SHA
-  const gitDirPath = join(cacheDir, `synthetic-git-${gitSha}`);
+function createMinimalGitDir(): string {
+  const gitDirPath = join(cacheDir, `minimal-git-${gitSha}`);
 
-  // Clean and recreate to ensure fresh state
+  // Check if we already have a valid cached version
+  const packDir = join(gitDirPath, "objects", "pack");
+  if (existsSync(packDir)) {
+    const packFiles = readdirSync(packDir).filter((f) => f.endsWith(".pack"));
+    if (packFiles.length > 0) {
+      console.log(`Using cached minimal .git for ${gitSha}`);
+      return gitDirPath;
+    }
+  }
+
+  console.log(`Creating minimal .git with packed objects for ${gitSha}...`);
+
+  // Clean and recreate
   rmSync(gitDirPath, { recursive: true, force: true });
   mkdirSync(gitDirPath, { recursive: true });
 
@@ -67,18 +78,62 @@ function createDeterministicGitDir(): string {
 `,
   );
 
-  // Create empty objects directory (required for git to recognize this as a repo)
-  mkdirSync(join(gitDirPath, "objects"), { recursive: true });
-
-  // Create empty refs directory (required for git to recognize this as a repo)
+  // Create required directories
+  mkdirSync(join(gitDirPath, "objects", "pack"), { recursive: true });
   mkdirSync(join(gitDirPath, "refs", "heads"), { recursive: true });
+
+  // Get all objects reachable from HEAD (commit, trees, blobs)
+  // Using --no-object-names to get just SHAs, one per line
+  const objectList = execSync(`git rev-list --objects ${gitSha} --no-object-names`, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024, // 100MB buffer for large repos
+  }).trim();
+
+  // Pack the objects deterministically
+  // --threads=1 ensures deterministic output
+  // Output goes to pack-HASH.pack and pack-HASH.idx
+  const packBasename = join(packDir, "pack");
+  execSync(`git pack-objects --threads=1 ${packBasename}`, {
+    cwd: repoRoot,
+    input: objectList,
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
+  });
+
+  // Verify pack was created
+  const createdPacks = readdirSync(packDir).filter((f) => f.endsWith(".pack"));
+  if (createdPacks.length === 0) {
+    throw new Error("Failed to create git pack file");
+  }
+
+  const packSize = createdPacks
+    .map((f) => {
+      const stats = require("fs").statSync(join(packDir, f));
+      return stats.size;
+    })
+    .reduce((a, b) => a + b, 0);
+
+  console.log(`Created pack file: ${(packSize / 1024 / 1024).toFixed(1)}MB`);
 
   return gitDirPath;
 }
 
-// Create deterministic synthetic .git directory for cache-friendly builds
-const syntheticGitDir = createDeterministicGitDir();
-console.log(`Synthetic .git directory: ${syntheticGitDir}`);
+// Create minimal .git directory with packed objects for cache-friendly builds
+const minimalGitDir = createMinimalGitDir();
+console.log(`Minimal .git directory: ${minimalGitDir}`);
+
+// Multi-platform builds require pushing to a registry (can't --load multiple platforms)
+if (isMultiPlatform && !registryImageName) {
+  console.error("Error: Multi-platform builds require REGISTRY_IMAGE_NAME environment variable");
+  console.error("Example: REGISTRY_IMAGE_NAME=ghcr.io/iterate/sandbox:latest");
+  process.exit(1);
+}
+
+// Determine output mode: --load for single platform (local daemon), --push for multi-platform (registry)
+const outputArgs = isMultiPlatform
+  ? ["--push", "-t", registryImageName!]
+  : ["--load", "-t", localImageName];
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
@@ -88,14 +143,12 @@ const buildArgs = [
   "--platform",
   buildPlatform,
   "--progress=plain", // Show all layer details for cache analysis
-  "--load", // Load image into local Docker daemon
+  ...outputArgs,
   "-f",
   "apps/os/sandbox/Dockerfile",
-  "-t",
-  localImageName,
-  // Override the Dockerfile's synthetic-git stage with our deterministic .git directory
+  // Override the Dockerfile's iterate-synthetic-git stage with our minimal .git directory
   "--build-context",
-  `iterate-synthetic-git=${syntheticGitDir}`,
+  `iterate-synthetic-git=${minimalGitDir}`,
   "--build-arg",
   `GIT_SHA=${gitSha}`,
   "--label",
@@ -106,8 +159,13 @@ const buildArgs = [
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
 const buildCommand = buildArgs.map(quoteArg).join(" ");
 
-console.log(`Local image tag: ${localImageName}`);
-console.log(`Platform: ${buildPlatform}`);
+if (isMultiPlatform) {
+  console.log(`Multi-platform build: ${buildPlatform}`);
+  console.log(`Registry image: ${registryImageName}`);
+} else {
+  console.log(`Local image tag: ${localImageName}`);
+  console.log(`Platform: ${buildPlatform}`);
+}
 console.log("Build command:");
 console.log(buildCommand);
 
@@ -122,10 +180,12 @@ writeFileSync(
   buildInfoPath,
   JSON.stringify(
     {
-      localImageName,
+      localImageName: isMultiPlatform ? null : localImageName,
+      registryImageName: isMultiPlatform ? registryImageName : null,
       gitSha,
       builtBy,
       buildPlatform,
+      isMultiPlatform,
     },
     null,
     2,
@@ -134,4 +194,5 @@ writeFileSync(
 console.log(`Build info written to: ${buildInfoPath}`);
 
 // Output the image name for CI to use
-console.log(`image_name=${localImageName}`);
+const outputImageName = isMultiPlatform ? registryImageName : localImageName;
+console.log(`image_name=${outputImageName}`);

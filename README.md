@@ -1,5 +1,13 @@
 # iterate
 
+## Prerequisites
+
+- [Depot CLI](https://depot.dev/docs/cli/installation) for fast Docker builds with shared caching:
+  ```bash
+  brew install depot/tap/depot
+  depot login
+  ```
+
 ## Quick Start
 
 ```bash

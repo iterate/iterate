@@ -19,17 +19,54 @@ on:
       - apps/os/backend/providers/local-docker.ts
       - apps/daemon/**
       - .github/workflows/local-docker-test.yml
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to test (branch, tag, or SHA). Leave empty for current branch.
+        required: false
+        type: string
+        default: ""
+      docker_platform:
+        description: Build platform (linux/amd64 or linux/arm64)
+        required: false
+        type: string
+        default: ""
+      image_name:
+        description: Docker image name/tag to use
+        required: false
+        type: string
+        default: iterate-sandbox:test
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to test (branch, tag, or SHA). Uses workflow ref if empty.
+        required: false
+        type: string
+        default: ""
+      docker_platform:
+        description: Build platform (linux/amd64 or linux/arm64). Auto-detects if empty.
+        required: false
+        type: string
+        default: ""
+      image_name:
+        description: Docker image name/tag to use
+        required: false
+        type: string
+        default: iterate-sandbox:test
+    outputs:
+      test_result:
+        description: Test result (success or failure)
+        value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
-  test:
+  build-and-test:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    outputs:
+      test_result: ${{ steps.test.outcome }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
@@ -49,11 +86,17 @@ jobs:
         uses: depot/setup-action@v1
       - name: Build Docker image
         env:
-          SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
-        run: pnpm os docker:build
-      - name: Run Local Docker Tests
+          LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
+          SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform || (github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64') }}
+        run: |-
+          echo '::group::Build timing'
+          time pnpm os docker:build
+          echo '::endgroup::'
+      - id: test
+        name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"
+          LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:test' }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
         run: pnpm os docker:test
