@@ -43,6 +43,8 @@ jobs:
           LOCAL_DOCKER_IMAGE_NAME: ghcr.io/iterate/sandbox:ci
           SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
         run: pnpm os docker:build
+      - name: Install Daytona CLI
+        run: ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi && curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH" && sudo chmod +x daytona && sudo mv daytona /usr/local/bin/ && daytona version
       - id: build
         name: Build and push Daytona snapshot
         env:

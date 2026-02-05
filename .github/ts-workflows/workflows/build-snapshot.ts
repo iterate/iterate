@@ -57,6 +57,15 @@ export default workflow({
           run: "pnpm os docker:build",
         },
         {
+          name: "Install Daytona CLI",
+          run: [
+            'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
+            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
+            "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
+            "daytona version",
+          ].join(" && "),
+        },
+        {
           id: "build",
           name: "Build and push Daytona snapshot",
           env: {
