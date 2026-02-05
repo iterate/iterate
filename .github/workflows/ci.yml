@@ -37,6 +37,7 @@ jobs:
     needs:
       - variables
       - build-daytona-snapshot
+    if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
     with:
       stage: ${{ needs.variables.outputs.stage }}

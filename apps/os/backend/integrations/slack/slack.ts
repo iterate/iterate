@@ -9,6 +9,7 @@ import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 
 import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
@@ -342,6 +343,15 @@ slackApp.get(
           },
         });
       });
+
+      // Link Slack team to org/project in PostHog (after transaction commits)
+      if (project) {
+        linkExternalIdToGroups(c.env, {
+          distinctId: `slack:${teamData.id}`,
+          organizationId: project.organizationId,
+          projectId,
+        });
+      }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
         const conflictData = JSON.parse(
@@ -411,16 +421,23 @@ slackApp.post("/webhook", async (c) => {
     return c.text("Invalid JSON", 400);
   }
 
-  // URL verification - return immediately
-  if (payload.type === "url_verification") {
-    return c.json({ challenge: payload.challenge });
-  }
-  // Extract event_id for dedup - generate hash from payload if missing
-  const slackEventId = payload.event_id as string;
+  // Track ALL webhooks in PostHog (non-blocking, before any filtering)
   const teamId =
     (payload.team_id as string) ||
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
+  trackWebhookEvent(c.env, {
+    distinctId: `slack:${teamId ?? "unknown"}`,
+    event: "slack:webhook_received",
+    properties: payload,
+  });
+
+  // URL verification - return immediately
+  if (payload.type === "url_verification") {
+    return c.json({ challenge: payload.challenge });
+  }
+  // Extract event_id for dedup
+  const slackEventId = payload.event_id as string;
 
   // Log full payload for debugging
   logger.debug("[Slack Webhook] Received", { payload });

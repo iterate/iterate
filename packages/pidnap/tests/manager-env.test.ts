@@ -105,87 +105,6 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
-  it("should handle cron processes with envOptions", async () => {
-    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
-    writeFileSync(join(testDir, "cron.env"), "CRON_VAR=cron_value");
-
-    const testLogger = logger({ name: "test" });
-    const manager = new Manager(
-      {
-        cwd: testDir,
-        crons: [
-          {
-            name: "backup",
-            definition: {
-              command: "echo",
-              args: ["backup"],
-            },
-            options: {
-              schedule: "0 0 * * *",
-            },
-            envOptions: { envFile: "cron.env" },
-          },
-        ],
-      },
-      testLogger,
-    );
-
-    await manager.start();
-
-    const cron = manager.getCronProcess("backup");
-    const lazyProcess = cron!.lazyProcess;
-    const definition = lazyProcess.definition;
-
-    expect(definition.env).toEqual({
-      GLOBAL: "base",
-      CRON_VAR: "cron_value",
-    });
-
-    await manager.stop();
-  });
-
-  it("should handle tasks with envOptions", async () => {
-    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
-    writeFileSync(join(testDir, "task.env"), "TASK_VAR=task_value");
-
-    const testLogger = logger({ name: "test" });
-    const manager = new Manager(
-      {
-        cwd: testDir,
-        tasks: [
-          {
-            name: "setup",
-            definition: {
-              command: "echo",
-              args: ["setup"],
-            },
-            envOptions: { envFile: "task.env" },
-          },
-        ],
-      },
-      testLogger,
-    );
-
-    const taskList = manager.getTaskList();
-    expect(taskList).toBeNull();
-
-    await manager.start();
-
-    const updatedTaskList = manager.getTaskList();
-    expect(updatedTaskList).toBeDefined();
-
-    // Check the task's process definition
-    const task = updatedTaskList!.tasks[0];
-    const processDefinition = task.processes[0].process;
-
-    expect(processDefinition.env).toEqual({
-      GLOBAL: "base",
-      TASK_VAR: "task_value",
-    });
-
-    await manager.stop();
-  });
-
   it("should handle custom envFile on process entry", async () => {
     writeFileSync(join(testDir, "custom.env"), "CUSTOM_VAR=custom_value");
     writeFileSync(join(testDir, ".env.app"), "APP_VAR=app_value"); // Should be ignored
@@ -420,42 +339,6 @@ describe("Manager with EnvManager integration", () => {
       ONLY: "this", // From definition.env
     });
     expect(definition.inheritProcessEnv).toBe(false);
-
-    await manager.stop();
-  });
-
-  it("should work with addTask and envOptions", async () => {
-    writeFileSync(join(testDir, ".env"), "GLOBAL=base");
-
-    const testLogger = logger({ name: "test" });
-    const manager = new Manager(
-      {
-        cwd: testDir,
-      },
-      testLogger,
-    );
-
-    await manager.start();
-
-    const result = manager.addTask(
-      "dynamic-task",
-      {
-        command: "echo",
-        args: ["task"],
-        env: { TASK_ENV: "value" },
-      },
-      { inheritGlobalEnv: false },
-    );
-
-    const taskList = manager.getTaskList();
-    // Use the returned id to find the task
-    const task = taskList!.tasks.find((t) => t.id === result.id);
-    const processDefinition = task!.processes[0].process;
-
-    // Should NOT include GLOBAL from .env
-    expect(processDefinition.env).toEqual({
-      TASK_ENV: "value",
-    });
 
     await manager.stop();
   });

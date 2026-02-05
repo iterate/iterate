@@ -134,7 +134,7 @@ class LocalDockerSandboxHandle implements SandboxHandle {
           "-sf",
           "--max-time",
           String(Math.ceil(requestTimeoutMs / 1000)),
-          "http://localhost:9876/rpc/processes/waitForRunning",
+          "http://localhost:9876/processes/waitForRunning",
           "-H",
           "Content-Type: application/json",
           "-d",
@@ -399,7 +399,7 @@ export function createLocalDockerProvider(
           const start = Date.now();
           while (Date.now() - start < maxWaitMs) {
             try {
-              await handle.exec(["curl", "-sf", "http://localhost:9876/rpc/health"]);
+              await handle.exec(["curl", "-sf", "http://localhost:9876/health"]);
               break;
             } catch {
               await new Promise((r) => setTimeout(r, 500));

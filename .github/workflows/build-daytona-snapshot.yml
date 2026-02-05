@@ -74,20 +74,11 @@ jobs:
           sudo chmod +x daytona && sudo mv daytona /usr/local/bin/
           daytona version
           mkdir -p ~/.config/daytona
-          doppler run -- bash -c 'cat > ~/.config/daytona/config.json << EOF
-          {
-            "activeProfile": "ci",
-            "profiles": [{
-              "id": "ci",
-              "name": "ci",
-              "api": {
-                "url": "https://app.daytona.io/api",
-                "key": "$DAYTONA_API_KEY"
-              },
-              "activeOrganizationId": "$DAYTONA_ORG_ID"
-            }]
-          }
-          EOF'
+          doppler run -- bash -c 'jq -n \
+                        --arg apiKey "$DAYTONA_API_KEY" \
+                        --arg orgId "$DAYTONA_ORG_ID" \
+                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: \$apiKey}, activeOrganizationId: \$orgId}]}" \
+                        > ~/.config/daytona/config.json'
           daytona snapshot list --limit 1
       - name: Setup Depot CLI
         uses: depot/setup-action@v1
@@ -101,16 +92,21 @@ jobs:
           echo '::endgroup::'
       - id: push
         name: Push Daytona snapshot
+        uses: nick-fields/retry@v3
         env:
           CI: "true"
           LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
           SANDBOX_ITERATE_REPO_REF: ${{ github.sha }}
-        run: |-
-          set -euo pipefail
-          output_file=$(mktemp)
-          git_sha=$(git rev-parse HEAD)
-          snapshot_name="iterate-sandbox-${git_sha}"
-          pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"
-          snapshot_name=$(grep -m 1 '^snapshot_name=' "$output_file" | sed 's/^snapshot_name=//')
-          echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"
-          echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |-
+            set -euo pipefail
+            output_file=$(mktemp)
+            git_sha=$(git rev-parse HEAD)
+            snapshot_name="iterate-sandbox-${git_sha}"
+            pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"
+            snapshot_name=$(grep -m 1 '^snapshot_name=' "$output_file" | sed 's/^snapshot_name=//')
+            echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"
+            echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"

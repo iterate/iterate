@@ -4,7 +4,13 @@
  * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
  * This script expects the image to already be built with `pnpm os docker:build`,
- * which loads the image into local Docker daemon.
+ * which loads the image into local Docker daemon. By default, uses the most recently built :local image.
+ *
+ * Resource limits can be set via env vars (DAYTONA_DEFAULT_SNAPSHOT_CPU, DAYTONA_DEFAULT_SNAPSHOT_MEMORY, DAYTONA_DEFAULT_SNAPSHOT_DISK)
+ * or CLI args. CLI args override env vars. Defaults: cpu=2, memory=4, disk=10.
+ *
+ * We intentionally avoid the `--dockerfile` flow because we rely on BuildKit
+ * features (buildx) and Daytona's Dockerfile builder does not support them.
  */
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -29,9 +35,17 @@ const { values } = parseArgs({
   options: {
     name: { type: "string", short: "n" },
     image: { type: "string", short: "i" },
-    cpu: { type: "string", short: "c", default: "2" },
-    memory: { type: "string", short: "m", default: "4" },
-    disk: { type: "string", short: "d", default: "10" },
+    cpu: { type: "string", short: "c", default: process.env.DAYTONA_DEFAULT_SNAPSHOT_CPU ?? "2" },
+    memory: {
+      type: "string",
+      short: "m",
+      default: process.env.DAYTONA_DEFAULT_SNAPSHOT_MEMORY ?? "4",
+    },
+    disk: {
+      type: "string",
+      short: "d",
+      default: process.env.DAYTONA_DEFAULT_SNAPSHOT_DISK ?? "10",
+    },
     "update-doppler": { type: "boolean", default: true },
   },
   strict: true,

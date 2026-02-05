@@ -243,7 +243,7 @@ function ProjectEnvVarsPage() {
     const key = formKey.trim();
     const value = formValue.trim();
     const description = formDescription.trim() || undefined;
-    if (!key || !value) return;
+    if (!key || (!value && !isEditingExistingSecret)) return;
 
     // Check if this key will override an existing one
     const existingNonUser = envVars.find((v) => v.key === key && v.source.type !== "user");
@@ -259,8 +259,10 @@ function ProjectEnvVarsPage() {
       const secretKey = `env.${key}`;
       try {
         if (editingEnvVar) {
-          // Update existing secret
-          await updateSecret.mutateAsync({ key: secretKey, value });
+          // Update existing secret only if a new value was provided
+          if (value) {
+            await updateSecret.mutateAsync({ key: secretKey, value });
+          }
         } else {
           await createSecret.mutateAsync({ key: secretKey, value });
         }
@@ -302,6 +304,8 @@ function ProjectEnvVarsPage() {
   };
 
   const isPending = setEnvVar.isPending || createSecret.isPending;
+  // When editing an existing secret, allow empty value to keep existing
+  const isEditingExistingSecret = !!editingEnvVar?.secret && formIsSecret;
 
   const addSheet = (
     <Sheet open={addSheetOpen} onOpenChange={setAddSheetOpen}>
@@ -339,7 +343,9 @@ function ProjectEnvVarsPage() {
                 id="env-value"
                 value={formValue}
                 onChange={(e) => setFormValue(e.target.value)}
-                placeholder="Enter the value"
+                placeholder={
+                  editingEnvVar?.secret ? "Leave empty to keep existing value" : "Enter the value"
+                }
                 disabled={isPending}
                 rows={4}
                 className="font-mono text-sm"
@@ -374,8 +380,8 @@ function ProjectEnvVarsPage() {
               <Alert>
                 <Lock className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  {editingEnvVar ? (
-                    "Enter a new value to update the encrypted secret."
+                  {editingEnvVar?.secret ? (
+                    "Leave empty to keep the existing value, or enter a new value to update."
                   ) : (
                     <>
                       The value will be stored encrypted. The env var will be set to{" "}
@@ -408,7 +414,7 @@ function ProjectEnvVarsPage() {
               type="submit"
               disabled={
                 !formKey.trim() ||
-                !formValue.trim() ||
+                (!formValue.trim() && !isEditingExistingSecret) ||
                 isPending ||
                 hasBlockingSecretHint(formKey, formValue, formIsSecret, secretHintDismissed)
               }
