@@ -9,9 +9,9 @@ export const runsOn = {
   "runs-on": `\${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}`,
 };
 
-/** use this instead of `runsOn` if you want fast startup time instead of fast cache restore time */
+/** use this for jobs that don't need ARM - still uses Depot for speed */
 export const runsOnUbuntuLatest = {
-  "runs-on": "ubuntu-latest",
+  "runs-on": `\${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}`,
 };
 
 /** checkout, setup pnpm, setup node, install dependencies */

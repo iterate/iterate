@@ -77,7 +77,7 @@ export default {
     slack_failure: {
       needs: ["variables", "build-daytona-snapshot", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
-      "runs-on": "ubuntu-latest",
+      ...utils.runsOnUbuntuLatest,
       env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,

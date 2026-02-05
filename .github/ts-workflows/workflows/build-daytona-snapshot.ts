@@ -79,7 +79,9 @@ export default workflow({
   jobs: {
     build: {
       // Must use AMD64 runner - Daytona requires AMD64 images and QEMU emulation segfaults
-      "runs-on": "ubuntu-24.04",
+      // Use Depot runner for same-network image transfer (no 2GB download!)
+      "runs-on":
+        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}",
       outputs: {
         snapshot_name: "${{ steps.push.outputs.snapshot_name }}",
         git_sha: "${{ steps.push.outputs.git_sha }}",
