@@ -118,6 +118,10 @@ describe("createMinimalGitDirForSha", () => {
   it("packs HEAD objects but not parent commit objects", () => {
     const repoPath = join(tempDir, "repo");
     const { firstSha, secondSha } = createGitRepo(repoPath);
+    const rootTreeSha = execSync(`git rev-parse ${secondSha}^{tree}`, {
+      cwd: repoPath,
+      encoding: "utf-8",
+    }).trim();
 
     const minimalGitDir = createMinimalGitDirForSha({
       repoRoot: repoPath,
@@ -126,6 +130,7 @@ describe("createMinimalGitDirForSha", () => {
     });
 
     expect(objectExists(minimalGitDir, secondSha)).toBe(true);
+    expect(objectExists(minimalGitDir, rootTreeSha)).toBe(true);
     expect(objectExists(minimalGitDir, firstSha)).toBe(false);
   });
 });

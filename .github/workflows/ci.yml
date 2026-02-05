@@ -17,7 +17,7 @@ on:
         type: string
 jobs:
   variables:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     steps:
       - id: get_env
         name: Get environment variables
@@ -48,7 +48,7 @@ jobs:
       - build-daytona-snapshot
       - deploy
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:

@@ -38,6 +38,12 @@ export function createMinimalGitDirForSha(opts: {
   mkdirSync(packDir, { recursive: true });
   mkdirSync(join(gitDirPath, "refs", "heads"), { recursive: true });
 
+  const rootTreeSha = execSync(`git rev-parse ${gitSha}^{tree}`, {
+    cwd: repoRoot,
+    encoding: "utf-8",
+    maxBuffer: 100 * 1024 * 1024,
+  }).trim();
+
   // Include only the current commit and current tree objects (no history).
   const treeObjects = execSync(`git ls-tree -r -t --object-only ${gitSha}`, {
     cwd: repoRoot,
@@ -48,7 +54,7 @@ export function createMinimalGitDirForSha(opts: {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const objectList = Array.from(new Set([gitSha, ...treeObjects]))
+  const objectList = Array.from(new Set([gitSha, rootTreeSha, ...treeObjects]))
     .sort()
     .join("\n");
 
