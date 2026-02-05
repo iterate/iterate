@@ -1,0 +1,2 @@
+#!/bin/sh
+exec ~/.npm-global/bin/codex --dangerously-bypass-approvals-and-sandbox "$@"

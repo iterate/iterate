@@ -1,7 +1,15 @@
+# Local development docker-compose
+#
+# Usage: pnpm docker:up  (handles worktrees automatically)
+#    or: tsx ./scripts/docker-compose.ts up
+#
+# Services for local development (db + proxy).
+
+name: ${LOCAL_DOCKER_COMPOSE_PROJECT_NAME}
+
 services:
   postgres:
     image: postgres:17
-    container_name: postgres-iterate
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -9,7 +17,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d os"]
@@ -20,7 +28,7 @@ services:
   neon-proxy:
     image: ghcr.io/timowilhelm/local-neon-http-proxy:main
     environment:
-      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres-iterate:5432/os
+      - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres:5432/os
     ports:
       - "4444:4444"
     depends_on:
@@ -28,4 +36,4 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres_data:
+  postgres-data:

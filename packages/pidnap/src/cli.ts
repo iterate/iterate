@@ -23,7 +23,7 @@ const ResourceTarget = v.union([v.string(), v.number()]);
 
 const makeTable = (head?: string[]) => new Table({ head });
 
-// Helper functions for table formatting (used multiple times)
+// Helper functions for table formatting
 function printProcessTable(proc: { name: string; state: string; restarts: number }) {
   const table = makeTable(["Name", "State", "Restarts"]);
   table.push([proc.name, proc.state, proc.restarts]);
@@ -71,113 +71,6 @@ function printProcessDetails(
     const envTable = makeTable(["Variable", "Value"]);
     for (const [key, value] of Object.entries(proc.definition.env)) {
       envTable.push([key, value]);
-    }
-    console.log(envTable.toString());
-  }
-}
-
-function printTaskTable(task: { id: string; state: string; processNames: string[] }) {
-  const table = makeTable(["Id", "State", "Processes"]);
-  table.push([task.id, task.state, task.processNames.join(", ")]);
-  console.log(table.toString());
-}
-
-type ProcessDefinitionType = {
-  command: string;
-  args?: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-};
-
-function printDefinition(definition: ProcessDefinitionType, indent = "") {
-  const defTable = makeTable();
-  defTable.push(
-    { Command: definition.command },
-    { Args: definition.args?.join(" ") ?? "(none)" },
-    { Cwd: definition.cwd ?? "(default)" },
-  );
-  console.log(defTable.toString());
-
-  if (definition.env && Object.keys(definition.env).length > 0) {
-    console.log(`${indent}\nEnvironment Variables:`);
-    const envTable = makeTable(["Variable", "Value"]);
-    for (const [key, value] of Object.entries(definition.env)) {
-      envTable.push([key, value]);
-    }
-    console.log(envTable.toString());
-  }
-}
-
-function printTaskDetails(
-  task: {
-    id: string;
-    state: string;
-    processNames: string[];
-    processes: {
-      name: string;
-      definition: ProcessDefinitionType;
-      effectiveEnv?: Record<string, string>;
-    }[];
-  },
-  options?: { showEffectiveEnv?: boolean },
-) {
-  const table = makeTable(["Id", "State", "Processes"]);
-  table.push([task.id, task.state, task.processNames.join(", ")]);
-  console.log(table.toString());
-
-  for (const proc of task.processes) {
-    console.log(`\nProcess: ${proc.name}`);
-    printDefinition(proc.definition);
-
-    if (options?.showEffectiveEnv && proc.effectiveEnv) {
-      console.log("\nEffective Environment (inherited by process):");
-      const envTable = makeTable(["Variable", "Value"]);
-      const sortedKeys = Object.keys(proc.effectiveEnv).sort();
-      for (const key of sortedKeys) {
-        envTable.push([key, proc.effectiveEnv[key]]);
-      }
-      console.log(envTable.toString());
-    }
-  }
-}
-
-function printCronTable(cron: {
-  name: string;
-  state: string;
-  runCount: number;
-  failCount: number;
-  nextRun: string | null;
-}) {
-  const table = makeTable(["Name", "State", "Runs", "Fails", "Next Run"]);
-  table.push([cron.name, cron.state, cron.runCount, cron.failCount, cron.nextRun ?? "-"]);
-  console.log(table.toString());
-}
-
-function printCronDetails(
-  cron: {
-    name: string;
-    state: string;
-    runCount: number;
-    failCount: number;
-    nextRun: string | null;
-    definition: ProcessDefinitionType;
-    effectiveEnv?: Record<string, string>;
-  },
-  options?: { showEffectiveEnv?: boolean },
-) {
-  const table = new Table({ head: ["Name", "State", "Runs", "Fails", "Next Run"], wordWrap: true });
-  table.push([cron.name, cron.state, cron.runCount, cron.failCount, cron.nextRun ?? "-"]);
-  console.log(table.toString());
-
-  console.log("\nDefinition:");
-  printDefinition(cron.definition);
-
-  if (options?.showEffectiveEnv && cron.effectiveEnv) {
-    console.log("\nEffective Environment (inherited by process):");
-    const envTable = new Table({ head: ["Variable", "Value"], wordWrap: true });
-    const sortedKeys = Object.keys(cron.effectiveEnv).sort();
-    for (const key of sortedKeys) {
-      envTable.push([key, cron.effectiveEnv[key]]);
     }
     console.log(envTable.toString());
   }
@@ -247,35 +140,29 @@ const cliRouter = os.router({
           if (authToken) {
             const providedToken = req.headers["authorization"]?.replace("Bearer ", "");
             if (providedToken !== authToken) {
-              res.statusCode = 401;
-              res.end("Unauthorized");
+              res.writeHead(401, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Unauthorized" }));
               return;
             }
           }
 
-          const { matched } = await handler.handle(req, res, {
-            prefix: "/rpc",
-            context: { manager },
+          const { matched } = await handler.handle(req, res, { context: { manager } });
+          if (!matched) {
+            res.writeHead(404).end();
+          }
+        });
+
+        // Start HTTP server
+        await new Promise<void>((resolve) => {
+          server.listen(port, host, () => {
+            initLogger.info(`Server listening on ${host}:${port}`);
+            resolve();
           });
-          if (matched) return;
-          res.statusCode = 404;
-          res.end("Not found\n");
         });
 
-        server.listen(port, host, async () => {
-          managerLogger.info(`pidnap RPC server running on http://${host}:${port}`);
-          if (authToken) {
-            managerLogger.info("Auth token required for API access");
-          }
-
-          try {
-            await manager.start();
-          } catch (err) {
-            managerLogger.error("Failed to start manager:", err);
-            server.close();
-            process.exit(1);
-          }
-        });
+        // Start manager
+        await manager.start();
+        initLogger.info("Manager started");
 
         // Wait for shutdown
         await manager.waitForShutdown();
@@ -292,8 +179,8 @@ const cliRouter = os.router({
     .meta({ description: "Show manager status" })
     .handler(async ({ context: { client } }) => {
       const status = await client.manager.status();
-      const table = new Table({ head: ["State", "Processes", "Crons", "Tasks"], wordWrap: true });
-      table.push([status.state, status.processCount, status.cronCount, status.taskCount]);
+      const table = new Table({ head: ["State", "Processes"], wordWrap: true });
+      table.push([status.state, status.processCount]);
       console.log(table.toString());
     }),
 
@@ -380,16 +267,16 @@ const cliRouter = os.router({
       }),
     reload: os
       .meta({
-        description: "Reload a restarting process definition",
+        description: "Reload a restarting process with a new definition",
         aliases: { options: { definition: "d", restartImmediately: "r" } },
       })
       .input(
         v.tuple([
           v.pipe(ResourceTarget, v.description("Process name or index")),
           v.object({
-            definition: v.pipe(ProcessDefinition, v.description("Process definition JSON")),
+            definition: v.pipe(ProcessDefinition, v.description("New process definition JSON")),
             restartImmediately: v.optional(
-              v.pipe(v.boolean(), v.description("Restart immediately after reload")),
+              v.pipe(v.boolean(), v.description("Restart immediately after reloading")),
             ),
           }),
         ]),
@@ -409,115 +296,6 @@ const cliRouter = os.router({
       .handler(async ({ input, context: { client } }) => {
         await client.processes.remove({ target: input[0] });
         console.log("Process removed");
-      }),
-  }),
-
-  // Tasks
-  tasks: os.router({
-    list: os.meta({ description: "List tasks" }).handler(async ({ context: { client } }) => {
-      const tasks = await client.tasks.list();
-      const table = new Table({ head: ["Id", "State", "Processes"], wordWrap: true });
-      for (const task of tasks) {
-        table.push([task.id, task.state, task.processNames.join(", ")]);
-      }
-      console.log(table.toString());
-    }),
-    get: os
-      .meta({
-        description: "Get a task by id or index",
-        aliases: { options: { env: "e" } },
-      })
-      .input(
-        v.tuple([
-          v.pipe(ResourceTarget, v.description("Task id or index")),
-          v.object({
-            env: v.optional(
-              v.pipe(v.boolean(), v.description("Show effective environment inherited by process")),
-            ),
-          }),
-        ]),
-      )
-      .handler(async ({ input, context: { client } }) => {
-        const [target, options] = input;
-        const task = await client.tasks.get({ target, includeEffectiveEnv: options.env });
-        printTaskDetails(task, { showEffectiveEnv: options.env });
-      }),
-    add: os
-      .meta({ description: "Add a task", aliases: { options: { name: "n", definition: "d" } } })
-      .input(
-        v.object({
-          name: v.pipe(v.string(), v.description("Task name")),
-          definition: v.pipe(ProcessDefinition, v.description("Process definition JSON")),
-        }),
-      )
-      .handler(async ({ input, context: { client } }) => {
-        const task = await client.tasks.add({ name: input.name, definition: input.definition });
-        printTaskTable(task);
-      }),
-    remove: os
-      .meta({ description: "Remove a task by id or index" })
-      .input(v.tuple([v.pipe(ResourceTarget, v.description("Task id or index"))]))
-      .handler(async ({ input, context: { client } }) => {
-        const task = await client.tasks.remove({ target: input[0] });
-        printTaskTable(task);
-      }),
-  }),
-
-  // Crons
-  crons: os.router({
-    list: os
-      .meta({ description: "List cron processes" })
-      .handler(async ({ context: { client } }) => {
-        const crons = await client.crons.list();
-        const table = new Table({
-          head: ["Name", "State", "Runs", "Fails", "Next Run"],
-          wordWrap: true,
-        });
-        for (const cron of crons) {
-          table.push([cron.name, cron.state, cron.runCount, cron.failCount, cron.nextRun ?? "-"]);
-        }
-        console.log(table.toString());
-      }),
-    get: os
-      .meta({
-        description: "Get a cron process by name or index",
-        aliases: { options: { env: "e" } },
-      })
-      .input(
-        v.tuple([
-          v.pipe(ResourceTarget, v.description("Cron name or index")),
-          v.object({
-            env: v.optional(
-              v.pipe(v.boolean(), v.description("Show effective environment inherited by process")),
-            ),
-          }),
-        ]),
-      )
-      .handler(async ({ input, context: { client } }) => {
-        const [target, options] = input;
-        const cron = await client.crons.get({ target, includeEffectiveEnv: options.env });
-        printCronDetails(cron, { showEffectiveEnv: options.env });
-      }),
-    trigger: os
-      .meta({ description: "Trigger a cron process" })
-      .input(v.tuple([v.pipe(ResourceTarget, v.description("Cron name or index"))]))
-      .handler(async ({ input, context: { client } }) => {
-        const cron = await client.crons.trigger({ target: input[0] });
-        printCronTable(cron);
-      }),
-    start: os
-      .meta({ description: "Start a cron process" })
-      .input(v.tuple([v.pipe(ResourceTarget, v.description("Cron name or index"))]))
-      .handler(async ({ input, context: { client } }) => {
-        const cron = await client.crons.start({ target: input[0] });
-        printCronTable(cron);
-      }),
-    stop: os
-      .meta({ description: "Stop a cron process" })
-      .input(v.tuple([v.pipe(ResourceTarget, v.description("Cron name or index"))]))
-      .handler(async ({ input, context: { client } }) => {
-        const cron = await client.crons.stop({ target: input[0] });
-        printCronTable(cron);
       }),
   }),
 });

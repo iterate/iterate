@@ -6,6 +6,7 @@ settings:
 
 overrides:
   baseline-browser-mapping: ^2.9.14
+  '@babel/parser': ^7.28.0
 
 importers:
 
@@ -294,6 +295,9 @@ importers:
       '@slack/types':
         specifier: ^2.19.0
         version: 2.19.0
+      '@slack/web-api':
+        specifier: ^7.13.0
+        version: 7.13.0
       '@tailwindcss/vite':
         specifier: ^4.0.6
         version: 4.1.17(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
@@ -1492,11 +1496,6 @@ packages:
   '@babel/parser@7.28.5':
     resolution: {integrity: sha512-KKBU1VGYR7ORr3At5HAtUQ+TV3SzRCXmA/8OdDZiLDBIZxVyzXuztPjfLd3BV1PRAQGCMWWSHYhL0F8d5uHBDQ==}
     engines: {node: '>=6.0.0'}
-    hasBin: true
-
-  '@babel/parser@8.0.0-beta.4':
-    resolution: {integrity: sha512-fBcUqUN3eenLyg25QFkOwY1lmV6L0RdG92g6gxyS2CVCY8kHdibkQz1+zV3bLzxcvNnfHoi3i9n5Dci+g93acg==}
-    engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
   '@babel/plugin-syntax-jsx@7.27.1':
@@ -12389,7 +12388,7 @@ snapshots:
 
   '@babel/generator@8.0.0-beta.4':
     dependencies:
-      '@babel/parser': 8.0.0-beta.4
+      '@babel/parser': 7.28.5
       '@babel/types': 8.0.0-beta.4
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
@@ -12486,10 +12485,6 @@ snapshots:
   '@babel/parser@7.28.5':
     dependencies:
       '@babel/types': 7.28.5
-
-  '@babel/parser@8.0.0-beta.4':
-    dependencies:
-      '@babel/types': 8.0.0-beta.4
 
   '@babel/plugin-syntax-jsx@7.27.1(@babel/core@7.28.5)':
     dependencies:
@@ -17766,7 +17761,7 @@ snapshots:
 
   ast-kit@3.0.0-beta.1:
     dependencies:
-      '@babel/parser': 8.0.0-beta.4
+      '@babel/parser': 7.28.5
       estree-walker: 3.0.3
       pathe: 2.0.3
 
@@ -21891,7 +21886,7 @@ snapshots:
   rolldown-plugin-dts@0.21.7(@typescript/native-preview@7.0.0-dev.20260203.1)(rolldown@1.0.0-rc.1)(typescript@5.9.3):
     dependencies:
       '@babel/generator': 8.0.0-beta.4
-      '@babel/parser': 8.0.0-beta.4
+      '@babel/parser': 7.28.5
       '@babel/types': 8.0.0-beta.4
       ast-kit: 3.0.0-beta.1
       birpc: 4.0.0

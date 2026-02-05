@@ -13,7 +13,7 @@ export default workflow({
   },
   jobs: {
     specs: {
-      ...utils.runsOn,
+      ...utils.runsOnFastStartingUbuntuLatest,
       steps: [
         { uses: "actions/checkout@v4" },
         { uses: "pnpm/action-setup@v4" },
@@ -24,8 +24,8 @@ export default workflow({
             cache: "pnpm",
           },
         },
-        { run: "pnpm docker:up" },
         { run: "pnpm install" },
+        { run: "pnpm docker:up" },
         { uses: "dopplerhq/cli-action@v2" },
         {
           name: "Setup Doppler",

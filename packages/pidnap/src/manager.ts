@@ -2,12 +2,12 @@ import { join } from "node:path";
 import { cwd as getCwd } from "node:process";
 import { mkdirSync } from "node:fs";
 import * as v from "valibot";
+import { Cron } from "croner";
 import { ProcessDefinition } from "./lazy-process.ts";
 import type { Logger } from "./logger.ts";
-import { TaskList, type NamedProcessDefinition } from "./task-list.ts";
-import { CronProcess, CronProcessOptions } from "./cron-process.ts";
 import { RestartingProcess, RestartingProcessOptions } from "./restarting-process.ts";
 import { EnvManager, type EnvChangeEvent } from "./env-manager.ts";
+import { DependencyResolver } from "./dependency-resolver.ts";
 
 export const HttpServerConfig = v.object({
   host: v.optional(v.string()),
@@ -31,45 +31,46 @@ export const EnvOptions = v.object({
    * - number: delay in ms
    * - true or "immediately": reload immediately
    * - false: don't reload on env changes
-   * Default: 5000ms for processes/crons, false for tasks
+   * Default: 5000ms
    */
   reloadDelay: v.optional(EnvReloadDelay),
 });
 export type EnvOptions = v.InferOutput<typeof EnvOptions>;
 
-export const CronProcessEntry = v.object({
-  name: v.string(),
-  definition: ProcessDefinition,
-  options: CronProcessOptions,
-  envOptions: v.optional(EnvOptions),
-});
-export type CronProcessEntry = v.InferOutput<typeof CronProcessEntry>;
+// Dependency conditions for process ordering
+export const DependencyCondition = v.picklist(["completed", "healthy", "started"]);
+export type DependencyCondition = v.InferOutput<typeof DependencyCondition>;
 
-// REFACTOR: Add dependsOn field here to support process dependencies
-// Example new schema:
-// export const DependencyCondition = v.picklist(["completed", "healthy", "started"]);
-// export const ProcessDependency = v.object({
-//   process: v.string(),
-//   condition: v.optional(DependencyCondition), // defaults based on target's restartPolicy
-// });
+export const ProcessDependency = v.union([
+  v.string(), // shorthand: just process name (condition defaults based on target's restartPolicy)
+  v.object({
+    process: v.string(),
+    condition: v.optional(DependencyCondition),
+  }),
+]);
+export type ProcessDependency = v.InferOutput<typeof ProcessDependency>;
+
+// Schedule configuration for cron-like process execution
+export const ScheduleConfig = v.object({
+  /** Cron expression (e.g., "0 * * * *" for hourly) */
+  cron: v.string(),
+  /** Run immediately on manager start (default: false) */
+  runOnStart: v.optional(v.boolean()),
+  /** Timezone for the cron expression (default: system timezone) */
+  timezone: v.optional(v.string()),
+});
+export type ScheduleConfig = v.InferOutput<typeof ScheduleConfig>;
+
 export const RestartingProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
-  // REFACTOR: Add this field:
-  // dependsOn: v.optional(v.array(ProcessDependency)),
+  dependsOn: v.optional(v.array(ProcessDependency)),
+  /** Schedule for cron-like execution. When triggered: starts if stopped, restarts if running. */
+  schedule: v.optional(ScheduleConfig),
 });
 export type RestartingProcessEntry = v.InferOutput<typeof RestartingProcessEntry>;
-
-// REFACTOR: This entire type can be deleted. Tasks become processes with restartPolicy: "never"
-// For backward compatibility, we can auto-convert tasks to processes during config parsing.
-export const TaskEntryConfig = v.object({
-  name: v.string(),
-  definition: ProcessDefinition,
-  envOptions: v.optional(EnvOptions),
-});
-export type TaskEntryConfig = v.InferOutput<typeof TaskEntryConfig>;
 
 export const ManagerConfig = v.object({
   http: v.optional(HttpServerConfig),
@@ -77,8 +78,6 @@ export const ManagerConfig = v.object({
   logDir: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
   envFile: v.optional(v.string()),
-  tasks: v.optional(v.array(TaskEntryConfig)),
-  crons: v.optional(v.array(CronProcessEntry)),
   processes: v.optional(v.array(RestartingProcessEntry)),
 });
 export type ManagerConfig = v.InferOutput<typeof ManagerConfig>;
@@ -91,7 +90,6 @@ const SHUTDOWN_TIMEOUT_MS = 15000;
 // Manager state
 export type ManagerState =
   | "idle" // Not started
-  | "initializing" // Running task list
   | "running" // All processes running
   | "stopping" // Stopping all processes
   | "stopped"; // Fully stopped
@@ -102,12 +100,14 @@ export class Manager {
   private envManager: EnvManager;
 
   private _state: ManagerState = "idle";
-  private taskList: TaskList | null = null;
-  private cronProcesses: Map<string, CronProcess> = new Map();
   private restartingProcesses: Map<string, RestartingProcess> = new Map();
   private logDir: string;
 
-  // Env reload tracking (for processes and crons)
+  // Dependency resolution
+  private dependencyResolver = new DependencyResolver();
+  private stateChangeUnsubscribes: Map<string, () => void> = new Map();
+
+  // Env reload tracking
   private envReloadConfig: Map<string, EnvReloadDelay> = new Map();
   private envReloadTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private envChangeUnsubscribe: (() => void) | null = null;
@@ -117,6 +117,9 @@ export class Manager {
   private shutdownPromise: Promise<void> | null = null;
   private isShuttingDown = false;
 
+  // Scheduled process tracking
+  private schedulers: Map<string, Cron> = new Map();
+
   constructor(config: ManagerConfig, logger: Logger) {
     const cwd = config.cwd ?? getCwd();
     this.config = config;
@@ -124,16 +127,9 @@ export class Manager {
     this.logDir = config.logDir ?? join(cwd, "logs");
     this.ensureLogDirs();
 
-    // Validate that all names are globally unique across tasks, crons, and processes
     this.validateConfigNames();
 
     const customEnvFiles: Record<string, string> = {};
-    for (const task of config.tasks ?? []) {
-      if (task.envOptions?.envFile) customEnvFiles[task.name] = task.envOptions.envFile;
-    }
-    for (const cron of config.crons ?? []) {
-      if (cron.envOptions?.envFile) customEnvFiles[cron.name] = cron.envOptions.envFile;
-    }
     for (const proc of config.processes ?? []) {
       if (proc.envOptions?.envFile) customEnvFiles[proc.name] = proc.envOptions.envFile;
     }
@@ -157,57 +153,21 @@ export class Manager {
   }
 
   private validateConfigNames(): void {
-    const allNames: { name: string; type: string }[] = [];
-
-    for (const task of this.config.tasks ?? []) {
-      allNames.push({ name: task.name, type: "task" });
-    }
-    for (const cron of this.config.crons ?? []) {
-      allNames.push({ name: cron.name, type: "cron" });
-    }
+    const seen = new Set<string>();
     for (const proc of this.config.processes ?? []) {
-      allNames.push({ name: proc.name, type: "process" });
-    }
-
-    const seen = new Map<string, string>();
-    for (const { name, type } of allNames) {
-      const existingType = seen.get(name);
-      if (existingType) {
-        throw new Error(
-          `Duplicate name "${name}" found: already used as ${existingType}, cannot use as ${type}. Names must be globally unique across tasks, crons, and processes.`,
-        );
+      if (seen.has(proc.name)) {
+        throw new Error(`Duplicate process name "${proc.name}"`);
       }
-      seen.set(name, type);
+      seen.add(proc.name);
     }
   }
 
-  /**
-   * Check if a name is already used by any task, cron, or process
-   */
-  private isNameUsed(name: string): { used: boolean; type?: string } {
-    for (const task of this.config.tasks ?? []) {
-      if (task.name === name) return { used: true, type: "task" };
-    }
-
-    if (this.taskList) {
-      for (const task of this.taskList.tasks) {
-        for (const proc of task.processes) {
-          if (proc.name === name) return { used: true, type: "task" };
-        }
-      }
-    }
-
-    if (this.cronProcesses.has(name)) return { used: true, type: "cron" };
-    for (const cron of this.config.crons ?? []) {
-      if (cron.name === name) return { used: true, type: "cron" };
-    }
-
-    if (this.restartingProcesses.has(name)) return { used: true, type: "process" };
+  private isNameUsed(name: string): boolean {
+    if (this.restartingProcesses.has(name)) return true;
     for (const proc of this.config.processes ?? []) {
-      if (proc.name === name) return { used: true, type: "process" };
+      if (proc.name === name) return true;
     }
-
-    return { used: false };
+    return false;
   }
 
   private applyDefaults(
@@ -235,19 +195,14 @@ export class Manager {
     return join(this.logDir, "process", `${name}.log`);
   }
 
-  private taskLogFile(name: string): string {
-    return join(this.logDir, "tasks", `${name}.log`);
-  }
-
-  private cronLogFile(name: string): string {
-    return join(this.logDir, "cron", `${name}.log`);
+  /** Get the log file path for a process (for external access) */
+  getProcessLogPath(name: string): string {
+    return this.processLogFile(name);
   }
 
   private ensureLogDirs(): void {
     mkdirSync(this.logDir, { recursive: true });
     mkdirSync(join(this.logDir, "process"), { recursive: true });
-    mkdirSync(join(this.logDir, "tasks"), { recursive: true });
-    mkdirSync(join(this.logDir, "cron"), { recursive: true });
   }
 
   /**
@@ -257,20 +212,11 @@ export class Manager {
     if (this._state !== "running") return;
 
     if (event.type === "global") {
-      this.logger.info(
-        "Global env file changed, reloading all processes/crons as per their policies",
-      );
-      // Reload all processes
+      this.logger.info("Global env file changed, reloading all processes as per their policies");
       for (const name of this.restartingProcesses.keys()) {
         const reloadDelay = this.envReloadConfig.get(name);
         if (reloadDelay === false) continue;
-        this.scheduleReload(name, "process", reloadDelay);
-      }
-      // Reload all crons
-      for (const name of this.cronProcesses.keys()) {
-        const reloadDelay = this.envReloadConfig.get(name);
-        if (reloadDelay === false) continue;
-        this.scheduleReload(name, "cron", reloadDelay);
+        this.scheduleReload(name, reloadDelay);
       }
       return;
     }
@@ -280,49 +226,36 @@ export class Manager {
       const reloadDelay = this.envReloadConfig.get(name);
       if (reloadDelay === false) return;
 
-      // Check if it's a process or cron
       if (this.restartingProcesses.has(name)) {
-        this.scheduleReload(name, "process", reloadDelay);
-      } else if (this.cronProcesses.has(name)) {
-        this.scheduleReload(name, "cron", reloadDelay);
+        this.scheduleReload(name, reloadDelay);
       }
     }
   }
 
   /**
-   * Schedule a process or cron reload with debouncing
+   * Schedule a process reload with debouncing
    */
-  private scheduleReload(
-    name: string,
-    type: "process" | "cron",
-    reloadDelay?: EnvReloadDelay,
-  ): void {
-    // Clear existing timer if any
+  private scheduleReload(name: string, reloadDelay?: EnvReloadDelay): void {
     const existingTimer = this.envReloadTimers.get(name);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
 
-    // Determine delay in ms
     let delayMs: number;
     if (reloadDelay === false) {
-      return; // Should not happen, but guard anyway
+      return;
     } else if (reloadDelay === true || reloadDelay === "immediately") {
       delayMs = 0;
     } else if (typeof reloadDelay === "number") {
       delayMs = reloadDelay;
     } else {
-      delayMs = 5000; // Default 5 seconds
+      delayMs = 5000;
     }
 
-    this.logger.info(`Scheduling reload for ${type} "${name}" in ${delayMs}ms`);
+    this.logger.info(`Scheduling reload for process "${name}" in ${delayMs}ms`);
 
     const timer = setTimeout(async () => {
-      if (type === "process") {
-        await this.reloadProcessEnv(name);
-      } else {
-        await this.reloadCronEnv(name);
-      }
+      await this.reloadProcessEnv(name);
       this.envReloadTimers.delete(name);
     }, delayMs);
 
@@ -341,7 +274,6 @@ export class Manager {
 
     this.logger.info(`Reloading process "${processName}" due to env change`);
 
-    // Get the original config for this process
     const processConfig = this.config.processes?.find((p) => p.name === processName);
     if (!processConfig) {
       this.logger.warn(`Process config for "${processName}" not found`);
@@ -356,70 +288,22 @@ export class Manager {
     await proc.reload(updatedDefinition, true);
   }
 
-  /**
-   * Reload a cron with updated env vars
-   */
-  private async reloadCronEnv(cronName: string): Promise<void> {
-    const cron = this.cronProcesses.get(cronName);
-    if (!cron) {
-      this.logger.warn(`Cron "${cronName}" not found for env reload`);
-      return;
-    }
-
-    this.logger.info(`Reloading cron "${cronName}" due to env change`);
-
-    // Get the original config for this cron
-    const cronConfig = this.config.crons?.find((c) => c.name === cronName);
-    if (!cronConfig) {
-      this.logger.warn(`Cron config for "${cronName}" not found`);
-      return;
-    }
-
-    const updatedDefinition = this.applyDefaults(
-      cronName,
-      cronConfig.definition,
-      cronConfig.envOptions,
-    );
-    cron.updateDefinition(updatedDefinition);
-  }
-
   get state(): ManagerState {
     return this._state;
   }
 
   /**
-   * Get all cron processes (read-only access)
-   */
-  getCronProcesses(): ReadonlyMap<string, CronProcess> {
-    return this.cronProcesses;
-  }
-
-  /**
-   * Get a specific cron process by name
-   */
-  getCronProcess(name: string): CronProcess | undefined {
-    return this.cronProcesses.get(name);
-  }
-
-  /**
-   * Get all restarting processes (read-only access)
+   * Get all processes (read-only access)
    */
   getRestartingProcesses(): ReadonlyMap<string, RestartingProcess> {
     return this.restartingProcesses;
   }
 
   /**
-   * Get a specific restarting process by name
+   * Get a specific process by name
    */
   getRestartingProcess(name: string): RestartingProcess | undefined {
     return this.restartingProcesses.get(name);
-  }
-
-  /**
-   * Get the task list (read-only access)
-   */
-  getTaskList(): TaskList | null {
-    return this.taskList;
   }
 
   /**
@@ -431,45 +315,6 @@ export class Manager {
     }
     const entries = Array.from(this.restartingProcesses.values());
     return entries[target];
-  }
-
-  /**
-   * Get a cron process by name or index
-   */
-  getCronByTarget(target: string | number): CronProcess | undefined {
-    if (typeof target === "string") {
-      return this.cronProcesses.get(target);
-    }
-    const entries = Array.from(this.cronProcesses.values());
-    return entries[target];
-  }
-
-  /**
-   * Get a task by id or index
-   */
-  getTaskByTarget(
-    target: string | number,
-  ): { id: string; state: string; processNames: string[] } | undefined {
-    if (!this.taskList) return undefined;
-    const tasks = this.taskList.tasks;
-
-    if (typeof target === "string") {
-      const task = tasks.find((t) => t.id === target);
-      if (!task) return undefined;
-      return {
-        id: task.id,
-        state: task.state,
-        processNames: task.processes.map((p) => p.name),
-      };
-    }
-
-    const task = tasks[target];
-    if (!task) return undefined;
-    return {
-      id: task.id,
-      state: task.state,
-      processNames: task.processes.map((p) => p.name),
-    };
   }
 
   /**
@@ -553,78 +398,22 @@ export class Manager {
       throw new Error(`Process not found: ${target}`);
     }
 
-    // Stop the process first
     await proc.stop(timeout);
-
-    // Remove from the map
+    this.cleanupProcessResources(proc.name);
     this.restartingProcesses.delete(proc.name);
     this.logger.info(`Removed process: ${proc.name}`);
   }
 
-  /**
-   * Add a task to the task list
-   * Creates the task list if it doesn't exist and starts it
-   */
-  addTask(
-    name: string,
-    definition: ProcessDefinition,
-    envOptions?: EnvOptions,
-  ): { id: string; state: string; processNames: string[] } {
-    // Check for global name uniqueness
-    const nameCheck = this.isNameUsed(name);
-    if (nameCheck.used) {
-      throw new Error(
-        `Name "${name}" is already used as ${nameCheck.type}. Names must be globally unique across tasks, crons, and processes.`,
-      );
-    }
-
-    // Register custom env file if provided
-    if (envOptions?.envFile) {
-      this.envManager.registerFile(name, envOptions.envFile);
-    }
-
-    if (!this.taskList) {
-      const taskListLogger = this.logger.child("tasks", {
-        logFile: this.taskLogFile("tasks"),
-      });
-      this.taskList = new TaskList("runtime", taskListLogger, undefined, (processName) => {
-        return this.taskLogFile(processName);
-      });
-    }
-
-    const namedProcess: NamedProcessDefinition = {
-      name,
-      process: this.applyDefaults(name, definition, envOptions),
-    };
-    const id = this.taskList.addTask(namedProcess);
-
-    // Start the task list if it's idle so the task runs immediately
-    if (this.taskList.state === "idle") {
-      this.taskList.start();
-    }
-
-    return {
-      id,
-      state: "pending",
-      processNames: [name],
-    };
-  }
-
-  removeTaskByTarget(target: string | number): {
-    id: string;
-    state: string;
-    processNames: string[];
-  } {
-    if (!this.taskList) {
-      throw new Error(`Task list not initialized`);
-    }
-
-    const removed = this.taskList.removeTaskByTarget(target);
-    return {
-      id: removed.id,
-      state: removed.state,
-      processNames: removed.processes.map((p) => p.name),
-    };
+  /** Clean up all resources associated with a process (except the process itself) */
+  private cleanupProcessResources(name: string): void {
+    this.stateChangeUnsubscribes.get(name)?.();
+    this.stateChangeUnsubscribes.delete(name);
+    this.schedulers.get(name)?.stop();
+    this.schedulers.delete(name);
+    this.envReloadConfig.delete(name);
+    const timer = this.envReloadTimers.get(name);
+    if (timer) clearTimeout(timer);
+    this.envReloadTimers.delete(name);
   }
 
   /**
@@ -636,12 +425,8 @@ export class Manager {
     options?: RestartingProcessOptions,
     envOptions?: EnvOptions,
   ): Promise<RestartingProcess> {
-    // Check for global name uniqueness
-    const nameCheck = this.isNameUsed(name);
-    if (nameCheck.used) {
-      throw new Error(
-        `Name "${name}" is already used as ${nameCheck.type}. Names must be globally unique across tasks, crons, and processes.`,
-      );
+    if (this.isNameUsed(name)) {
+      throw new Error(`Name "${name}" is already in use`);
     }
 
     // Register custom env file if provided
@@ -668,45 +453,7 @@ export class Manager {
   }
 
   /**
-   * Trigger a cron process by target
-   */
-  async triggerCronByTarget(target: string | number): Promise<CronProcess> {
-    const cron = this.getCronByTarget(target);
-    if (!cron) {
-      throw new Error(`Cron not found: ${target}`);
-    }
-    await cron.trigger();
-    return cron;
-  }
-
-  /**
-   * Start a cron process by target
-   */
-  startCronByTarget(target: string | number): CronProcess {
-    const cron = this.getCronByTarget(target);
-    if (!cron) {
-      throw new Error(`Cron not found: ${target}`);
-    }
-    cron.start();
-    return cron;
-  }
-
-  /**
-   * Stop a cron process by target
-   */
-  async stopCronByTarget(target: string | number, timeout?: number): Promise<CronProcess> {
-    const cron = this.getCronByTarget(target);
-    if (!cron) {
-      throw new Error(`Cron not found: ${target}`);
-    }
-    await cron.stop(timeout);
-    return cron;
-  }
-
-  /**
-   * Start the manager:
-   * 1. Run task list (if configured) and wait for completion
-   * 2. Create and start all cron/restarting processes
+   * Start the manager using dependency-based process ordering
    */
   async start(): Promise<void> {
     if (this._state !== "idle" && this._state !== "stopped") {
@@ -715,83 +462,132 @@ export class Manager {
 
     this.logger.info(`Starting manager`);
 
-    // Phase 1: Run initialization tasks
-    if (this.config.tasks && this.config.tasks.length > 0) {
-      this._state = "initializing";
-      this.logger.info(`Running initialization tasks`);
+    const entries = this.config.processes ?? [];
+    if (entries.length === 0) {
+      this._state = "running";
+      this.logger.info(`Manager started with 0 processes`);
+      return;
+    }
 
-      const taskListLogger = this.logger.child("tasks");
-      const tasksWithDefaults = this.config.tasks.map((task) => ({
-        name: task.name,
-        process: this.applyDefaults(task.name, task.definition, task.envOptions),
-      }));
-      this.taskList = new TaskList("init", taskListLogger, tasksWithDefaults, (processName) => {
-        return this.taskLogFile(processName);
+    // Create all processes upfront
+    for (const entry of entries) {
+      const processLogger = this.logger.child(entry.name, {
+        logFile: this.processLogFile(entry.name),
       });
-
-      this.taskList.start();
-      await this.taskList.waitUntilIdle();
-
-      // Check if any tasks failed
-      const failedTasks = this.taskList.tasks.filter((t) => t.state === "failed");
-      if (failedTasks.length > 0) {
-        this._state = "stopped";
-        const failedNames = failedTasks.map((t) => t.id).join(", ");
-        throw new Error(`Initialization failed: tasks [${failedNames}] failed`);
-      }
-
-      this.logger.info(`Initialization tasks completed`);
+      const restartingProcess = new RestartingProcess(
+        entry.name,
+        this.applyDefaults(entry.name, entry.definition, entry.envOptions),
+        entry.options ?? DEFAULT_RESTART_OPTIONS,
+        processLogger,
+      );
+      this.restartingProcesses.set(entry.name, restartingProcess);
+      this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
     }
 
-    // Phase 2: Create and start cron processes
-    if (this.config.crons) {
-      for (const entry of this.config.crons) {
-        const processLogger = this.logger.child(entry.name, {
-          logFile: this.cronLogFile(entry.name),
-        });
-        const cronProcess = new CronProcess(
-          entry.name,
-          this.applyDefaults(entry.name, entry.definition, entry.envOptions),
-          entry.options,
-          processLogger,
-        );
-        this.cronProcesses.set(entry.name, cronProcess);
-        cronProcess.start();
+    // Build and validate dependency graph
+    this.dependencyResolver.buildGraph(entries, this.restartingProcesses);
+    this.dependencyResolver.validateDependenciesExist();
+    this.dependencyResolver.validateNoCycles();
 
-        // Track env reload config for this cron (default 5000ms)
-        this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
+    // Subscribe to state changes to start dependents
+    for (const proc of this.restartingProcesses.values()) {
+      const unsubscribe = proc.onStateChange((newState) => {
+        this.onProcessStateChange(proc.name, newState);
+      });
+      this.stateChangeUnsubscribes.set(proc.name, unsubscribe);
+    }
 
-        this.logger.info(`Started cron process: ${entry.name}`);
+    // Set up schedulers BEFORE starting processes - if this fails, nothing is running yet
+    for (const entry of entries) {
+      if (entry.schedule) {
+        this.setupScheduler(entry);
       }
     }
 
-    // Phase 3: Create and start restarting processes
-    if (this.config.processes) {
-      for (const entry of this.config.processes) {
-        const processLogger = this.logger.child(entry.name, {
-          logFile: this.processLogFile(entry.name),
-        });
-        const restartingProcess = new RestartingProcess(
-          entry.name,
-          this.applyDefaults(entry.name, entry.definition, entry.envOptions),
-          entry.options ?? DEFAULT_RESTART_OPTIONS,
-          processLogger,
-        );
-        this.restartingProcesses.set(entry.name, restartingProcess);
-
-        restartingProcess.start();
-
-        // Track env reload config for this process (default 5000ms)
-        this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
-
-        this.logger.info(`Started restarting process: ${entry.name}`);
+    // Start processes with no dependencies (unless they have a schedule and runOnStart is false)
+    for (const entry of entries) {
+      if (this.dependencyResolver.areDependenciesMet(entry.name)) {
+        const proc = this.restartingProcesses.get(entry.name)!;
+        if (entry.schedule && !entry.schedule.runOnStart) {
+          this.logger.info(`Process ${entry.name} has schedule, waiting for first trigger`);
+          continue;
+        }
+        proc.start();
+        this.logger.info(`Started process: ${entry.name}`);
       }
     }
 
     this._state = "running";
-    this.logger.info(
-      `Manager started with ${this.cronProcesses.size} cron process(es) and ${this.restartingProcesses.size} restarting process(es)`,
-    );
+    this.logger.info(`Manager started with ${this.restartingProcesses.size} process(es)`);
+  }
+
+  /**
+   * Set up a cron scheduler for a process
+   */
+  private setupScheduler(entry: RestartingProcessEntry): void {
+    if (!entry.schedule) return;
+
+    const { cron: cronExpr, timezone } = entry.schedule;
+    const proc = this.restartingProcesses.get(entry.name);
+    if (!proc) return;
+
+    const scheduler = new Cron(cronExpr, { timezone }, () => {
+      this.triggerScheduledProcess(entry.name);
+    });
+
+    this.schedulers.set(entry.name, scheduler);
+    this.logger.info(`Scheduled process ${entry.name} with cron: ${cronExpr}`);
+  }
+
+  /**
+   * Trigger a scheduled process: start if stopped/idle, restart if running
+   */
+  private triggerScheduledProcess(name: string): void {
+    const proc = this.restartingProcesses.get(name);
+    if (!proc) {
+      this.logger.error(`Scheduled process ${name} not found`);
+      return;
+    }
+
+    const state = proc.state;
+    this.logger.info(`Schedule triggered for ${name} (current state: ${state})`);
+
+    if (state === "running" || state === "restarting") {
+      // Restart if already running
+      proc.restart().catch((err) => {
+        this.logger.error(`Failed to restart scheduled process ${name}:`, err);
+      });
+    } else if (state === "idle" || state === "stopped") {
+      // Check dependencies before starting
+      if (this.dependencyResolver.areDependenciesMet(name)) {
+        proc.start();
+      } else {
+        this.logger.warn(`Cannot start scheduled process ${name}: dependencies not met`);
+      }
+    } else {
+      this.logger.warn(`Cannot trigger scheduled process ${name} in state: ${state}`);
+    }
+  }
+
+  /**
+   * Handle process state changes to start dependents
+   */
+  private onProcessStateChange(name: string, newState: string): void {
+    if (this._state !== "running") return;
+
+    // Check if any pending processes can now start
+    for (const entry of this.config.processes ?? []) {
+      const proc = this.restartingProcesses.get(entry.name);
+      if (!proc || proc.state !== "idle") continue;
+
+      if (this.dependencyResolver.areDependenciesMet(entry.name)) {
+        proc.start();
+        this.logger.info(`Started process: ${entry.name} (dependency ${name} is now ${newState})`);
+      }
+    }
+
+    // Note: Failed dependency handling (marking dependents as dependency-failed)
+    // could be added here in the future when dependency-failed state is implemented
   }
 
   /**
@@ -812,6 +608,18 @@ export class Manager {
     }
     this.envReloadTimers.clear();
 
+    // Stop all schedulers
+    for (const scheduler of this.schedulers.values()) {
+      scheduler.stop();
+    }
+    this.schedulers.clear();
+
+    // Unsubscribe from state changes
+    for (const unsubscribe of this.stateChangeUnsubscribes.values()) {
+      unsubscribe();
+    }
+    this.stateChangeUnsubscribes.clear();
+
     // Unsubscribe from env changes
     if (this.envChangeUnsubscribe) {
       this.envChangeUnsubscribe();
@@ -825,20 +633,9 @@ export class Manager {
     }
     this.signalHandlers.clear();
 
-    // Stop task list if still running
-    if (this.taskList) {
-      await this.taskList.stop(timeout);
-    }
-
-    // Stop all cron processes in parallel
-    const cronStopPromises = Array.from(this.cronProcesses.values()).map((p) => p.stop(timeout));
-
-    // Stop all restarting processes in parallel
-    const restartingStopPromises = Array.from(this.restartingProcesses.values()).map((p) =>
-      p.stop(timeout),
-    );
-
-    await Promise.all([...cronStopPromises, ...restartingStopPromises]);
+    // Stop all processes in parallel
+    const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop(timeout));
+    await Promise.all(stopPromises);
 
     this._state = "stopped";
     this.logger.info(`Manager stopped`);

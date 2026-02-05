@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+import jsonata from "jsonata";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
@@ -5,10 +7,14 @@ import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import * as jose from "jose";
 import type { CloudflareEnv } from "../../../env.ts";
+import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
+import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { createMachineForProject } from "../../services/machine-creation.ts";
+import { trackWebhookEvent } from "../../lib/posthog.ts";
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -263,7 +269,7 @@ githubApp.get(
 
     const redirectPath =
       callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/repo` : "/");
+      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );
@@ -445,3 +451,438 @@ export async function listInstallationRepositories(
     isPrivate: repo.private,
   }));
 }
+
+// JSONata filters for webhook events - evaluated against { payload, env }
+// Return true to process the event, false to skip
+const WEBHOOK_FILTERS = {
+  // workflow_run: only process in prod when CI passes on main
+  workflow_run: "env.APP_STAGE = 'prd' and payload.workflow_run.head_branch = 'main'",
+  // commit_comment: require APP_STAGE=xxx tag in comment body to target specific environment
+  commit_comment: `$contains(payload.comment.body, '[APP_STAGE=' & env.APP_STAGE & ']')`,
+};
+
+// #region ========== Webhook Handler ==========
+
+githubApp.post("/webhook", async (c) => {
+  const body = await c.req.text();
+  const signature = c.req.header("x-hub-signature-256");
+  const xGithubEvent = c.req.header("x-github-event");
+  const deliveryId = c.req.header("x-github-delivery");
+
+  // Verify signature
+  const isValid = await verifyGitHubSignature(c.env.GITHUB_WEBHOOK_SECRET, signature ?? null, body);
+  if (!isValid) {
+    logger.warn("[GitHub Webhook] Invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  const payload = JSON.parse(body);
+  const repo = payload.repository as
+    | { full_name?: string; owner?: { login?: string }; name?: string }
+    | undefined;
+  const repoFullName = repo?.full_name ?? "unknown";
+  const repoOwner = repo?.owner?.login;
+  const repoName = repo?.name;
+
+  // Track webhook in PostHog with group association (non-blocking).
+  // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
+  const db = c.var.db;
+  const env = c.env;
+  waitUntil(
+    (async () => {
+      let groups: { organization: string; project: string } | undefined;
+
+      // Look up project repo to get group association
+      if (repoOwner && repoName) {
+        const projectRepoRecord = await db.query.projectRepo.findFirst({
+          where: (pr, { eq, and }) => and(eq(pr.owner, repoOwner), eq(pr.name, repoName)),
+          with: { project: true },
+        });
+        if (projectRepoRecord?.project) {
+          groups = {
+            organization: projectRepoRecord.project.organizationId,
+            project: projectRepoRecord.projectId,
+          };
+        }
+      }
+
+      trackWebhookEvent(env, {
+        distinctId: `github:${repoFullName}`,
+        event: "github:webhook_received",
+        properties: { ...payload, _event_type: xGithubEvent },
+        groups,
+      });
+    })().catch((err) => {
+      logger.error("[GitHub Webhook] PostHog tracking error", err);
+    }),
+  );
+
+  // Insert raw event immediately after signature verification for deduplication.
+  // Uses ON CONFLICT DO NOTHING with unique index on externalId.
+  // This pattern allows this handler to become an outbox consumer later -
+  // the event table acts as the inbox, and processing happens in background.
+  if (!deliveryId) {
+    logger.warn("[GitHub Webhook] Missing x-github-delivery header");
+    return c.json({ error: "Missing delivery ID" }, 400);
+  }
+  const externalId = deliveryId;
+
+  if (!xGithubEvent || !(xGithubEvent in WEBHOOK_FILTERS)) {
+    return c.json({ message: `No filter for event type ${xGithubEvent}` }, 200);
+  }
+  const eventType = xGithubEvent as keyof typeof WEBHOOK_FILTERS;
+
+  const jsonataExpression = WEBHOOK_FILTERS[eventType];
+
+  const filterContext = { payload, env: { APP_STAGE: c.env.APP_STAGE } };
+  const matches = await jsonata(jsonataExpression).evaluate(filterContext);
+  if (!matches) {
+    logger.debug("[GitHub Webhook] Event filtered out", { eventType, filter: jsonataExpression });
+    return c.json({ message: `Event filtered out` }, 200);
+  }
+
+  const [inserted] = await c.var.db
+    .insert(schema.event)
+    .values({
+      type: `github:${eventType}`,
+      payload: { ...payload, _delivery_id: deliveryId },
+      externalId,
+    })
+    .onConflictDoNothing({ target: [schema.event.type, schema.event.externalId] })
+    .returning({ id: schema.event.id });
+
+  if (!inserted) {
+    // Duplicate delivery - already processed
+    logger.debug("[GitHub Webhook] Duplicate delivery, skipping", { deliveryId });
+    return c.json({ received: true, duplicate: true });
+  }
+
+  // Route to appropriate handler based on event type
+  switch (eventType) {
+    case "workflow_run": {
+      const parseResult = WorkflowRunEvent.safeParse(payload);
+      if (parseResult.success) {
+        // Process in background, return immediately
+        waitUntil(
+          handleWorkflowRun({
+            payload: parseResult.data,
+            db: c.var.db,
+            env: c.env,
+          }).catch((err) => {
+            logger.error("[GitHub Webhook] handleWorkflowRun error", err);
+          }),
+        );
+      }
+      break;
+    }
+    case "commit_comment": {
+      const parseResult = CommitCommentEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handleCommitComment({
+            payload: parseResult.data,
+            db: c.var.db,
+            env: c.env,
+          }).catch((err) => {
+            logger.error("[GitHub Webhook] handleCommitComment error", err);
+          }),
+        );
+      }
+      break;
+    }
+    default: {
+      // ensure we've handled all event types
+      eventType satisfies never;
+    }
+  }
+
+  return c.json({ received: true });
+});
+
+/**
+ * Verify GitHub webhook signature using HMAC SHA-256.
+ * GitHub sends the signature in the `x-hub-signature-256` header.
+ */
+async function verifyGitHubSignature(
+  secret: string,
+  signature: string | null,
+  body: string,
+): Promise<boolean> {
+  if (!signature) return false;
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+
+  const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+  const expectedSignature =
+    "sha256=" +
+    Array.from(new Uint8Array(signatureBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+  // Timing-safe comparison
+  if (signature.length !== expectedSignature.length) return false;
+  return timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+}
+
+// Zod schema for GitHub workflow_run event payload
+const WorkflowRunEvent = z.object({
+  action: z.string(),
+  workflow_run: z.object({
+    id: z.number(),
+    name: z.string(),
+    head_branch: z.string(),
+    head_sha: z.string(),
+    path: z.string(),
+    conclusion: z.string().nullable(),
+    repository: z.object({
+      full_name: z.string(),
+    }),
+  }),
+  repository: z.object({
+    full_name: z.string(),
+  }),
+});
+
+type WorkflowRunEvent = z.infer<typeof WorkflowRunEvent>;
+
+// Zod schema for GitHub commit_comment event payload
+const CommitCommentEvent = z.object({
+  action: z.literal("created"),
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    commit_id: z.string(), // The SHA of the commit
+    user: z.object({
+      login: z.string(),
+    }),
+  }),
+  repository: z.object({
+    full_name: z.string(),
+  }),
+});
+
+type CommitCommentEvent = z.infer<typeof CommitCommentEvent>;
+
+/**
+ * Handle a workflow_run event. Checks if this is an event we care about
+ * and takes appropriate action.
+ *
+ * NOTE: This function could become an outbox consumer in the future.
+ * The event is already persisted in the events table before this runs.
+ */
+async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) {
+  const { workflow_run } = payload;
+
+  // Check if this is an iterate/iterate CI completion on main
+  if (!IterateCICompletion.safeParse(payload).success) {
+    logger.debug("[GitHub Webhook] workflow_run not matching any handlers", {
+      action: payload.action,
+      conclusion: workflow_run.conclusion,
+      branch: workflow_run.head_branch,
+      path: workflow_run.path,
+      repo: workflow_run.repository.full_name,
+    });
+    return;
+  }
+
+  const headSha = workflow_run.head_sha;
+  const snapshotName = `iterate-sandbox-${headSha}`;
+
+  logger.info("[GitHub Webhook] Processing CI completion", {
+    workflowRunId: workflow_run.id,
+    headSha,
+    snapshotName,
+  });
+
+  // Get all projects with active machines
+  const projectsWithActiveMachines = await db.query.project.findMany({
+    with: {
+      organization: true,
+      machines: {
+        where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+        limit: 1,
+      },
+    },
+  });
+
+  const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
+
+  logger.info("[GitHub Webhook] Found projects to update", {
+    total: projectsWithActiveMachines.length,
+    withActiveMachines: projectsToUpdate.length,
+  });
+
+  // Create new machines for each project
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const project of projectsToUpdate) {
+    try {
+      const activeMachine = project.machines[0];
+      const machineName = `ci-${headSha.slice(0, 7)}`;
+
+      await createMachineForProject({
+        db,
+        env,
+        projectId: project.id,
+        organizationId: project.organizationId,
+        organizationSlug: project.organization.slug,
+        projectSlug: project.slug,
+        name: machineName,
+        type: activeMachine.type,
+        metadata: {
+          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          snapshotName, // Override to use the CI-built snapshot
+        },
+      });
+
+      logger.info("[GitHub Webhook] Created machine", {
+        projectId: project.id,
+        machineName,
+      });
+      successCount++;
+    } catch (err) {
+      logger.error("[GitHub Webhook] Failed to create machine", {
+        projectId: project.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      errorCount++;
+    }
+  }
+
+  logger.info("[GitHub Webhook] Completed machine recreation", {
+    successCount,
+    errorCount,
+  });
+}
+
+// Schema to identify CI completion events we want to act on
+const IterateCICompletion = z.object({
+  action: z.literal("completed"),
+  workflow_run: z.object({
+    head_branch: z.literal("main"),
+    path: z.string().endsWith("ci.yml"),
+    conclusion: z.literal("success"),
+    repository: z.object({
+      full_name: z.literal("iterate/iterate"),
+    }),
+  }),
+});
+
+type HandleWorkflowRunParams = {
+  payload: WorkflowRunEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+type HandleCommitCommentParams = {
+  payload: CommitCommentEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+/**
+ * Handle a commit_comment event. Looks for [refresh] tag to trigger machine recreation.
+ * This allows manual testing of the webhook flow by commenting on any commit.
+ */
+async function handleCommitComment({ payload, db, env }: HandleCommitCommentParams) {
+  const { comment, repository } = payload;
+
+  // Only process comments on iterate/iterate repo
+  if (repository.full_name !== "iterate/iterate") {
+    logger.debug("[GitHub Webhook] commit_comment not from iterate/iterate", {
+      repo: repository.full_name,
+    });
+    return;
+  }
+
+  // Look for [refresh] tag in comment body
+  if (!comment.body.includes("[refresh]")) {
+    logger.debug("[GitHub Webhook] commit_comment missing [refresh] tag", {
+      commentId: comment.id,
+      user: comment.user.login,
+    });
+    return;
+  }
+
+  const commitSha = comment.commit_id;
+  const snapshotName = `iterate-sandbox-${commitSha}`;
+
+  logger.info("[GitHub Webhook] Processing [refresh] comment", {
+    commentId: comment.id,
+    user: comment.user.login,
+    commitSha,
+    snapshotName,
+  });
+
+  // Get all projects with active machines
+  const projectsWithActiveMachines = await db.query.project.findMany({
+    with: {
+      organization: true,
+      machines: {
+        where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+        limit: 1,
+      },
+    },
+  });
+
+  const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
+
+  logger.info("[GitHub Webhook] Found projects to update from comment", {
+    total: projectsWithActiveMachines.length,
+    withActiveMachines: projectsToUpdate.length,
+  });
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const project of projectsToUpdate) {
+    try {
+      const activeMachine = project.machines[0];
+      const machineName = `refresh-${commitSha.slice(0, 7)}`;
+
+      await createMachineForProject({
+        db,
+        env,
+        projectId: project.id,
+        organizationId: project.organizationId,
+        organizationSlug: project.organization.slug,
+        projectSlug: project.slug,
+        name: machineName,
+        type: activeMachine.type,
+        metadata: {
+          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          snapshotName,
+          triggeredBy: `commit_comment:${comment.id}`,
+          triggeredByUser: comment.user.login,
+        },
+      });
+
+      logger.info("[GitHub Webhook] Created machine from comment", {
+        projectId: project.id,
+        machineName,
+      });
+      successCount++;
+    } catch (err) {
+      logger.error("[GitHub Webhook] Failed to create machine from comment", {
+        projectId: project.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      errorCount++;
+    }
+  }
+
+  logger.info("[GitHub Webhook] Completed machine recreation from comment", {
+    successCount,
+    errorCount,
+  });
+}
+
+// #endregion ========== Webhook Handler ==========

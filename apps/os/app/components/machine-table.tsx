@@ -28,10 +28,13 @@ interface Machine {
   name: string;
   type: string;
   state: "starting" | "active" | "archived";
+  externalId: string;
   createdAt: Date;
   metadata: {
     snapshotName?: string;
+    sandboxName?: string;
     containerId?: string;
+    containerName?: string;
     port?: number;
     ports?: Record<string, number>;
     host?: string;
@@ -194,7 +197,23 @@ export function MachineTable({
                 />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
-                {machine.metadata?.snapshotName && (
+                {machine.metadata?.containerName && (
+                  <>
+                    <span className="hidden sm:inline">·</span>
+                    <span className="hidden sm:inline font-mono text-xs text-orange-600">
+                      {machine.metadata.containerName}
+                    </span>
+                  </>
+                )}
+                {machine.type === "daytona" && (
+                  <>
+                    <span className="hidden sm:inline">·</span>
+                    <span className="hidden sm:inline font-mono text-xs">
+                      {machine.metadata?.sandboxName ?? machine.externalId}
+                    </span>
+                  </>
+                )}
+                {machine.metadata?.snapshotName && machine.type !== "daytona" && (
                   <>
                     <span className="hidden sm:inline">·</span>
                     <span className="hidden sm:inline font-mono text-xs">

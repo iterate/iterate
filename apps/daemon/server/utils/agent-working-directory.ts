@@ -1,5 +1,3 @@
-import { getCustomerRepoPath } from "../trpc/platform.ts";
-
 export function getAgentWorkingDirectory(): string {
-  return getCustomerRepoPath() || process.env.ITERATE_REPO || process.cwd();
+  return process.env.ITERATE_CUSTOMER_REPO_PATH || process.env.ITERATE_REPO || process.cwd();
 }

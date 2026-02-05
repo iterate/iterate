@@ -1,4 +1,4 @@
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
 import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import { ensureIteratePnpmStoreVolume, getLocalDockerEnvVars } from "./sandbox/test/helpers.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -50,80 +51,6 @@ const isPreview =
   app.stage === "dev" ||
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
-
-const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
-
-/**
- * Get the current git branch name for dev mode.
- * Used to automatically set ITERATE_GIT_REF for Daytona sandboxes.
- */
-function getCurrentGitRef(): string | undefined {
-  if (!isDevelopment) return undefined;
-  try {
-    return execSync("git branch --show-current", { encoding: "utf-8", cwd: repoRoot }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function ensureLocalDockerImage() {
-  // Check if Docker is available
-  const result = spawnSync("docker", ["version"], { encoding: "utf-8" });
-  if (result.status !== 0) {
-    console.log("Docker not available, skipping local sandbox image build");
-    return;
-  }
-
-  // Always run docker build in background - let Docker's cache decide if rebuild is needed
-  // This ensures we pick up Dockerfile changes without blocking dev server startup
-  console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME} (background)...`);
-
-  // Build args from env vars (only SANDBOX_ITERATE_REPO_REF is a build arg - other versions are ENV in Dockerfile)
-  const buildArgs: string[] = [];
-  if (process.env.SANDBOX_ITERATE_REPO_REF) {
-    buildArgs.push(
-      "--build-arg",
-      `SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`,
-    );
-    console.log(`[docker] Using SANDBOX_ITERATE_REPO_REF=${process.env.SANDBOX_ITERATE_REPO_REF}`);
-  }
-
-  const buildProcess = spawn(
-    "docker",
-    ["build", ...buildArgs, "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os/sandbox/Dockerfile", "."],
-    {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  // Stream output with prefix so it's clear what's happening
-  buildProcess.stdout?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.stderr?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line) console.log(`[docker] ${line}`);
-    }
-  });
-
-  buildProcess.on("exit", (code) => {
-    if (code === 0) {
-      console.log(`[docker] Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
-    } else {
-      console.error(`[docker] Failed to build ${LOCAL_DOCKER_IMAGE_NAME} (exit code ${code})`);
-    }
-  });
-
-  buildProcess.on("error", (err) => {
-    console.error(`[docker] Build process error: ${err.message}`);
-  });
-}
 
 /**
  * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
@@ -279,6 +206,8 @@ const Env = z.object({
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
   DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  DAYTONA_ORG_ID: Optional,
+  VITE_DAYTONA_SNAPSHOT_NAME: Optional,
   DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
   DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   GOOGLE_CLIENT_ID: Required,
@@ -294,6 +223,7 @@ const Env = z.object({
   GITHUB_APP_SLUG: Required,
   GITHUB_APP_ID: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
+  GITHUB_WEBHOOK_SECRET: Required,
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
@@ -304,6 +234,7 @@ const Env = z.object({
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
+  APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
   // ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
@@ -322,6 +253,12 @@ type EnvSecrets = {
 };
 
 async function setupEnvironmentVariables(): Promise<EnvSecrets> {
+  if (process.env.APP_STAGE && process.env.APP_STAGE !== app.stage)
+    throw new Error(`APP_STAGE=${process.env.APP_STAGE} but app.stage=${app.stage}!`);
+
+  if (process.env.VITE_APP_STAGE && process.env.VITE_APP_STAGE !== app.stage)
+    throw new Error(`VITE_APP_STAGE=${process.env.VITE_APP_STAGE} but app.stage=${app.stage}!`);
+
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
   if (!parsed.success) {
     throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);
@@ -463,7 +400,52 @@ const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/
 
 const domains = [`${subdomain}.iterate.com`];
 
+function envVarsFrom(keys: readonly string[]) {
+  // Build an object of only the env vars that are set.
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  ) as Record<string, string>;
+}
+
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
+  const localDockerEnvVars = isDevelopment
+    ? {
+        ...getLocalDockerEnvVars(repoRoot),
+        ...envVarsFrom([
+          "LOCAL_DOCKER_COMPOSE_PROJECT_NAME",
+          "LOCAL_DOCKER_GIT_COMMON_DIR",
+          "LOCAL_DOCKER_GIT_GITDIR",
+          "LOCAL_DOCKER_GIT_COMMIT",
+          "LOCAL_DOCKER_GIT_BRANCH",
+          "LOCAL_DOCKER_GIT_REPO_ROOT",
+          "LOCAL_DOCKER_REPO_CHECKOUT",
+          "LOCAL_DOCKER_GIT_DIR",
+          "LOCAL_DOCKER_COMMON_DIR",
+        ]),
+      }
+    : {};
+  const localDockerBindings = {
+    LOCAL_DOCKER_IMAGE_NAME: "",
+    LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
+    LOCAL_DOCKER_GIT_COMMON_DIR: "",
+    LOCAL_DOCKER_GIT_GITDIR: "",
+    LOCAL_DOCKER_GIT_COMMIT: "",
+    LOCAL_DOCKER_GIT_BRANCH: "",
+    LOCAL_DOCKER_GIT_REPO_ROOT: "",
+    LOCAL_DOCKER_REPO_CHECKOUT: "",
+    LOCAL_DOCKER_GIT_DIR: "",
+    LOCAL_DOCKER_COMMON_DIR: "",
+  };
+  if (isDevelopment) {
+    Object.assign(localDockerBindings, {
+      LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local",
+      ...localDockerEnvVars,
+    });
+  }
+
   const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
     "realtime-pusher",
     {
@@ -477,9 +459,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     className: "ApprovalCoordinator",
     sqlite: true,
   });
-
-  const devGitRef = getCurrentGitRef();
-  console.log(`Current git branch: ${devGitRef}`);
 
   const PROXY_ROOT_DOMAIN = isDevelopment ? "local.iterate.town" : "iterate.town";
 
@@ -511,8 +490,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       APPROVAL_COORDINATOR,
       PROXY_ROOT_DOMAIN,
       PROXY_WORKER: proxyWorker,
-      // In dev, pass the current git branch for Daytona sandboxes
-      ...(devGitRef ? { ITERATE_DEV_GIT_REF: devGitRef } : {}),
+      // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
+      // Use empty defaults outside dev so worker.Env contains these bindings for typing.
+      ...localDockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
@@ -560,9 +540,19 @@ if (process.env.GITHUB_OUTPUT) {
 await verifyDopplerEnvironment();
 
 if (isDevelopment) {
-  ensureLocalDockerImage();
   // Set VITE_PUBLIC_URL before vite starts
   setupDevTunnelEnv();
+
+  // Start Docker containers (postgres, neon-proxy) before migrations
+  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars
+  // --wait flag ensures postgres healthcheck passes before returning
+  console.log("Starting Docker containers...");
+  execSync("pnpm docker:up", {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+
+  ensureIteratePnpmStoreVolume(repoRoot);
 }
 
 // Setup database and env first

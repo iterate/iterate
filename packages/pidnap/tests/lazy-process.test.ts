@@ -31,9 +31,8 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      // Wait for process to complete
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      // Wait for process to complete using polling for reliability
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
     });
 
     it("should log stdout output", async () => {
@@ -77,9 +76,8 @@ describe("LazyProcess", () => {
       await proc.start();
 
       // Wait for process to exit
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
 
-      expect(proc.state).toBe("error");
       // Logger now uses withPrefix, so check the child logger was called
       expect(mockLogger.withPrefix).toHaveBeenCalled();
     });
@@ -157,8 +155,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -177,8 +174,7 @@ describe("LazyProcess", () => {
       const proc = new LazyProcess("test", definition, mockLogger);
 
       await proc.start();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("error");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
 
       await proc.reset();
       expect(proc.state).toBe("idle");
@@ -198,8 +194,7 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
     });
 
     it("should follow correct lifecycle with stop: idle -> running -> stopping -> stopped", async () => {

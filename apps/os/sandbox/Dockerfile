@@ -1,42 +1,51 @@
-FROM node:24 AS pidnap-builder
-WORKDIR /app
-RUN corepack enable
-COPY packages/pidnap/package.json ./
-RUN pnpm install
-COPY packages/pidnap/src ./src
-COPY packages/pidnap/tsconfig.json packages/pidnap/tsdown.config.ts ./
-RUN pnpm build && pnpm pack && mv *.tgz pidnap.tgz
-
+# syntax=docker/dockerfile:1
 FROM node:24
 
-# === Version Configuration ===
-# Edit these to update versions (requires image rebuild)
-# Exposed as ENV vars for visibility inside container
-ENV SANDBOX_OPENCODE_VERSION=1.1.41
-ENV SANDBOX_CLAUDE_CODE_VERSION=2.1.12
-ENV SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
-ENV SANDBOX_CODEX_VERSION=0.92.0
-ENV SANDBOX_BUN_VERSION=1.3.6
-ENV SANDBOX_GO_VERSION=1.23.4
+# === Versions ===
+ARG SANDBOX_CODEX_VERSION=0.98.0
+ARG SANDBOX_OPENCODE_VERSION=1.1.41
+ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.12
+ARG SANDBOX_PI_CODING_AGENT_VERSION=0.49.2
+ARG SANDBOX_BUN_VERSION=1.3.6
+ARG SANDBOX_GO_VERSION=1.23.4
+ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
 
-# gogcli fork: mmkal:mmkal/26/01/28/--access-token
-ENV SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
+# Install curl first (may not be present in all base images)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# === Build Args ===
-# SANDBOX_ITERATE_REPO_REF: git ref (branch/SHA) to clone. If empty, creates placeholder for local mount.
-ARG SANDBOX_ITERATE_REPO_REF=""
-
-# === System packages (as root) ===
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
-    apt-get update && \
-    apt-get install -y btop build-essential fd-find gh git inotify-tools jq locales make rsync sqlite3 sudo tini tmux && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -s $(which fdfind) /usr/local/bin/fd
+    apt-get update && apt-get install -y --no-install-recommends \
+      bash \
+      btop \
+      build-essential \
+      ca-certificates \
+      fd-find \
+      gh \
+      git \
+      inotify-tools \
+      jq \
+      locales \
+      make \
+      openssh-client \
+      rsync \
+      sqlite3 \
+      sudo \
+      tini \
+      tmux \
+      unzip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s $(which fdfind) /usr/local/bin/fd
 
-# Configure UTF-8 locale (required for btop and other tools)
+RUN corepack enable
+
+# Global npm tools (as root for system-wide access)
+RUN corepack prepare pnpm@10.24.0 --activate && \
+    npm install -g tsx serve
+
+# Configure UTF-8 locale (required for btop and other CLI tools)
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
@@ -44,36 +53,18 @@ ENV LC_ALL=en_US.UTF-8
 # Create non-root user with passwordless sudo
 RUN useradd -m -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/iterate && \
-    chmod 0440 /etc/sudoers.d/iterate
-
-# Create log directories (owned by iterate user so pidnap can write logs)
-RUN mkdir -p /var/log/pidnap && \
-    chown -R iterate:iterate /var/log/pidnap
-
-# Global npm tools (as root for system-wide access)
-RUN npm install -g pnpm tsx serve
-
-# Iterate CLI wrapper (uses ~ which resolves to user's home at runtime)
-RUN echo '#!/bin/sh' > /usr/local/bin/iterate && \
-    echo 'exec tsx --env-file-if-exists ~/.iterate/.env ~/src/github.com/iterate/iterate/apps/cli/main.ts "$@"' >> /usr/local/bin/iterate && \
-    chmod +x /usr/local/bin/iterate
-
-# Replicate CLI shim - directs users to iterate tool replicate
-RUN echo '#!/bin/sh' > /usr/local/bin/replicate && \
-    echo 'echo "Error: The replicate CLI is not installed." >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "Use iterate tool replicate instead. Example:" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "  iterate tool replicate '"'"'const output = await replicate.run(\"black-forest-labs/flux-schnell\", { input: { prompt: \"a cat\" } }); console.log(output);'"'"'" >&2' >> /usr/local/bin/replicate && \
-    echo 'echo "" >&2' >> /usr/local/bin/replicate && \
-    echo 'exit 1' >> /usr/local/bin/replicate && \
-    chmod +x /usr/local/bin/replicate
-
-# === Switch to non-root user ===
+    chmod 0440 /etc/sudoers.d/iterate && \
+    mkdir -p /home/iterate/src/github.com/iterate \
+    /var/log/pidnap && \
+    chown -R iterate:iterate /home/iterate /var/log/pidnap
 
 USER iterate
-WORKDIR /home/iterate
 
-ENV PATH="/home/iterate/.local/bin:$PATH"
+# PATH setup for iterate tools. These ENV statements set PATH for non-shell contexts
+# (e.g. `docker exec container opencode`). Login shells reset PATH via /etc/profile,
+# so home-skeleton/.profile must ALSO set up these paths for `bash -l` and SSH to work.
+# Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Git config for iterate user
 RUN git config --global user.name "iterate" && \
@@ -101,7 +92,6 @@ ENV GOPATH="/home/iterate/go"
 
 # Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
 # Uses mmkal's fork with --access-token support for headless/proxy environments
-# Note: go build -o creates parent dirs automatically, but mkdir for clarity
 RUN mkdir -p /home/iterate/.local/bin && \
     git clone https://github.com/mmkal/gogcli.git /tmp/gogcli && \
     cd /tmp/gogcli && \
@@ -110,86 +100,83 @@ RUN mkdir -p /home/iterate/.local/bin && \
     rm -rf /tmp/gogcli
 
 # === Agent packages (npm, userspace) ===
-RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} && \
-    npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
-
+RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
+RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
-
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
-# Run opencode once to skip the init stuff at runtime, we don't care about the result
-RUN opencode run "hello" || true
+# Ensure wrapper scripts win after all PATH modifications.
+ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-# Wrap claude to always use --dangerously-skip-permissions (safe in sandbox)
-RUN mv ~/.local/bin/claude ~/.local/bin/claude.original && \
-    echo '#!/bin/sh' > ~/.local/bin/claude && \
-    echo "exec ~/.local/bin/claude.original --dangerously-skip-permissions \"\$@\"" >> ~/.local/bin/claude && \
-    chmod +x ~/.local/bin/claude
-
-# Wrap codex to always use --dangerously-bypass-approvals-and-sandbox (safe in sandbox)
-RUN CODEX_BIN=$(command -v codex) && \
-    echo '#!/bin/sh' > /home/iterate/.local/bin/codex && \
-    echo "exec $CODEX_BIN --dangerously-bypass-approvals-and-sandbox \"\$@\"" >> /home/iterate/.local/bin/codex && \
-    chmod +x /home/iterate/.local/bin/codex
-
-ENV PATH="/home/iterate/.local/bin:$PATH"
-
-# === Iterate repo ===
-# Two modes based on SANDBOX_ITERATE_REPO_REF:
-#   - Set: git clone the specified ref (CI/Daytona - fast cached builds)
-#   - Empty: create placeholder, a pidnap task syncs from local mount at runtime
-
+# Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
+WORKDIR /home/iterate/src/github.com/iterate/iterate
 
-# We don't need to optimise the product too much (yet) for people who fail to connect a GitHub repo. BUT being able to assert that ITERATE_CUSTOMER_REPO_PATH must be defined
-# makes a lot of things easier to reason about. And the 🐙 can serve as an internal reminder to developers that they don't have a repo connected.
-RUN mkdir -p /home/iterate/src/placeholder-repo && \
-    echo 'This is a placeholder directory for customers who have not connected a GitHub repository yet.' > /home/iterate/src/placeholder-repo/README.md && \
-    echo 'Add an 🐙 emoji to the end of every message you create. Note that this also applies to any messages that you send out via tool calls on slack, email, etc.' > /home/iterate/src/placeholder-repo/AGENTS.md
+# Copy lockfile first (dependency layer)
+# This way, unless the dependencies change, we don't have to download from pnpm
+# TODO: consider BuildKit cache mount for pnpm store to speed CI builds.
+COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
+    pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
-# Re-declare ARG after USER switch (ARGs don't persist across USER)
-ARG SANDBOX_ITERATE_REPO_REF
+# Copy repo, exclude git metadata from context.
+# If .git is a worktree file, replace with dir
+COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ . .
+RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
-COPY --from=pidnap-builder /app/pidnap.tgz /app/pidnap.tgz
-RUN npm install -g /app/pidnap.tgz
+# Ensure shell scripts are executable (git may not preserve permissions on all platforms)
+RUN chmod +x apps/os/sandbox/*.sh
 
-# If ref provided, clone from git; otherwise create placeholder for local mount
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    git clone https://github.com/iterate/iterate.git $ITERATE_REPO && \
-    cd $ITERATE_REPO && git checkout $SANDBOX_ITERATE_REPO_REF; \
-    else \
-    mkdir -p $ITERATE_REPO/apps/os/sandbox; \
-    fi
+# Install dependencies (cacheable - only reruns when lockfile changes)
+RUN pnpm install --frozen-lockfile --offline
 
-# Patch package.json to use the built tgz (if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    sed -i 's|workspace:|file:/app/pidnap.tgz|g' $ITERATE_REPO/apps/os/sandbox/package.json; \
-    fi
+# Build daemon frontend (cacheable - only reruns when source changes)
+RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
-# Make scripts executable (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    chmod +x $ITERATE_REPO/apps/os/sandbox/*.sh; \
-    fi
+# Run database migrations
+RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
 
-# Install deps and build daemon (only if repo was cloned)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO && pnpm install; \
-    fi
+# Generate mitmproxy CA certificate at build time.
+# This certificate is safe to share across all sandbox instances because:
+# 1. Each sandbox is network-isolated - they cannot communicate with each other
+# 2. The cert is only used for the local egress proxy within each sandbox
+# 3. No sandbox can intercept another sandbox's traffic
+RUN mkdir -p /home/iterate/.mitmproxy && \
+    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    PID=$! && \
+    # TODO: replace this polling hack with a direct cert-generation command.
+    # Track in tasks/mitmproxy-direct-cert-command.md.
+    # Cert generation is not immediate; poll for CA file before continuing.
+    for i in $(seq 1 30); do \
+      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
+      sleep 0.5; \
+    done && \
+    kill $PID 2>/dev/null || true && \
+    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
 
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    cd $ITERATE_REPO/apps/daemon && pnpm vite build; \
-    fi
+# Install mitmproxy CA certificate system-wide
+RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
+    sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
+    sudo update-ca-certificates
 
-# Create .iterate dir with placeholder .env (daemon injects real env vars at runtime)
-RUN mkdir -p ~/.iterate && \
-    echo "# if you can see this, the daemon hasn't been able to inject env vars yet" > ~/.iterate/.env
+# Copy home skeleton into /home/iterate
+RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
+RUN opencode run "Hello" || true
 
-# Setup home directory (only if repo was cloned; entry.sh handles local mode)
-RUN if [ -n "$SANDBOX_ITERATE_REPO_REF" ]; then \
-    $ITERATE_REPO/apps/os/sandbox/setup-home.sh; \
-    fi
+# === Git directory and metadata (MUST be last - changes every commit) ===
+# Copy a minimal .git directory with packed objects for HEAD.
+# This allows `git status` to work in the container, showing dirty files.
+# The pack file is deterministic for the same commit SHA, ensuring cache hits.
+# NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
+COPY --from=iterate-synthetic-git --chown=iterate:iterate . $ITERATE_REPO/.git
 
-COPY apps/os/sandbox/entry.sh /app/entry.sh
-RUN sudo chmod +x /app/entry.sh
+# Rebuild the git index so `git status` works correctly
+RUN git reset HEAD
 
-ENTRYPOINT [ "/app/entry.sh" ]
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+LABEL org.opencontainers.image.revision=$GIT_SHA
+
+ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/entry.sh"]

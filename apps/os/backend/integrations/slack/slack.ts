@@ -9,6 +9,7 @@ import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 
 import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
@@ -342,6 +343,15 @@ slackApp.get(
           },
         });
       });
+
+      // Link Slack team to org/project in PostHog (after transaction commits)
+      if (project) {
+        linkExternalIdToGroups(c.env, {
+          distinctId: `slack:${teamData.id}`,
+          organizationId: project.organizationId,
+          projectId,
+        });
+      }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
         const conflictData = JSON.parse(
@@ -411,17 +421,18 @@ slackApp.post("/webhook", async (c) => {
     return c.text("Invalid JSON", 400);
   }
 
-  // URL verification - return immediately
-  if (payload.type === "url_verification") {
-    return c.json({ challenge: payload.challenge });
-  }
-
-  // Extract event_id for dedup
-  const slackEventId = payload.event_id as string | undefined;
+  // Extract team ID for tracking and processing
   const teamId =
     (payload.team_id as string) ||
     ((payload.team as Record<string, unknown>)?.id as string) ||
     ((payload.event as Record<string, unknown>)?.team as string);
+
+  // URL verification - return immediately
+  if (payload.type === "url_verification") {
+    return c.json({ challenge: payload.challenge });
+  }
+  // Extract event_id for dedup
+  const slackEventId = payload.event_id as string;
 
   // Log full payload for debugging
   logger.debug("[Slack Webhook] Received", { payload });
@@ -436,20 +447,16 @@ slackApp.post("/webhook", async (c) => {
       try {
         if (!teamId) {
           logger.warn("[Slack Webhook] No team_id in payload");
+          // Still track the event, just without groups
+          trackWebhookEvent(env, {
+            distinctId: "slack:unknown",
+            event: "slack:webhook_received",
+            properties: payload,
+          });
           return;
         }
 
-        // Dedup check using external_id (Slack's event_id)
-        if (slackEventId) {
-          const existing = await db.query.event.findFirst({
-            where: (e, { eq }) => eq(e.externalId, slackEventId),
-          });
-          if (existing) {
-            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
-            return;
-          }
-        }
-
+        // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
         logger.debug("[Slack Webhook] Looking up connection", { teamId });
         // Find connection and the single active machine for its project
         const connection = await db.query.projectConnection.findFirst({
@@ -465,6 +472,30 @@ slackApp.post("/webhook", async (c) => {
             },
           },
         });
+
+        // Track webhook in PostHog with group association
+        trackWebhookEvent(env, {
+          distinctId: `slack:${teamId}`,
+          event: "slack:webhook_received",
+          properties: payload,
+          groups: connection?.project
+            ? {
+                organization: connection.project.organizationId,
+                project: connection.projectId,
+              }
+            : undefined,
+        });
+
+        // Dedup check using external_id (Slack's event_id)
+        if (slackEventId) {
+          const existing = await db.query.event.findFirst({
+            where: (e, { eq }) => eq(e.externalId, slackEventId),
+          });
+          if (existing) {
+            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
+            return;
+          }
+        }
 
         const projectId = connection?.projectId;
         if (!projectId) {

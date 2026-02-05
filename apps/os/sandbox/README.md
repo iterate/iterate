@@ -1,158 +1,96 @@
 # Sandbox
 
-The sandbox container runs agents in isolated Docker environments.
+Minimal, single-image setup. Host sync uses rsync into the baked repo path.
+Builds use [Depot](https://depot.dev) for persistent layer caching across CI and local dev.
 
-## How It Works
+## TL;DR
 
-The Docker **build context** determines what version of iterate is bundled in the image. The entire repo (including `.git`) is COPYed into the container at build time.
+- Local image: `iterate-sandbox:local`
+- Repo path in container: `/home/iterate/src/github.com/iterate/iterate`
+- pnpm store: `/home/iterate/.pnpm-store` (volume `iterate-pnpm-store`)
+- Dev sync mounts (read-only):
+  - `/host/repo-checkout` (repo worktree)
+  - `/host/gitdir` (worktree git dir)
+  - `/host/commondir` (main .git)
 
-### Deployment Scenarios
+## Build
 
-- **Production (Daytona)**: CI builds from `main` branch → image pushed to registry → Daytona uses that image. Agent versions (OpenCode, Claude Code, Bun, etc.) are locked in the Dockerfile.
-
-- **Staging/Feature Branch (CI)**: CI builds from that branch → special image created → pushed to Daytona. Allows testing branch-specific changes.
-
-- **Local Docker Development**: Build from your local working directory. On container restart, `entry.sh` rsyncs your local files into the container, runs `pnpm install`, rebuilds the daemon, and re-copies `home-skeleton/`. Edit code locally, restart container to pick up changes.
-
-## Key Files
-
-| File                       | Purpose                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------ |
-| `Dockerfile`               | Image definition; COPY repo from build context                                       |
-| `entry.sh`                 | Container entrypoint; rsync in local mode, then start pidnap                         |
-| `pidnap.config.ts`         | Process manager configuration (services, tasks, env watching)                        |
-| `egress-proxy-addon.py`    | mitmproxy addon for routing traffic through iterate egress worker                    |
-| `setup-home.sh`            | Copies `home-skeleton/` to `$HOME`; used at build time AND in local mode after rsync |
-| `home-skeleton/`           | Agent configs (Claude Code, OpenCode, Pi) baked into `$HOME`                         |
-| `daytona-snapshot.ts`      | Script to build Daytona snapshot from git ref                                        |
-| `local-docker-snapshot.ts` | Script to build local Docker image                                                   |
-| `daytona.test.ts`          | Integration test for Daytona sandbox bootstrap                                       |
-| `local-docker.test.ts`     | Integration test for local Docker sandbox                                            |
-
-## Version Configuration
-
-Agent versions are `ENV` vars at the top of the Dockerfile (prefix `SANDBOX_`):
-
-| ENV var                           | Description                 |
-| --------------------------------- | --------------------------- |
-| `SANDBOX_OPENCODE_VERSION`        | npm version for OpenCode    |
-| `SANDBOX_CLAUDE_CODE_VERSION`     | npm version for Claude Code |
-| `SANDBOX_PI_CODING_AGENT_VERSION` | npm version for Pi          |
-| `SANDBOX_BUN_VERSION`             | Bun version                 |
-
-To update: edit `ENV` values in `Dockerfile`, rebuild image.
-
-## Building & Testing
-
-### Local Docker
+Local build (uses current repo checkout):
 
 ```bash
-# Build local image (uses your working directory)
-pnpm snapshot:local-docker
-
-# Run tests against local Docker
-pnpm snapshot:local-docker:test
+pnpm os docker:build
 ```
 
-### Daytona
+Tags the image as `iterate-sandbox:local` by default.
+Cache is shared automatically via Depot - no manual push needed.
+
+Direct Depot build (bypassing pnpm script):
 
 ```bash
-# Build snapshot from current branch
-SANDBOX_ITERATE_REPO_REF=$(git branch --show-current) pnpm snapshot:daytona:prd
-
-# Build snapshot from specific branch/SHA
-SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:prd
-
-# Run tests (auto-builds snapshot from current branch if not specified)
-pnpm snapshot:daytona:test
-
-# Run tests with specific branch
-SANDBOX_ITERATE_REPO_REF=my-feature-branch pnpm snapshot:daytona:test
-
-# Run tests with existing snapshot (skips build)
-DAYTONA_SNAPSHOT_NAME=prd--20260116-230007 pnpm snapshot:daytona:test
+depot build --load -f apps/os/sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
 ```
 
-### Direct Docker Build
+## Local Depot Setup
+
+Depot provides persistent layer caching shared between CI and all developers.
+
+One-time setup:
 
 ```bash
-docker build -t iterate-sandbox:local -f apps/os/sandbox/Dockerfile .
+brew install depot/tap/depot   # or: curl -L https://depot.dev/install-cli.sh | sh
+depot login
 ```
 
-## Entry Script Flow
+After setup, `pnpm os docker:build` uses the shared layer cache automatically.
+The project ID in `depot.json` links your local builds to the same cache as CI.
 
-`entry.sh` runs on container start:
+## Dev sync mode
 
-```
-Local mode (mount at /local-iterate-repo exists):
-  1. rsync local repo → ~/src/github.com/iterate/iterate
-  2. pnpm install
-  3. vite build daemon
-  4. setup-home.sh (copy home-skeleton to $HOME)
-  5. Start pidnap
+Local sandboxes are created by the local-docker provider (not docker compose).
+The container mounts:
 
-Daytona/CI mode (no mount):
-  1. Start pidnap (code + configs already baked in)
-```
+- `/host/repo-checkout` (repo worktree, read-only)
+- `/host/gitdir` (worktree git dir)
+- `/host/commondir` (main .git)
 
----
+Entry point rsyncs into `/home/iterate/src/github.com/iterate/iterate` and overlays git metadata.
+If dependencies change, run `pnpm install` inside the container.
 
-# pidnap Process Manager
+### Env vars (compose)
 
-Services are managed by [pidnap](https://www.npmjs.com/package/pidnap), configured in `pidnap.config.ts`.
+- `LOCAL_DOCKER_REPO_CHECKOUT` (host repo root)
+- `LOCAL_DOCKER_GIT_DIR` (worktree git dir)
+- `LOCAL_DOCKER_COMMON_DIR` (main .git)
+- `LOCAL_DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
 
-## Services
+These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
 
-| Service        | Port | Description                                      |
-| -------------- | ---- | ------------------------------------------------ |
-| egress-proxy   | 8888 | mitmproxy routing traffic through iterate egress |
-| iterate-daemon | 3000 | Main daemon + web UI                             |
-| opencode       | 4096 | OpenCode server                                  |
+## Daytona snapshots
 
-## Commands
+Create snapshot directly from Dockerfile (builds on Daytona's infra):
 
 ```bash
-# Manager status
-pidnap status
-
-# List all processes
-pidnap processes list
-
-# Get specific process
-pidnap processes get iterate-daemon
-
-# Restart a process
-pidnap processes restart opencode
-
-# Stop a process
-pidnap processes stop iterate-daemon
-
-# Start a process
-pidnap processes start iterate-daemon
+pnpm os daytona:build
 ```
 
-## Logs
+Options:
 
-Logs are written to `/var/log/pidnap/`:
+- `--name` / `-n`: Snapshot name (default: `iterate-sandbox-<sha>` or `iterate-sandbox-<sha>-$ITERATE_USER-dirty`)
+- `--cpu` / `-c`: CPU cores (default: 2)
+- `--memory` / `-m`: Memory in GB (default: 4)
+- `--disk` / `-d`: Disk in GB (default: 10)
+
+Example:
 
 ```bash
-# Process logs
-tail -f /var/log/pidnap/process/iterate-daemon.log
-tail -f /var/log/pidnap/process/opencode.log
-tail -f /var/log/pidnap/process/egress-proxy.log
-
-# Task logs (initialization)
-tail -f /var/log/pidnap/tasks/generate-ca.log
-tail -f /var/log/pidnap/tasks/db-migrate.log
-
-# pidnap manager log
-tail -f /var/log/pidnap/pidnap.log
+pnpm os daytona:build --name my-snapshot --cpu 4 --memory 8
 ```
 
-## Env File Watching
+Requires `daytona` CLI (`daytona login`).
 
-pidnap watches `~/.iterate/.env` for changes. When the daemon writes new API keys:
+## Key files
 
-- `opencode` restarts after 500ms (quick reload for API keys)
-- `iterate-daemon` restarts after 5s
-- `egress-proxy` does not restart (reads env at request time)
+- `apps/os/sandbox/Dockerfile`
+- `apps/os/sandbox/entry.sh`
+- `apps/os/sandbox/sync-home-skeleton.sh`
+- `apps/os/sandbox/pidnap.config.ts`

@@ -1,7 +1,6 @@
 import { z } from "zod/v4";
-import { eq, and, isNull, or, gt, ne } from "drizzle-orm";
+import { eq, and, or, gt, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { typeid } from "typeid-js";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import {
   router,
@@ -11,11 +10,11 @@ import {
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
-import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
+import { createMachineForProject } from "../../services/machine-creation.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(baseUrl: string) {
@@ -74,22 +73,12 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
 
   return {
     ...machine,
+    metadata,
     displayInfo: provider.displayInfo,
     commands: provider.commands,
     terminalOptions: provider.terminalOptions,
     services,
   };
-}
-
-// Generate a project access token API key
-// Format: pak_<tokenId>_<randomHex>
-export function generateProjectAccessKey(tokenId: string): string {
-  const array = new Uint8Array(24);
-  crypto.getRandomValues(array);
-  const randomHex = Array.from(array)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return `pak_${tokenId}_${randomHex}`;
 }
 
 // Hash an API key using SHA-256
@@ -105,45 +94,6 @@ export async function hashApiKey(apiKey: string): Promise<string> {
 export async function verifyApiKey(apiKey: string, hash: string): Promise<boolean> {
   const computedHash = await hashApiKey(apiKey);
   return computedHash === hash;
-}
-
-/**
- * Get or create the project-level access token for machines.
- * Returns the token ID and decrypted API key.
- * If a token doesn't exist, creates one.
- */
-async function getOrCreateProjectMachineToken(
-  db: DB,
-  projectId: string,
-): Promise<{ tokenId: string; apiKey: string }> {
-  // Look for an existing non-revoked token for the project
-  const existingToken = await db.query.projectAccessToken.findFirst({
-    where: and(
-      eq(schema.projectAccessToken.projectId, projectId),
-      isNull(schema.projectAccessToken.revokedAt),
-    ),
-    orderBy: (token, { asc }) => [asc(token.createdAt)], // Get oldest (first created) token
-  });
-
-  if (existingToken) {
-    // Decrypt and return the existing token
-    const apiKey = await decrypt(existingToken.encryptedToken);
-    return { tokenId: existingToken.id, apiKey };
-  }
-
-  // No existing token - create a new one
-  const tokenId = typeid("pat").toString();
-  const apiKey = generateProjectAccessKey(tokenId);
-  const encryptedToken = await encrypt(apiKey);
-
-  await db.insert(schema.projectAccessToken).values({
-    id: tokenId,
-    projectId,
-    name: "Machine Access Token",
-    encryptedToken,
-  });
-
-  return { tokenId, apiKey };
 }
 
 // Helper to get provider for a machine by looking up its type from the database
@@ -283,116 +233,31 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const machineId = typeid("mach").toString();
-
-      // Get or create the project-level access token (shared by all machines)
-      const { apiKey } = await getOrCreateProjectMachineToken(ctx.db, ctx.project.id);
-
-      // Create provider for creation - externalId not known yet, will use result
-      const provider = await createMachineProvider({
-        type: input.type,
-        env: ctx.env,
-        externalId: "", // Not known until create() returns
-        metadata: input.metadata ?? {},
-        buildProxyUrl: () => "", // Not used during creation
-      });
-
-      // Get project-level env vars (plain text, not secrets)
-      // Secrets (OpenAI, Anthropic keys) are injected by the egress proxy, not here
-      const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
-        where: and(
-          eq(schema.projectEnvVar.projectId, ctx.project.id),
-          isNull(schema.projectEnvVar.machineId),
-        ),
-      });
-
-      const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
-
-      // Note: We no longer archive existing machines here - the new machine starts in 'starting' state
-      // and only becomes 'active' (archiving the old one) when the daemon reports ready
-
-      // Note: GitHub env vars are now injected via the bootstrap flow instead of at creation time
-      // This allows the daemon to receive fresh GitHub tokens when it reports ready
-      const providerResult = await provider
-        .create({
-          machineId,
-          name: input.name,
-          envVars: {
-            ...envVars,
-            // Platform bootstrap env vars - we use the tunnel host if it is set to handle remote sandbox and local control plane use cases
-            ITERATE_OS_BASE_URL: ctx.env.VITE_PUBLIC_URL,
-            ITERATE_OS_API_KEY: apiKey,
-            ITERATE_MACHINE_ID: machineId,
-            ITERATE_MACHINE_NAME: input.name,
-            // Org/project info for building dashboard URLs from within the sandbox
-            ITERATE_ORG_ID: ctx.organization.id,
-            ITERATE_ORG_SLUG: input.organizationSlug,
-            ITERATE_PROJECT_ID: ctx.project.id,
-            ITERATE_PROJECT_SLUG: input.projectSlug,
-            // Egress proxy URL for sandbox mitmproxy (mounted on main worker)
-            ITERATE_EGRESS_PROXY_URL: `${ctx.env.VITE_PUBLIC_URL}/api/egress-proxy`,
-            // GitHub auth via egress proxy magic string - gh CLI sends this in Authorization header
-            GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
-            GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
-            // Note: git URL rewriting is configured in entry.sh via git config commands
-            // In dev, use the current git branch for Daytona sandboxes
-            ...(input.type === "daytona" && ctx.env.ITERATE_DEV_GIT_REF
-              ? { ITERATE_GIT_REF: ctx.env.ITERATE_DEV_GIT_REF }
-              : {}),
-          },
-        })
-        .catch((err) => {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Failed to create machine: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        });
-
-      // Create machine in DB with 'starting' state
-      // It will be promoted to 'active' when the daemon reports ready
-      const [newMachine] = await ctx.db
-        .insert(schema.machine)
-        .values({
-          id: machineId,
+      try {
+        const result = await createMachineForProject({
+          db: ctx.db,
+          env: ctx.env,
+          projectId: ctx.project.id,
+          organizationId: ctx.organization.id,
+          organizationSlug: input.organizationSlug,
+          projectSlug: input.projectSlug,
           name: input.name,
           type: input.type,
-          projectId: ctx.project.id,
-          state: "starting",
-          metadata: { ...(input.metadata ?? {}), ...(providerResult.metadata ?? {}) },
-          externalId: providerResult.externalId,
-        })
-        .returning()
-        .catch(async (err) => {
-          // Cleanup: delete the provider resource if DB insert fails
-          // Need a new provider instance with the actual externalId for cleanup
-          try {
-            const cleanupProvider = await createMachineProvider({
-              type: input.type,
-              env: ctx.env,
-              externalId: providerResult.externalId,
-              metadata: providerResult.metadata ?? {},
-              buildProxyUrl: () => "",
-            });
-            await cleanupProvider.delete();
-          } catch {
-            // Ignore cleanup errors
-          }
-          throw err;
+          metadata: input.metadata,
         });
 
-      if (!newMachine) {
+        // Return apiKey for local machines - user needs this to configure their daemon
+        if (input.type === "local" && result.apiKey) {
+          return { ...result.machine, apiKey: result.apiKey };
+        }
+
+        return result.machine;
+      } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create machine",
+          message: `Failed to create machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-
-      // Return apiKey for local machines - user needs this to configure their daemon
-      if (input.type === "local") {
-        return { ...newMachine, apiKey };
-      }
-
-      return newMachine;
     }),
 
   // Archive a machine
@@ -570,6 +435,34 @@ export const machineRouter = router({
       daemons: DAEMON_DEFINITIONS,
       daemonsWithWebUI: getDaemonsWithWebUI(),
     };
+  }),
+
+  // Get available machine types (checks which providers are configured)
+  getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
+    const types: Array<{
+      type: (typeof schema.MachineType)[number];
+      label: string;
+      disabledReason?: string;
+    }> = [];
+
+    // Dev-only types first (preferred in dev)
+    if (import.meta.env.DEV) {
+      types.push({ type: "local-docker", label: "Local Docker" });
+    }
+
+    // Daytona - available if configured
+    types.push({
+      type: "daytona",
+      label: "Daytona (Cloud)",
+      disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
+    });
+
+    // Local host:port - dev only
+    if (import.meta.env.DEV) {
+      types.push({ type: "local", label: "Local (Host:Port)" });
+    }
+
+    return types;
   }),
 
   getPreviewInfo: projectProtectedProcedure

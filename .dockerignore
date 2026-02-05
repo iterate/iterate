@@ -1,8 +1,12 @@
+# Exclude .git - we use a synthetic deterministic .git via --build-context instead
+# This ensures 100% cache hits when the commit SHA hasn't changed
 .git
-.context
+
 .DS_Store
 node_modules
+**/node_modules
 .pnpm-store
+**/.pnpm-store
 *.tsbuildinfo
 
 # React Router
@@ -26,10 +30,9 @@ dist
 .cursor/rules
 .rules
 .clinerules/
-AGENTS.md
-CLAUDE.md
 
 .cache
+__pycache__/
 
 # ad-hoc ignored files/paths
 *ignoreme*
@@ -49,3 +52,11 @@ opensrc/
 
 # opencode sessions
 session-ses*.md
+
+# local lint-staged config
+lint-staged.local.cjs
+
+playwriter-screenshot-*
+
+# PR video recordings
+pr-videos/

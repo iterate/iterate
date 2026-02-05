@@ -2,8 +2,6 @@ import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessState } from "../restarting-process.ts";
-import { CronProcessState } from "../cron-process.ts";
-import { TaskStateSchema } from "../task-list.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -11,13 +9,7 @@ const oc = ocBase.$input(v.void());
 const ResourceTarget = v.union([v.string(), v.number()]);
 
 // Manager state schema
-export const ManagerStateSchema = v.picklist([
-  "idle",
-  "initializing",
-  "running",
-  "stopping",
-  "stopped",
-]);
+export const ManagerStateSchema = v.picklist(["idle", "running", "stopping", "stopped"]);
 
 export type ManagerState = v.InferOutput<typeof ManagerStateSchema>;
 
@@ -25,8 +17,6 @@ export type ManagerState = v.InferOutput<typeof ManagerStateSchema>;
 export const ManagerStatusSchema = v.object({
   state: ManagerStateSchema,
   processCount: v.number(),
-  cronCount: v.number(),
-  taskCount: v.number(),
 });
 
 export type ManagerStatus = v.InferOutput<typeof ManagerStatusSchema>;
@@ -52,35 +42,16 @@ export const RestartingProcessInfoSchema = v.object({
 
 export type RestartingProcessInfo = v.InferOutput<typeof RestartingProcessInfoSchema>;
 
-export const CronProcessInfoSchema = v.object({
+// Wait for running response - includes logs
+export const WaitForRunningResponseSchema = v.object({
   name: v.string(),
-  state: CronProcessState,
-  runCount: v.number(),
-  failCount: v.number(),
-  nextRun: v.nullable(v.string()), // ISO date string
-  definition: ProcessDefinitionInfoSchema,
-  effectiveEnv: v.optional(v.record(v.string(), v.string())),
+  state: RestartingProcessState,
+  restarts: v.number(),
+  elapsedMs: v.number(),
+  logs: v.optional(v.string()),
 });
 
-export type CronProcessInfo = v.InferOutput<typeof CronProcessInfoSchema>;
-
-// Named process info for tasks (name + definition)
-export const NamedProcessInfoSchema = v.object({
-  name: v.string(),
-  definition: ProcessDefinitionInfoSchema,
-  effectiveEnv: v.optional(v.record(v.string(), v.string())),
-});
-
-export type NamedProcessInfo = v.InferOutput<typeof NamedProcessInfoSchema>;
-
-export const TaskEntryInfoSchema = v.object({
-  id: v.string(),
-  state: TaskStateSchema,
-  processNames: v.array(v.string()),
-  processes: v.array(NamedProcessInfoSchema),
-});
-
-export type TaskEntryInfo = v.InferOutput<typeof TaskEntryInfoSchema>;
+export type WaitForRunningResponse = v.InferOutput<typeof WaitForRunningResponseSchema>;
 
 // API contract
 export const manager = {
@@ -110,32 +81,30 @@ export const processes = {
     )
     .output(RestartingProcessInfoSchema),
   remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
+  waitForRunning: oc
+    .input(
+      v.object({
+        target: ResourceTarget,
+        timeoutMs: v.optional(v.number()), // default 60000
+        pollIntervalMs: v.optional(v.number()), // default 500
+        includeLogs: v.optional(v.boolean()), // default true
+        logTailLines: v.optional(v.number()), // default 100
+      }),
+    )
+    .output(WaitForRunningResponseSchema),
 };
 
-export const tasks = {
-  get: oc
-    .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
-    .output(TaskEntryInfoSchema),
-  list: oc.output(v.array(TaskEntryInfoSchema)),
-  add: oc
-    .input(v.object({ name: v.string(), definition: ProcessDefinition }))
-    .output(TaskEntryInfoSchema),
-  remove: oc.input(v.object({ target: ResourceTarget })).output(TaskEntryInfoSchema),
-};
+// Simple health check response
+export const HealthResponseSchema = v.object({
+  status: v.literal("ok"),
+});
 
-export const crons = {
-  get: oc
-    .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
-    .output(CronProcessInfoSchema),
-  list: oc.output(v.array(CronProcessInfoSchema)),
-  trigger: oc.input(v.object({ target: ResourceTarget })).output(CronProcessInfoSchema),
-  start: oc.input(v.object({ target: ResourceTarget })).output(CronProcessInfoSchema),
-  stop: oc.input(v.object({ target: ResourceTarget })).output(CronProcessInfoSchema),
-};
+export type HealthResponse = v.InferOutput<typeof HealthResponseSchema>;
+
+export const health = oc.output(HealthResponseSchema);
 
 export const api = {
+  health,
   manager,
   processes,
-  tasks,
-  crons,
 };

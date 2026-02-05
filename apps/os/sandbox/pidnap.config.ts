@@ -17,12 +17,15 @@ const bash = (command: string) => ({
 });
 
 export default defineConfig({
+  http: {
+    host: "0.0.0.0",
+    port: 9876,
+  },
   logDir: "/var/log/pidnap",
   envFile,
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    ITERATE_REPO_LOCAL_DOCKER_MOUNT: "/local-iterate-repo",
     // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,
@@ -42,7 +45,8 @@ export default defineConfig({
     // Github Stuff
     GITHUB_MAGIC_TOKEN: githubMagicToken,
   },
-  tasks: [
+  processes: [
+    // Init tasks (run once, sequential)
     {
       name: "task-git-config",
       definition: bash(
@@ -51,6 +55,7 @@ export default defineConfig({
           git config --global --add "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "git@github.com:"
         `,
       ),
+      options: { restartPolicy: "never" },
     },
     {
       name: "task-generate-ca",
@@ -68,6 +73,8 @@ export default defineConfig({
           fi
           `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-git-config"],
     },
     {
       name: "task-install-ca",
@@ -80,6 +87,8 @@ export default defineConfig({
           fi
         `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-generate-ca"],
     },
     {
       name: "task-db-migrate",
@@ -88,9 +97,23 @@ export default defineConfig({
         args: ["db:migrate"],
         cwd: `${iterateRepo}/apps/daemon`,
       },
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-install-ca"],
     },
-  ],
-  processes: [
+    {
+      name: "task-build-daemon-client",
+      definition: {
+        command: "pnpm",
+        args: ["exec", "vite", "build", "--mode", "production"],
+        cwd: `${iterateRepo}/apps/daemon`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-db-migrate"],
+    },
+    // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
       definition: {
@@ -112,16 +135,18 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
-      name: "iterate-daemon",
+      name: "daemon-backend",
       definition: {
         command: "tsx",
         args: ["server.ts"],
         cwd: `${iterateRepo}/apps/daemon`,
         env: {
           HOSTNAME: "0.0.0.0",
-          PORT: "3000",
+          PORT: "3001",
+          NODE_ENV: "production",
         },
       },
       options: {
@@ -131,13 +156,42 @@ export default defineConfig({
       envOptions: {
         inheritGlobalEnv: false,
       },
+      dependsOn: ["task-build-daemon-client"],
+    },
+    {
+      name: "daemon-frontend",
+      definition: {
+        command: "pnpm",
+        args: ["exec", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"],
+        cwd: `${iterateRepo}/apps/daemon`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+      },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "opencode",
       definition: {
         // Note, the client needs to handle the working directory by passing in a directory when creating a client using the SDK.
         command: "opencode",
-        args: ["serve", "--port", "4096", "--hostname", "0.0.0.0", "--log-level", "DEBUG"],
+        args: [
+          "serve",
+          "--port",
+          "4096",
+          "--hostname",
+          "0.0.0.0",
+          "--log-level",
+          "DEBUG",
+          "--print-logs",
+        ],
       },
       envOptions: {
         reloadDelay: 500,
@@ -146,6 +200,7 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-build-daemon-client"],
     },
   ],
 });
