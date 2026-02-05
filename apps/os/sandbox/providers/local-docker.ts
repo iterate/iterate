@@ -370,32 +370,13 @@ export function createLocalDockerProvider(
         await waitForEntrypointSignal(handle, maxWaitMs);
 
         if (gitInfo?.commit) {
-          // Wait for host gitdir sync to be visible in the container.
-          // Without this, Host Sync (Minimal) and Git Worktree Sync tests can race.
-          let synced = false;
-          for (let i = 0; i < 25; i += 1) {
-            try {
-              const [branch, commit] = (
-                await handle.exec([
-                  "bash",
-                  "-c",
-                  "cd /home/iterate/src/github.com/iterate/iterate && git branch --show-current; git rev-parse HEAD",
-                ])
-              )
-                .trim()
-                .split("\n");
-              if (commit === gitInfo.commit && (!gitInfo.branch || branch === gitInfo.branch)) {
-                synced = true;
-                break;
-              }
-            } catch {
-              // Ignore transient git failures during sync
-            }
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          if (!synced) {
-            throw new Error("Timed out waiting for git sync");
-          }
+          // TODO: Remove this crude delay. Previously we had a polling loop that checked
+          // `git branch --show-current` and `git rev-parse HEAD` every 200ms for up to 25
+          // iterations, waiting for branch/commit to match the host. But it intermittently
+          // failed - the container would report stale git state (e.g. "main" instead of the
+          // host branch) even after entry.sh signaled completion. A fixed 5s delay works
+          // reliably but wastes time. Need to investigate why polling saw stale data.
+          await new Promise((r) => setTimeout(r, 5000));
         }
       }
 
