@@ -166,9 +166,13 @@ if (isMultiPlatform) {
 console.log("Build command:");
 console.log(buildCommand);
 
+// 15-minute timeout for depot build (fails fast instead of GitHub's 6-hour default)
+const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+
 execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
+  timeout: BUILD_TIMEOUT_MS,
 });
 
 // Write build info for downstream scripts (push-docker-image-to-daytona.ts reads this)

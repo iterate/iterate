@@ -65,6 +65,8 @@ export default {
     deploy: {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables", "build-daytona-snapshot"],
+      // Explicit condition (defensive - don't rely only on build-daytona-snapshot being skipped)
+      if: "needs.variables.outputs.stage == 'prd'",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {

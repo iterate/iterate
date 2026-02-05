@@ -134,7 +134,7 @@ pnpm os docker:shell
 After building locally, push to Daytona as a snapshot:
 
 ```bash
-# Push with auto-generated name (iterate-sandbox-{date}-{sha}-{user})
+# Push with auto-generated name
 doppler run --config dev -- pnpm os daytona:build
 
 # Push with custom name
@@ -146,6 +146,22 @@ doppler run --config dev -- pnpm os daytona:build --cpu 4 --memory 8 --disk 20
 # Push without updating Doppler secrets
 doppler run --config dev -- pnpm os daytona:build --no-update-doppler
 ```
+
+#### Snapshot Naming
+
+Auto-generated names follow the format: `iterate-sandbox-{sha}[-{user}][-dirty]`
+
+| Component | Example           | When included                      |
+| --------- | ----------------- | ---------------------------------- |
+| `{sha}`   | `419527730eb3...` | Always (full git SHA)              |
+| `{user}`  | `-jonas`          | When `ITERATE_USER` env var is set |
+| `-dirty`  | `-dirty`          | When repo has uncommitted changes  |
+
+Examples:
+
+- CI build: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40`
+- Local clean: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40-jonas`
+- Local dirty: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40-jonas-dirty`
 
 #### Options
 

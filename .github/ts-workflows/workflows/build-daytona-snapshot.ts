@@ -125,21 +125,13 @@ export default workflow({
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
             // Configure CLI with API key (CLI doesn't use env vars, needs config file)
+            // Use jq to safely escape JSON values (prevents injection if API key contains special chars)
             "mkdir -p ~/.config/daytona",
-            `doppler run -- bash -c 'cat > ~/.config/daytona/config.json << EOF
-{
-  "activeProfile": "ci",
-  "profiles": [{
-    "id": "ci",
-    "name": "ci",
-    "api": {
-      "url": "https://app.daytona.io/api",
-      "key": "$DAYTONA_API_KEY"
-    },
-    "activeOrganizationId": "$DAYTONA_ORG_ID"
-  }]
-}
-EOF'`,
+            `doppler run -- bash -c 'jq -n \\
+              --arg apiKey "$DAYTONA_API_KEY" \\
+              --arg orgId "$DAYTONA_ORG_ID" \\
+              "{activeProfile: \\"ci\\", profiles: [{id: \\"ci\\", name: \\"ci\\", api: {url: \\"https://app.daytona.io/api\\", key: \\$apiKey}, activeOrganizationId: \\$orgId}]}" \\
+              > ~/.config/daytona/config.json'`,
             // Verify auth works
             "daytona snapshot list --limit 1",
           ].join("\n"),
@@ -160,27 +152,33 @@ EOF'`,
             "echo '::endgroup::'",
           ].join("\n"),
         },
-        // Push to Daytona
+        // Push to Daytona with retry logic (network issues can cause transient failures)
         {
           id: "push",
           name: "Push Daytona snapshot",
+          uses: "nick-fields/retry@v3",
           env: {
             CI: "true",
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
-          run: [
-            "set -euo pipefail",
-            "output_file=$(mktemp)",
-            "git_sha=$(git rev-parse HEAD)",
-            'snapshot_name="iterate-sandbox-${git_sha}"',
-            // CLI is configured via config file, no doppler run needed
-            // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
-            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
-            "snapshot_name=$(grep -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
-            'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
-            'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
-          ].join("\n"),
+          with: {
+            timeout_minutes: 10,
+            max_attempts: 3,
+            retry_wait_seconds: 30,
+            command: [
+              "set -euo pipefail",
+              "output_file=$(mktemp)",
+              "git_sha=$(git rev-parse HEAD)",
+              'snapshot_name="iterate-sandbox-${git_sha}"',
+              // CLI is configured via config file, no doppler run needed
+              // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
+              'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
+              "snapshot_name=$(grep -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
+              'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
+              'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
+            ].join("\n"),
+          },
         },
       ],
     },
