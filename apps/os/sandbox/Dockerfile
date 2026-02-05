@@ -128,22 +128,24 @@ RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x apps/os/sandbox/*.sh
 
-# Overlay git directory pieces from BuildKit contexts (worktree-safe).
-# In a worktree, .git is a file that points at the real gitdir/commondir on disk.
-# The build script passes both as BuildKit contexts, then we copy them into
-# $ITERATE_REPO/.git and remove the indirection markers so git works in-container.
-COPY --from=iterate-repo-commondir --chown=iterate:iterate . $ITERATE_REPO/.git
-COPY --from=iterate-repo-gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
-RUN rm -f $ITERATE_REPO/.git/commondir $ITERATE_REPO/.git/gitdir
-
-# Install dependencies
+# Install dependencies (cacheable - only reruns when lockfile changes)
 RUN pnpm install --frozen-lockfile --offline
 
-# Build daemon frontend
+# Build daemon frontend (cacheable - only reruns when source changes)
 RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
 
 # Copy home skeleton into /home/iterate
 RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+
+# === Git directory and metadata (MUST be last - changes every commit) ===
+# Overlay git directory pieces from BuildKit contexts (worktree-safe).
+# In a worktree, .git is a file that points at the real gitdir/commondir on disk.
+# The build script passes both as BuildKit contexts, then we copy them into
+# $ITERATE_REPO/.git and remove the indirection markers so git works in-container.
+# NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
+COPY --from=iterate-repo-commondir --chown=iterate:iterate . $ITERATE_REPO/.git
+COPY --from=iterate-repo-gitdir --chown=iterate:iterate . $ITERATE_REPO/.git
+RUN rm -f $ITERATE_REPO/.git/commondir $ITERATE_REPO/.git/gitdir
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
