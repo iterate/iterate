@@ -67,9 +67,9 @@ export default workflow({
     "name": "ci",
     "api": {
       "url": "https://app.daytona.io/api",
-      "key": "'"$DAYTONA_API_KEY"'"
+      "key": "$DAYTONA_API_KEY"
     },
-    "activeOrganizationId": "'"$DAYTONA_ORG_ID"'"
+    "activeOrganizationId": "$DAYTONA_ORG_ID"
   }]
 }
 EOF'`,
