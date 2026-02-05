@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { cwd as getCwd } from "node:process";
 import { mkdirSync } from "node:fs";
 import * as v from "valibot";
+import { Cron } from "croner";
 import { ProcessDefinition } from "./lazy-process.ts";
 import type { Logger } from "./logger.ts";
 import { RestartingProcess, RestartingProcessOptions } from "./restarting-process.ts";
@@ -49,12 +50,25 @@ export const ProcessDependency = v.union([
 ]);
 export type ProcessDependency = v.InferOutput<typeof ProcessDependency>;
 
+// Schedule configuration for cron-like process execution
+export const ScheduleConfig = v.object({
+  /** Cron expression (e.g., "0 * * * *" for hourly) */
+  cron: v.string(),
+  /** Run immediately on manager start (default: false) */
+  runOnStart: v.optional(v.boolean()),
+  /** Timezone for the cron expression (default: system timezone) */
+  timezone: v.optional(v.string()),
+});
+export type ScheduleConfig = v.InferOutput<typeof ScheduleConfig>;
+
 export const RestartingProcessEntry = v.object({
   name: v.string(),
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
   dependsOn: v.optional(v.array(ProcessDependency)),
+  /** Schedule for cron-like execution. When triggered: starts if stopped, restarts if running. */
+  schedule: v.optional(ScheduleConfig),
 });
 export type RestartingProcessEntry = v.InferOutput<typeof RestartingProcessEntry>;
 
@@ -102,6 +116,9 @@ export class Manager {
   private signalHandlers: Map<NodeJS.Signals, () => void> = new Map();
   private shutdownPromise: Promise<void> | null = null;
   private isShuttingDown = false;
+
+  // Scheduled process tracking
+  private schedulers: Map<string, Cron> = new Map();
 
   constructor(config: ManagerConfig, logger: Logger) {
     const cwd = config.cwd ?? getCwd();
@@ -470,17 +487,77 @@ export class Manager {
       this.stateChangeUnsubscribes.push(unsubscribe);
     }
 
-    // Start processes with no dependencies
+    // Start processes with no dependencies (unless they have a schedule and runOnStart is false)
     for (const entry of entries) {
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
         const proc = this.restartingProcesses.get(entry.name)!;
+        // Skip starting scheduled processes unless runOnStart is true
+        if (entry.schedule && !entry.schedule.runOnStart) {
+          this.logger.info(`Process ${entry.name} has schedule, waiting for first trigger`);
+          continue;
+        }
         proc.start();
         this.logger.info(`Started process: ${entry.name}`);
       }
     }
 
+    // Set up schedulers for processes with schedule config
+    for (const entry of entries) {
+      if (entry.schedule) {
+        this.setupScheduler(entry);
+      }
+    }
+
     this._state = "running";
     this.logger.info(`Manager started with ${this.restartingProcesses.size} process(es)`);
+  }
+
+  /**
+   * Set up a cron scheduler for a process
+   */
+  private setupScheduler(entry: RestartingProcessEntry): void {
+    if (!entry.schedule) return;
+
+    const { cron: cronExpr, timezone } = entry.schedule;
+    const proc = this.restartingProcesses.get(entry.name);
+    if (!proc) return;
+
+    const scheduler = new Cron(cronExpr, { timezone }, () => {
+      this.triggerScheduledProcess(entry.name);
+    });
+
+    this.schedulers.set(entry.name, scheduler);
+    this.logger.info(`Scheduled process ${entry.name} with cron: ${cronExpr}`);
+  }
+
+  /**
+   * Trigger a scheduled process: start if stopped/idle, restart if running
+   */
+  private triggerScheduledProcess(name: string): void {
+    const proc = this.restartingProcesses.get(name);
+    if (!proc) {
+      this.logger.error(`Scheduled process ${name} not found`);
+      return;
+    }
+
+    const state = proc.state;
+    this.logger.info(`Schedule triggered for ${name} (current state: ${state})`);
+
+    if (state === "running" || state === "restarting") {
+      // Restart if already running
+      proc.restart().catch((err) => {
+        this.logger.error(`Failed to restart scheduled process ${name}:`, err);
+      });
+    } else if (state === "idle" || state === "stopped") {
+      // Check dependencies before starting
+      if (this.dependencyResolver.areDependenciesMet(name)) {
+        proc.start();
+      } else {
+        this.logger.warn(`Cannot start scheduled process ${name}: dependencies not met`);
+      }
+    } else {
+      this.logger.warn(`Cannot trigger scheduled process ${name} in state: ${state}`);
+    }
   }
 
   /**
@@ -521,6 +598,12 @@ export class Manager {
       clearTimeout(timer);
     }
     this.envReloadTimers.clear();
+
+    // Stop all schedulers
+    for (const scheduler of this.schedulers.values()) {
+      scheduler.stop();
+    }
+    this.schedulers.clear();
 
     // Unsubscribe from state changes
     for (const unsubscribe of this.stateChangeUnsubscribes) {
