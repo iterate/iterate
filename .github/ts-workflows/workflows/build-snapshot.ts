@@ -48,6 +48,11 @@ export default workflow({
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
           name: "Build local sandbox image",
+          env: {
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
+          },
           run: "pnpm os docker:build",
         },
         {
