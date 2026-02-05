@@ -49,6 +49,7 @@ export default workflow({
         {
           name: "Install Daytona CLI and authenticate",
           env: {
+            CI: "true",
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
             DAYTONA_ORG_ID: "${{ secrets.DAYTONA_ORG_ID }}",
           },
@@ -75,6 +76,7 @@ export default workflow({
           id: "build",
           name: "Build and push Daytona snapshot",
           env: {
+            CI: "true",
             DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
             DAYTONA_ORG_ID: "${{ secrets.DAYTONA_ORG_ID }}",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
