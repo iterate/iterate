@@ -36,8 +36,26 @@ export default workflow({
         ...utils.setupBuildx,
         ...utils.loginGhcr,
         {
+          id: "check-image",
+          name: "Check if image exists",
+          run: [
+            "set -euo pipefail",
+            'IMAGE_NAME="ghcr.io/iterate/sandbox-cache:sha-${{ github.sha }}"',
+            'echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT',
+            "# Check if image exists in registry (manifest inspect returns 0 if exists)",
+            'if docker manifest inspect "$IMAGE_NAME" > /dev/null 2>&1; then',
+            '  echo "exists=true" >> $GITHUB_OUTPUT',
+            '  echo "Image already exists: $IMAGE_NAME"',
+            "else",
+            '  echo "exists=false" >> $GITHUB_OUTPUT',
+            '  echo "Image not found, will build: $IMAGE_NAME"',
+            "fi",
+          ].join("\n"),
+        },
+        {
           id: "build",
-          name: "build-docker-image",
+          name: "Build Docker image (if needed)",
+          if: "steps.check-image.outputs.exists != 'true'",
           env: {
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
@@ -46,17 +64,11 @@ export default workflow({
             // Push to registry instead of loading locally (avoids 55s tarball overhead)
             DOCKER_OUTPUT_MODE: "push",
           },
-          run: [
-            "set -euo pipefail",
-            "output=$(pnpm os docker:build)",
-            'echo "$output"',
-            "image_name=$(echo \"$output\" | grep -E '^image_name=' | sed 's/^image_name=//')",
-            'echo "image_name=$image_name" >> $GITHUB_OUTPUT',
-          ].join("\n"),
+          run: "pnpm os docker:build",
         },
         {
-          name: "Pre-pull image from registry",
-          run: "docker pull ${{ steps.build.outputs.image_name }}",
+          name: "Pull image from registry",
+          run: "docker pull ${{ steps.check-image.outputs.image_name }}",
         },
         {
           name: "Run Local Docker Tests",
@@ -65,7 +77,7 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
             // Use the pre-pulled image
-            LOCAL_DOCKER_IMAGE_NAME: "${{ steps.build.outputs.image_name }}",
+            LOCAL_DOCKER_IMAGE_NAME: "${{ steps.check-image.outputs.image_name }}",
           },
           run: "pnpm os docker:test",
         },
