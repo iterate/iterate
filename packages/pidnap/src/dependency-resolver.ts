@@ -31,7 +31,6 @@ export function inferDefaultConditionFromOptions(
 export class DependencyResolver {
   private nodes: Map<string, DependencyNode> = new Map();
   private processes: Map<string, RestartingProcess> = new Map();
-  private entries: Map<string, RestartingProcessEntry> = new Map();
 
   /**
    * Build the dependency graph from process entries
@@ -39,10 +38,8 @@ export class DependencyResolver {
   buildGraph(entries: RestartingProcessEntry[], processes: Map<string, RestartingProcess>): void {
     this.processes = processes;
     this.nodes.clear();
-    this.entries.clear();
 
     for (const entry of entries) {
-      this.entries.set(entry.name, entry);
       const node: DependencyNode = {
         name: entry.name,
         dependsOn: [],
