@@ -48,7 +48,7 @@ export default workflow({
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:local",
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
           },
           run: "pnpm os docker:test",
         },
