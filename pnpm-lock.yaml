@@ -980,12 +980,6 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
-  apps/os/sandbox:
-    dependencies:
-      pidnap:
-        specifier: 'workspace:'
-        version: link:../../../packages/pidnap
-
   packages/pidnap:
     dependencies:
       '@orpc/client':
@@ -1056,6 +1050,34 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  sandbox:
+    dependencies:
+      '@daytonaio/sdk':
+        specifier: ^0.128.1
+        version: 0.128.1(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@trpc/client':
+        specifier: ^11.1.4
+        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
+      pidnap:
+        specifier: workspace:*
+        version: link:../packages/pidnap
+      undici:
+        specifier: ^7.10.0
+        version: 7.18.2
+      zod:
+        specifier: ^3.25.30
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
 

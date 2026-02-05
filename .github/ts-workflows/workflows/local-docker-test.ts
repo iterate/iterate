@@ -22,7 +22,7 @@ export default workflow({
     push: {
       branches: ["main"],
       paths: [
-        "apps/os/sandbox/**",
+        "sandbox/**",
         "apps/os/backend/providers/local-docker.ts",
         "apps/daemon/**",
         "packages/pidnap/**",
@@ -31,7 +31,7 @@ export default workflow({
     },
     pull_request: {
       paths: [
-        "apps/os/sandbox/**",
+        "sandbox/**",
         "apps/os/backend/providers/local-docker.ts",
         "apps/daemon/**",
         "packages/pidnap/**",
@@ -137,7 +137,7 @@ export default workflow({
           },
           run: [
             "echo '::group::Build timing'",
-            "time pnpm os docker:build",
+            "time pnpm docker:build",
             "echo '::endgroup::'",
           ].join("\n"),
         },
@@ -146,12 +146,13 @@ export default workflow({
           id: "test",
           name: "Run Local Docker Tests",
           env: {
-            RUN_LOCAL_DOCKER_TESTS: "true",
-            LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "docker",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
-          run: "pnpm os docker:test",
+          run: "pnpm sandbox test",
         },
         // Upload test artifacts on failure
         {
@@ -159,7 +160,7 @@ export default workflow({
           if: "failure()",
           ...uses("actions/upload-artifact@v4", {
             name: "local-docker-test-logs",
-            path: "apps/os/sandbox/test-results",
+            path: "sandbox/test-results",
             "retention-days": 7,
           }),
         },

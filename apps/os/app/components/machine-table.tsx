@@ -44,7 +44,6 @@ interface Machine {
   } & Record<string, unknown>;
   displayInfo: {
     label: string;
-    isDevOnly?: boolean;
   };
   commands: Array<{
     label: string;
@@ -185,9 +184,7 @@ export function MachineTable({
 
               {/* Meta info */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                <span className={machine.displayInfo.isDevOnly ? "text-orange-600" : ""}>
-                  {getTypeLabel(machine)}
-                </span>
+                <span>{getTypeLabel(machine)}</span>
                 <span>·</span>
                 <DaemonStatus
                   state={machine.state}

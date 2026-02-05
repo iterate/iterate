@@ -128,10 +128,7 @@ function generateMeters(): Record<string, BillingMeter> {
   }
 
   // Sandbox meters
-  const sandboxProviders = [
-    { provider: "daytona", displayName: "Daytona", costPerSecond: 0.0001 },
-    { provider: "local-docker", displayName: "Local Docker", costPerSecond: 0 },
-  ];
+  const sandboxProviders = [{ provider: "daytona", displayName: "Daytona", costPerSecond: 0.0001 }];
 
   for (const { provider, displayName, costPerSecond } of sandboxProviders) {
     const key = getMeterKey("sandbox", provider, undefined, "both");

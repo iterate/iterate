@@ -135,7 +135,7 @@ export default workflow({
           },
           run: [
             "echo '::group::Build timing'",
-            "time pnpm os docker:build",
+            "time pnpm docker:build",
             "echo '::endgroup::'",
           ].join("\n"),
         },

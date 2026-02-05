@@ -5,7 +5,7 @@
 #
 # Services for local development (db + proxy).
 
-name: ${LOCAL_DOCKER_COMPOSE_PROJECT_NAME}
+name: ${DOCKER_COMPOSE_PROJECT_NAME}
 
 services:
   postgres:

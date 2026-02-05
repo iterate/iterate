@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-$HOME/src/github.com/iterate/iterate}"
-HOME_SKELETON="$ITERATE_REPO/apps/os/sandbox/home-skeleton"
+HOME_SKELETON="$ITERATE_REPO/sandbox/home-skeleton"
 
 if [ ! -d "$HOME_SKELETON" ]; then
   echo "[sync-home-skeleton] Missing home skeleton: $HOME_SKELETON" >&2

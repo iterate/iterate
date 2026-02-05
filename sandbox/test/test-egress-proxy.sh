@@ -32,7 +32,7 @@ ITERATE_EGRESS_PROXY_URL="${ITERATE_EGRESS_PROXY_URL:-https://dev-nick-os.dev.it
 ITERATE_OS_API_KEY="${ITERATE_OS_API_KEY:-test-dev-key}"
 
 log "Building Docker image..."
-LOCAL_DOCKER_IMAGE_NAME="ghcr.io/iterate/sandbox:test" pnpm --filter os docker:build
+DOCKER_IMAGE_NAME="ghcr.io/iterate/sandbox:test" pnpm --filter @iterate-com/sandbox docker:build
 
 log ""
 log "Running egress proxy test in container..."
@@ -62,7 +62,7 @@ log "Setting up mitmproxy..."
 
 # Copy addon script
 mkdir -p /app/egress-proxy
-cp /local-iterate-repo/apps/os/sandbox/egress-proxy-addon.py /app/egress-proxy/
+cp /local-iterate-repo/sandbox/egress-proxy-addon.py /app/egress-proxy/
 
 # Start mitmproxy in background
 log "Starting mitmproxy on port 8888..."

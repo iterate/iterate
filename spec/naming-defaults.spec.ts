@@ -92,7 +92,7 @@ test.describe("naming defaults", () => {
 
     await page
       .locator("input[placeholder='Machine name']")
-      .and(page.locator("[value^='daytona-'], [value^='local-docker-']"))
+      .and(page.locator("[value^='daytona-'], [value^='docker-']"))
       .waitFor();
   });
 });

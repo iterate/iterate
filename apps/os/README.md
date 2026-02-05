@@ -31,11 +31,11 @@ To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
 pnpm docker:build
 ```
 
-New local-docker machines always use the latest `iterate-sandbox:local` image tag.
+New docker machines always use the latest `iterate-sandbox:local` image tag.
 
 ### Creating a Local Machine
 
-In the UI, select "local-docker" as the machine type when creating a new machine. The container will run locally and be accessible at `http://localhost:<port>`.
+In the UI, select "docker" as the machine type when creating a new machine. The container will run locally and be accessible at `http://localhost:<port>`.
 
 ---
 

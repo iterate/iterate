@@ -1,5 +1,5 @@
 /**
- * Local Docker + Pidnap Integration Tests (SLOW!)
+ * Sandbox + Pidnap Integration Tests (SLOW!)
  *
  * Tests that require the full pidnap process supervision and daemon-backend.
  * Uses the default entry.sh entrypoint which starts pidnap.
@@ -10,22 +10,50 @@
  * - Container restart with daemon recovery
  *
  * For lightweight tests that don't need pidnap/daemon (git, CLI tools, container setup),
- * see sandbox-minimal.test.ts which uses `command: ["sleep", "infinity"]` to bypass pidnap.
+ * see sandbox-without-daemon.test.ts which uses `command: ["sleep", "infinity"]` to bypass pidnap.
  *
  * RUN WITH:
- *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/test/sandbox.test.ts
+ *   RUN_SANDBOX_TESTS=true pnpm sandbox test
+ *
+ * See sandbox/test/helpers.ts for full configuration options.
  */
 
 import { describe } from "vitest";
-import { test, ITERATE_REPO_PATH, RUN_LOCAL_DOCKER_TESTS, POLL_DEFAULTS } from "./helpers.ts";
+import type { Sandbox } from "../providers/types.ts";
+import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
+
+/**
+ * Wait for a process to become healthy using pidnap client.
+ *
+ * NOTE: Currently failing on Daytona due to oRPC routing issue.
+ * See tasks/daytona-provider-testing.md for details.
+ */
+async function waitForServiceHealthy(
+  sandbox: Sandbox,
+  process: string,
+  timeoutMs = 30000,
+): Promise<void> {
+  const client = await sandbox.pidnapClient();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const info = await client.processes.get({ target: process });
+      if (info.state === "running") return;
+    } catch {
+      // Process not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`Timeout waiting for ${process} to become healthy`);
+}
 
 // ============ Pidnap-Specific Tests ============
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
+describe.runIf(RUN_SANDBOX_TESTS).concurrent("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
-      const client = sandbox.pidnapOrpcClient();
+      await waitForServiceHealthy(sandbox, "daemon-backend", 30000);
+      const client = await sandbox.pidnapClient();
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
       // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
@@ -51,30 +79,36 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
           return info.effectiveEnv?.DYNAMIC_TEST_VAR;
         }, POLL_DEFAULTS)
         .toBe("added_at_runtime");
-    }, 120_000);
+    }, 50000);
   });
 
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
-      const client = sandbox.pidnapOrpcClient();
+      await waitForServiceHealthy(sandbox, "daemon-backend");
+      const client = await sandbox.pidnapClient();
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
         /Process not found/i,
       );
-    }, 120_000);
+    }, 50000);
   });
 });
 
 // ============ Daemon Tests ============
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
-  test.scoped({ sandboxOptions: { env: { ITERATE_CUSTOMER_REPO_PATH: ITERATE_REPO_PATH } } });
+describe.runIf(RUN_SANDBOX_TESTS).concurrent("Daemon Integration", () => {
+  test.scoped({
+    sandboxOptions: {
+      id: "daemon-test",
+      name: "Daemon Test",
+      envVars: { ITERATE_CUSTOMER_REPO_PATH: ITERATE_REPO_PATH },
+    },
+  });
 
   test("daemon accessible", async ({ sandbox, expect }) => {
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
-    const baseUrl = sandbox.getUrl({ port: 3000 });
+    await waitForServiceHealthy(sandbox, "daemon-backend");
+    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
 
     // Verify health endpoint from host
     await expect
@@ -88,14 +122,14 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
     // Verify health from inside container
     const internalHealth = await sandbox.exec(["curl", "-s", "http://localhost:3000/api/health"]);
     expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
-  }, 120_000);
+  }, 50000);
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
     // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
-    await sandbox.waitForServiceHealthy({ process: "daemon-frontend" });
+    await waitForServiceHealthy(sandbox, "daemon-backend");
+    await waitForServiceHealthy(sandbox, "daemon-frontend");
 
-    const baseUrl = sandbox.getUrl({ port: 3000 });
+    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
 
     // First verify the proxy is working by polling for health endpoint
     await expect
@@ -128,12 +162,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
         });
       }, POLL_DEFAULTS)
       .toBe("connected");
-  }, 120_000);
+  }, 50000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
-    const baseUrl = sandbox.getUrl({ port: 3000 });
-    const trpc = sandbox.daemonTrpcClient();
+    await waitForServiceHealthy(sandbox, "daemon-backend");
+    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const trpc = await sandbox.daemonClient();
 
     // index.html
     await expect
@@ -158,7 +192,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
       .toBe(true);
 
     // tRPC
-    const hello = await trpc.hello.query();
+    const hello = await (trpc as any).hello.query();
     expect(hello.message).toContain("Hello");
 
     // CSS/JS bundles
@@ -199,28 +233,28 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
         return response.headers.get("content-type") ?? "";
       }, POLL_DEFAULTS)
       .toContain("text/html");
-  }, 120_000);
+  }, 50000);
 });
 
 // ============ Container Restart Tests ============
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
+describe.runIf(RUN_SANDBOX_TESTS).concurrent("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
 
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    await waitForServiceHealthy(sandbox, "daemon-backend");
 
     await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
     await sandbox.restart();
 
-    await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
+    await waitForServiceHealthy(sandbox, "daemon-backend");
 
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);
 
-    const baseUrl = sandbox.getUrl({ port: 3000 });
+    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
     await expect
       .poll(
         async () => {
@@ -230,5 +264,5 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
         { timeout: 60_000, interval: 500 }, // longer timeout for container restart
       )
       .toBe(true);
-  }, 180_000);
+  }, 90000);
 });

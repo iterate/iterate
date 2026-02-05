@@ -4,7 +4,7 @@ import * as utils from "../utils/index.ts";
 /**
  * Build and push a Daytona snapshot.
  *
- * The Docker image is built using `pnpm os docker:build` (same as build-docker-image.yml)
+ * The Docker image is built using `pnpm docker:build` (same as build-docker-image.yml)
  * then pushed to Daytona. Both steps must run in the same job since Daytona needs
  * the image in the local Docker daemon.
  *
@@ -152,7 +152,7 @@ export default workflow({
           },
           run: [
             "echo '::group::Build timing'",
-            "time pnpm os docker:build",
+            "time pnpm docker:build",
             "echo '::endgroup::'",
           ].join("\n"),
         },
@@ -177,7 +177,7 @@ export default workflow({
               'snapshot_name="iterate-sandbox-${git_sha}"',
               // CLI is configured via config file, no doppler run needed
               // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
-              'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
+              'pnpm daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
               "snapshot_name=$(grep -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
               'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
               'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',

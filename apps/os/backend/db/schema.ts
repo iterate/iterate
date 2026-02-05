@@ -32,7 +32,8 @@ export const MachineState = ["starting", "active", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona", "local-docker", "local"] as const;
+// Note: "docker" replaces "local-docker" (migration 0016).
+export const MachineType = ["daytona", "docker", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 // Secret metadata for OAuth tokens

@@ -4,7 +4,7 @@ import { defineConfig } from "pidnap";
 
 const home = homedir();
 const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
-const sandboxDir = join(iterateRepo, "apps/os/sandbox");
+const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");

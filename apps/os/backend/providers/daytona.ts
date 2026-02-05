@@ -115,7 +115,6 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
 
     displayInfo: {
       label: "Daytona",
-      isDevOnly: false,
     },
 
     commands: [

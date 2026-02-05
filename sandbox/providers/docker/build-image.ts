@@ -14,7 +14,6 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
-
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 const builtBy = process.env.ITERATE_USER ?? "unknown";
@@ -142,7 +141,7 @@ const buildArgs = [
   "--progress=plain", // Show all layer details for cache analysis
   ...outputArgs,
   "-f",
-  "apps/os/sandbox/Dockerfile",
+  "sandbox/Dockerfile",
   // Override the Dockerfile's iterate-synthetic-git stage with our minimal .git directory
   "--build-context",
   `iterate-synthetic-git=${minimalGitDir}`,

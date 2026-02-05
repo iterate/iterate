@@ -49,19 +49,19 @@ export async function createMachineProvider(
       });
     }
 
-    case "local-docker": {
+    case "docker": {
       if (!import.meta.env.DEV) {
-        throw new Error("local-docker provider only available in development");
+        throw new Error("docker provider only available in development");
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
       return createLocalDockerProvider({
-        imageName: env.LOCAL_DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
+        imageName: env.DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
         externalId,
         metadata,
-        composeProjectName: env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME || undefined,
-        repoCheckout: env.LOCAL_DOCKER_GIT_REPO_ROOT || env.LOCAL_DOCKER_REPO_CHECKOUT || undefined,
-        gitDir: env.LOCAL_DOCKER_GIT_GITDIR || env.LOCAL_DOCKER_GIT_DIR || undefined,
-        commonDir: env.LOCAL_DOCKER_GIT_COMMON_DIR || env.LOCAL_DOCKER_COMMON_DIR || undefined,
+        composeProjectName: env.DOCKER_COMPOSE_PROJECT_NAME || undefined,
+        repoCheckout: env.DOCKER_GIT_REPO_ROOT || undefined,
+        gitDir: env.DOCKER_GIT_GITDIR || undefined,
+        commonDir: env.DOCKER_GIT_COMMON_DIR || undefined,
       });
     }
 

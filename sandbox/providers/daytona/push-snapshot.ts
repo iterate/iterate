@@ -1,9 +1,9 @@
 /**
  * Push local Docker sandbox image to Daytona as a snapshot.
  *
- * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
+ * Usage: pnpm daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
- * This script expects the image to already be built with `pnpm os docker:build`,
+ * This script expects the image to already be built with `pnpm docker:build`,
  * which loads the image into local Docker daemon. By default, uses the most recently built :local image.
  *
  * Resource limits can be set via env vars (DAYTONA_DEFAULT_SNAPSHOT_CPU, DAYTONA_DEFAULT_SNAPSHOT_MEMORY, DAYTONA_DEFAULT_SNAPSHOT_DISK)
@@ -92,7 +92,7 @@ try {
   execSync(`docker image inspect ${localImageName}`, { stdio: "ignore" });
 } catch {
   console.error(`Error: Local image '${localImageName}' not found.`);
-  console.error("Build the image first with: pnpm os docker:build");
+  console.error("Build the image first with: pnpm docker:build");
   process.exit(1);
 }
 console.log(`Local image: ${localImageName}`);

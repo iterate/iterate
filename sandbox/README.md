@@ -1,269 +1,155 @@
-# Sandbox Docker Images
+# Sandbox
 
-Guide to building sandbox Docker images via CI or locally, and pushing to Daytona.
+Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked repo path.
 
-## Prerequisites
+## TL;DR
 
-### Depot CLI (for local builds)
+- Image: `ghcr.io/iterate/sandbox`
+- Tags: `main`, `sha-<sha>`, `local`
+- Repo path in container: `/home/iterate/src/github.com/iterate/iterate`
+- pnpm store: `/home/iterate/.pnpm-store` (volume `iterate-pnpm-store`)
+- Dev sync mounts (read-only):
+  - `/host/repo-checkout` (repo worktree)
+  - `/host/gitdir` (worktree git dir)
+  - `/host/commondir` (main .git)
 
-Depot provides persistent layer caching shared between CI and all developers.
+## Build
 
-```bash
-brew install depot/tap/depot   # or: curl -L https://depot.dev/install-cli.sh | sh
-depot login
-```
-
-### Daytona CLI (for pushing snapshots)
-
-```bash
-# Install
-ARCH=$(uname -m); [[ "$ARCH" == "arm64" ]] || ARCH="amd64"
-curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-darwin-$ARCH"
-chmod +x daytona && sudo mv daytona /usr/local/bin/
-
-# Login
-daytona login
-```
-
----
-
-## CI Workflows
-
-### Build Docker Image
-
-Builds the sandbox image using Depot. Invokable directly or as a reusable workflow.
+Local build (uses current repo checkout):
 
 ```bash
-# Build current branch
-gh workflow run "Build Docker Image"
-
-# Build specific ref (branch, tag, or SHA)
-gh workflow run "Build Docker Image" -f ref=main
-gh workflow run "Build Docker Image" -f ref=abc123def
-
-# Build for ARM64 (default is AMD64)
-gh workflow run "Build Docker Image" -f docker_platform=linux/arm64
-
-# Watch the run
-gh run watch
-```
-
-### Build Daytona Snapshot
-
-Builds the image AND pushes to Daytona as a snapshot.
-
-```bash
-# Build and push to Daytona (dev config)
-gh workflow run "Build Daytona Snapshot"
-
-# Build specific ref and push
-gh workflow run "Build Daytona Snapshot" -f ref=main -f doppler_config=dev
-
-# For production
-gh workflow run "Build Daytona Snapshot" -f doppler_config=prd
-
-# Watch the run
-gh run watch
-```
-
-### Local Docker Tests
-
-Builds the image and runs the local Docker test suite.
-
-```bash
-# Run tests on current branch
-gh workflow run "Local Docker Tests"
-
-# Test specific ref
-gh workflow run "Local Docker Tests" -f ref=feature-branch
-
-# Test with custom image name
-gh workflow run "Local Docker Tests" -f image_name=iterate-sandbox:test
-
-# Watch the run
-gh run watch
-```
-
-### Checking CI Status
-
-```bash
-# List recent runs
-gh run list --limit 10
-
-# List runs for specific workflow
-gh run list --workflow "Build Docker Image" --limit 5
-
-# View a specific run
-gh run view <run-id>
-
-# View run logs
-gh run view <run-id> --log
-```
-
----
-
-## Local Development
-
-### Build the Image
-
-```bash
-# Build for local Docker daemon (tagged as iterate-sandbox:local)
 pnpm os docker:build
-
-# Build for specific platform
-SANDBOX_BUILD_PLATFORM=linux/arm64 pnpm os docker:build
-
-# Build with custom tag
-LOCAL_DOCKER_IMAGE_NAME=my-sandbox:test pnpm os docker:build
 ```
 
-Build output is cached via Depot. Unchanged builds complete in ~10 seconds.
+Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
 
-### Test the Image
+Push to GHCR (updates shared build cache):
 
 ```bash
-# Run the local Docker test suite
-RUN_LOCAL_DOCKER_TESTS=true pnpm os docker:test
-
-# Or run a shell in the container
-pnpm os docker:shell
+PUSH=1 pnpm os docker:build
 ```
 
-### Push to Daytona
-
-After building locally, push to Daytona as a snapshot:
+Direct Docker build:
 
 ```bash
-# Push with auto-generated name
-doppler run --config dev -- pnpm os daytona:build
-
-# Push with custom name
-doppler run --config dev -- pnpm os daytona:build --name my-snapshot
-
-# Push with custom resources
-doppler run --config dev -- pnpm os daytona:build --cpu 4 --memory 8 --disk 20
-
-# Push without updating Doppler secrets
-doppler run --config dev -- pnpm os daytona:build --no-update-doppler
+docker buildx build --load -f sandbox/Dockerfile -t ghcr.io/iterate/sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
 ```
 
-#### Snapshot Naming
+## Dev sync mode
 
-Auto-generated names follow the format: `iterate-sandbox-{sha}[-{user}][-dirty]`
+Local sandboxes are created by the docker provider (not docker compose).
+The container mounts:
 
-| Component | Example           | When included                      |
-| --------- | ----------------- | ---------------------------------- |
-| `{sha}`   | `419527730eb3...` | Always (full git SHA)              |
-| `{user}`  | `-jonas`          | When `ITERATE_USER` env var is set |
-| `-dirty`  | `-dirty`          | When repo has uncommitted changes  |
+- `/host/repo-checkout` (repo worktree, read-only)
+- `/host/gitdir` (worktree git dir)
+- `/host/commondir` (main .git)
 
-Examples:
+Entry point rsyncs into `/home/iterate/src/github.com/iterate/iterate` and overlays git metadata.
+If dependencies change, run `pnpm install` inside the container.
 
-- CI build: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40`
-- Local clean: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40-jonas`
-- Local dirty: `iterate-sandbox-419527730eb32cd0790d833ba5e67e0ec2262e40-jonas-dirty`
+### Env vars (compose)
 
-#### Options
+- `DOCKER_GIT_REPO_ROOT` (host repo root)
+- `DOCKER_GIT_GITDIR` (worktree git dir)
+- `DOCKER_GIT_COMMON_DIR` (main .git)
+- `DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
 
-| Flag                  | Default               | Description                   |
-| --------------------- | --------------------- | ----------------------------- |
-| `--name`, `-n`        | auto                  | Snapshot name                 |
-| `--image`, `-i`       | iterate-sandbox:local | Local image to push           |
-| `--cpu`, `-c`         | 2                     | CPU cores                     |
-| `--memory`, `-m`      | 4                     | Memory in GB                  |
-| `--disk`, `-d`        | 10                    | Disk in GB                    |
-| `--no-update-doppler` | false                 | Skip updating Doppler secrets |
+These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
 
-### Full Local Workflow
+## Daytona snapshots
+
+Create snapshot directly from Dockerfile (builds on Daytona's infra):
 
 ```bash
-# 1. Build the image
-pnpm os docker:build
-
-# 2. Test it works
-pnpm os docker:shell
-# Inside container: git status, pnpm test, etc.
-# Exit with: exit
-
-# 3. Push to Daytona (updates DAYTONA_SNAPSHOT_NAME in Doppler)
-doppler run --config dev -- pnpm os daytona:build
+pnpm os daytona:build
 ```
 
----
+Options:
 
-## Depot Cache
+- `--name` / `-n`: Snapshot name (default: `iterate-sandbox-<sha>` or `iterate-sandbox-<sha>-$ITERATE_USER-dirty`)
+- `--cpu` / `-c`: CPU cores (default: 2)
+- `--memory` / `-m`: Memory in GB (default: 4)
+- `--disk` / `-d`: Disk in GB (default: 10)
 
-CI and local builds share the same Depot layer cache. This means:
-
-- First build by anyone primes the cache
-- Subsequent builds (local or CI) get instant cache hits
-- Cache persists across CI runs and developer machines
-
-### Verify cache is working
+Example:
 
 ```bash
-# Build twice - second should be <30s
-time pnpm os docker:build
-time pnpm os docker:build
+pnpm os daytona:build --name my-snapshot --cpu 4 --memory 8
 ```
 
-### Check cache status
+Requires `daytona` CLI (`daytona login`).
 
-Visit [depot.dev](https://depot.dev) → Project → Builds to see cache hit rates.
-
----
-
-## Troubleshooting
-
-### "depot: command not found"
-
-Install Depot CLI: `brew install depot/tap/depot && depot login`
-
-### "daytona: command not found"
-
-Install Daytona CLI (see Prerequisites above)
-
-### Build fails with OIDC error in CI
-
-Ensure the workflow has `id-token: write` permission:
-
-```typescript
-permissions: {
-  contents: "read",
-  "id-token": "write",
-}
-```
-
-### Daytona push fails with auth error
-
-Run with Doppler to inject credentials:
+## Push from local
 
 ```bash
-doppler run --config dev -- pnpm os daytona:build
+gh auth login
+gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+
+docker buildx build --push -f sandbox/Dockerfile \\
+  -t ghcr.io/iterate/sandbox:main \\
+  -t ghcr.io/iterate/sandbox:sha-$(git rev-parse HEAD) \\
+  --build-arg GIT_SHA=$(git rev-parse HEAD) \\
+  --cache-from type=registry,ref=ghcr.io/iterate/sandbox:buildcache \\
+  --cache-to type=registry,ref=ghcr.io/iterate/sandbox:buildcache,mode=max \\
+  .
 ```
 
-### Image not found when pushing to Daytona
+## Testing
 
-Build first: `pnpm os docker:build`
+Sandbox integration tests verify both Docker and Daytona providers work correctly.
 
-### OrbStack socket not found
+### Environment Variables
 
-Daytona CLI needs `DOCKER_HOST` set. The script auto-detects OrbStack, but you can set it manually:
+| Variable                   | Description                                 | Default            |
+| -------------------------- | ------------------------------------------- | ------------------ |
+| `RUN_SANDBOX_TESTS`        | Enable sandbox tests (set to `true`)        | (tests skipped)    |
+| `SANDBOX_TEST_PROVIDER`    | Provider to test: `docker` or `daytona`     | `docker`           |
+| `SANDBOX_TEST_SNAPSHOT_ID` | Image (Docker) or snapshot name (Daytona)   | See defaults below |
+| `KEEP_SANDBOX_CONTAINER`   | Keep containers after tests (for debugging) | `false`            |
+
+Default snapshot IDs:
+
+- Docker: `ghcr.io/iterate/sandbox:local`
+- Daytona: reads from `DAYTONA_SNAPSHOT_NAME` in Doppler
+
+### Run Locally
 
 ```bash
-export DOCKER_HOST="unix://$HOME/.orbstack/run/docker.sock"
+# Docker provider (requires local image build first)
+pnpm sandbox docker:build
+pnpm sandbox test:docker
+
+# Daytona provider (requires Doppler secrets)
+doppler run -- pnpm sandbox test:daytona
+
+# With specific snapshot
+RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
+  SANDBOX_TEST_SNAPSHOT_ID=ghcr.io/iterate/sandbox:sha-abc123 \
+  pnpm sandbox test
+
+# Keep containers for debugging
+KEEP_SANDBOX_CONTAINER=true pnpm sandbox test:docker
 ```
 
----
+### CI Workflows
 
-## Key Files
+| Workflow                | Description                                    |
+| ----------------------- | ---------------------------------------------- |
+| `sandbox-test.yml`      | Runs both Docker and Daytona tests in parallel |
+| `local-docker-test.yml` | Docker provider only                           |
+| `daytona-test.yml`      | Daytona provider only                          |
 
-| File                                              | Description                          |
-| ------------------------------------------------- | ------------------------------------ |
-| `apps/os/sandbox/Dockerfile`                      | The sandbox image definition         |
-| `apps/os/sandbox/build-docker-image.ts`           | Local build script                   |
-| `apps/os/sandbox/push-docker-image-to-daytona.ts` | Daytona push script                  |
-| `.github/workflows/build-docker-image.yml`        | CI build workflow                    |
-| `.github/workflows/build-daytona-snapshot.yml`    | CI build + Daytona push              |
-| `.github/workflows/local-docker-test.yml`         | CI build + test suite                |
-| `depot.json`                                      | Depot project config (cache sharing) |
+Workflows trigger on PRs/pushes to `sandbox/**`, `apps/daemon/**`.
+
+### Test Files
+
+- `sandbox/test/helpers.ts` - Test fixtures and provider factory
+- `sandbox/test/sandbox-without-daemon.test.ts` - Fast tests (no pidnap)
+- `sandbox/test/daemon-in-sandbox.test.ts` - Full integration tests
+
+## Key files
+
+- `sandbox/Dockerfile`
+- `sandbox/entry.sh`
+- `sandbox/sync-home-skeleton.sh`
+- `sandbox/pidnap.config.ts`

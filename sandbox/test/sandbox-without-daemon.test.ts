@@ -2,7 +2,6 @@
  * Minimal Sandbox Tests (No Pidnap/Daemon)
  *
  * These are reasonably fast, though there are currently three tests that do hit LLMs.
- * (we'll fix that shortly)
  *
  * These tests run against a container using `sleep infinity` as the command,
  * bypassing pidnap process supervision entirely. This is useful for fast tests
@@ -10,16 +9,18 @@
  *
  * The entry.sh script supports this pattern: when arguments are passed to the
  * container, it execs them directly instead of starting pidnap. See:
- * apps/os/sandbox/entry.sh: `if [[ $# -gt 0 ]]; then exec "$@"; fi`
+ * sandbox/entry.sh: `if [[ $# -gt 0 ]]; then exec "$@"; fi`
  *
  * IMPORTANT: The sync scripts (sync-home-skeleton.sh, sync-repo-from-host.sh) run
  * BEFORE the command override check in entry.sh, so host sync still works.
  *
  * For tests that require pidnap/daemon (process supervision, daemon endpoints),
- * see sandbox.test.ts which uses the default entry.sh entrypoint.
+ * see daemon-in-sandbox.test.ts which uses the default entry.sh entrypoint.
  *
  * RUN WITH:
- *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/test/sandbox-minimal.test.ts
+ *   RUN_SANDBOX_TESTS=true pnpm sandbox test
+ *
+ * See sandbox/test/helpers.ts for full configuration options.
  */
 
 import { execSync } from "node:child_process";
@@ -30,8 +31,8 @@ import {
   test,
   ITERATE_REPO_PATH_ON_HOST,
   ITERATE_REPO_PATH,
-  RUN_LOCAL_DOCKER_TESTS,
-  getLocalDockerGitInfo,
+  RUN_SANDBOX_TESTS,
+  getGitInfo,
   withSandbox,
   withWorktree,
 } from "./helpers.ts";
@@ -42,9 +43,16 @@ import {
  * Tests that don't require pidnap or daemon - just a running container.
  * Uses `sleep infinity` as the command to keep container alive without starting pidnap.
  */
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Minimal Container Tests", () => {
+describe.runIf(RUN_SANDBOX_TESTS).concurrent("Minimal Container Tests", () => {
   // Override sandbox command to skip pidnap - entry.sh will exec this directly
-  test.scoped({ sandboxOptions: { command: ["sleep", "infinity"] } });
+  test.scoped({
+    sandboxOptions: {
+      id: "minimal-test",
+      name: "Minimal Test",
+      envVars: {},
+      command: ["sleep", "infinity"],
+    },
+  });
 
   describe("Container Setup", () => {
     test("container setup correct", async ({ sandbox }) => {
@@ -119,14 +127,19 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Minimal Container Tests", () 
 
 // ============ Host Sync Tests ============
 
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Host Sync (Minimal)", () => {
+describe.runIf(RUN_SANDBOX_TESTS).concurrent("Host Sync (Minimal)", () => {
   test.scoped({
-    providerOptions: { syncFromHostRepo: true },
-    sandboxOptions: { command: ["sleep", "infinity"] },
+    envOverrides: { DOCKER_SYNC_FROM_HOST_REPO: "true" },
+    sandboxOptions: {
+      id: "host-sync-test",
+      name: "Host Sync Test",
+      envVars: {},
+      command: ["sleep", "infinity"],
+    },
   });
 
   test("git state matches host", async ({ sandbox }) => {
-    const gitInfo = getLocalDockerGitInfo(ITERATE_REPO_PATH_ON_HOST);
+    const gitInfo = getGitInfo(ITERATE_REPO_PATH_ON_HOST);
     expect(gitInfo).toBeDefined();
     // branch may be undefined in detached HEAD state (common in CI)
 
@@ -169,7 +182,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Host Sync (Minimal)", () => {
  *
  * NOTE: Uses sleep infinity command override since we don't need pidnap for git verification.
  */
-describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Git Worktree Sync", () => {
   baseTest.concurrent(
     "container git state matches host worktree exactly",
     async () => {
@@ -208,10 +221,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
         console.log("git rev-parse --git-dir:", gitDir);
         console.log("git rev-parse --git-common-dir:", gitCommonDir);
 
-        // Show what getLocalDockerGitInfo returns
-        const { getLocalDockerGitInfo } = await import("../test/helpers.ts");
-        const gitInfo = getLocalDockerGitInfo(worktree.path);
-        console.log("getLocalDockerGitInfo result:", JSON.stringify(gitInfo, null, 2));
+        // Show what getGitInfo returns
+        const gitInfo = getGitInfo(worktree.path);
+        console.log("getGitInfo result:", JSON.stringify(gitInfo, null, 2));
 
         console.log("=== END DEBUG ===\n");
 
@@ -229,8 +241,13 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
 
         // Create container from worktree and verify git state matches
         await withSandbox(
-          { repoRoot: worktree.path, syncFromHostRepo: true },
-          { command: ["sleep", "infinity"] },
+          { DOCKER_GIT_REPO_ROOT: worktree.path, DOCKER_SYNC_FROM_HOST_REPO: "true" },
+          {
+            id: "worktree-test",
+            name: "Worktree Test",
+            envVars: {},
+            command: ["sleep", "infinity"],
+          },
           async (sandbox) => {
             // DEBUG: show container git state
             console.log("\n=== DEBUG: Container State ===");
@@ -299,17 +316,18 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Git Worktree Sync", () => {
  * The provider writes env vars to ~/.iterate/.env, and .bashrc sources this file,
  * so any login shell (bash -l) automatically has access to the env vars.
  */
-describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Agent CLI Tests", () => {
-  if (!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY) {
-    throw new Error("OPENAI_API_KEY and ANTHROPIC_API_KEY environment variables are required");
-  }
+// Skip if API keys not available (checked at test registration time, not module load)
+const hasApiKeys = Boolean(process.env.OPENAI_API_KEY && process.env.ANTHROPIC_API_KEY);
 
+describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys).concurrent("Agent CLI Tests", () => {
   test.scoped({
     sandboxOptions: {
+      id: "agent-cli-test",
+      name: "Agent CLI Test",
       command: ["sleep", "infinity"],
-      env: {
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      envVars: {
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY!,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
       },
     },
   });

@@ -2,9 +2,9 @@
  * Local Docker Provider
  *
  * Provider for local Docker development using direct Docker API calls.
- * Each local-docker machine gets its own container with fixed host ports.
+ * Each docker machine gets its own container with fixed host ports.
  *
- * Optional: LOCAL_DOCKER_COMPOSE_PROJECT_NAME is used for UI grouping labels.
+ * Optional: DOCKER_COMPOSE_PROJECT_NAME is used for UI grouping labels.
  */
 
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
@@ -148,22 +148,18 @@ type LocalDockerMounts = {
   commonDir: string;
 };
 
-function resolveLocalDockerMounts(opts?: {
+function resolveDockerMounts(opts?: {
   repoCheckout?: string;
   gitDir?: string;
   commonDir?: string;
 }): LocalDockerMounts | null {
-  // Workerd can't exec, so git paths are injected via env vars by alchemy.run.ts.
-  const repoCheckout =
-    opts?.repoCheckout ??
-    process.env.LOCAL_DOCKER_GIT_REPO_ROOT ??
-    process.env.LOCAL_DOCKER_REPO_CHECKOUT;
-  const gitDir =
-    opts?.gitDir ?? process.env.LOCAL_DOCKER_GIT_GITDIR ?? process.env.LOCAL_DOCKER_GIT_DIR;
-  const commonDir =
-    opts?.commonDir ??
-    process.env.LOCAL_DOCKER_GIT_COMMON_DIR ??
-    process.env.LOCAL_DOCKER_COMMON_DIR;
+  // Flow:
+  // 1) alchemy.run.ts runs in node, can exec git to derive repo paths.
+  // 2) those paths are injected into the worker env (workerd/miniflare).
+  // 3) this provider reads the env vars and mounts host git paths via Docker API.
+  const repoCheckout = opts?.repoCheckout ?? process.env.DOCKER_GIT_REPO_ROOT;
+  const gitDir = opts?.gitDir ?? process.env.DOCKER_GIT_GITDIR;
+  const commonDir = opts?.commonDir ?? process.env.DOCKER_GIT_COMMON_DIR;
   if (!repoCheckout || !gitDir || !commonDir) return null;
 
   return {
@@ -283,7 +279,6 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
 
     displayInfo: {
       label: `Local ${host}:${displayPort}`,
-      isDevOnly: true,
     },
 
     commands: [],
@@ -342,7 +337,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
   const displayPort = metadata.ports?.["iterate-daemon"] ?? metadata.port;
 
   return {
-    type: "local-docker",
+    type: "docker",
 
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const portBindings: Record<string, Array<{ HostPort: string }>> = {};
@@ -366,9 +361,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       );
 
       const binds: string[] = [];
-      const mounts = syncRepo
-        ? resolveLocalDockerMounts({ repoCheckout, gitDir, commonDir })
-        : null;
+      const mounts = syncRepo ? resolveDockerMounts({ repoCheckout, gitDir, commonDir }) : null;
       if (mounts) {
         binds.push(`${mounts.repoCheckout}:/host/repo-checkout:ro`);
         binds.push(`${mounts.gitDir}:/host/gitdir:ro`);
@@ -378,7 +371,6 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
 
       const labels: Record<string, string> = {
         "com.iterate.machine_id": machineConfig.machineId,
-        "com.iterate.machine_type": "local-docker",
       };
       if (composeProjectName) {
         labels["com.docker.compose.project"] = composeProjectName;
@@ -402,7 +394,7 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
       const envVarsWithDev = {
         ...rewrittenEnvVars,
         ITERATE_DEV: "true",
-        ...(mounts ? { LOCAL_DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
+        ...(mounts ? { DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
       };
 
       const envArray = sanitizeEnvVars(envVarsWithDev);
@@ -460,7 +452,6 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
 
     displayInfo: {
       label: `Local Docker :${displayPort ?? "?"}`,
-      isDevOnly: true,
     },
 
     commands: [],

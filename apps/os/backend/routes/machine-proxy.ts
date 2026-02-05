@@ -161,7 +161,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  // For local machines (local-docker, local, local-vanilla), simple proxy without auth
+  // For local machines (docker, local), simple proxy without auth
   const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
   return rewriteHTMLUrls(response, proxyBasePath);
 });

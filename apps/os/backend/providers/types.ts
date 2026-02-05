@@ -15,8 +15,6 @@ export interface MachineProviderResult {
 export interface MachineDisplayInfo {
   /** Human-readable label for the machine type */
   label: string;
-  /** Whether to highlight this type (e.g., dev-only types shown in orange) */
-  isDevOnly?: boolean;
 }
 
 /** A copyable shell command for interacting with the machine */

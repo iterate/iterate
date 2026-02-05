@@ -1,12 +1,12 @@
 #!/bin/bash
 # TODO: This script is still a bit messy; the main entrypoint in
-# apps/os/sandbox/entry.sh is now clean, but this sync helper could use a refactor.
+# sandbox/entry.sh is now clean, but this sync helper could use a refactor.
 set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 
-HOST_GITDIR="${LOCAL_DOCKER_GIT_DIR:-${LOCAL_DOCKER_GIT_GITDIR:-/host/gitdir}}"
-HOST_COMMONDIR="${LOCAL_DOCKER_COMMON_DIR:-${LOCAL_DOCKER_GIT_COMMON_DIR:-/host/commondir}}"
+HOST_GITDIR="${DOCKER_GIT_GITDIR:-/host/gitdir}"
+HOST_COMMONDIR="${DOCKER_GIT_COMMON_DIR:-/host/commondir}"
 
 if [[ ! -d "/host/repo-checkout" ]]; then
   echo "[entry] /host/repo-checkout not found. Ensure host repo mount is configured."
@@ -48,9 +48,9 @@ if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]
   rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
 fi
 
-if [[ -f "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh" ]]; then
+if [[ -f "${ITERATE_REPO}/sandbox/sync-home-skeleton.sh" ]]; then
   echo "[entry] Syncing home-skeleton"
-  bash "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh"
+  bash "${ITERATE_REPO}/sandbox/sync-home-skeleton.sh"
 fi
 
 # Rebuild daemon frontend after sync to ensure the build matches synced source.

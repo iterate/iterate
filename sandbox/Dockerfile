@@ -126,7 +126,7 @@ COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ . .
 RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
-RUN chmod +x apps/os/sandbox/*.sh
+RUN chmod +x sandbox/*.sh sandbox/providers/docker/*.sh
 
 # Install dependencies (cacheable - only reruns when lockfile changes)
 RUN pnpm install --frozen-lockfile --offline
@@ -158,7 +158,7 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
     sudo update-ca-certificates
 
 # Copy home skeleton into /home/iterate
-RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
+RUN bash "$ITERATE_REPO/sandbox/sync-home-skeleton.sh"
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
 RUN opencode run "Hello" || true
 
@@ -176,4 +176,4 @@ ARG GIT_SHA=unknown
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
-ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/entry.sh"]
+ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/sandbox/entry.sh"]

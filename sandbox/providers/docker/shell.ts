@@ -3,7 +3,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { getLocalDockerGitInfo } from "./test/helpers.ts";
+import { getGitInfo as getLocalDockerGitInfo } from "./utils.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 const gitInfo = getLocalDockerGitInfo(repoRoot);
@@ -12,7 +12,7 @@ if (!gitInfo) {
   throw new Error("Failed to resolve git info for local Docker shell.");
 }
 
-const imageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local";
+const imageName = process.env.DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local";
 
 const inspect = spawnSync("docker", ["image", "inspect", imageName], { stdio: "ignore" });
 if (inspect.status !== 0) {

@@ -19,10 +19,6 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "db:studio:prd": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_POSTGRES_URL) drizzle-kit studio",
-    "docker:build": "doppler run -- tsx sandbox/build-docker-image.ts",
-    "docker:test": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true vitest run --reporter=verbose sandbox/'",
-    "docker:shell": "doppler run -- tsx sandbox/local-docker-shell.ts",
-    "daytona:build": "doppler run -- tsx sandbox/push-docker-image-to-daytona.ts",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {

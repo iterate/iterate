@@ -3,17 +3,15 @@ set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 
-# Local Docker: sync host repo into container
-# In local development this behaviour can be toggled on and off inthe os UI and is
-# implemented in providers/local-docker.ts
-if [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
-  bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
+# Docker provider: sync host repo into container
+# In local development this behaviour can be toggled on and off in the os UI and is
+# implemented in sandbox/providers/docker/provider.ts
+if [[ -n "${DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
+  bash "${ITERATE_REPO}/sandbox/providers/docker/sync-repo-from-host.sh"
 fi
 
-# This is primarily useful for tests of the local-docker provider,
+# This is primarily useful for tests of the docker provider,
 # where we want to exec commands in the container _after_ the initial sync.
-# A bit weird to have this here so we might move it to a local docker specific
-# place later.
 touch /tmp/reached-entrypoint
 
 # Allow interactive shell in a fresh container - e.g.:
@@ -39,4 +37,4 @@ tee -a "$CONSOLE_LOG" < "$CONSOLE_FIFO" &
 exec tini -sg -- \
   tsx --watch \
   "$ITERATE_REPO/packages/pidnap/src/cli.ts" \
-  init -c "$ITERATE_REPO/apps/os/sandbox/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1
+  init -c "$ITERATE_REPO/sandbox/pidnap.config.ts" > "$CONSOLE_FIFO" 2>&1

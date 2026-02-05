@@ -202,7 +202,7 @@ export const machineRouter = router({
       );
 
       if (!provider.getProviderState) {
-        // Provider doesn't support state querying (e.g., local-docker)
+        // Provider doesn't support state querying (e.g., docker)
         return {
           machineId: input.machineId,
           machineType: machine.type,
@@ -439,26 +439,36 @@ export const machineRouter = router({
 
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
+    const configuredProviders = (ctx.env.SANDBOX_MACHINE_PROVIDERS ?? "")
+      .split(",")
+      .map((provider) => provider.trim())
+      .filter(Boolean) as Array<(typeof schema.MachineType)[number]>;
+    const enabledProviders = new Set(
+      configuredProviders.length > 0
+        ? configuredProviders
+        : import.meta.env.DEV
+          ? ["docker", "daytona", "local"]
+          : ["daytona"],
+    );
     const types: Array<{
       type: (typeof schema.MachineType)[number];
       label: string;
       disabledReason?: string;
     }> = [];
 
-    // Dev-only types first (preferred in dev)
-    if (import.meta.env.DEV) {
-      types.push({ type: "local-docker", label: "Local Docker" });
+    if (enabledProviders.has("docker")) {
+      types.push({ type: "docker", label: "Docker" });
     }
 
-    // Daytona - available if configured
-    types.push({
-      type: "daytona",
-      label: "Daytona (Cloud)",
-      disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
-    });
+    if (enabledProviders.has("daytona")) {
+      types.push({
+        type: "daytona",
+        label: "Daytona (Cloud)",
+        disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
+      });
+    }
 
-    // Local host:port - dev only
-    if (import.meta.env.DEV) {
+    if (enabledProviders.has("local")) {
       types.push({ type: "local", label: "Local (Host:Port)" });
     }
 

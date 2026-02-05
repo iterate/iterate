@@ -90,7 +90,7 @@ jobs:
           SANDBOX_BUILD_PLATFORM: ${{ inputs.docker_platform }}
         run: |-
           echo '::group::Build timing'
-          time pnpm os docker:build
+          time pnpm docker:build
           echo '::endgroup::'
       - id: output
         name: Export outputs
