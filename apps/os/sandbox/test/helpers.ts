@@ -253,7 +253,7 @@ export function createDaemonTrpcClient(baseUrl: string) {
 }
 
 export function createPidnapRpcClient(baseUrl: string) {
-  return createPidnapClient(`${baseUrl}/rpc`);
+  return createPidnapClient(baseUrl);
 }
 
 /** Dump container logs to stdout for debugging test failures */

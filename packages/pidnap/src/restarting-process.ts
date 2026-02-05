@@ -55,6 +55,8 @@ export type RestartingProcessState = v.InferOutput<typeof RestartingProcessState
 const DEFAULT_BACKOFF: BackoffStrategy = { type: "fixed", delayMs: 1000 };
 const DEFAULT_CRASH_LOOP: CrashLoopConfig = { maxRestarts: 5, windowMs: 60000, backoffMs: 60000 };
 
+export type StateChangeListener = (newState: RestartingProcessState) => void;
+
 export class RestartingProcess {
   readonly name: string;
   readonly lazyProcess: LazyProcess;
@@ -71,6 +73,8 @@ export class RestartingProcess {
   private lastStartTime: number | null = null;
   private stopRequested = false;
   private pendingDelayTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _hasStarted = false;
+  private stateChangeListeners: Set<StateChangeListener> = new Set();
 
   constructor(
     name: string,
@@ -96,6 +100,36 @@ export class RestartingProcess {
 
   get restarts(): number {
     return this._restartCount;
+  }
+
+  get hasStarted(): boolean {
+    return this._hasStarted;
+  }
+
+  get isHealthy(): boolean {
+    // For now, healthy means running (no health check implemented yet)
+    return this._state === "running";
+  }
+
+  /**
+   * Subscribe to state changes
+   * @returns Unsubscribe function
+   */
+  onStateChange(listener: StateChangeListener): () => void {
+    this.stateChangeListeners.add(listener);
+    return () => this.stateChangeListeners.delete(listener);
+  }
+
+  private setState(newState: RestartingProcessState): void {
+    if (this._state === newState) return;
+    this._state = newState;
+    for (const listener of this.stateChangeListeners) {
+      try {
+        listener(newState);
+      } catch (err) {
+        this.logger.error(`State change listener error:`, err);
+      }
+    }
   }
 
   start(): void {
@@ -134,13 +168,13 @@ export class RestartingProcess {
       this._state === "stopped" ||
       this._state === "max-restarts-reached"
     ) {
-      this._state = "stopped";
+      this.setState("stopped");
       return;
     }
 
-    this._state = "stopping";
+    this.setState("stopping");
     await this.lazyProcess.stop(timeout);
-    this._state = "stopped";
+    this.setState("stopped");
     this.logger.info(`RestartingProcess stopped`);
   }
 
@@ -169,7 +203,7 @@ export class RestartingProcess {
       // Follow normal delay strategy
       const delay = this.calculateDelay();
       if (delay > 0) {
-        this._state = "restarting";
+        this.setState("restarting");
         this.logger.info(`Restarting in ${delay}ms`);
         await this.delay(delay);
         if (this.stopRequested) return;
@@ -214,7 +248,8 @@ export class RestartingProcess {
 
   private startProcess(): void {
     this.lastStartTime = Date.now();
-    this._state = "running";
+    this._hasStarted = true;
+    this.setState("running");
 
     this.lazyProcess
       .reset()
@@ -226,7 +261,7 @@ export class RestartingProcess {
       .then((exitState) => {
         if (!exitState) return;
         if (this.stopRequested && exitState === "error") {
-          this._state = "stopped";
+          this.setState("stopped");
           return;
         }
         if (exitState === "stopped" || exitState === "error") {
@@ -235,14 +270,14 @@ export class RestartingProcess {
       })
       .catch((err) => {
         if (this.stopRequested) return;
-        this._state = "stopped";
+        this.setState("stopped");
         this.logger.error(`Failed to start process:`, err);
       });
   }
 
   private handleProcessExit(exitState: ProcessState): void {
     if (this.stopRequested) {
-      this._state = "stopped";
+      this.setState("stopped");
       return;
     }
 
@@ -259,7 +294,7 @@ export class RestartingProcess {
 
     // Check if policy allows restart
     if (!this.shouldRestart(exitedWithError)) {
-      this._state = "stopped";
+      this.setState("stopped");
       this.logger.info(
         `Process exited, policy "${this.options.restartPolicy}" does not allow restart`,
       );
@@ -271,7 +306,7 @@ export class RestartingProcess {
       this.options.maxTotalRestarts !== undefined &&
       this._restartCount >= this.options.maxTotalRestarts
     ) {
-      this._state = "max-restarts-reached";
+      this.setState("max-restarts-reached");
       this.logger.warn(`Max total restarts (${this.options.maxTotalRestarts}) reached`);
       return;
     }
@@ -282,7 +317,7 @@ export class RestartingProcess {
 
     // Check for crash loop
     if (this.isInCrashLoop()) {
-      this._state = "crash-loop-backoff";
+      this.setState("crash-loop-backoff");
       this.logger.warn(
         `Crash loop detected (${this.options.crashLoop.maxRestarts} restarts in ${this.options.crashLoop.windowMs}ms), backing off for ${this.options.crashLoop.backoffMs}ms`,
       );
@@ -337,7 +372,7 @@ export class RestartingProcess {
   }
 
   private scheduleRestart(): void {
-    this._state = "restarting";
+    this.setState("restarting");
     const delay = this.calculateDelay();
 
     this.logger.info(`Restarting in ${delay}ms (restart #${this._restartCount})`);
@@ -345,7 +380,7 @@ export class RestartingProcess {
     this.pendingDelayTimeout = setTimeout(() => {
       this.pendingDelayTimeout = null;
       if (this.stopRequested) {
-        this._state = "stopped";
+        this.setState("stopped");
         return;
       }
       this.startProcess();
@@ -358,7 +393,7 @@ export class RestartingProcess {
     this.pendingDelayTimeout = setTimeout(() => {
       this.pendingDelayTimeout = null;
       if (this.stopRequested) {
-        this._state = "stopped";
+        this.setState("stopped");
         return;
       }
 

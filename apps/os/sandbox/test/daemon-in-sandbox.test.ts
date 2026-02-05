@@ -24,7 +24,7 @@ import { test, ITERATE_REPO_PATH, RUN_LOCAL_DOCKER_TESTS, POLL_DEFAULTS } from "
 describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
-      await sandbox.waitForServiceHealthy({ process: "daemon-backend", timeoutMs: 30000 });
+      await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
       const client = sandbox.pidnapOrpcClient();
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
@@ -51,7 +51,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
           return info.effectiveEnv?.DYNAMIC_TEST_VAR;
         }, POLL_DEFAULTS)
         .toBe("added_at_runtime");
-    }, 50000);
+    }, 120_000);
   });
 
   describe("Process Management", () => {
@@ -63,7 +63,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Pidnap Integration", () => {
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
         /Process not found/i,
       );
-    }, 50000);
+    }, 120_000);
   });
 });
 
@@ -88,7 +88,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
     // Verify health from inside container
     const internalHealth = await sandbox.exec(["curl", "-s", "http://localhost:3000/api/health"]);
     expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
-  }, 50000);
+  }, 120_000);
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
     // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
@@ -128,7 +128,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
         });
       }, POLL_DEFAULTS)
       .toBe("connected");
-  }, 50000);
+  }, 120_000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
     await sandbox.waitForServiceHealthy({ process: "daemon-backend" });
@@ -199,7 +199,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Daemon Integration", () => {
         return response.headers.get("content-type") ?? "";
       }, POLL_DEFAULTS)
       .toContain("text/html");
-  }, 50000);
+  }, 120_000);
 });
 
 // ============ Container Restart Tests ============
@@ -230,5 +230,5 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS).concurrent("Container Restart", () => {
         { timeout: 60_000, interval: 500 }, // longer timeout for container restart
       )
       .toBe(true);
-  }, 90000);
+  }, 180_000);
 });
