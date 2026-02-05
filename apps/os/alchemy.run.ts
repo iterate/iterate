@@ -414,15 +414,43 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_GIT_REPO_ROOT: "",
     DOCKER_GIT_GITDIR: "",
     DOCKER_GIT_COMMON_DIR: "",
+    LOCAL_DOCKER_IMAGE_NAME: "",
+    LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
+    LOCAL_DOCKER_GIT_REPO_ROOT: "",
+    LOCAL_DOCKER_GIT_GITDIR: "",
+    LOCAL_DOCKER_GIT_COMMON_DIR: "",
+    LOCAL_DOCKER_REPO_CHECKOUT: "",
+    LOCAL_DOCKER_GIT_DIR: "",
+    LOCAL_DOCKER_COMMON_DIR: "",
   };
   if (isDevelopment) {
-    const imageName = process.env.DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local";
+    const composeProjectName =
+      process.env.DOCKER_COMPOSE_PROJECT_NAME ?? dockerEnvVars.DOCKER_COMPOSE_PROJECT_NAME ?? "";
+    const repoCheckout =
+      process.env.DOCKER_GIT_REPO_ROOT ?? dockerEnvVars.DOCKER_GIT_REPO_ROOT ?? "";
+    const gitDir = process.env.DOCKER_GIT_GITDIR ?? dockerEnvVars.DOCKER_GIT_GITDIR ?? "";
+    const commonDir =
+      process.env.DOCKER_GIT_COMMON_DIR ?? dockerEnvVars.DOCKER_GIT_COMMON_DIR ?? "";
+    const imageName =
+      process.env.DOCKER_IMAGE_NAME ??
+      process.env.LOCAL_DOCKER_IMAGE_NAME ??
+      "iterate-sandbox:local";
+
     Object.assign(dockerBindings, {
       DOCKER_IMAGE_NAME: imageName,
-      DOCKER_COMPOSE_PROJECT_NAME: dockerEnvVars.DOCKER_COMPOSE_PROJECT_NAME ?? "",
-      DOCKER_GIT_REPO_ROOT: dockerEnvVars.DOCKER_GIT_REPO_ROOT ?? "",
-      DOCKER_GIT_GITDIR: dockerEnvVars.DOCKER_GIT_GITDIR ?? "",
-      DOCKER_GIT_COMMON_DIR: dockerEnvVars.DOCKER_GIT_COMMON_DIR ?? "",
+      DOCKER_COMPOSE_PROJECT_NAME: composeProjectName,
+      DOCKER_GIT_REPO_ROOT: repoCheckout,
+      DOCKER_GIT_GITDIR: gitDir,
+      DOCKER_GIT_COMMON_DIR: commonDir,
+      LOCAL_DOCKER_IMAGE_NAME: imageName,
+      LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
+        process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,
+      LOCAL_DOCKER_GIT_REPO_ROOT: process.env.LOCAL_DOCKER_GIT_REPO_ROOT ?? repoCheckout,
+      LOCAL_DOCKER_GIT_GITDIR: process.env.LOCAL_DOCKER_GIT_GITDIR ?? gitDir,
+      LOCAL_DOCKER_GIT_COMMON_DIR: process.env.LOCAL_DOCKER_GIT_COMMON_DIR ?? commonDir,
+      LOCAL_DOCKER_REPO_CHECKOUT: process.env.LOCAL_DOCKER_REPO_CHECKOUT ?? repoCheckout,
+      LOCAL_DOCKER_GIT_DIR: process.env.LOCAL_DOCKER_GIT_DIR ?? gitDir,
+      LOCAL_DOCKER_COMMON_DIR: process.env.LOCAL_DOCKER_COMMON_DIR ?? commonDir,
     });
   }
 

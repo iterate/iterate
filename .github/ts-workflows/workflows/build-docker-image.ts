@@ -41,6 +41,18 @@ export default workflow({
           type: "string",
           default: "iterate-sandbox:ci",
         },
+        use_depot_registry: {
+          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        depot_registry_tag: {
+          description: "Optional Depot Registry tag override. Auto-generated when empty.",
+          required: false,
+          type: "string",
+          default: "",
+        },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
           required: false,
@@ -80,6 +92,18 @@ export default workflow({
           type: "string",
           default: "iterate-sandbox:ci",
         },
+        use_depot_registry: {
+          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        depot_registry_tag: {
+          description: "Optional Depot Registry tag override. Auto-generated when empty.",
+          required: false,
+          type: "string",
+          default: "",
+        },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
           required: false,
@@ -91,7 +115,7 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOn,
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         image_ref: "${{ steps.output.outputs.image_ref }}",
         git_sha: "${{ steps.output.outputs.git_sha }}",
@@ -132,6 +156,9 @@ export default workflow({
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name }}",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
+            SANDBOX_USE_DEPOT_REGISTRY: "${{ inputs.use_depot_registry && 'true' || 'false' }}",
+            SANDBOX_DEPOT_SAVE_TAG:
+              "${{ inputs.depot_registry_tag || format('iterate-sandbox-ci-{0}-{1}', github.run_id, github.run_attempt) }}",
           },
           run: [
             "echo '::group::Build timing'",
@@ -144,7 +171,16 @@ export default workflow({
           id: "output",
           name: "Export outputs",
           run: [
-            'echo "image_ref=${{ inputs.image_name }}" >> $GITHUB_OUTPUT',
+            'if [ "${{ inputs.use_depot_registry }}" = "true" ]; then',
+            "  image_ref=\"$(jq -r '.depotRegistryImageName' .cache/depot-build-info.json)\"",
+            '  if [ "$image_ref" = "null" ]; then',
+            '    echo "Missing Depot registry image ref in .cache/depot-build-info.json" >&2',
+            "    exit 1",
+            "  fi",
+            '  echo "image_ref=$image_ref" >> $GITHUB_OUTPUT',
+            "else",
+            '  echo "image_ref=${{ inputs.image_name }}" >> $GITHUB_OUTPUT',
+            "fi",
             'echo "git_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT',
           ].join("\n"),
         },

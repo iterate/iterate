@@ -106,7 +106,7 @@ function ProjectMachinesPage() {
   const [newLocalHost, setNewLocalHost] = useState("localhost");
   // Per-daemon port state for local machines (daemonId -> port string)
   const [newLocalPorts, setNewLocalPorts] = useState<Record<string, string>>(DEFAULT_LOCAL_PORTS);
-  const [newLocalDockerImage, setNewLocalDockerImage] = useState("ghcr.io/iterate/sandbox:local");
+  const [newLocalDockerImage, setNewLocalDockerImage] = useState("iterate-sandbox:local");
   const [newLocalDockerSyncRepo, setNewLocalDockerSyncRepo] = useState(true);
   const [newDaytonaSnapshotName, setNewDaytonaSnapshotName] = useState(
     DEFAULT_DAYTONA_SNAPSHOT_NAME,
@@ -144,7 +144,7 @@ function ProjectMachinesPage() {
       setNewMachineName(`${defaultType}-${dateSlug()}`);
       setNewLocalHost("localhost");
       setNewLocalPorts(DEFAULT_LOCAL_PORTS);
-      setNewLocalDockerImage("ghcr.io/iterate/sandbox:local");
+      setNewLocalDockerImage("iterate-sandbox:local");
       setNewLocalDockerSyncRepo(true);
       setNewDaytonaSnapshotName(DEFAULT_DAYTONA_SNAPSHOT_NAME);
       toast.success("Machine created!");
@@ -390,7 +390,7 @@ function ProjectMachinesPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Docker Image</label>
                   <Input
-                    placeholder="ghcr.io/iterate/sandbox:sha-<sha>"
+                    placeholder="iterate-sandbox:local"
                     value={newLocalDockerImage}
                     onChange={(e) => setNewLocalDockerImage(e.target.value)}
                     disabled={createMachine.isPending}

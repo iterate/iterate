@@ -10,13 +10,23 @@
  * while keeping the build context 100% deterministic for the same SHA.
  */
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 const builtBy = process.env.ITERATE_USER ?? "unknown";
+const useDepotRegistry = process.env.SANDBOX_USE_DEPOT_REGISTRY === "true";
+const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
 
 // Detect multi-platform builds (comma-separated platforms)
 const isMultiPlatform = buildPlatform.includes(",");
@@ -26,6 +36,19 @@ const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:l
 
 // Registry image name for multi-platform builds (can't --load multiple platforms)
 const registryImageName = process.env.REGISTRY_IMAGE_NAME;
+
+function readDepotProjectId(): string {
+  const depotConfigPath = join(repoRoot, "depot.json");
+  const config = JSON.parse(readFileSync(depotConfigPath, "utf-8")) as { id?: string };
+  if (!config.id) {
+    throw new Error("Missing depot project id in depot.json");
+  }
+  return config.id;
+}
+
+const depotProjectId = useDepotRegistry ? readDepotProjectId() : null;
+const depotRegistryImageName =
+  useDepotRegistry && depotSaveTag ? `registry.depot.dev/${depotProjectId}:${depotSaveTag}` : null;
 
 // Ensure cache directory exists
 const cacheDir = join(repoRoot, ".cache");
@@ -126,10 +149,27 @@ if (isMultiPlatform && !registryImageName) {
   process.exit(1);
 }
 
-// Determine output mode: --load for single platform (local daemon), --push for multi-platform (registry)
+if (useDepotRegistry && isMultiPlatform) {
+  console.error("Error: SANDBOX_USE_DEPOT_REGISTRY is only supported for single-platform builds");
+  console.error("Use REGISTRY_IMAGE_NAME for multi-platform builds.");
+  process.exit(1);
+}
+
+if (useDepotRegistry && !depotSaveTag) {
+  console.error("Error: SANDBOX_DEPOT_SAVE_TAG is required when SANDBOX_USE_DEPOT_REGISTRY=true");
+  console.error("Example: SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-ci-1234");
+  process.exit(1);
+}
+
+// Determine output mode:
+// - --load for local daemon (default, needed by Daytona and local dev)
+// - --save for Depot Registry (single-platform CI fast path)
+// - --push for explicit registry image names (multi-platform builds)
 const outputArgs = isMultiPlatform
   ? ["--push", "-t", registryImageName!]
-  : ["--load", "-t", localImageName];
+  : useDepotRegistry
+    ? ["--save", "--save-tag", depotSaveTag!]
+    : ["--load", "-t", localImageName];
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
@@ -158,6 +198,10 @@ const buildCommand = buildArgs.map(quoteArg).join(" ");
 if (isMultiPlatform) {
   console.log(`Multi-platform build: ${buildPlatform}`);
   console.log(`Registry image: ${registryImageName}`);
+} else if (useDepotRegistry) {
+  console.log(`Depot registry image: ${depotRegistryImageName}`);
+  console.log(`Depot save tag: ${depotSaveTag}`);
+  console.log(`Platform: ${buildPlatform}`);
 } else {
   console.log(`Local image tag: ${localImageName}`);
   console.log(`Platform: ${buildPlatform}`);
@@ -180,12 +224,16 @@ writeFileSync(
   buildInfoPath,
   JSON.stringify(
     {
-      localImageName: isMultiPlatform ? null : localImageName,
+      localImageName: isMultiPlatform || useDepotRegistry ? null : localImageName,
       registryImageName: isMultiPlatform ? registryImageName : null,
+      depotRegistryImageName,
+      depotSaveTag: useDepotRegistry ? depotSaveTag : null,
+      depotProjectId,
       gitSha,
       builtBy,
       buildPlatform,
       isMultiPlatform,
+      useDepotRegistry,
     },
     null,
     2,
@@ -194,5 +242,9 @@ writeFileSync(
 console.log(`Build info written to: ${buildInfoPath}`);
 
 // Output the image name for CI to use
-const outputImageName = isMultiPlatform ? registryImageName : localImageName;
+const outputImageName = isMultiPlatform
+  ? registryImageName!
+  : useDepotRegistry
+    ? depotRegistryImageName!
+    : localImageName;
 console.log(`image_name=${outputImageName}`);

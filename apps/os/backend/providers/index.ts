@@ -55,13 +55,18 @@ export async function createMachineProvider(
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
       return createLocalDockerProvider({
-        imageName: env.DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
+        imageName: env.DOCKER_IMAGE_NAME || env.LOCAL_DOCKER_IMAGE_NAME || "iterate-sandbox:local",
         externalId,
         metadata,
-        composeProjectName: env.DOCKER_COMPOSE_PROJECT_NAME || undefined,
-        repoCheckout: env.DOCKER_GIT_REPO_ROOT || undefined,
-        gitDir: env.DOCKER_GIT_GITDIR || undefined,
-        commonDir: env.DOCKER_GIT_COMMON_DIR || undefined,
+        composeProjectName:
+          env.DOCKER_COMPOSE_PROJECT_NAME || env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME || undefined,
+        repoCheckout:
+          env.DOCKER_GIT_REPO_ROOT ||
+          env.LOCAL_DOCKER_GIT_REPO_ROOT ||
+          env.LOCAL_DOCKER_REPO_CHECKOUT ||
+          undefined,
+        gitDir: env.DOCKER_GIT_GITDIR || env.LOCAL_DOCKER_GIT_GITDIR || undefined,
+        commonDir: env.DOCKER_GIT_COMMON_DIR || env.LOCAL_DOCKER_GIT_COMMON_DIR || undefined,
       });
     }
 

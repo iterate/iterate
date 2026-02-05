@@ -44,6 +44,7 @@ export default workflow({
     "build-snapshot": {
       uses: "./.github/workflows/build-daytona-snapshot.yml",
       if: "${{ github.event.inputs.snapshot_name == '' }}",
+      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         doppler_config: "dev",

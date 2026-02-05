@@ -11,16 +11,87 @@ on:
     paths:
       - sandbox/**
       - apps/daemon/**
+      - apps/os/backend/providers/local-docker.ts
+      - packages/pidnap/**
       - .github/workflows/sandbox-test.yml
   pull_request:
     paths:
       - sandbox/**
       - apps/daemon/**
+      - apps/os/backend/providers/local-docker.ts
+      - packages/pidnap/**
       - .github/workflows/sandbox-test.yml
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to test (branch, tag, or SHA). Leave empty for current branch.
+        required: false
+        type: string
+        default: ""
+      image_name:
+        description: Docker image name/tag to use
+        required: false
+        type: string
+        default: iterate-sandbox:ci
 jobs:
-  docker-test:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+  build-amd64-image:
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
+    outputs:
+      image_name: ${{ steps.metadata.outputs.image_name }}
+      git_sha: ${{ steps.metadata.outputs.git_sha }}
+      depot_project_id: ${{ steps.metadata.outputs.depot_project_id }}
+      depot_save_tag: ${{ steps.metadata.outputs.depot_save_tag }}
+      depot_registry_image_name: ${{ steps.metadata.outputs.depot_registry_image_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+      - name: Setup Doppler
+        run: doppler setup --config dev --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - name: Build AMD64 Docker image with Depot
+        env:
+          LOCAL_DOCKER_IMAGE_NAME: ${{ inputs.image_name || 'iterate-sandbox:ci' }}
+          SANDBOX_BUILD_PLATFORM: linux/amd64
+          SANDBOX_USE_DEPOT_REGISTRY: "true"
+          SANDBOX_DEPOT_SAVE_TAG: iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}
+        run: pnpm docker:build
+      - id: metadata
+        name: Export build metadata
+        run: |-
+          build_info_path=".cache/depot-build-info.json"
+          depot_project_id="$(jq -r ".depotProjectId" "$build_info_path")"
+          depot_save_tag="$(jq -r ".depotSaveTag" "$build_info_path")"
+          depot_registry_image_name="$(jq -r ".depotRegistryImageName" "$build_info_path")"
+          git_sha="$(jq -r ".gitSha" "$build_info_path")"
+          if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$depot_registry_image_name" = "null" ] || [ "$git_sha" = "null" ]; then
+            echo "Missing Depot build metadata in $build_info_path" >&2
+            exit 1
+          fi
+          echo "image_name=${{ inputs.image_name || "iterate-sandbox:ci" }}" >> "$GITHUB_OUTPUT"
+          echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
+          echo "depot_project_id=$depot_project_id" >> "$GITHUB_OUTPUT"
+          echo "depot_save_tag=$depot_save_tag" >> "$GITHUB_OUTPUT"
+          echo "depot_registry_image_name=$depot_registry_image_name" >> "$GITHUB_OUTPUT"
+  docker-provider-tests:
+    needs:
+      - build-amd64-image
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,25 +112,136 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - name: Build Docker image
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - name: Pull built image from Depot Registry
         env:
-          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
-          SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
-        run: pnpm docker:build
-      - name: Run Docker Provider Base Image Test
+          IMAGE_NAME: ${{ needs.build-amd64-image.outputs.image_name }}
+        run: |-
+          depot_project_id="${{ needs.build-amd64-image.outputs.depot_project_id }}"
+          depot_save_tag="${{ needs.build-amd64-image.outputs.depot_save_tag }}"
+          depot_registry_image_name="${{ needs.build-amd64-image.outputs.depot_registry_image_name }}"
+          depot pull --project "$depot_project_id" "$depot_save_tag"
+          docker image inspect "$depot_registry_image_name" > /dev/null
+          docker tag "$depot_registry_image_name" "$IMAGE_NAME"
+      - name: Run Docker provider tests
         env:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: docker
-          SANDBOX_TEST_SNAPSHOT_ID: iterate-sandbox:ci
-          SANDBOX_TEST_BASE_DOCKER_IMAGE: iterate-sandbox:ci
+          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-amd64-image.outputs.image_name }}
+          SANDBOX_TEST_BASE_DOCKER_IMAGE: ${{ needs.build-amd64-image.outputs.image_name }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-        run: pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
-      - name: Upload test results
+        run: pnpm sandbox test:docker
+      - name: Upload Docker test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: docker-test-logs
+          name: docker-provider-test-logs
+          path: sandbox/test-results
+          retention-days: 7
+  upload-daytona-snapshot:
+    needs:
+      - build-amd64-image
+    runs-on: ubuntu-24.04
+    outputs:
+      snapshot_name: ${{ steps.push.outputs.snapshot_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+      - name: Setup Doppler
+        run: doppler setup --config dev --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - name: Pull built image from Depot Registry
+        env:
+          IMAGE_NAME: ${{ needs.build-amd64-image.outputs.image_name }}
+        run: |-
+          depot_project_id="${{ needs.build-amd64-image.outputs.depot_project_id }}"
+          depot_save_tag="${{ needs.build-amd64-image.outputs.depot_save_tag }}"
+          depot_registry_image_name="${{ needs.build-amd64-image.outputs.depot_registry_image_name }}"
+          depot pull --project "$depot_project_id" "$depot_save_tag"
+          docker image inspect "$depot_registry_image_name" > /dev/null
+          docker tag "$depot_registry_image_name" "$IMAGE_NAME"
+      - name: Install and configure Daytona CLI
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
+          curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"
+          sudo chmod +x daytona && sudo mv daytona /usr/local/bin/
+          daytona version
+          mkdir -p ~/.config/daytona
+          doppler run -- bash -c 'jq -n \
+                        --arg apiKey "$DAYTONA_API_KEY" \
+                        --arg orgId "$DAYTONA_ORG_ID" \
+                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: \$apiKey}, activeOrganizationId: \$orgId}]}" \
+                        > ~/.config/daytona/config.json'
+          daytona snapshot list --limit 1
+      - id: push
+        name: Upload snapshot to Daytona
+        env:
+          IMAGE_NAME: ${{ needs.build-amd64-image.outputs.image_name }}
+          CI: "true"
+        run: |-
+          set -euo pipefail
+          snapshot_name="iterate-sandbox-${{ needs.build-amd64-image.outputs.git_sha }}"
+          output_file=$(mktemp)
+          pnpm daytona:build --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"
+          snapshot_name=$(grep -m 1 "^snapshot_name=" "$output_file" | sed "s/^snapshot_name=//")
+          echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"
+  daytona-provider-tests:
+    needs:
+      - upload-daytona-snapshot
+    if: ${{ needs.upload-daytona-snapshot.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+      - name: Setup Doppler
+        run: doppler setup --config dev --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Run Daytona provider tests
+        env:
+          RUN_SANDBOX_TESTS: "true"
+          SANDBOX_TEST_PROVIDER: daytona
+          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}
+          SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT: ${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm sandbox test:daytona
+      - name: Upload Daytona test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daytona-provider-test-logs
           path: sandbox/test-results
           retention-days: 7
