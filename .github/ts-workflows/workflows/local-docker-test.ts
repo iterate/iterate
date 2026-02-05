@@ -36,15 +36,23 @@ export default workflow({
         ...utils.setupBuildx,
         ...utils.loginGhcr,
         {
+          id: "build",
           name: "build-docker-image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             SANDBOX_BUILD_PLATFORM:
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
             // Use local buildx with registry cache instead of remote Depot builders
             DOCKER_BUILD_MODE: "local",
+            // Push to registry instead of loading locally (avoids 55s tarball overhead)
+            DOCKER_OUTPUT_MODE: "push",
           },
-          run: "pnpm os docker:build",
+          run: [
+            "set -euo pipefail",
+            "output=$(pnpm os docker:build)",
+            'echo "$output"',
+            "image_name=$(echo \"$output\" | grep -E '^image_name=' | sed 's/^image_name=//')",
+            'echo "image_name=$image_name" >> $GITHUB_OUTPUT',
+          ].join("\n"),
         },
         {
           name: "Run Local Docker Tests",
@@ -52,7 +60,8 @@ export default workflow({
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
+            // Pull image from registry instead of using local image
+            LOCAL_DOCKER_IMAGE_NAME: "${{ steps.build.outputs.image_name }}",
           },
           run: "pnpm os docker:test",
         },

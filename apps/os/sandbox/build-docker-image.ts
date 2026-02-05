@@ -37,8 +37,14 @@ const DEPOT_PROJECT_ID = process.env.DEPOT_PROJECT_ID ?? "lds5v3fpw8";
 // For CI on Depot runners, "local" is often faster because it avoids downloading the full image from remote builders
 const buildMode = (process.env.DOCKER_BUILD_MODE ?? "depot") as "depot" | "local";
 
+// Output mode: "load" loads into local Docker daemon, "push" pushes to registry (faster, no tarball overhead)
+const outputMode = (process.env.DOCKER_OUTPUT_MODE ?? "load") as "load" | "push";
+
 // Registry for cache layers (used in "local" mode)
 const cacheRegistry = process.env.DOCKER_CACHE_REGISTRY ?? "ghcr.io/iterate/sandbox-cache";
+
+// Registry for pushed images (used when outputMode is "push")
+const imageRegistry = process.env.DOCKER_IMAGE_REGISTRY ?? "ghcr.io/iterate/sandbox";
 
 const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
@@ -64,6 +70,9 @@ const gitShaShort = gitSha.slice(0, 7);
 const depotRegistryTag = isDirty ? `sha-${gitShaShort}-${builtBy}-dirty` : `sha-${gitSha}`;
 const depotImageUrl = `registry.depot.dev/${DEPOT_PROJECT_ID}:${depotRegistryTag}`;
 
+// Image tag for registry (used when pushing)
+const registryImageTag = `${imageRegistry}:sha-${gitSha}`;
+
 // Local tag for Docker daemon (used by local-docker provider and tests)
 const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
 
@@ -77,7 +86,13 @@ if (buildMode === "local") {
   // Local build mode: use docker buildx with registry cache
   // This builds locally on the runner (no remote builder) and uses registry for cache persistence
   console.log("Build mode: local (docker buildx with registry cache)");
+  console.log(`Output mode: ${outputMode}`);
   console.log(`Cache registry: ${cacheRegistry}`);
+
+  const tags =
+    outputMode === "push"
+      ? ["-t", registryImageTag, "-t", `${imageRegistry}:latest`]
+      : ["-t", localImageName];
 
   buildArgs = [
     "docker",
@@ -85,11 +100,10 @@ if (buildMode === "local") {
     "build",
     "--platform",
     buildPlatform,
-    "--load", // Load into local Docker daemon
+    outputMode === "push" ? "--push" : "--load",
     "-f",
     "apps/os/sandbox/Dockerfile",
-    "-t",
-    localImageName,
+    ...tags,
     // Override the Dockerfile's gitdir/commondir stages with host git paths.
     "--build-context",
     `iterate-repo-gitdir=${gitDir}`,
@@ -141,7 +155,11 @@ if (buildMode === "local") {
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
 const buildCommand = buildArgs.map(quoteArg).join(" ");
 
-console.log(`Local image tag: ${localImageName}`);
+if (outputMode === "push") {
+  console.log(`Registry image: ${registryImageTag}`);
+} else {
+  console.log(`Local image tag: ${localImageName}`);
+}
 console.log(`Platform: ${buildPlatform}`);
 console.log("Build command:");
 console.log(buildCommand);
@@ -158,9 +176,11 @@ writeFileSync(
   JSON.stringify(
     {
       buildMode,
+      outputMode,
       depotRegistryTag,
       depotImageUrl: buildMode === "depot" ? depotImageUrl : undefined,
-      localImageName,
+      registryImageTag: outputMode === "push" ? registryImageTag : undefined,
+      localImageName: outputMode === "load" ? localImageName : undefined,
       gitSha,
       builtBy,
       buildPlatform,
@@ -170,3 +190,10 @@ writeFileSync(
   ),
 );
 console.log(`Build info written to: ${depotInfoPath}`);
+
+// Output the image name for CI to use
+if (outputMode === "push") {
+  console.log(`image_name=${registryImageTag}`);
+} else {
+  console.log(`image_name=${localImageName}`);
+}

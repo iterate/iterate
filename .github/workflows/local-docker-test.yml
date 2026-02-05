@@ -53,18 +53,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: build-docker-image
+      - id: build
+        name: build-docker-image
         env:
-          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
           SANDBOX_BUILD_PLATFORM: ${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}
           DOCKER_BUILD_MODE: local
-        run: pnpm os docker:build
+          DOCKER_OUTPUT_MODE: push
+        run: |-
+          set -euo pipefail
+          output=$(pnpm os docker:build)
+          echo "$output"
+          image_name=$(echo "$output" | grep -E '^image_name=' | sed 's/^image_name=//')
+          echo "image_name=$image_name" >> $GITHUB_OUTPUT
       - name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
-          LOCAL_DOCKER_IMAGE_NAME: iterate-sandbox:ci
+          LOCAL_DOCKER_IMAGE_NAME: ${{ steps.build.outputs.image_name }}
         run: pnpm os docker:test
       - name: Upload test results
         if: failure()
