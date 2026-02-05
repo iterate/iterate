@@ -60,7 +60,8 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- daytona organization list",
+          // organization commands don't work with API key auth, use snapshot list instead
+          run: "doppler run -- daytona snapshot list --limit 1",
         },
         uses("docker/setup-buildx-action@v3"),
         {

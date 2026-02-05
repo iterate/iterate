@@ -42,7 +42,7 @@ jobs:
       - name: Verify Daytona CLI authentication
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- daytona organization list
+        run: doppler run -- daytona snapshot list --limit 1
       - uses: docker/setup-buildx-action@v3
       - name: Build local sandbox image
         env:
