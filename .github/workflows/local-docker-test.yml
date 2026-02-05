@@ -65,6 +65,8 @@ jobs:
           echo "$output"
           image_name=$(echo "$output" | grep -E '^image_name=' | sed 's/^image_name=//')
           echo "image_name=$image_name" >> $GITHUB_OUTPUT
+      - name: Pre-pull image from registry
+        run: docker pull ${{ steps.build.outputs.image_name }}
       - name: Run Local Docker Tests
         env:
           RUN_LOCAL_DOCKER_TESTS: "true"

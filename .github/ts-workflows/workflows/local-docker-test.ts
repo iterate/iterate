@@ -55,12 +55,16 @@ export default workflow({
           ].join("\n"),
         },
         {
+          name: "Pre-pull image from registry",
+          run: "docker pull ${{ steps.build.outputs.image_name }}",
+        },
+        {
           name: "Run Local Docker Tests",
           env: {
             RUN_LOCAL_DOCKER_TESTS: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
-            // Pull image from registry instead of using local image
+            // Use the pre-pulled image
             LOCAL_DOCKER_IMAGE_NAME: "${{ steps.build.outputs.image_name }}",
           },
           run: "pnpm os docker:test",
