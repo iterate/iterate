@@ -14,6 +14,7 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { trackWebhookEvent } from "../../lib/posthog.ts";
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -475,6 +476,15 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
+  // Track ALL webhooks in PostHog (non-blocking, before any filtering)
+  const payload = JSON.parse(body);
+  const repo = payload.repository as { full_name?: string } | undefined;
+  trackWebhookEvent(c.env, {
+    distinctId: `repo:${repo?.full_name ?? "unknown"}`,
+    event: "github:webhook_received",
+    properties: payload,
+  });
+
   // Insert raw event immediately after signature verification for deduplication.
   // Uses ON CONFLICT DO NOTHING with unique index on externalId.
   // This pattern allows this handler to become an outbox consumer later -
@@ -484,7 +494,6 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Missing delivery ID" }, 400);
   }
   const externalId = deliveryId;
-  const payload = JSON.parse(body);
 
   if (!xGithubEvent || !(xGithubEvent in WEBHOOK_FILTERS)) {
     return c.json({ message: `No filter for event type ${xGithubEvent}` }, 200);
