@@ -85,17 +85,35 @@ function parseComposePublishedPort(
   return match[1];
 }
 
-function getComposePublishedPort(service: string, containerPort: number): string {
-  const output = execSync(`tsx ./scripts/docker-compose.ts port ${service} ${containerPort}`, {
-    cwd: repoRoot,
-    encoding: "utf-8",
+async function getComposePublishedPort(
+  service: string,
+  containerPort: number,
+  maxWaitMs = 30_000,
+): Promise<string> {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const output = execSync(`tsx ./scripts/docker-compose.ts port ${service} ${containerPort}`, {
+        cwd: repoRoot,
+        encoding: "utf-8",
+      });
+      return parseComposePublishedPort(output, service, containerPort);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  throw new Error(`Could not resolve published port for ${service}:${containerPort}`, {
+    cause: lastError instanceof Error ? lastError : undefined,
   });
-  return parseComposePublishedPort(output, service, containerPort);
 }
 
-function resolveLocalDockerRuntimePorts() {
-  const postgresPort = getComposePublishedPort("postgres", 5432);
-  const neonProxyPort = getComposePublishedPort("neon-proxy", 4444);
+async function resolveLocalDockerRuntimePorts() {
+  const postgresPort = await getComposePublishedPort("postgres", 5432);
+  const neonProxyPort = await getComposePublishedPort("neon-proxy", 4444);
   process.env.LOCAL_DOCKER_POSTGRES_PORT = postgresPort;
   process.env.LOCAL_DOCKER_NEON_PROXY_PORT = neonProxyPort;
   return { postgresPort, neonProxyPort };
@@ -592,7 +610,7 @@ if (isDevelopment) {
     cwd: repoRoot,
     stdio: "inherit",
   });
-  const ports = resolveLocalDockerRuntimePorts();
+  const ports = await resolveLocalDockerRuntimePorts();
   console.log(
     `Resolved local Docker ports: postgres=${ports.postgresPort}, neon-proxy=${ports.neonProxyPort}`,
   );
