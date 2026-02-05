@@ -31,9 +31,8 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      // Wait for process to complete
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      expect(proc.state).toBe("stopped");
+      // Wait for process to complete using polling for reliability
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
     });
 
     it("should log stdout output", async () => {

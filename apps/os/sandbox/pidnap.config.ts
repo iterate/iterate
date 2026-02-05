@@ -42,7 +42,8 @@ export default defineConfig({
     // Github Stuff
     GITHUB_MAGIC_TOKEN: githubMagicToken,
   },
-  tasks: [
+  processes: [
+    // Init tasks (run once, sequential)
     {
       name: "task-git-config",
       definition: bash(
@@ -51,6 +52,7 @@ export default defineConfig({
           git config --global --add "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "git@github.com:"
         `,
       ),
+      options: { restartPolicy: "never" },
     },
     {
       name: "task-generate-ca",
@@ -68,6 +70,8 @@ export default defineConfig({
           fi
           `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-git-config"],
     },
     {
       name: "task-install-ca",
@@ -80,6 +84,8 @@ export default defineConfig({
           fi
         `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-generate-ca"],
     },
     {
       name: "task-db-migrate",
@@ -88,9 +94,10 @@ export default defineConfig({
         args: ["db:migrate"],
         cwd: `${iterateRepo}/apps/daemon`,
       },
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-install-ca"],
     },
-  ],
-  processes: [
+    // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
       definition: {
@@ -112,6 +119,7 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-db-migrate"],
     },
     {
       name: "iterate-daemon",
@@ -131,6 +139,7 @@ export default defineConfig({
       envOptions: {
         inheritGlobalEnv: false,
       },
+      dependsOn: ["task-db-migrate"],
     },
     {
       name: "opencode",
@@ -146,6 +155,7 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-db-migrate"],
     },
   ],
 });
