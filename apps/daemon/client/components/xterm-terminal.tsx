@@ -1,5 +1,13 @@
 import "@xterm/xterm/css/xterm.css";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useMemo, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useMemo,
+  useState,
+  useCallback,
+} from "react";
 import { useWebSocket } from "partysocket/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -7,6 +15,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { useIsMobile } from "@/hooks/use-mobile.ts";
+import { MobileKeyboardToolbar } from "@/components/mobile-keyboard-toolbar.tsx";
 
 interface XtermTerminalProps {
   wsBase?: string;
@@ -39,7 +49,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
+    const mobileInputRef = useRef<HTMLInputElement>(null);
     const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
+    const isMobile = useIsMobile();
 
     const wsUrl = useMemo(() => {
       const baseUri = new URL(document.baseURI);
@@ -62,6 +74,35 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     });
 
     const connectionStatus = READY_STATE_MAP[socket.readyState] ?? "disconnected";
+
+    // Handle mobile keyboard input
+    const handleMobileInput = useCallback(
+      (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        if (value && socket.readyState === WebSocket.OPEN) {
+          socket.send(value);
+        }
+        e.target.value = "";
+      },
+      [socket],
+    );
+
+    // Handle key presses from the mobile toolbar
+    const handleToolbarKeyPress = useCallback(
+      (key: string) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(key);
+        }
+      },
+      [socket],
+    );
+
+    // Focus mobile input to trigger keyboard on mobile devices
+    const focusMobileInput = useCallback(() => {
+      if (isMobile && mobileInputRef.current) {
+        mobileInputRef.current.focus();
+      }
+    }, [isMobile]);
 
     useImperativeHandle(ref, () => ({
       sendText: (text: string) => {
@@ -147,6 +188,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           sendResize();
         });
         terminal.focus();
+        // On mobile, also focus the hidden input to trigger keyboard
+        if (mobileInputRef.current) {
+          // Small delay to ensure terminal is ready
+          setTimeout(() => mobileInputRef.current?.focus(), 100);
+        }
       };
 
       const handleMessage = (event: MessageEvent) => {
@@ -237,15 +283,49 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
           {termSize.cols}x{termSize.rows}
         </div>
-        <div className="relative h-full w-full overflow-hidden">
+        {/* Add bottom padding on mobile to account for toolbar */}
+        <div className={`relative h-full w-full overflow-hidden ${isMobile ? "pb-24" : ""}`}>
           <div
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
             className="absolute inset-0"
-            onClick={() => termRef.current?.focus()}
+            onClick={() => {
+              termRef.current?.focus();
+              focusMobileInput();
+            }}
           />
+          {/* Hidden input for mobile keyboard - captures typed text */}
+          {isMobile && (
+            <input
+              ref={mobileInputRef}
+              type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              className="absolute opacity-0 pointer-events-none"
+              style={{ top: -9999, left: -9999 }}
+              onChange={handleMobileInput}
+              onKeyDown={(e) => {
+                // Handle special keys that don't produce input events
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (socket.readyState === WebSocket.OPEN) {
+                    socket.send("\r");
+                  }
+                } else if (e.key === "Backspace") {
+                  e.preventDefault();
+                  if (socket.readyState === WebSocket.OPEN) {
+                    socket.send("\x7f");
+                  }
+                }
+              }}
+            />
+          )}
         </div>
+        {/* Mobile keyboard toolbar */}
+        {isMobile && <MobileKeyboardToolbar onKeyPress={handleToolbarKeyPress} />}
       </div>
     );
   },
