@@ -167,11 +167,44 @@ export function trackWebhookEvent(
     distinctId: string;
     event: string;
     properties?: Record<string, unknown>;
+    groups?: Record<string, string>;
   },
 ): void {
   waitUntil(
     captureServerEvent(env, params).catch((error) => {
       logger.error("Failed to track webhook event", { error, event: params.event });
+    }),
+  );
+}
+
+/**
+ * Link an external distinct_id (e.g., slack:T123 or github:owner/name) to an
+ * organization and project using PostHog groups.
+ *
+ * Capturing an event with the `groups` property automatically associates
+ * the distinct_id with those groups in PostHog.
+ */
+export function linkExternalIdToGroups(
+  env: PostHogEnv,
+  params: {
+    distinctId: string;
+    organizationId: string;
+    projectId: string;
+  },
+): void {
+  waitUntil(
+    captureServerEvent(env, {
+      distinctId: params.distinctId,
+      event: "external_id_linked",
+      groups: {
+        organization: params.organizationId,
+        project: params.projectId,
+      },
+    }).catch((error) => {
+      logger.error("Failed to link external ID to groups", {
+        error,
+        distinctId: params.distinctId,
+      });
     }),
   );
 }
