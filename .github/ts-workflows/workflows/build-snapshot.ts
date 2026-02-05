@@ -46,6 +46,21 @@ export default workflow({
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
+        {
+          name: "Install Daytona CLI and authenticate",
+          env: {
+            DAYTONA_API_KEY: "${{ secrets.DAYTONA_API_KEY }}",
+            DAYTONA_ORG_ID: "${{ secrets.DAYTONA_ORG_ID }}",
+          },
+          run: [
+            'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
+            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
+            "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
+            "daytona version",
+            'daytona login --api-key "$DAYTONA_API_KEY"',
+            'if [ -n "$DAYTONA_ORG_ID" ]; then daytona organization use "$DAYTONA_ORG_ID"; fi',
+          ].join(" && "),
+        },
         uses("docker/setup-buildx-action@v3"),
         {
           name: "Build local sandbox image",
@@ -55,15 +70,6 @@ export default workflow({
               "${{ github.repository_owner == 'iterate' && 'linux/arm64' || 'linux/amd64' }}",
           },
           run: "pnpm os docker:build",
-        },
-        {
-          name: "Install Daytona CLI",
-          run: [
-            'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
-            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
-            "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
-            "daytona version",
-          ].join(" && "),
         },
         {
           id: "build",
