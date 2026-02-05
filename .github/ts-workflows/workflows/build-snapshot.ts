@@ -67,7 +67,7 @@ export default workflow({
             "set -euo pipefail",
             "output_file=$(mktemp)",
             "snapshot_name=iterate-sandbox-${{ github.sha }}",
-            'pnpm os daytona:build -- --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
+            'pnpm os daytona:build --no-update-doppler --name "$snapshot_name" | tee "$output_file"',
             "snapshot_name=$(rg -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
