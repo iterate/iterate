@@ -40,8 +40,12 @@ export default workflow({
           name: "Check if image exists",
           run: [
             "set -euo pipefail",
-            'IMAGE_NAME="ghcr.io/iterate/sandbox-cache:sha-${{ github.sha }}"',
+            "# Use git SHA from checked out code (matches build script behavior)",
+            "# This handles PRs correctly - avoids GitHub's synthetic merge commit SHA",
+            "GIT_SHA=$(git rev-parse HEAD)",
+            'IMAGE_NAME="ghcr.io/iterate/sandbox-cache:sha-$GIT_SHA"',
             'echo "image_name=$IMAGE_NAME" >> $GITHUB_OUTPUT',
+            'echo "git_sha=$GIT_SHA" >> $GITHUB_OUTPUT',
             "# Check if image exists in registry (manifest inspect returns 0 if exists)",
             'if docker manifest inspect "$IMAGE_NAME" > /dev/null 2>&1; then',
             '  echo "exists=true" >> $GITHUB_OUTPUT',
