@@ -119,8 +119,10 @@ RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then PNPM_ARCH="x64"; else PNPM_ARCH="arm64"; fi && \
     pnpm fetch --config.platform=linux --config.arch="$PNPM_ARCH" --config.libc=glibc
 
-# Copy repo (exclude .git file from worktrees)
-COPY --chown=iterate:iterate --exclude=.git . .
+# Copy repo. Avoid COPY --exclude (BuildKit-only; older parsers fail).
+# If .git is a worktree file, replace with dir
+COPY --chown=iterate:iterate . .
+RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
 RUN chmod +x apps/os/sandbox/*.sh
