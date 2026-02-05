@@ -92,6 +92,7 @@ EOF'`,
           name: "Build and push Daytona snapshot",
           env: {
             CI: "true",
+            LOCAL_DOCKER_IMAGE_NAME: "ghcr.io/iterate/sandbox:ci",
             SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           run: [
