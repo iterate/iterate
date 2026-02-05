@@ -94,7 +94,17 @@ export const processes = {
     .output(WaitForRunningResponseSchema),
 };
 
+// Simple health check response
+export const HealthResponseSchema = v.object({
+  status: v.literal("ok"),
+});
+
+export type HealthResponse = v.InferOutput<typeof HealthResponseSchema>;
+
+export const health = oc.output(HealthResponseSchema);
+
 export const api = {
+  health,
   manager,
   processes,
 };

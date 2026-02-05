@@ -221,7 +221,13 @@ const waitForRunning = os.processes.waitForRunning.handler(
   },
 );
 
+// Simple health check endpoint
+const health = os.health.handler(async () => {
+  return { status: "ok" as const };
+});
+
 export const router = os.router({
+  health,
   manager: {
     status: managerStatus,
   },
