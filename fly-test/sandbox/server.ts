@@ -129,44 +129,46 @@ async function fetchViaCurl(input: FetchInput): Promise<FetchResult> {
     args.push("--data-raw", body);
   }
   args.push(target);
+  try {
+    const status = await new Promise<string>((resolve, reject) => {
+      const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
 
-  const status = await new Promise<string>((resolve, reject) => {
-    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
-
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error: Error) => reject(error));
-    child.on("close", (code: number | null) => {
-      if (code !== 0) {
-        reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `curl_exit=${code}`));
-        return;
-      }
-      resolve(Buffer.concat(stdout).toString("utf8").trim());
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.on("error", (error: Error) => reject(error));
+      child.on("close", (code: number | null) => {
+        if (code !== 0) {
+          reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `curl_exit=${code}`));
+          return;
+        }
+        resolve(Buffer.concat(stdout).toString("utf8").trim());
+      });
     });
-  });
 
-  const headersRaw = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf8") : "";
-  const bodyRaw = fs.existsSync(bodyPath) ? fs.readFileSync(bodyPath, "utf8") : "";
-  fs.rmSync(tempDir, { recursive: true, force: true });
-  const parsedHeaders = parseResponseHeaders(headersRaw);
-  const interestingHeaders = pickInterestingHeaders(parsedHeaders);
+    const headersRaw = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf8") : "";
+    const bodyRaw = fs.existsSync(bodyPath) ? fs.readFileSync(bodyPath, "utf8") : "";
+    const parsedHeaders = parseResponseHeaders(headersRaw);
+    const interestingHeaders = pickInterestingHeaders(parsedHeaders);
 
-  const proofDetected =
-    /(^|\n)x-iterate-mitm-proof:\s*1(\r?\n|$)/i.test(headersRaw) ||
-    bodyRaw.startsWith(PROOF_PREFIX);
+    const proofDetected =
+      /(^|\n)x-iterate-mitm-proof:\s*1(\r?\n|$)/i.test(headersRaw) ||
+      bodyRaw.startsWith(PROOF_PREFIX);
 
-  return {
-    ok: true,
-    status: status.length > 0 ? status : "unknown",
-    body: bodyRaw.slice(0, 2500),
-    proofDetected,
-    responseHeaders: interestingHeaders,
-    requestId: interestingHeaders["x-iterate-mitm-request-id"],
-    method,
-    targetUrl: target,
-  };
+    return {
+      ok: true,
+      status: status.length > 0 ? status : "unknown",
+      body: bodyRaw.slice(0, 2500),
+      proofDetected,
+      responseHeaders: interestingHeaders,
+      requestId: interestingHeaders["x-iterate-mitm-request-id"],
+      method,
+      targetUrl: target,
+    };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function safeFetchViaCurl(input: FetchInput): Promise<FetchResult> {
