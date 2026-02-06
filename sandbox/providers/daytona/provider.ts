@@ -91,7 +91,6 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    this.resetClientCaches();
     const sandbox = await this.getSdkSandbox();
     await sandbox.start();
   }
@@ -104,7 +103,6 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
-    this.resetClientCaches();
     const sandbox = await this.getSdkSandbox();
     if (sandbox.state === "started") {
       await sandbox.stop();
@@ -168,11 +166,19 @@ export class DaytonaProvider extends SandboxProvider {
       ? Number(this.env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL)
       : undefined;
 
-    const snapshotId = opts.snapshotId ?? this.defaultSnapshotId;
+    const envVars = { ...opts.envVars };
+    const entrypointArguments = opts.providerOptions?.daytona?.entrypointArguments;
+    if (entrypointArguments && entrypointArguments.length > 0) {
+      // Providers like Daytona cannot pass container start args at sandbox creation time.
+      // We tunnel entrypoint args via env var so sandbox/entry.sh can exec them.
+      envVars.SANDBOX_ENTRY_ARGS = entrypointArguments.join("\t");
+    }
+
+    const snapshotId = opts.providerSnapshotId ?? this.defaultSnapshotId;
     const sdkSandbox = await this.daytona.create({
       name: sandboxName,
       snapshot: snapshotId,
-      envVars: opts.envVars,
+      envVars,
       autoStopInterval,
       autoDeleteInterval,
       public: true,

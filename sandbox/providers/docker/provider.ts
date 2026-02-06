@@ -111,7 +111,6 @@ export class DockerSandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    this.resetClientCaches();
     await withTimeout(
       dockerApi("POST", `/containers/${this.providerId}/start`, {}),
       LIFECYCLE_TIMEOUT_MS,
@@ -129,7 +128,6 @@ export class DockerSandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
-    this.resetClientCaches();
     await withTimeout(
       dockerApi("POST", `/containers/${this.providerId}/restart`, {}),
       LIFECYCLE_TIMEOUT_MS,
@@ -181,7 +179,12 @@ export class DockerProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
-    const imageName = resolveBaseImage(this.repoRoot, opts.snapshotId ?? this.defaultSnapshotId);
+    const imageName = resolveBaseImage(
+      this.repoRoot,
+      opts.providerSnapshotId ?? this.defaultSnapshotId,
+    );
+    const entrypointArguments = opts.providerOptions?.docker?.entrypointArguments;
+    const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
     const portBindings: Record<string, Array<{ HostPort: string }>> = {};
     const exposedPorts: Record<string, object> = {};
@@ -244,7 +247,7 @@ export class DockerProvider extends SandboxProvider {
       `/containers/create?name=${encodeURIComponent(containerName)}`,
       {
         Image: imageName,
-        ...(opts.command ? { Cmd: opts.command } : {}),
+        ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
         Env: envArray,
         ExposedPorts: exposedPorts,
         HostConfig: hostConfig,
@@ -260,7 +263,7 @@ export class DockerProvider extends SandboxProvider {
     const sandbox = new DockerSandbox(containerId, ports, internalPorts);
     const maxWaitMs = 30000;
 
-    if (opts.command) {
+    if (hasEntrypointArguments) {
       const start = Date.now();
       while (Date.now() - start < maxWaitMs) {
         try {
@@ -281,7 +284,7 @@ export class DockerProvider extends SandboxProvider {
     }
 
     if (Object.keys(iterateEnv).length > 0) {
-      if (!opts.command) {
+      if (!hasEntrypointArguments) {
         const start = Date.now();
         while (Date.now() - start < maxWaitMs) {
           try {

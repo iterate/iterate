@@ -14,10 +14,20 @@ fi
 # where we want to exec commands in the container _after_ the initial sync.
 touch /tmp/reached-entrypoint
 
-# Allow interactive shell in a fresh container - e.g.:
-# docker run --rm -it iterate-sandbox:local /bin/bash
+# Allow overriding entrypoint args in two ways:
+# 1) Positional args (normal Docker/CMD path), e.g.:
+#    docker run --rm -it iterate-sandbox:local /bin/bash
+# 2) SANDBOX_ENTRY_ARGS env var (tab-delimited args) for sandbox providers like Daytona,
+#    where sandbox creation supports env vars but does not support startup args.
 if [[ $# -gt 0 ]]; then
   exec "$@"
+fi
+
+if [[ -n "${SANDBOX_ENTRY_ARGS:-}" ]]; then
+  IFS=$'\t' read -r -a env_entry_args <<< "${SANDBOX_ENTRY_ARGS}"
+  if [[ ${#env_entry_args[@]} -gt 0 ]]; then
+    exec "${env_entry_args[@]}"
+  fi
 fi
 
 

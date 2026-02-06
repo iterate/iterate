@@ -31,7 +31,9 @@ describe
         id: "host-sync-test",
         name: "Host Sync Test",
         envVars: {},
-        command: ["sleep", "infinity"],
+        providerOptions: {
+          docker: { entrypointArguments: ["sleep", "infinity"] },
+        },
       },
     });
 
@@ -82,7 +84,9 @@ describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
               id: "worktree-test",
               name: "Worktree Test",
               envVars: {},
-              command: ["sleep", "infinity"],
+              providerOptions: {
+                docker: { entrypointArguments: ["sleep", "infinity"] },
+              },
             },
             async (sandbox) => {
               await expect

@@ -10,7 +10,7 @@
  * - Container restart with daemon recovery
  *
  * For lightweight tests that don't need pidnap/daemon (git, CLI tools, container setup),
- * see sandbox-without-daemon.test.ts which uses `command: ["sleep", "infinity"]` to bypass pidnap.
+ * see sandbox-without-daemon.test.ts which uses provider entrypoint args to bypass pidnap.
  *
  * RUN WITH:
  *   RUN_SANDBOX_TESTS=true pnpm sandbox test
@@ -19,6 +19,7 @@
  */
 
 import { describe } from "vitest";
+import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
 import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
 
@@ -41,7 +42,7 @@ async function waitForServiceHealthy(
   while (Date.now() - start < timeoutMs) {
     const remainingMs = timeoutMs - (Date.now() - start);
     try {
-      const client = await sandbox.pidnapClient();
+      const client = await getPidnapClientForSandbox(sandbox);
       const status = await client.processes.waitForRunning({
         target: process,
         timeoutMs: Math.min(10_000, remainingMs),
@@ -72,7 +73,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
       await waitForServiceHealthy(sandbox, "daemon-backend", 30000);
-      const client = await sandbox.pidnapClient();
+      const client = await getPidnapClientForSandbox(sandbox);
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
       // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
@@ -104,7 +105,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
       await waitForServiceHealthy(sandbox, "daemon-backend");
-      const client = await sandbox.pidnapClient();
+      const client = await getPidnapClientForSandbox(sandbox);
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
@@ -186,7 +187,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
     await waitForServiceHealthy(sandbox, "daemon-backend");
     const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
-    const trpc = await sandbox.daemonClient();
+    const trpc = await getDaemonClientForSandbox(sandbox);
 
     // index.html
     await expect

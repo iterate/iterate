@@ -437,10 +437,12 @@ export const machineRouter = router({
 
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
+    const isMachineType = (value: string): value is (typeof schema.MachineType)[number] =>
+      (schema.MachineType as ReadonlyArray<string>).includes(value);
     const configuredProviders = (ctx.env.SANDBOX_MACHINE_PROVIDERS ?? "")
       .split(",")
       .map((provider) => provider.trim())
-      .filter(Boolean) as Array<(typeof schema.MachineType)[number]>;
+      .filter(isMachineType);
     const enabledProviders = new Set(
       configuredProviders.length > 0
         ? configuredProviders

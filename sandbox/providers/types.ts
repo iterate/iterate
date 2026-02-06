@@ -1,5 +1,3 @@
-import { createTRPCClient, httpLink } from "@trpc/client";
-import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import type { z } from "zod/v4";
 
 /**
@@ -52,29 +50,25 @@ export interface CreateSandboxOptions {
   name: string;
   /** Environment variables to inject into the sandbox */
   envVars: Record<string, string>;
-  /** Override the provider's defaultSnapshotId */
-  snapshotId?: string;
-  /**
-   * Override the container command. Docker-only - Daytona ignores this.
-   * When provided, entry.sh execs this command directly instead of starting pidnap.
-   */
-  command?: string[];
+  /** Override the provider's default snapshot/image */
+  providerSnapshotId?: string;
+  /** Provider-specific create options keyed by provider type. */
+  providerOptions?: {
+    docker?: { entrypointArguments?: string[] };
+    daytona?: { entrypointArguments?: string[] };
+    fly?: { entrypointArguments?: string[] };
+  };
 }
-
-// Ports used by sandbox services
-const DAEMON_PORT = 3000;
-const PIDNAP_PORT = 9876;
 
 /**
  * Abstract base class for sandbox instances.
  *
  * Each provider implements preview URL + lifecycle methods. The base class
- * provides shared fetch/client helpers.
+ * provides a shared fetch helper.
  */
 export abstract class Sandbox {
   abstract readonly providerId: string;
   abstract readonly type: ProviderType;
-  private pidnapRpcBaseUrl?: string;
 
   // === Core abstraction ===
 
@@ -95,75 +89,12 @@ export abstract class Sandbox {
    */
   abstract getPreviewUrl(opts: { port: number }): Promise<string>;
 
-  // === Lifecycle (each provider implements) ===
-
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;
   abstract restart(): Promise<void>;
   abstract delete(): Promise<void>;
   abstract exec(cmd: string[]): Promise<string>;
   abstract getState(): Promise<ProviderState>;
-
-  // === Clients (shared implementation using getFetch) ===
-
-  /**
-   * Get a pidnap oRPC client for process management.
-   */
-  async pidnapClient(): Promise<PidnapClient> {
-    const baseUrl = await this.resolvePidnapRpcBaseUrl();
-    return createPidnapClient(baseUrl);
-  }
-
-  /**
-   * Get a tRPC client for the daemon backend.
-   * Callers should cast to TRPCClient<TRPCRouter> for type safety.
-   */
-  async daemonClient(): Promise<ReturnType<typeof createTRPCClient>> {
-    const baseUrl = await this.getPreviewUrl({ port: DAEMON_PORT });
-    return createTRPCClient({
-      links: [httpLink({ url: `${baseUrl}/api/trpc` })],
-    });
-  }
-
-  /**
-   * Reset memoized client endpoint state after lifecycle changes
-   * (e.g. Docker restart can remap host ports).
-   */
-  protected resetClientCaches(): void {
-    this.pidnapRpcBaseUrl = undefined;
-  }
-
-  /**
-   * Detect pidnap RPC base path.
-   *
-   * Old snapshots use "/rpc/*" while newer builds serve at root ("/*").
-   * We probe both for compatibility so tests can target mixed snapshots.
-   */
-  private async resolvePidnapRpcBaseUrl(): Promise<string> {
-    if (this.pidnapRpcBaseUrl) return this.pidnapRpcBaseUrl;
-
-    const previewUrl = await this.getPreviewUrl({ port: PIDNAP_PORT });
-    const candidates = [`${previewUrl}/rpc`, previewUrl];
-
-    for (const candidate of candidates) {
-      try {
-        const response = await fetch(`${candidate}/health`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-          signal: AbortSignal.timeout(5000),
-        });
-        if (response.ok) {
-          this.pidnapRpcBaseUrl = candidate;
-          return candidate;
-        }
-      } catch {
-        // Try next candidate
-      }
-    }
-
-    throw new Error("pidnap RPC endpoint is not ready yet");
-  }
 }
 
 /**

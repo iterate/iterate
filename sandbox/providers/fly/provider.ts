@@ -206,7 +206,6 @@ export class FlySandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    this.resetClientCaches();
     await flyApi(
       this.env,
       "POST",
@@ -231,7 +230,6 @@ export class FlySandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
-    this.resetClientCaches();
     try {
       await flyApi(
         this.env,
@@ -279,6 +277,8 @@ export class FlyProvider extends SandboxProvider {
     const suffix = randomBytes(4).toString("hex");
     const base = slugify(opts.id ?? opts.name) || "sandbox";
     const appName = `${this.env.FLY_APP_PREFIX}-${base}-${suffix}`.slice(0, 63);
+    const entrypointArguments = opts.providerOptions?.fly?.entrypointArguments;
+    const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
     try {
       await flyApi(this.env, "POST", "/v1/apps", {
@@ -300,7 +300,7 @@ export class FlyProvider extends SandboxProvider {
         name: `sandbox-${base}`.slice(0, 63),
         region: this.env.FLY_REGION,
         config: {
-          image: opts.snapshotId ?? this.defaultSnapshotId,
+          image: opts.providerSnapshotId ?? this.defaultSnapshotId,
           env: opts.envVars,
           guest: { cpu_kind: "shared", cpus: 1, memory_mb: 1024 },
           restart: { policy: "always" },
@@ -309,7 +309,7 @@ export class FlyProvider extends SandboxProvider {
             "com.iterate.sandbox": "true",
             "com.iterate.machine_type": "fly",
           },
-          ...(opts.command ? { init: { exec: opts.command } } : {}),
+          ...(hasEntrypointArguments ? { init: { exec: entrypointArguments } } : {}),
         },
       },
     );

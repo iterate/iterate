@@ -3,16 +3,16 @@
  *
  * These are reasonably fast, though there are currently three tests that do hit LLMs.
  *
- * These tests run against a container using `sleep infinity` as the command,
+ * These tests run against a container using `sleep infinity` provider entrypoint args,
  * bypassing pidnap process supervision entirely. This is useful for fast tests
  * that only need basic container functionality (git, shell, file system, CLI tools).
  *
- * The entry.sh script supports this pattern: when arguments are passed to the
- * container, it execs them directly instead of starting pidnap. See:
+ * The entry.sh script supports this pattern: when entrypoint args are passed
+ * (directly or via SANDBOX_ENTRY_ARGS), it execs them instead of starting pidnap. See:
  * sandbox/entry.sh: `if [[ $# -gt 0 ]]; then exec "$@"; fi`
  *
  * IMPORTANT: The sync scripts (sync-home-skeleton.sh, sync-repo-from-host.sh) run
- * BEFORE the command override check in entry.sh, so host sync still works.
+ * BEFORE the entrypoint-args override check in entry.sh, so host sync still works.
  *
  * For tests that require pidnap/daemon (process supervision, daemon endpoints),
  * see daemon-in-sandbox.test.ts which uses the default entry.sh entrypoint.
@@ -30,16 +30,20 @@ import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS } from "./helpers.ts";
 
 /**
  * Tests that don't require pidnap or daemon - just a running container.
- * Uses `sleep infinity` as the command to keep container alive without starting pidnap.
+ * Uses `sleep infinity` provider entrypoint args to keep container alive without starting pidnap.
  */
 describe.runIf(RUN_SANDBOX_TESTS).concurrent("Minimal Container Tests", () => {
-  // Override sandbox command to skip pidnap - entry.sh will exec this directly
+  // Override provider entrypoint args to skip pidnap - entry.sh will exec these directly
   test.scoped({
     sandboxOptions: {
       id: "minimal-test",
       name: "Minimal Test",
       envVars: {},
-      command: ["sleep", "infinity"],
+      providerOptions: {
+        docker: { entrypointArguments: ["sleep", "infinity"] },
+        daytona: { entrypointArguments: ["sleep", "infinity"] },
+        fly: { entrypointArguments: ["sleep", "infinity"] },
+      },
     },
   });
 
@@ -131,7 +135,11 @@ describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys).concurrent("Agent CLI Tests", ()
     sandboxOptions: {
       id: "agent-cli-test",
       name: "Agent CLI Test",
-      command: ["sleep", "infinity"],
+      providerOptions: {
+        docker: { entrypointArguments: ["sleep", "infinity"] },
+        daytona: { entrypointArguments: ["sleep", "infinity"] },
+        fly: { entrypointArguments: ["sleep", "infinity"] },
+      },
       envVars: {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY!,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,

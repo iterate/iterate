@@ -21,8 +21,12 @@ describe
         id: "base-image-test",
         name: "Base Image Test",
         envVars: {},
-        snapshotId: TEST_BASE_SNAPSHOT_ID,
-        command: ["sleep", "infinity"],
+        providerSnapshotId: TEST_BASE_SNAPSHOT_ID,
+        providerOptions: {
+          docker: { entrypointArguments: ["sleep", "infinity"] },
+          daytona: { entrypointArguments: ["sleep", "infinity"] },
+          fly: { entrypointArguments: ["sleep", "infinity"] },
+        },
       },
     });
 
@@ -34,6 +38,13 @@ describe
 
         const echo = await sandbox.exec(["sh", "-c", "echo provider-ok"]);
         expect(echo).toContain("provider-ok");
+
+        const pidnapRunning = await sandbox.exec([
+          "sh",
+          "-c",
+          "ps -ef | grep -v grep | grep -q 'pidnap/src/cli.ts' && echo yes || echo no",
+        ]);
+        expect(pidnapRunning.trim()).toBe("no");
 
         const previewPort = TEST_CONFIG.provider === "docker" ? 3000 : 7777;
 

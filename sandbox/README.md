@@ -13,6 +13,13 @@ Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked re
   - `/host/gitdir` (worktree git dir)
   - `/host/commondir` (main .git)
 
+## Dependency boundaries
+
+- `sandbox/*` is provider/runtime infra code only.
+- `apps/os/backend` (worker/control plane) may import `@iterate-com/sandbox`.
+- `apps/daemon` must not depend on sandbox provider abstractions.
+- `sandbox/*` must not import `apps/os/*` or any OS worker package.
+
 ## Build
 
 Local build (uses current repo checkout):

@@ -68,14 +68,18 @@ describe.runIf(RUN_FLY_SHARED_EGRESS_TEST)("Fly shared egress", () => {
         id: `fly-a-${suffix}`,
         name: "Fly A",
         envVars: {},
-        command: ["sleep", "infinity"],
+        providerOptions: {
+          fly: { entrypointArguments: ["sleep", "infinity"] },
+        },
       });
 
       const sandboxB = await provider.create({
         id: `fly-b-${suffix}`,
         name: "Fly B",
         envVars: {},
-        command: ["sleep", "infinity"],
+        providerOptions: {
+          fly: { entrypointArguments: ["sleep", "infinity"] },
+        },
       });
 
       let egressMachineId: string | null = null;
