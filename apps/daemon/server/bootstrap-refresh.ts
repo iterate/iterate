@@ -73,9 +73,12 @@ export async function fetchBootstrapData(): Promise<void> {
   const result = await client.machines.getEnv({ machineId });
 
   // Apply environment variables (always call to replace/clear stale vars)
-  const { injectedCount, removedCount } = await applyEnvVars(result.envVars);
+  // skipProxy indicates that raw secrets mode is enabled - no egress proxy needed
+  const { injectedCount, removedCount } = await applyEnvVars(result.envVars, {
+    skipProxy: result.skipProxy,
+  });
   console.log(
-    `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale`,
+    `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale${result.skipProxy ? " (proxy disabled)" : ""}`,
   );
 
   // Clear any stale GitHub credentials from global git config

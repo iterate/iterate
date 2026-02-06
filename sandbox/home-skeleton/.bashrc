@@ -9,3 +9,6 @@ if [ -f ~/.iterate/.env ]; then
     . ~/.iterate/.env
     set +a
 fi
+
+# Prompt: grey pwd path + lightning
+PS1='\[\033[90m\]\w\[\033[0m\] ⚡️ '
