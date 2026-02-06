@@ -8,11 +8,13 @@ const state = globalThis as typeof globalThis & {
   __iterateDaemonOtelStarted?: boolean;
 };
 
+const DEFAULT_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces";
+
 function resolveTraceExporterUrl(): string | undefined {
   const tracesEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
   if (tracesEndpoint) return tracesEndpoint;
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-  if (!endpoint) return undefined;
+  if (!endpoint) return DEFAULT_OTLP_TRACES_ENDPOINT;
   const normalized = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
   return `${normalized}/v1/traces`;
 }
