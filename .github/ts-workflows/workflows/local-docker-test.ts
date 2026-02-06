@@ -21,23 +21,8 @@ export default workflow({
   on: {
     push: {
       branches: ["main"],
-      paths: [
-        "apps/os/sandbox/**",
-        "apps/os/backend/providers/local-docker.ts",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/local-docker-test.yml",
-      ],
     },
-    pull_request: {
-      paths: [
-        "apps/os/sandbox/**",
-        "apps/os/backend/providers/local-docker.ts",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/local-docker-test.yml",
-      ],
-    },
+    pull_request: {},
     // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
@@ -94,7 +79,7 @@ export default workflow({
   jobs: {
     "build-and-test": {
       // Run on AMD64 to match Daytona snapshot builds and maximize shared Depot cache hits.
-      ...utils.runsOnUbuntuLatest,
+      ...utils.runsOnFastStartingUbuntuLatest,
       outputs: {
         test_result: "${{ steps.test.outcome }}",
       },

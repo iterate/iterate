@@ -8,19 +8,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - apps/os/sandbox/**
-      - apps/os/backend/providers/local-docker.ts
-      - apps/daemon/**
-      - packages/pidnap/**
-      - .github/workflows/local-docker-test.yml
-  pull_request:
-    paths:
-      - apps/os/sandbox/**
-      - apps/os/backend/providers/local-docker.ts
-      - apps/daemon/**
-      - packages/pidnap/**
-      - .github/workflows/local-docker-test.yml
+  pull_request: {}
   workflow_dispatch:
     inputs:
       ref:
@@ -61,6 +49,7 @@ on:
         value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
   build-and-test:
+    runs-on: ubuntu-24.04
     outputs:
       test_result: ${{ steps.test.outcome }}
     steps:
