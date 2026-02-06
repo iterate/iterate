@@ -11,14 +11,13 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import type { IterateEvent } from "../types/events.ts";
+import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
-const DAEMON_PORT = process.env.PORT || "3001";
-const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 export const emailRouter = new Hono();
 
@@ -32,30 +31,6 @@ emailRouter.use("*", async (c, next) => {
   const resBody = await c.res.clone().text();
   console.log(`[daemon/email] RES ${c.res.status}`, resBody);
 });
-
-async function agentExists(agentPath: string): Promise<boolean> {
-  const existing = await db
-    .select()
-    .from(schema.agents)
-    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-    .limit(1);
-  return Boolean(existing[0]);
-}
-
-async function sendToAgentGateway(agentPath: string, event: IterateEvent): Promise<void> {
-  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
-    );
-  }
-}
 
 /**
  * Resend email.received payload (forwarded from OS backend)
@@ -146,10 +121,6 @@ function getSlug(email: { subject: string; email_id: string }): string {
   return `email-${words}-${hashStr}`.slice(0, 50);
 }
 
-function getAgentPath(slug: string): string {
-  return `/email/${slug}`;
-}
-
 emailRouter.post("/webhook", async (c) => {
   const payload = (await c.req.json()) as ResendEmailPayload;
 
@@ -175,12 +146,11 @@ emailRouter.post("/webhook", async (c) => {
     const { name: senderName, email: senderEmail } = parseSender(emailData.from);
     const subject = emailData.subject;
     const threadSlug = getSlug(emailData);
-    const agentPath = getAgentPath(threadSlug);
     const emailBody = payload._iterate?.emailBody;
 
-    const hasAgent = await agentExists(agentPath);
+    const existingAgent = await getAgent(threadSlug);
 
-    if (hasAgent) {
+    if (existingAgent) {
       // Reply to existing thread
       const message = formatReplyMessage(
         threadSlug,
@@ -191,17 +161,25 @@ emailRouter.post("/webhook", async (c) => {
         emailBody,
         eventId,
       );
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
+      await appendToAgent(existingAgent, message, {
+        workingDirectory: await getCustomerRepoPath(),
+      });
       return c.json({
         success: true,
-        agentPath,
+        agentSlug: threadSlug,
         created: false,
         case: "reply",
         eventId,
       });
     }
 
-    // New email thread - create agent via gateway
+    // New email thread - create agent
+    const agent = await createAgent({
+      slug: threadSlug,
+      harnessType: "opencode",
+      workingDirectory: await getCustomerRepoPath(),
+    });
+
     const message = formatNewEmailMessage(
       threadSlug,
       senderName,
@@ -211,11 +189,11 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    await appendToAgent(agent, message, { workingDirectory: await getCustomerRepoPath() });
 
     return c.json({
       success: true,
-      agentPath,
+      agentSlug: threadSlug,
       created: true,
       case: "new_email",
       eventId,

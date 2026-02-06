@@ -22,13 +22,6 @@
       "when": 1769675552131,
       "tag": "0002_known_legion",
       "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1769521469402,
-      "tag": "0003_agent_paths",
-      "breakpoints": true
     }
   ]
 }

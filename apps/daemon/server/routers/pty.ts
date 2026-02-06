@@ -7,7 +7,6 @@ import { Hono } from "hono";
 import XTermHeadless from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { upgradeWebSocket } from "../utils/hono.ts";
-
 const COMMAND_PREFIX = "\x00[command]\x00";
 const PTY_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
