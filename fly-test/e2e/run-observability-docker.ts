@@ -440,11 +440,11 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
       throw new Error(
         [
           `docker compose up failed`,
-          up.stdout.length > 0 ? `stdout:\\n${up.stdout}` : "",
-          up.stderr.length > 0 ? `stderr:\\n${up.stderr}` : "",
+          up.stdout.length > 0 ? `stdout:\n${up.stdout}` : "",
+          up.stderr.length > 0 ? `stderr:\n${up.stderr}` : "",
         ]
           .filter((line) => line.length > 0)
-          .join("\\n"),
+          .join("\n"),
       );
     }
 

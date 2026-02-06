@@ -499,11 +499,23 @@ async function main(): Promise<void> {
   const sandboxFetchResponseRaw = readFileOrEmpty(
     join(config.artifactDir, "sandbox-fetch-response.json"),
   );
-  const sandboxFetchResponse = JSON.parse(sandboxFetchResponseRaw) as {
+  if (sandboxFetchResponseRaw.trim().length === 0) {
+    throw new Error("sandbox fetch response file missing or empty");
+  }
+  let sandboxFetchResponse: {
     ok?: boolean;
     body?: string;
     proofDetected?: boolean;
   };
+  try {
+    sandboxFetchResponse = JSON.parse(sandboxFetchResponseRaw) as {
+      ok?: boolean;
+      body?: string;
+      proofDetected?: boolean;
+    };
+  } catch {
+    throw new Error("sandbox fetch response was not valid json");
+  }
   if (!/FETCH_(OK|ERROR)/.test(sandboxLog)) throw new Error("sandbox did not report fetch attempt");
   if (!/(MITM_REQUEST|MITM_RESPONSE|TRANSFORM_OK)/.test(egressLog)) {
     throw new Error("egress log does not show MITM transform event");
