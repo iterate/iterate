@@ -231,9 +231,19 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const { project } = machine;
   const machineId = machine.id;
 
+  // Check if dangerous raw secrets mode is enabled
+  // BoolyString schema only allows "true" or "false" strings
+  const dangerousRawSecrets = env.DANGEROUS_RAW_SECRETS_ENABLED === "true";
+  if (dangerousRawSecrets) {
+    logger.warn("DANGEROUS: Raw secrets mode enabled - bypassing egress proxy", { machineId });
+  }
+
   // Get unified env vars using shared function
   const [unifiedEnvVars, githubConnection, projectRepos] = await Promise.all([
-    getUnifiedEnvVars(db, project.id),
+    getUnifiedEnvVars(db, project.id, {
+      dangerousRawSecrets,
+      encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
+    }),
     db.query.projectConnection.findFirst({
       where: (conn, { and: whereAnd, eq: whereEq }) =>
         whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
@@ -311,6 +321,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     machineId,
     envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
+    skipProxy: dangerousRawSecrets,
   });
 
   // Return the unified list - daemon will handle formatting for .env file
@@ -323,6 +334,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       source: v.source,
     })),
     repos,
+    // Skip proxy when raw secrets mode is enabled - secrets are returned directly
+    skipProxy: dangerousRawSecrets,
   };
 });
 
