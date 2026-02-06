@@ -61,8 +61,9 @@ function buildNetworkPlan(project: string): NetworkPlan {
 }
 
 function parseTryCloudflareUrl(text: string): string | null {
-  const match = text.match(/https:\/\/[-a-z0-9]+\.trycloudflare\.com/);
-  return match?.[0] ?? null;
+  const matches = text.match(/https:\/\/[-a-z0-9]+\.trycloudflare\.com/g);
+  if (!matches) return null;
+  return matches.find((url) => url !== "https://api.trycloudflare.com") ?? null;
 }
 
 function dockerCompose(
@@ -195,8 +196,10 @@ async function waitForTunnelUrl(
   project: string,
   service: "sandbox-tunnel" | "egress-tunnel",
   env: NodeJS.ProcessEnv,
-): Promise<string> {
-  for (let attempt = 1; attempt <= 180; attempt += 1) {
+  options: { required?: boolean; maxAttempts?: number } = {},
+): Promise<string | null> {
+  const maxAttempts = options.maxAttempts ?? 180;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const logs = dockerCompose(composeFile, project, ["logs", "--no-color", service], {
       env,
       allowFailure: true,
@@ -205,7 +208,10 @@ async function waitForTunnelUrl(
     if (url) return url;
     await sleep(2000);
   }
-  throw new Error(`tunnel URL not found for service=${service}`);
+  if (options.required ?? true) {
+    throw new Error(`tunnel URL not found for service=${service}`);
+  }
+  return null;
 }
 
 function collectComposeLogs(
@@ -310,7 +316,7 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
     });
     writeFileSync(join(config.artifactDir, "docker-up.log"), `${up.stdout}${up.stderr}`);
     if (up.status !== 0) {
-      const downOnFail = dockerCompose(composeFile, project, ["down", "-v"], {
+      const downOnFail = dockerCompose(composeFile, project, ["down", "-v", "--timeout", "5"], {
         env,
         allowFailure: true,
       });
@@ -343,38 +349,65 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
     if (publishedPorts.upstreamHostPort !== null) {
       log(`Upstream local URL: http://127.0.0.1:${publishedPorts.upstreamHostPort}`);
     }
+    if (publishedPorts.sandboxHostPort === null) {
+      throw new Error("sandbox host port was not published");
+    }
+    if (publishedPorts.egressViewerHostPort === null) {
+      throw new Error("egress viewer host port was not published");
+    }
+    const sandboxLocalUrl = `http://127.0.0.1:${publishedPorts.sandboxHostPort}`;
+    const egressViewerLocalUrl = `http://127.0.0.1:${publishedPorts.egressViewerHostPort}`;
+    writeFileSync(join(config.artifactDir, "sandbox-local-url.txt"), `${sandboxLocalUrl}\n`);
+    writeFileSync(
+      join(config.artifactDir, "egress-viewer-local-url.txt"),
+      `${egressViewerLocalUrl}\n`,
+    );
 
     log("Waiting for gateway + app service health checks");
     await waitForHealthChecks(composeFile, project, env);
 
-    log("Waiting for cloudflared tunnel URLs");
-    const sandboxUrl = await waitForTunnelUrl(composeFile, project, "sandbox-tunnel", env);
-    const egressViewerUrl = await waitForTunnelUrl(composeFile, project, "egress-tunnel", env);
+    log("Attempting to discover cloudflared tunnel URLs (best-effort)");
+    const [sandboxUrl, egressViewerUrl] = await Promise.all([
+      waitForTunnelUrl(composeFile, project, "sandbox-tunnel", env, {
+        required: false,
+        maxAttempts: 10,
+      }),
+      waitForTunnelUrl(composeFile, project, "egress-tunnel", env, {
+        required: false,
+        maxAttempts: 10,
+      }),
+    ]);
+    if (sandboxUrl) {
+      writeFileSync(join(config.artifactDir, "sandbox-url.txt"), `${sandboxUrl}\n`);
+      log(`Sandbox tunnel URL: ${sandboxUrl}`);
+    } else {
+      log("WARN sandbox tunnel URL was not discovered in time");
+    }
+    if (egressViewerUrl) {
+      writeFileSync(join(config.artifactDir, "egress-viewer-url.txt"), `${egressViewerUrl}\n`);
+      log(`Egress viewer tunnel URL: ${egressViewerUrl}`);
+    } else {
+      log("WARN egress viewer tunnel URL was not discovered in time");
+    }
 
-    writeFileSync(join(config.artifactDir, "sandbox-url.txt"), `${sandboxUrl}\n`);
-    writeFileSync(join(config.artifactDir, "egress-viewer-url.txt"), `${egressViewerUrl}\n`);
-
-    log(`Sandbox URL: ${sandboxUrl}`);
-    log(`Egress viewer URL: ${egressViewerUrl}`);
-
-    log("Checking both pages from host");
+    log("Checking both pages from host (local published ports)");
     await fetchWithDnsFallback(
       run,
-      sandboxUrl,
+      `${sandboxLocalUrl}/`,
       join(config.artifactDir, "sandbox-home.html"),
       join(config.artifactDir, "sandbox-home.stderr"),
     );
     await fetchWithDnsFallback(
       run,
-      egressViewerUrl,
+      `${egressViewerLocalUrl}/`,
       join(config.artifactDir, "egress-viewer-home.html"),
       join(config.artifactDir, "egress-viewer-home.stderr"),
     );
 
-    log(`Triggering outbound fetch via sandbox API: ${config.targetUrl}`);
+    log(`Triggering outbound fetch via sandbox API (local): ${config.targetUrl}`);
     await postFormWithDnsFallback(
       run,
-      `${sandboxUrl}/api/fetch`,
+      `${sandboxLocalUrl}/api/fetch`,
       urlEncodedForm({ url: config.targetUrl }),
       join(config.artifactDir, "sandbox-fetch-response.json"),
       join(config.artifactDir, "sandbox-fetch.stderr"),
@@ -544,20 +577,22 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
 
     log("SUCCESS");
     log("Open side-by-side:");
-    log(`  sandbox: ${sandboxUrl}`);
-    log(`  egress viewer: ${egressViewerUrl}`);
+    log(`  sandbox local: ${sandboxLocalUrl}`);
+    log(`  egress viewer local: ${egressViewerLocalUrl}`);
+    if (sandboxUrl) log(`  sandbox tunnel: ${sandboxUrl}`);
+    if (egressViewerUrl) log(`  egress viewer tunnel: ${egressViewerUrl}`);
     log(`Artifacts: ${config.artifactDir}`);
     log("Tail egress log live:");
     log(`  docker compose -f ${composeFile} -p ${project} logs -f egress-proxy`);
 
     if (!config.cleanupOnExit) {
       log("Destroy when done:");
-      log(`  docker compose -f ${composeFile} -p ${project} down -v`);
+      log(`  docker compose -f ${composeFile} -p ${project} down -v --timeout 5`);
       shouldCleanup = false;
     }
   } finally {
     if (shouldCleanup) {
-      const down = dockerCompose(composeFile, project, ["down", "-v"], {
+      const down = dockerCompose(composeFile, project, ["down", "-v", "--timeout", "5"], {
         env,
         allowFailure: true,
       });
