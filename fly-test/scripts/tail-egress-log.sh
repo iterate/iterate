@@ -18,7 +18,7 @@ APP="${1:-}"
 NAME="${2:-egress-proxy}"
 
 if [ -z "$APP" ]; then
-  echo "Usage: bash fly-test/tail-egress-log.sh <app-name> [machine-name]" >&2
+  echo "Usage: bash fly-test/scripts/tail-egress-log.sh <app-name> [machine-name]" >&2
   exit 1
 fi
 
