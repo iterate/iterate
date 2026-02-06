@@ -4,20 +4,6 @@ import indexPage from "./index.html";
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
 const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
-const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
-
-type TransformRequest = {
-  method: string;
-  url: string;
-  headers: Record<string, string[]>;
-  bodyBase64?: string;
-};
-
-type TransformResponse = {
-  status: number;
-  headers: Record<string, string[]>;
-  bodyBase64: string;
-};
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -56,47 +42,35 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function sanitizeHeaders(input: Record<string, string[]>): Headers {
+function sanitizeInboundHeaders(input: Headers): Headers {
   const headers = new Headers();
-  for (const [key, values] of Object.entries(input)) {
+  for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP.has(lower)) continue;
     if (lower === "host") continue;
     if (lower === "content-length") continue;
-    for (const value of values) {
-      headers.append(key, value);
-    }
+    if (lower.startsWith("x-iterate-")) continue;
+    headers.append(key, value);
   }
   headers.set("accept-encoding", "identity");
   return headers;
 }
 
-function headersToRecord(headers: Headers): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
+function sanitizeOutboundHeaders(headers: Headers): Headers {
+  const out = new Headers();
   for (const [key, value] of headers.entries()) {
     const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower)) continue;
     if (lower === "content-length") continue;
     if (lower === "transfer-encoding") continue;
-    if (lower === "content-encoding") continue;
-    if (out[key]) {
-      out[key].push(value);
-    } else {
-      out[key] = [value];
-    }
+    out.append(key, value);
   }
   return out;
 }
 
 async function handleTransform(request: Request): Promise<Response> {
-  let payload: TransformRequest;
-  try {
-    payload = (await request.json()) as TransformRequest;
-  } catch {
-    return json({ error: "invalid json" }, 400);
-  }
-
-  const method = String(payload.method ?? "GET").toUpperCase();
-  const target = String(payload.url ?? "").trim();
+  const method = request.method.toUpperCase();
+  const target = (request.headers.get("x-iterate-target-url") ?? "").trim();
   if (target.length === 0) return json({ error: "missing url" }, 400);
 
   let parsed: URL;
@@ -109,45 +83,30 @@ async function handleTransform(request: Request): Promise<Response> {
     return json({ error: "unsupported protocol" }, 400);
   }
 
-  const requestHeaders = sanitizeHeaders(payload.headers ?? {});
-  let requestBody: Blob | undefined;
-  let requestBytes = 0;
-  if (
-    payload.bodyBase64 &&
-    payload.bodyBase64.length > 0 &&
-    method !== "GET" &&
-    method !== "HEAD"
-  ) {
-    const decoded = Buffer.from(payload.bodyBase64, "base64");
-    requestBytes = decoded.length;
-    requestBody = new Blob([decoded]);
+  const requestHeaders = sanitizeInboundHeaders(request.headers);
+  const init: RequestInit = {
+    method,
+    headers: requestHeaders,
+    redirect: "manual",
+  };
+  if (method !== "GET" && method !== "HEAD") {
+    init.body = request.body;
   }
 
   const startedAt = Date.now();
   try {
-    const upstream = await fetch(target, {
-      method,
-      headers: requestHeaders,
-      body: requestBody,
-      redirect: "manual",
-    });
-
-    const upstreamBody = Buffer.from(await upstream.arrayBuffer());
-    const prefixedBody = Buffer.concat([Buffer.from(PROOF_PREFIX, "utf8"), upstreamBody]);
-    const responseHeaders = headersToRecord(upstream.headers);
-    responseHeaders["x-iterate-mitm-proof"] = ["1"];
-    responseHeaders["content-length"] = [String(prefixedBody.length)];
+    const upstream = await fetch(target, init);
+    const responseHeaders = sanitizeOutboundHeaders(upstream.headers);
+    responseHeaders.set("x-iterate-mitm-proof", "1");
 
     appendLog(
-      `TRANSFORM_OK method=${method} url="${target}" status=${upstream.status} req_bytes=${requestBytes} up_bytes=${upstreamBody.length} out_bytes=${prefixedBody.length} duration_ms=${Date.now() - startedAt}`,
+      `TRANSFORM_OK method=${method} url="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
     );
 
-    const response: TransformResponse = {
+    return new Response(upstream.body, {
       status: upstream.status,
       headers: responseHeaders,
-      bodyBase64: prefixedBody.toString("base64"),
-    };
-    return json(response);
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     appendLog(`TRANSFORM_ERROR method=${method} url="${target}" err="${message}"`);
@@ -201,7 +160,7 @@ Bun.serve({
       });
     }
 
-    if (url.pathname === "/transform" && request.method === "POST") {
+    if (url.pathname === "/transform") {
       return handleTransform(request);
     }
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import indexPage from "./index.html";
 
 const PORT = Number(process.env.SANDBOX_PORT ?? "8080");
@@ -43,11 +44,26 @@ async function parseTargetUrl(request: Request): Promise<string> {
 }
 
 async function fetchViaCurl(target: string): Promise<FetchResult> {
-  const marker = "\n__STATUS__:";
-  const output = await new Promise<string>((resolve, reject) => {
+  const tempDir = fs.mkdtempSync("/tmp/fly-test-curl-");
+  const headersPath = join(tempDir, "headers.txt");
+  const bodyPath = join(tempDir, "body.txt");
+
+  const status = await new Promise<string>((resolve, reject) => {
     const child = spawn(
       "curl",
-      ["-sS", "-L", "--max-time", "35", "-w", `${marker}%{http_code}\n`, target],
+      [
+        "-sS",
+        "-L",
+        "--max-time",
+        "35",
+        "--dump-header",
+        headersPath,
+        "--output",
+        bodyPath,
+        "--write-out",
+        "%{http_code}",
+        target,
+      ],
       {
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -63,23 +79,35 @@ async function fetchViaCurl(target: string): Promise<FetchResult> {
         reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `curl_exit=${code}`));
         return;
       }
-      resolve(Buffer.concat(stdout).toString("utf8"));
+      resolve(Buffer.concat(stdout).toString("utf8").trim());
     });
   });
 
-  const idx = output.lastIndexOf(marker);
-  if (idx < 0) {
-    return { ok: true, status: "unknown", body: output.slice(0, 2500), proofDetected: false };
-  }
+  const headers = fs.existsSync(headersPath) ? fs.readFileSync(headersPath, "utf8") : "";
+  const body = fs.existsSync(bodyPath) ? fs.readFileSync(bodyPath, "utf8") : "";
+  fs.rmSync(tempDir, { recursive: true, force: true });
 
-  const status = output.slice(idx + marker.length).trim();
-  const body = output.slice(0, idx);
+  const proofDetected =
+    /(^|\n)x-iterate-mitm-proof:\s*1(\r?\n|$)/i.test(headers) || body.startsWith(PROOF_PREFIX);
+
   return {
     ok: true,
-    status,
+    status: status.length > 0 ? status : "unknown",
     body: body.slice(0, 2500),
-    proofDetected: body.startsWith(PROOF_PREFIX),
+    proofDetected,
   };
+}
+
+async function safeFetchViaCurl(target: string): Promise<FetchResult> {
+  try {
+    return await fetchViaCurl(target);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error: message,
+    };
+  }
 }
 
 fs.mkdirSync("/tmp", { recursive: true });
@@ -119,17 +147,15 @@ Bun.serve({
       }
 
       appendLog(`FETCH_START url=\"${target}\"`);
-      try {
-        const result = await fetchViaCurl(target);
-        appendLog(
-          `FETCH_OK url=\"${target}\" status=${result.status ?? "unknown"} proof=${result.proofDetected ? "yes" : "no"}`,
-        );
-        return json(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        appendLog(`FETCH_ERROR url=\"${target}\" err=\"${message}\"`);
-        return json({ ok: false, error: message } satisfies FetchResult, 502);
+      const result = await safeFetchViaCurl(target);
+      if (!result.ok) {
+        appendLog(`FETCH_ERROR url=\"${target}\" err=\"${result.error ?? "unknown"}\"`);
+        return json(result, 502);
       }
+      appendLog(
+        `FETCH_OK url=\"${target}\" status=${result.status ?? "unknown"} proof=${result.proofDetected ? "yes" : "no"}`,
+      );
+      return json(result);
     }
 
     return new Response("not found", {

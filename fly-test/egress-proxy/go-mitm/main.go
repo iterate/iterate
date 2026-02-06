@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,27 +10,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/elazarl/goproxy"
 )
-
-type transformRequest struct {
-	Method     string              `json:"method"`
-	URL        string              `json:"url"`
-	Headers    map[string][]string `json:"headers"`
-	BodyBase64 string              `json:"bodyBase64,omitempty"`
-	RemoteAddr string              `json:"remoteAddr,omitempty"`
-}
-
-type transformResponse struct {
-	Status     int                 `json:"status"`
-	Headers    map[string][]string `json:"headers"`
-	BodyBase64 string              `json:"bodyBase64,omitempty"`
-}
 
 type certStorage struct {
 	mu    sync.RWMutex
@@ -64,27 +46,35 @@ func (cs *certStorage) Fetch(hostname string, gen func() (*tls.Certificate, erro
 }
 
 type proxyApp struct {
-	transformURL        string
-	client              *http.Client
-	logger              *log.Logger
-	logFile             *os.File
-	requestPreviewBytes int
+	transformURL string
+	client       *http.Client
+	logger       *log.Logger
+	logFile      *os.File
 }
 
-func newProxyApp(transformURL, logPath string, requestPreviewBytes int) (*proxyApp, error) {
+func newProxyApp(transformURL, logPath string) (*proxyApp, error) {
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
+
+	client := &http.Client{
+		Timeout: 90 * time.Second,
+		Transport: &http.Transport{
+			Proxy:               nil,
+			ForceAttemptHTTP2:   false,
+			MaxIdleConnsPerHost: 64,
+			MaxIdleConns:        256,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
 	logger := log.New(io.MultiWriter(os.Stdout, logFile), "", 0)
 	return &proxyApp{
 		transformURL: transformURL,
-		client: &http.Client{
-			Timeout: 60 * time.Second,
-		},
-		logger:              logger,
-		logFile:             logFile,
-		requestPreviewBytes: requestPreviewBytes,
+		client:       client,
+		logger:       logger,
+		logFile:      logFile,
 	}, nil
 }
 
@@ -97,6 +87,34 @@ func (app *proxyApp) close() error {
 
 func (app *proxyApp) logf(format string, args ...any) {
 	app.logger.Printf("%s %s", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
+func cloneHeaders(input http.Header) http.Header {
+	out := make(http.Header, len(input))
+	for key, values := range input {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		out[key] = copied
+	}
+	return out
+}
+
+func removeHopHeaders(headers http.Header) http.Header {
+	out := make(http.Header)
+	for key, values := range headers {
+		lower := strings.ToLower(key)
+		switch lower {
+		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+			continue
+		case "proxy-connection", "proxy-authentication", "host", "content-length":
+			continue
+		default:
+			copied := make([]string, len(values))
+			copy(copied, values)
+			out[key] = copied
+		}
+	}
+	return out
 }
 
 func parseCA(certPath, keyPath string) (tls.Certificate, error) {
@@ -123,154 +141,56 @@ func parseCA(certPath, keyPath string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-func sanitizePreview(input []byte, limit int) string {
-	if limit <= 0 || len(input) == 0 {
-		return ""
+func (app *proxyApp) callTransform(req *http.Request) (*http.Response, error) {
+	headers := removeHopHeaders(cloneHeaders(req.Header))
+	headers.Set("X-Iterate-Target-Url", req.URL.String())
+	if req.Host != "" {
+		headers.Set("X-Iterate-Request-Host", req.Host)
 	}
-	if len(input) > limit {
-		input = input[:limit]
+	if req.RemoteAddr != "" {
+		headers.Set("X-Iterate-Remote-Addr", req.RemoteAddr)
 	}
-	return base64.StdEncoding.EncodeToString(input)
-}
 
-func removeHopHeaders(headers map[string][]string) map[string][]string {
-	out := map[string][]string{}
-	for key, values := range headers {
-		lower := strings.ToLower(key)
-		switch lower {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
-			continue
-		case "proxy-connection", "proxy-authentication", "host":
-			continue
-		default:
-			copied := make([]string, len(values))
-			copy(copied, values)
-			out[key] = copied
-		}
-	}
-	return out
-}
-
-func (app *proxyApp) callTransform(payload transformRequest) (transformResponse, error) {
-	body, err := json.Marshal(payload)
+	transformReq, err := http.NewRequestWithContext(req.Context(), req.Method, app.transformURL, req.Body)
 	if err != nil {
-		return transformResponse{}, fmt.Errorf("marshal transform payload: %w", err)
+		return nil, fmt.Errorf("build transform request: %w", err)
 	}
-
-	req, err := http.NewRequest(http.MethodPost, app.transformURL, bytes.NewReader(body))
-	if err != nil {
-		return transformResponse{}, fmt.Errorf("build transform request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	transformReq.Header = headers
+	transformReq.ContentLength = req.ContentLength
 
 	start := time.Now()
-	resp, err := app.client.Do(req)
+	resp, err := app.client.Do(transformReq)
 	if err != nil {
-		return transformResponse{}, fmt.Errorf("transform request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	duration := time.Since(start)
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return transformResponse{}, fmt.Errorf("read transform response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return transformResponse{}, fmt.Errorf("transform status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, fmt.Errorf("transform request failed: %w", err)
 	}
 
-	var parsed transformResponse
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return transformResponse{}, fmt.Errorf("parse transform response: %w", err)
-	}
-	app.logf("TRANSFORM_ROUNDTRIP status=%d duration_ms=%d bytes=%d", parsed.Status, duration.Milliseconds(), len(respBody))
-	return parsed, nil
+	app.logf(
+		"TRANSFORM_STREAM method=%s target=%q status=%d duration_ms=%d",
+		req.Method,
+		req.URL.String(),
+		resp.StatusCode,
+		time.Since(start).Milliseconds(),
+	)
+	return resp, nil
 }
 
 func (app *proxyApp) handleRequest(req *http.Request) (*http.Request, *http.Response) {
 	start := time.Now()
-	rawBody := []byte{}
-	if req.Body != nil {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			app.logf("MITM_REQUEST_ERROR url=%q err=%q", req.URL.String(), err.Error())
-			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadRequest, "failed to read request body")
-		}
-		rawBody = body
-	}
+	app.logf("MITM_REQUEST method=%s url=%q", req.Method, req.URL.String())
 
-	reqHeaders := map[string][]string{}
-	for key, values := range req.Header {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		reqHeaders[key] = copied
-	}
-	if req.Host != "" {
-		reqHeaders["Host"] = []string{req.Host}
-	}
-	reqHeaders = removeHopHeaders(reqHeaders)
-
-	preview := sanitizePreview(rawBody, app.requestPreviewBytes)
-	app.logf(
-		"MITM_REQUEST method=%s url=%q body_bytes=%d body_preview_b64=%q",
-		req.Method,
-		req.URL.String(),
-		len(rawBody),
-		preview,
-	)
-
-	payload := transformRequest{
-		Method:     req.Method,
-		URL:        req.URL.String(),
-		Headers:    reqHeaders,
-		RemoteAddr: req.RemoteAddr,
-	}
-	if len(rawBody) > 0 {
-		payload.BodyBase64 = base64.StdEncoding.EncodeToString(rawBody)
-	}
-
-	tr, err := app.callTransform(payload)
+	resp, err := app.callTransform(req)
 	if err != nil {
 		app.logf("MITM_TRANSFORM_ERROR method=%s url=%q err=%q", req.Method, req.URL.String(), err.Error())
 		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "transform failed")
 	}
 
-	decodedBody, err := base64.StdEncoding.DecodeString(tr.BodyBase64)
-	if err != nil {
-		app.logf("MITM_DECODE_ERROR method=%s url=%q err=%q", req.Method, req.URL.String(), err.Error())
-		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "invalid transform payload")
-	}
-
-	resp := &http.Response{
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		StatusCode:    tr.Status,
-		Status:        fmt.Sprintf("%d %s", tr.Status, http.StatusText(tr.Status)),
-		Header:        make(http.Header),
-		Body:          io.NopCloser(bytes.NewReader(decodedBody)),
-		ContentLength: int64(len(decodedBody)),
-		Request:       req,
-	}
-	for key, values := range tr.Headers {
-		lower := strings.ToLower(key)
-		if lower == "content-length" || lower == "transfer-encoding" {
-			continue
-		}
-		for _, value := range values {
-			resp.Header.Add(key, value)
-		}
-	}
-	resp.Header.Set("Content-Length", strconv.Itoa(len(decodedBody)))
+	resp.Request = req
 	resp.Header.Set("X-Iterate-MITM", "1")
-
 	app.logf(
-		"MITM_RESPONSE method=%s url=%q status=%d body_bytes=%d duration_ms=%d",
+		"MITM_RESPONSE method=%s url=%q status=%d duration_ms=%d",
 		req.Method,
 		req.URL.String(),
-		tr.Status,
-		len(decodedBody),
+		resp.StatusCode,
 		time.Since(start).Milliseconds(),
 	)
 	return req, resp
@@ -282,10 +202,9 @@ func main() {
 	caCertPath := flag.String("ca-cert", "/data/mitm/ca.crt", "Path to CA certificate PEM")
 	caKeyPath := flag.String("ca-key", "/data/mitm/ca.key", "Path to CA private key PEM")
 	logPath := flag.String("log", "/tmp/egress-proxy.log", "Path to append log lines")
-	requestPreviewBytes := flag.Int("request-preview-bytes", 512, "max bytes from request body logged as base64")
 	flag.Parse()
 
-	app, err := newProxyApp(*transformURL, *logPath, *requestPreviewBytes)
+	app, err := newProxyApp(*transformURL, *logPath)
 	if err != nil {
 		panic(err)
 	}
