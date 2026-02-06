@@ -11,15 +11,17 @@ const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
 const jaegerVersion = "1.67.0";
 
+function bash(script: string) {
+  return {
+    command: "bash",
+    args: ["-lc", script],
+  };
+}
+
 // ITERATE_SKIP_PROXY is set by the control plane at machine creation when
 // DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
 // so managed processes connect directly to the internet using system CAs.
 const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
-
-const bash = (command: string) => ({
-  command: "bash",
-  args: ["-c", command.trim()],
-});
 
 // Proxy and CA env vars for pidnap-managed processes.
 // When skipProxy is true, these are omitted so traffic goes direct.
@@ -183,9 +185,8 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
-      dependsOn: ["task-build-daemon-client"],
+      dependsOn: ["task-install-jaeger"],
     },
     {
       name: "daemon-backend",
@@ -202,16 +203,15 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
       envOptions: {
         inheritGlobalEnv: false,
       },
-      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-frontend",
       definition: {
+        // Build is baked into the image.
         command: "pnpm",
         args: ["exec", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"],
         cwd: `${iterateRepo}/apps/daemon`,
@@ -221,12 +221,11 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
       envOptions: {
         inheritGlobalEnv: false,
       },
-      dependsOn: ["task-build-daemon-client"],
+      dependsOn: ["daemon-backend"],
     },
     {
       name: "opencode",
@@ -245,11 +244,11 @@ export default defineConfig({
         ],
       },
       envOptions: {
+        // TODO: confirm why opencode needs a lower env reload delay than default.
         reloadDelay: 500,
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
       dependsOn: ["task-install-jaeger"],
     },
