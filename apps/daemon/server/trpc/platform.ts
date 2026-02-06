@@ -104,13 +104,6 @@ export async function applyEnvVars(
   // Write env vars in dotenv format for pidnap to parse. This file is NOT sourced
   // by bash - pidnap reads it directly using the dotenv library and injects vars
   // into managed processes. Double-quoted values preserve special chars literally.
-  //
-  // Note: Proxy vars are included so that CLI tools (like `iterate tool slack`)
-  // can route requests through the egress proxy which resolves magic tokens.
-  const mitmproxyDir = join(homedir(), ".mitmproxy");
-  const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
-  const proxyUrl = "http://127.0.0.1:8888";
-
   const envFileHeader = skipProxy
     ? `# iterate sandbox environment variables
 # =====================================
@@ -148,16 +141,6 @@ export async function applyEnvVars(
 # The egress proxy (HTTPS_PROXY) intercepts all outbound requests and
 # replaces getIterateSecret() strings in both headers AND the URL path.
 # =====================================
-
-# Proxy settings - route HTTP requests through mitmdump for secret injection
-NODE_USE_ENV_PROXY=1
-HTTP_PROXY="${proxyUrl}"
-HTTPS_PROXY="${proxyUrl}"
-http_proxy="${proxyUrl}"
-https_proxy="${proxyUrl}"
-NO_PROXY="localhost,127.0.0.1"
-no_proxy="localhost,127.0.0.1"
-NODE_EXTRA_CA_CERTS="${caCert}"
 `;
 
   // Format active env vars
@@ -170,17 +153,10 @@ NODE_EXTRA_CA_CERTS="${caCert}"
     return line;
   });
 
-  // When skipProxy is true, override pidnap's global proxy env vars with empty values
-  // This ensures processes don't use the egress proxy
-  const proxyOverrideLines = skipProxy
-    ? `
-# Proxy disabled - raw secrets mode enabled
-HTTP_PROXY=""
-HTTPS_PROXY=""
-http_proxy=""
-https_proxy=""
-`
-    : "";
+  // Proxy and CA env vars are managed here (not in pidnap.config.ts static env) so the daemon
+  // can toggle them based on skipProxy mode. In normal mode, traffic goes through mitmproxy
+  // which re-signs TLS with its CA cert. In skipProxy mode, traffic goes direct.
+  const proxyAndCaLines = buildProxyAndCaLines(skipProxy);
 
   // Format recommended env vars as comments (so agent can discover them)
   let recommendedSection = "";
@@ -200,7 +176,7 @@ ${recommendedLines.join("\n")}
   }
 
   const envFileContent =
-    envFileHeader + proxyOverrideLines + activeLines.join("\n") + recommendedSection;
+    envFileHeader + proxyAndCaLines + activeLines.join("\n") + recommendedSection;
 
   // Check if content changed before writing
   mkdirSync(dirname(envFilePath), { recursive: true });
@@ -440,3 +416,48 @@ export const platformRouter = createTRPCRouter({
 });
 
 export type PlatformRouter = typeof platformRouter;
+
+/**
+ * Build the proxy and CA env var lines for the .env file.
+ * In normal mode, routes traffic through mitmproxy with its CA cert.
+ * In skipProxy mode, clears all proxy/CA vars so traffic goes direct.
+ */
+function buildProxyAndCaLines(skipProxy?: boolean): string {
+  if (skipProxy) {
+    // In skipProxy mode, CA vars are omitted entirely (not set to "") so tools fall back to
+    // the system CA store. Setting them to "" would override system defaults and break TLS.
+    return `
+# Proxy disabled - raw secrets mode enabled
+# Proxy vars explicitly emptied; CA vars omitted so tools use system CA store.
+HTTP_PROXY=""
+HTTPS_PROXY=""
+http_proxy=""
+https_proxy=""
+`;
+  }
+
+  const home = homedir();
+  const mitmDir = join(home, ".mitmproxy");
+  const ca = join(mitmDir, "mitmproxy-ca-cert.pem");
+  const proxy = "http://127.0.0.1:8888";
+  const magicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
+
+  return `
+# Egress proxy configuration
+# All sandbox HTTP traffic routes through mitmproxy -> egress proxy for secret injection
+NODE_USE_ENV_PROXY=1
+HTTP_PROXY="${proxy}"
+HTTPS_PROXY="${proxy}"
+http_proxy="${proxy}"
+https_proxy="${proxy}"
+NO_PROXY="localhost,127.0.0.1"
+no_proxy="localhost,127.0.0.1"
+GIT_SSL_CAINFO="${ca}"
+SSL_CERT_FILE="${ca}"
+SSL_CERT_DIR="${mitmDir}"
+REQUESTS_CA_BUNDLE="${ca}"
+CURL_CA_BUNDLE="${ca}"
+NODE_EXTRA_CA_CERTS="${ca}"
+GITHUB_MAGIC_TOKEN="${magicToken}"
+`;
+}
