@@ -18,7 +18,7 @@ function filterLog(text: string, mode: string): string {
   return text;
 }
 
-function App() {
+export function App() {
   const [lines, setLines] = useState(300);
   const [mode, setMode] = useState("all");
   const [text, setText] = useState("loading...");

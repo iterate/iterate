@@ -19,7 +19,7 @@ type FetchResult = {
   requestId?: string;
 };
 
-function App() {
+export function App() {
   const [targetUrl, setTargetUrl] = useState("http://public-http:18090/");
   const [method, setMethod] = useState("GET");
   const [body, setBody] = useState('{"hello":"world"}');
