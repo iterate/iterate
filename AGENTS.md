@@ -10,6 +10,13 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
 Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
 
+## Working with GitHub
+
+- Commit/push frequently (small, scoped commits)
+- Prefer pushing before long local validation so GitHub checks + review agents start early
+- After push, keep validating locally and follow up with more commits
+- Avoid large unpushed change sets
+
 ## Environment variables (Doppler)
 
 We use [Doppler](https://doppler.com) for secrets management. Configs: `dev`, `stg`, `prd`.
