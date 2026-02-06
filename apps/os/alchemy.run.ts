@@ -396,8 +396,8 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -420,8 +420,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -444,8 +444,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
