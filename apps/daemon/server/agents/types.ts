@@ -29,6 +29,14 @@ export interface StartCommandOptions {
   prompt?: string;
 }
 
+export interface AppendParams {
+  workingDirectory: string;
+  /** Called immediately when the message is received */
+  acknowledge: () => Promise<void>;
+  /** Called when the agent's turn ends (e.g., session becomes idle) */
+  unacknowledge: () => Promise<void>;
+}
+
 export interface AgentHarness {
   type: AgentType;
 

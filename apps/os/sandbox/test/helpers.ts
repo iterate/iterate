@@ -253,6 +253,12 @@ export function createDaemonTrpcClient(baseUrl: string) {
   });
 }
 
+/**
+ * Create a pidnap RPC client for the given base URL.
+ *
+ * Note: pidnap's ORPC server uses `/rpc` prefix (see packages/pidnap/src/cli.ts).
+ * The client expects a full URL including this prefix, so we append it here.
+ */
 export function createPidnapRpcClient(baseUrl: string) {
   return createPidnapClient(`${baseUrl}/rpc`);
 }

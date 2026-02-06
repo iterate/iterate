@@ -104,6 +104,13 @@ export async function applyEnvVars(
   // Write env vars in dotenv format for pidnap to parse. This file is NOT sourced
   // by bash - pidnap reads it directly using the dotenv library and injects vars
   // into managed processes. Double-quoted values preserve special chars literally.
+  //
+  // Note: Proxy vars are included so that CLI tools (like `iterate tool slack`)
+  // can route requests through the egress proxy which resolves magic tokens.
+  const mitmproxyDir = join(homedir(), ".mitmproxy");
+  const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
+  const proxyUrl = "http://127.0.0.1:8888";
+
   const envFileHeader = skipProxy
     ? `# iterate sandbox environment variables
 # =====================================
@@ -142,7 +149,15 @@ export async function applyEnvVars(
 # replaces getIterateSecret() strings in both headers AND the URL path.
 # =====================================
 
+# Proxy settings - route HTTP requests through mitmdump for secret injection
 NODE_USE_ENV_PROXY=1
+HTTP_PROXY="${proxyUrl}"
+HTTPS_PROXY="${proxyUrl}"
+http_proxy="${proxyUrl}"
+https_proxy="${proxyUrl}"
+NO_PROXY="localhost,127.0.0.1"
+no_proxy="localhost,127.0.0.1"
+NODE_EXTRA_CA_CERTS="${caCert}"
 `;
 
   // Format active env vars
