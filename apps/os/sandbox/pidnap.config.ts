@@ -10,10 +10,38 @@ const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
 
+// ITERATE_SKIP_PROXY is set by the control plane at machine creation when
+// DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
+// so managed processes connect directly to the internet using system CAs.
+const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
+
 const bash = (command: string) => ({
   command: "bash",
   args: ["-c", command.trim()],
 });
+
+// Proxy and CA env vars for pidnap-managed processes.
+// When skipProxy is true, these are omitted so traffic goes direct.
+// The user's interactive shell gets these from ~/.iterate/.env instead (managed by daemon).
+const proxyEnv: Record<string, string> = skipProxy
+  ? {}
+  : {
+      HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+      HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+      http_proxy: `http://127.0.0.1:${proxyPort}`,
+      https_proxy: `http://127.0.0.1:${proxyPort}`,
+      NO_PROXY: "localhost,127.0.0.1",
+      no_proxy: "localhost,127.0.0.1",
+      SSL_CERT_FILE: caCert,
+      SSL_CERT_DIR: mitmproxyDir,
+      REQUESTS_CA_BUNDLE: caCert,
+      CURL_CA_BUNDLE: caCert,
+      NODE_EXTRA_CA_CERTS: caCert,
+      GIT_SSL_CAINFO: caCert,
+      GITHUB_MAGIC_TOKEN: encodeURIComponent(
+        "getIterateSecret({secretKey: 'github.access_token'})",
+      ),
+    };
 
 export default defineConfig({
   http: {
@@ -25,24 +53,10 @@ export default defineConfig({
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,
     CA_CERT_PATH: caCert,
-    HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
-    HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-    http_proxy: `http://127.0.0.1:${proxyPort}`,
-    https_proxy: `http://127.0.0.1:${proxyPort}`,
-    NO_PROXY: "localhost,127.0.0.1",
-    no_proxy: "localhost,127.0.0.1",
-    SSL_CERT_FILE: caCert,
-    SSL_CERT_DIR: mitmproxyDir,
-    REQUESTS_CA_BUNDLE: caCert,
-    CURL_CA_BUNDLE: caCert,
-    NODE_EXTRA_CA_CERTS: caCert,
-    GIT_SSL_CAINFO: caCert,
-    // Github Stuff (magic token available as env var for non-git use cases)
-    GITHUB_MAGIC_TOKEN: encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})"),
+    ...proxyEnv,
   },
   processes: [
     // Init tasks (run once, sequential)
