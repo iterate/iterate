@@ -168,15 +168,8 @@ export const trpcRouter = createTRPCRouter({
       }
 
       const result = db.transaction((tx) => {
-        const existing = tx
-          .select()
-          .from(schema.agents)
-          .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-          .limit(1)
-          .get();
-
-        if (existing) {
-          const route = tx
+        const getActiveRoute = () =>
+          tx
             .select()
             .from(schema.agentRoutes)
             .where(
@@ -185,69 +178,77 @@ export const trpcRouter = createTRPCRouter({
             .limit(1)
             .get();
 
-          return {
-            agent: existing,
-            route: route ?? null,
-            pendingRoute: null,
-            wasCreated: false,
-          };
-        }
-
-        const workingDirectory = getAgentWorkingDirectory();
-
-        const newAgent = tx
-          .insert(schema.agents)
-          .values({
-            path: agentPath,
-            workingDirectory,
-          })
-          .onConflictDoNothing()
-          .returning()
-          .get();
-
-        if (!newAgent) {
-          const existingByPath = tx
-            .select()
-            .from(schema.agents)
+        const unarchiveAgent = () => {
+          const unarchived = tx
+            .update(schema.agents)
+            .set({ archivedAt: null, updatedAt: new Date() })
             .where(eq(schema.agents.path, agentPath))
-            .limit(1)
+            .returning()
             .get();
 
-          if (existingByPath?.archivedAt) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Agent path is reserved by an archived agent: ${agentPath}`,
-            });
-          }
-
-          const agent = tx
-            .select()
-            .from(schema.agents)
-            .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-            .limit(1)
-            .get();
-
-          const route = tx
-            .select()
-            .from(schema.agentRoutes)
-            .where(
-              and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)),
-            )
-            .limit(1)
-            .get();
-
-          if (!agent) {
+          if (!unarchived) {
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
-              message: `Failed to load agent after creation conflict for ${agentPath}`,
+              message: `Failed to reactivate archived agent for ${agentPath}`,
             });
           }
 
+          return unarchived;
+        };
+
+        let agent = tx
+          .select()
+          .from(schema.agents)
+          .where(eq(schema.agents.path, agentPath))
+          .limit(1)
+          .get();
+        let cleanupAgentOnCreateFailure = false;
+
+        if (!agent) {
+          const workingDirectory = getAgentWorkingDirectory();
+          const created = tx
+            .insert(schema.agents)
+            .values({
+              path: agentPath,
+              workingDirectory,
+            })
+            .onConflictDoNothing()
+            .returning()
+            .get();
+
+          if (created) {
+            agent = created;
+            cleanupAgentOnCreateFailure = true;
+          } else {
+            const existingByPath = tx
+              .select()
+              .from(schema.agents)
+              .where(eq(schema.agents.path, agentPath))
+              .limit(1)
+              .get();
+
+            if (!existingByPath) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `Failed to load agent after creation conflict for ${agentPath}`,
+              });
+            }
+
+            agent = existingByPath.archivedAt ? unarchiveAgent() : existingByPath;
+          }
+        } else if (agent.archivedAt) {
+          agent = unarchiveAgent();
+        }
+
+        const route = getActiveRoute();
+
+        if (route) {
           return {
             agent,
-            route: route ?? null,
+            route,
             pendingRoute: null,
             wasCreated: false,
+            cleanupAgentOnCreateFailure: false,
           };
         }
 
@@ -258,21 +259,24 @@ export const trpcRouter = createTRPCRouter({
             destination: "pending",
             active: true,
           })
+          .onConflictDoNothing()
           .returning()
           .get();
 
-        if (!pendingRoute) {
+        const routeAfterInsert = pendingRoute ?? getActiveRoute();
+        if (!routeAfterInsert) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: `Failed to create pending route for ${agentPath}`,
+            message: `Failed to create or load pending route for ${agentPath}`,
           });
         }
 
         return {
-          agent: newAgent,
-          route: pendingRoute,
-          pendingRoute,
-          wasCreated: true,
+          agent,
+          route: routeAfterInsert,
+          pendingRoute: pendingRoute ?? null,
+          wasCreated: Boolean(pendingRoute),
+          cleanupAgentOnCreateFailure,
         };
       });
 
@@ -321,7 +325,9 @@ export const trpcRouter = createTRPCRouter({
           tx.delete(schema.agentRoutes)
             .where(eq(schema.agentRoutes.id, result.pendingRoute.id))
             .run();
-          tx.delete(schema.agents).where(eq(schema.agents.path, agentPath)).run();
+          if (result.cleanupAgentOnCreateFailure) {
+            tx.delete(schema.agents).where(eq(schema.agents.path, agentPath)).run();
+          }
         });
 
         throw new TRPCError({

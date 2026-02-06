@@ -11,7 +11,7 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -21,11 +21,9 @@ import type {
 } from "@slack/types";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import type { IterateEvent } from "../types/events.ts";
+import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
 
 const logger = console;
-const DAEMON_PORT = process.env.PORT || "3001";
-const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 export const slackRouter = new Hono();
 
@@ -39,30 +37,6 @@ slackRouter.use("*", async (c, next) => {
   const resBody = await c.res.clone().text();
   console.log(`[daemon/slack] RES ${c.res.status}`, resBody);
 });
-
-async function agentExists(agentPath: string): Promise<boolean> {
-  const existing = await db
-    .select()
-    .from(schema.agents)
-    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-    .limit(1);
-  return Boolean(existing[0]);
-}
-
-async function sendToAgentGateway(agentPath: string, event: IterateEvent): Promise<void> {
-  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
-    );
-  }
-}
 
 // Slack webhook envelope structure
 interface SlackWebhookPayload {
@@ -138,7 +112,7 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const agentPath = getAgentPath(threadTs);
-      const hasAgent = await agentExists(agentPath);
+      const hasAgent = await activeAgentExists(agentPath);
 
       if (!hasAgent) {
         return c.json({
@@ -162,7 +136,7 @@ slackRouter.post("/webhook", async (c) => {
   const agentPath = getAgentPath(threadTs);
 
   try {
-    const hasAgent = await agentExists(agentPath);
+    const hasAgent = await activeAgentExists(agentPath);
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {

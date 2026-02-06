@@ -9,10 +9,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
-import { and, eq, isNull } from "drizzle-orm";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { db } from "../db/index.ts";
-import * as schema from "../db/schema.ts";
+import { activeAgentExists, sendPromptToAgent } from "../utils/agent-gateway.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -41,9 +39,6 @@ const DEFAULT_INTERVAL_MS = 1 * 15 * 1000;
 /** Default stale threshold for nudging agents to "close the loop" */
 const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 
-const DAEMON_PORT = process.env.PORT || "3001";
-const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
-
 // ============================================================================
 // Directory Helpers
 // ============================================================================
@@ -61,12 +56,7 @@ function getCronAgentPath(slug: string): string {
 
 async function getAgent(slug: string): Promise<CronAgent | null> {
   const agentPath = getCronAgentPath(slug);
-  const existing = await db
-    .select()
-    .from(schema.agents)
-    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-    .limit(1);
-  if (!existing[0]) return null;
+  if (!(await activeAgentExists(agentPath))) return null;
   return { slug, path: agentPath };
 }
 
@@ -75,14 +65,7 @@ async function createAgent({ slug }: { slug: string }): Promise<CronAgent> {
 }
 
 async function appendToAgent(agent: CronAgent, message: string): Promise<void> {
-  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agent.path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "prompt", message }),
-  });
-  if (!response.ok) {
-    throw new Error(`Agent gateway failed for ${agent.path}: ${response.status}`);
-  }
+  await sendPromptToAgent(agent.path, message);
 }
 
 export const getTasksDir = async () => {

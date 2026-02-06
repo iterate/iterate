@@ -11,14 +11,12 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import type { IterateEvent } from "../types/events.ts";
+import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
 
 const logger = console;
-const DAEMON_PORT = process.env.PORT || "3001";
-const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 export const emailRouter = new Hono();
 
@@ -32,30 +30,6 @@ emailRouter.use("*", async (c, next) => {
   const resBody = await c.res.clone().text();
   console.log(`[daemon/email] RES ${c.res.status}`, resBody);
 });
-
-async function agentExists(agentPath: string): Promise<boolean> {
-  const existing = await db
-    .select()
-    .from(schema.agents)
-    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-    .limit(1);
-  return Boolean(existing[0]);
-}
-
-async function sendToAgentGateway(agentPath: string, event: IterateEvent): Promise<void> {
-  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
-    );
-  }
-}
 
 /**
  * Resend email.received payload (forwarded from OS backend)
@@ -178,7 +152,7 @@ emailRouter.post("/webhook", async (c) => {
     const agentPath = getAgentPath(threadSlug);
     const emailBody = payload._iterate?.emailBody;
 
-    const hasAgent = await agentExists(agentPath);
+    const hasAgent = await activeAgentExists(agentPath);
 
     if (hasAgent) {
       // Reply to existing thread
