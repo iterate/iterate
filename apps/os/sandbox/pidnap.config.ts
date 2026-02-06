@@ -9,6 +9,7 @@ const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
+const jaegerVersion = "1.67.0";
 
 const bash = (command: string) => ({
   command: "bash",
@@ -119,6 +120,35 @@ export default defineConfig({
       options: { restartPolicy: "never" },
       dependsOn: ["task-db-migrate"],
     },
+    {
+      name: "task-install-jaeger",
+      definition: bash(
+        `
+          set -euo pipefail
+          BIN_DIR="$HOME/.local/bin"
+          BIN_PATH="$BIN_DIR/jaeger-all-in-one"
+          if [ -x "$BIN_PATH" ]; then
+            exit 0
+          fi
+          mkdir -p "$BIN_DIR"
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+            JAEGER_ARCH="arm64"
+          else
+            JAEGER_ARCH="amd64"
+          fi
+          URL="https://github.com/jaegertracing/jaeger/releases/download/v${jaegerVersion}/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}.tar.gz"
+          TMP_DIR=$(mktemp -d)
+          curl -fsSL "$URL" -o "$TMP_DIR/jaeger.tgz"
+          tar -xzf "$TMP_DIR/jaeger.tgz" -C "$TMP_DIR"
+          cp "$TMP_DIR/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}/jaeger-all-in-one" "$BIN_PATH"
+          chmod +x "$BIN_PATH"
+          rm -rf "$TMP_DIR"
+        `,
+      ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-build-daemon-client"],
+    },
     // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
@@ -206,7 +236,27 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
-      dependsOn: ["task-build-daemon-client"],
+      dependsOn: ["task-install-jaeger"],
+    },
+    {
+      name: "trace-viewer",
+      definition: {
+        command: "jaeger-all-in-one",
+        args: [
+          "--collector.otlp.enabled=true",
+          "--collector.otlp.http.host-port=0.0.0.0:4318",
+          "--collector.otlp.grpc.host-port=0.0.0.0:4317",
+          "--query.http-server.host-port=0.0.0.0:16686",
+        ],
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
+      },
+      dependsOn: ["task-install-jaeger"],
     },
   ],
 });

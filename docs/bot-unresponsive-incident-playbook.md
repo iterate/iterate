@@ -56,6 +56,19 @@ Forwarding path:
 - Daemon reads/logs those headers in `/api/integrations/slack/webhook`.
 - Response payloads include `requestId` for quick operator debugging.
 
+## Observability endpoints
+
+- Daemon: `GET /api/observability` (via machine port `3000` proxy)
+- OS backend: `GET /api/observability`
+- Includes whether OTEL export is configured and trace viewer info.
+
+## Trace viewer (in sandbox)
+
+- Viewer: Jaeger all-in-one (OSS)
+- UI port: `16686`
+- OTLP ingest: `4318` (HTTP), `4317` (gRPC)
+- Default trace export endpoint: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces`
+
 ## Common root causes
 
 - Daytona sandbox auto-stopped before webhook arrived.

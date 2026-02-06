@@ -158,6 +158,7 @@ https_proxy="${proxyUrl}"
 NO_PROXY="localhost,127.0.0.1"
 no_proxy="localhost,127.0.0.1"
 NODE_EXTRA_CA_CERTS="${caCert}"
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:4318/v1/traces"
 `;
 
   // Format active env vars
