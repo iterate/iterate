@@ -8,6 +8,11 @@ import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 import { emailRouter } from "./routers/email.ts";
+import { agentsRouter } from "./routers/agents.ts";
+import { opencodeRouter } from "./routers/opencode.ts";
+import { piRouter } from "./routers/pi.ts";
+import { claudeRouter } from "./routers/claude.ts";
+import { codexRouter } from "./routers/codex.ts";
 
 const app = baseApp.use(
   logger(),
@@ -28,6 +33,12 @@ const app = baseApp.use(
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+app.route("/api/agents", agentsRouter);
+app.route("/api/opencode", opencodeRouter);
+app.route("/api/pi", piRouter);
+app.route("/api/claude", claudeRouter);
+app.route("/api/codex", codexRouter);
 
 app.all("/api/trpc/*", (c) => {
   return fetchRequestHandler({

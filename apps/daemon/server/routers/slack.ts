@@ -2,16 +2,12 @@
  * Slack Webhook Router
  *
  * Handles incoming Slack webhooks forwarded from the OS backend.
- * Creates/reuses agents per Slack thread and sends formatted messages.
- * Uses the harness system for SDK-based session management.
+ * Routes per Slack thread and forwards formatted messages.
  *
  * Message cases:
  * 1. New thread @mention - Bot mentioned at the start of a new thread
  * 2. Mid-thread @mention - Bot mentioned in an existing thread (joining conversation)
  * 3. FYI message - No mention, but agent already exists for this thread
- *
- * Backslash commands (handled directly, not forwarded to agent):
- * - \debug - Returns agent session link for debugging
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -22,72 +18,12 @@ import type {
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
-  KnownBlock,
 } from "@slack/types";
-import { z } from "zod/v4";
-import { x } from "tinyexec";
-import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
 
 const logger = console;
-
-/**
- * Run a slack command via the iterate CLI.
- * The CLI loads env vars from ~/.iterate/.env (including proxy settings and SLACK_BOT_TOKEN).
- * We don't pass env explicitly - let the CLI script handle it via --env-file-if-exists.
- */
-async function runSlackCommand(code: string): Promise<void> {
-  logger.log("[slack] runSlackCommand:", code.slice(0, 80) + "...");
-  const result = await x("iterate", ["tool", "slack", code], { throwOnError: false });
-  logger.log("[slack] CLI result:", {
-    exitCode: result.exitCode,
-    stdout: result.stdout.slice(0, 200),
-    stderr: result.stderr.slice(0, 200),
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr || result.stdout || `Exit code ${result.exitCode}`);
-  }
-}
-
-/**
- * Create acknowledge callback - adds emoji reaction.
- */
-function createAcknowledge(channel: string, timestamp: string, emoji: string) {
-  return async () => {
-    try {
-      await runSlackCommand(
-        `await slack.reactions.add(${JSON.stringify({ channel, timestamp, name: emoji })})`,
-      );
-      logger.log(`[slack] Added :${emoji}: to ${channel}/${timestamp}`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!msg.includes("already_reacted")) {
-        logger.error(`[slack] Failed to add :${emoji}:`, error);
-      }
-    }
-  };
-}
-
-/**
- * Create unacknowledge callback - removes emoji reaction.
- */
-function createUnacknowledge(channel: string, timestamp: string, emoji: string) {
-  return async () => {
-    try {
-      await runSlackCommand(
-        `await slack.reactions.remove(${JSON.stringify({ channel, timestamp, name: emoji })})`,
-      );
-      logger.log(`[slack] Removed :${emoji}: from ${channel}/${timestamp}`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!msg.includes("no_reaction")) {
-        logger.error(`[slack] Failed to remove :${emoji}:`, error);
-      }
-    }
-  };
-}
 
 export const slackRouter = new Hono();
 
@@ -133,124 +69,6 @@ type MessageCase =
   | "reaction_removed"
   | "ignored";
 
-/**
- * Environment variables required for building session URLs.
- * Will throw if any are missing - this indicates a misconfiguration.
- */
-const SessionEnv = z.object({
-  ITERATE_OS_BASE_URL: z.string(),
-  ITERATE_ORG_SLUG: z.string(),
-  ITERATE_PROJECT_SLUG: z.string(),
-  ITERATE_MACHINE_ID: z.string(),
-  ITERATE_CUSTOMER_REPO_PATH: z.string(),
-});
-
-/**
- * Build the terminal URL with opencode attach command pre-filled.
- */
-function buildAgentSessionUrl(sessionId: string): string {
-  const env = SessionEnv.parse(process.env);
-
-  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${env.ITERATE_CUSTOMER_REPO_PATH}`;
-  const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
-
-  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
-}
-
-/**
- * Backslash command response type.
- */
-interface BackslashCommandResponse {
-  text: string;
-  blocks?: KnownBlock[];
-}
-
-/**
- * Parameters passed to backslash command handlers.
- */
-interface BackslashCommandParams {
-  channel: string;
-  threadTs: string;
-  agentSlug: string | null;
-  existingAgent: Awaited<ReturnType<typeof getAgent>>;
-}
-
-/**
- * Backslash command handler function type.
- */
-type BackslashCommandHandler = (
-  params: BackslashCommandParams,
-) => Promise<BackslashCommandResponse>;
-
-/**
- * Registry of backslash commands.
- * Add new commands here - they will be automatically detected and handled.
- */
-const backslashCommands = {
-  debug: async ({ agentSlug, existingAgent }): Promise<BackslashCommandResponse> => {
-    if (!existingAgent) {
-      return {
-        text: "No agent found for this thread. Start a conversation by @mentioning the bot first.",
-      };
-    }
-
-    const sessionId = existingAgent.harnessSessionId;
-    if (!sessionId) {
-      return {
-        text: `Agent exists (${agentSlug}) but has no session ID.`,
-      };
-    }
-
-    const sessionUrl = buildAgentSessionUrl(sessionId);
-
-    return {
-      text: `Agent: ${agentSlug}\nSession: ${sessionId}\n<${sessionUrl}|Attach to agent session>`,
-      blocks: [
-        {
-          type: "section" as const,
-          text: {
-            type: "mrkdwn" as const,
-            text: `*Agent:* \`${agentSlug}\`\n*Session:* \`${sessionId}\``,
-          },
-        },
-        {
-          type: "actions" as const,
-          elements: [
-            {
-              type: "button" as const,
-              text: { type: "plain_text" as const, text: "Open Agent Session", emoji: true },
-              url: sessionUrl,
-              action_id: "open_agent_session",
-            },
-          ],
-        },
-      ],
-    };
-  },
-} satisfies Record<string, BackslashCommandHandler>;
-
-type BackslashCommand = keyof typeof backslashCommands;
-
-/**
- * Regex to detect backslash commands anywhere in the message.
- * Built dynamically from the command registry.
- */
-const backslashCommandRegex = new RegExp(
-  `\\\\(${Object.keys(backslashCommands).join("|")})\\b`,
-  "i",
-);
-
-/**
- * Parse a backslash command from message text.
- * Returns undefined if no command found.
- */
-function parseBackslashCommand(text: string): BackslashCommand | undefined {
-  // Remove bot mention before checking
-  const cleanText = text.replace(/<@[A-Z0-9]+>/g, "").trim();
-  const match = cleanText.match(backslashCommandRegex);
-  return match?.[1].toLowerCase() as BackslashCommand | undefined;
-}
-
 interface ParsedMessage {
   case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
   event: AppMentionEvent | GenericMessageEvent;
@@ -293,13 +111,10 @@ slackRouter.post("/webhook", async (c) => {
         });
       }
 
-      // Check for associated agent first, then fall back to slack-{thread_ts}
-      const { agent: existingAgent, agentSlug } = await findAgentForThread(
-        parsed.channel,
-        threadTs,
-      );
+      const agentPath = getAgentPath(threadTs);
+      const hasAgent = await activeAgentExists(agentPath);
 
-      if (!existingAgent) {
+      if (!hasAgent) {
         return c.json({
           success: true,
           message: "Ignored: no agent for this thread",
@@ -308,14 +123,8 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      await appendToAgent(existingAgent, message, {
-        workingDirectory: await getCustomerRepoPath(),
-        acknowledge: async () =>
-          logger.log(`[slack] Processing reaction in ${channel}/${threadTs}`),
-        unacknowledge: async () =>
-          logger.log(`[slack] Finished processing reaction in ${channel}/${threadTs}`),
-      });
-      return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
+      return c.json({ success: true, agentPath, created: false, case: parsed.case, eventId });
     } catch (error) {
       logger.error("[Slack Webhook] Failed to handle reaction event", error);
       return c.json({ error: "Internal server error" }, 500);
@@ -324,74 +133,31 @@ slackRouter.post("/webhook", async (c) => {
 
   // From here on, parsed is a ParsedMessage (not a reaction)
   const { event, threadTs } = parsed as ParsedMessage;
-  const channel = event.channel || "";
-  const messageText = event.text || "";
+  const agentPath = getAgentPath(threadTs);
 
   try {
-    // Check for associated agent first, then fall back to slack-{thread_ts}
-    const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
-
-    // Check for backslash commands - these are handled directly without forwarding to agent
-    const commandName = parseBackslashCommand(messageText);
-    if (commandName) {
-      const handler = backslashCommands[commandName];
-      const response = await handler({ channel, threadTs, agentSlug, existingAgent });
-
-      // Send response via Slack API
-      await slackPostMessage({
-        channel,
-        thread_ts: threadTs,
-        text: response.text,
-        blocks: response.blocks,
-      });
-
-      return c.json({
-        success: true,
-        case: "backslash_command",
-        command: commandName,
-        eventId,
-      });
-    }
+    const hasAgent = await activeAgentExists(agentPath);
 
     // Case 1: New thread @mention - create agent and start fresh conversation
     if (parsed.case === "new_thread_mention") {
-      if (existingAgent) {
-        // Agent exists (either via association or slack-{thread_ts})
-        const workingDirectory = await getCustomerRepoPath();
-        const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
-        await appendToAgent(existingAgent, message, {
-          workingDirectory,
-          acknowledge: createAcknowledge(channel, event.ts, "eyes"),
-          unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
-        });
+      if (hasAgent) {
+        // Rare: agent already exists for what we think is a new thread
+        const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+        await sendToAgentGateway(agentPath, { type: "prompt", message });
         return c.json({
           success: true,
-          agentSlug,
+          agentPath,
           created: false,
           case: "mid_thread_mention",
           eventId,
         });
       }
 
-      // No existing agent - create new slack-{thread_ts} agent
-      const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
-      const workingDirectory = await getCustomerRepoPath();
-      const agent = await createAgent({
-        slug: newAgentSlug,
-        harnessType: "opencode",
-        workingDirectory,
-        initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
-      });
-
-      const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
-      await appendToAgent(agent, message, {
-        workingDirectory,
-        acknowledge: createAcknowledge(channel, event.ts, "eyes"),
-        unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
-      });
+      const message = formatNewThreadMentionMessage(event, threadTs, eventId);
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
-        agentSlug: newAgentSlug,
+        agentPath,
         created: true,
         case: "new_thread_mention",
         eventId,
@@ -400,32 +166,12 @@ slackRouter.post("/webhook", async (c) => {
 
     // Case 2: Mid-thread @mention - create agent if needed, join existing conversation
     if (parsed.case === "mid_thread_mention") {
-      let agent = existingAgent;
-      let wasCreated = false;
-      let finalAgentSlug = agentSlug;
-      const workingDirectory = await getCustomerRepoPath();
-
-      if (!agent) {
-        finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
-        agent = await createAgent({
-          slug: finalAgentSlug,
-          harnessType: "opencode",
-          workingDirectory,
-          initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
-        });
-        wasCreated = true;
-      }
-
-      const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
-      await appendToAgent(agent, message, {
-        workingDirectory,
-        acknowledge: createAcknowledge(channel, event.ts, "eyes"),
-        unacknowledge: createUnacknowledge(channel, event.ts, "eyes"),
-      });
+      const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
-        agentSlug: finalAgentSlug,
-        created: wasCreated,
+        agentPath,
+        created: !hasAgent,
         case: "mid_thread_mention",
         eventId,
       });
@@ -433,7 +179,7 @@ slackRouter.post("/webhook", async (c) => {
 
     // Case 3: FYI message - only forward if agent already exists
     if (parsed.case === "fyi_message") {
-      if (!existingAgent) {
+      if (!hasAgent) {
         return c.json({
           success: true,
           message: "Ignored: no mention and no existing agent",
@@ -442,12 +188,14 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatFyiMessage(event, threadTs, eventId);
-      await appendToAgent(existingAgent, message, {
-        workingDirectory: await getCustomerRepoPath(),
-        acknowledge: createAcknowledge(channel, threadTs, "thinking_face"),
-        unacknowledge: createUnacknowledge(channel, threadTs, "thinking_face"),
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
+      return c.json({
+        success: true,
+        agentPath,
+        created: false,
+        case: "fyi_message",
+        eventId,
       });
-      return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
     }
 
     // Should never reach here
@@ -457,15 +205,6 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
-
-const slackPostMessage = async (
-  params: Parameters<import("@slack/web-api").WebClient["chat"]["postMessage"]>[0],
-) => {
-  // todo: use the slack client directly instead of cli - once we have fixed the proxy issues and can use the proxy and env vars in the daemon
-  await x("iterate", ["tool", "slack", `await slack.chat.postMessage(${JSON.stringify(params)})`], {
-    throwOnError: true,
-  });
-};
 
 /**
  * Parse webhook payload and determine the message case.
@@ -550,24 +289,15 @@ function parseWebhookPayload(
 }
 
 /**
- * Sanitize Slack timestamp for use as slug.
+ * Sanitize Slack timestamp for use as a path segment.
  * Slack timestamps: "1234567890.123456" → "1234567890-123456"
  */
 function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
 
-/**
- * Find the agent for a Slack thread using the slack-{thread_ts} naming convention.
- */
-async function findAgentForThread(
-  _channel: string,
-  threadTs: string,
-): Promise<{ agent: Awaited<ReturnType<typeof getAgent>>; agentSlug: string }> {
-  const threadId = sanitizeThreadId(threadTs);
-  const agentSlug = `slack-${threadId}`;
-  const agent = await getAgent(agentSlug);
-  return { agent, agentSlug };
+function getAgentPath(threadTs: string): string {
+  return `/slack/${sanitizeThreadId(threadTs)}`;
 }
 
 /**
@@ -599,18 +329,6 @@ async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): 
 }
 
 /**
- * Format file attachments for agent messages.
- * Includes private_url when available for curl downloads.
- */
-function formatFileLines(files: GenericMessageEvent["files"] | AppMentionEvent["files"]): string[] {
-  if (!files) return [];
-  return files.map((file) => {
-    if ("url_private" in file) return `File url_private: ${file.url_private}`;
-    return `File id: ${file.id}`;
-  });
-}
-
-/**
  * Format message for a new thread @mention.
  * This is a fresh conversation - provide full context.
  */
@@ -618,11 +336,11 @@ function formatNewThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
-  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
+  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
   return [
     `[Agent: ${agentSlug}] New Slack thread started.`,
@@ -630,7 +348,6 @@ function formatNewThreadMentionMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
-    ...formatFileLines(event.files),
     "",
     `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
@@ -644,12 +361,12 @@ function formatMidThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
   eventId: string,
-  agentSlug: string,
 ): string {
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
+  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
 
   const lines = [
     `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,
@@ -657,7 +374,6 @@ function formatMidThreadMentionMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
-    ...formatFileLines(event.files),
     "",
   ];
 
@@ -692,7 +408,6 @@ function formatFyiMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
-    ...formatFileLines(event.files),
     "",
   ];
 

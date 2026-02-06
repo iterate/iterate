@@ -1,6 +1,6 @@
 import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon } from "lucide-react";
+import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, BotIcon } from "lucide-react";
 
 import type { SerializedAgent } from "@server/trpc/router.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
@@ -19,7 +19,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar.tsx";
-import { AgentTypeIcon } from "@/components/agent-type-icons.tsx";
 
 const MAX_SIDEBAR_AGENTS = 10;
 
@@ -28,6 +27,7 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
   const navigate = useNavigate();
   const location = useLocation();
   const selectedSlug = "slug" in params ? (params.slug as string) : null;
+  const selectedPath = selectedSlug ? decodeURIComponent(selectedSlug) : null;
   const currentPath = location.pathname;
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -36,7 +36,7 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
     trpc.archiveAgent.mutationOptions({
       onSuccess: (_data, variables) => {
         queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-        if (variables.slug === selectedSlug) {
+        if (variables.path === selectedPath) {
           navigate({ to: "/agents" });
         }
       },
@@ -76,25 +76,25 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
           <SidebarGroup>
             <SidebarGroupLabel>Agents</SidebarGroupLabel>
             <SidebarGroupAction asChild title="New Agent">
-              <Link to="/agents/new" search={{ name: undefined }}>
+              <Link to="/agents/new" search={{ path: undefined }}>
                 <Plus />
                 <span className="sr-only">New Agent</span>
               </Link>
             </SidebarGroupAction>
             <SidebarMenu>
               {visibleAgents.map((agent) => (
-                <SidebarMenuItem key={agent.id}>
-                  <SidebarMenuButton asChild isActive={selectedSlug === agent.slug}>
-                    <Link to="/agents/$slug" params={{ slug: agent.slug }}>
-                      <AgentTypeIcon type={agent.harnessType} className="size-4 shrink-0" />
-                      <span className="flex-1 truncate">{agent.slug}</span>
+                <SidebarMenuItem key={agent.path}>
+                  <SidebarMenuButton asChild isActive={selectedPath === agent.path}>
+                    <Link to="/agents/$slug" params={{ slug: encodeURIComponent(agent.path) }}>
+                      <BotIcon className="size-4 shrink-0" />
+                      <span className="flex-1 truncate">{agent.path}</span>
                     </Link>
                   </SidebarMenuButton>
                   <SidebarMenuAction
                     showOnHover
                     onClick={(e) => {
                       e.preventDefault();
-                      archiveAgentMutation.mutate({ slug: agent.slug });
+                      archiveAgentMutation.mutate({ path: agent.path });
                     }}
                     disabled={archiveAgentMutation.isPending}
                     title="Archive agent"

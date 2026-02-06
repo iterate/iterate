@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { createAgent, appendToAgent, getAgent } from "../services/agent-manager.ts";
+import { activeAgentExists, sendPromptToAgent } from "../utils/agent-gateway.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -44,6 +44,29 @@ const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 // ============================================================================
 
 let schedulerRunning = false;
+
+interface CronAgent {
+  slug: string;
+  path: string;
+}
+
+function getCronAgentPath(slug: string): string {
+  return `/cron/${slug}`;
+}
+
+async function getAgent(slug: string): Promise<CronAgent | null> {
+  const agentPath = getCronAgentPath(slug);
+  if (!(await activeAgentExists(agentPath))) return null;
+  return { slug, path: agentPath };
+}
+
+async function createAgent({ slug }: { slug: string }): Promise<CronAgent> {
+  return { slug, path: getCronAgentPath(slug) };
+}
+
+async function appendToAgent(agent: CronAgent, message: string): Promise<void> {
+  await sendPromptToAgent(agent.path, message);
+}
 
 export const getTasksDir = async () => {
   const customerRepoPath = await getCustomerRepoPath();
@@ -233,13 +256,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
     \`\`\`
   `;
 
-  const workingDirectory = await getCustomerRepoPath();
-  await appendToAgent(agent, message, {
-    workingDirectory,
-    acknowledge: async () => console.log(`[cron-tasks] Nudging agent ${agent.slug}`),
-    unacknowledge: async () =>
-      console.log(`[cron-tasks] Agent ${agent.slug} finished processing nudge`),
-  });
+  await appendToAgent(agent, message);
 
   // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
@@ -275,23 +292,12 @@ async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
     const prompt = buildPromptFromTask(task, slug);
 
     // Create cron agent
-    const workingDirectory = await getCustomerRepoPath();
-    const agent = await createAgent({
-      slug,
-      harnessType: "opencode",
-      workingDirectory,
-      initialPrompt: `[Agent slug: ${slug}]\n[Source: cron]\n[Task: ${task.filename}]`,
-    });
+    const agent = await createAgent({ slug });
 
     console.log(`[cron-tasks] Created agent ${agent.slug} for task ${task.filename}`);
 
     // Send the initial prompt to start the agent working
-    await appendToAgent(agent, prompt, {
-      workingDirectory,
-      acknowledge: async () => console.log(`[cron-tasks] Starting task ${task.filename}`),
-      unacknowledge: async () =>
-        console.log(`[cron-tasks] Agent finished processing task ${task.filename}`),
-    });
+    await appendToAgent(agent, prompt);
     console.log(`[cron-tasks] Sent prompt to agent ${agent.slug}`);
 
     // Note: The agent now runs asynchronously. We don't wait for completion here.

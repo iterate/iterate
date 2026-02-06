@@ -12,10 +12,9 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
-import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
 
 const logger = console;
 
@@ -121,6 +120,10 @@ function getSlug(email: { subject: string; email_id: string }): string {
   return `email-${words}-${hashStr}`.slice(0, 50);
 }
 
+function getAgentPath(slug: string): string {
+  return `/email/${slug}`;
+}
+
 emailRouter.post("/webhook", async (c) => {
   const payload = (await c.req.json()) as ResendEmailPayload;
 
@@ -146,11 +149,12 @@ emailRouter.post("/webhook", async (c) => {
     const { name: senderName, email: senderEmail } = parseSender(emailData.from);
     const subject = emailData.subject;
     const threadSlug = getSlug(emailData);
+    const agentPath = getAgentPath(threadSlug);
     const emailBody = payload._iterate?.emailBody;
 
-    const existingAgent = await getAgent(threadSlug);
+    const hasAgent = await activeAgentExists(agentPath);
 
-    if (existingAgent) {
+    if (hasAgent) {
       // Reply to existing thread
       const message = formatReplyMessage(
         threadSlug,
@@ -161,28 +165,17 @@ emailRouter.post("/webhook", async (c) => {
         emailBody,
         eventId,
       );
-      await appendToAgent(existingAgent, message, {
-        workingDirectory: await getCustomerRepoPath(),
-        acknowledge: async () => logger.log(`[email] Processing reply for ${threadSlug}`),
-        unacknowledge: async () =>
-          logger.log(`[email] Finished processing reply for ${threadSlug}`),
-      });
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
-        agentSlug: threadSlug,
+        agentPath,
         created: false,
         case: "reply",
         eventId,
       });
     }
 
-    // New email thread - create agent
-    const agent = await createAgent({
-      slug: threadSlug,
-      harnessType: "opencode",
-      workingDirectory: await getCustomerRepoPath(),
-    });
-
+    // New email thread - create agent via gateway
     const message = formatNewEmailMessage(
       threadSlug,
       senderName,
@@ -192,15 +185,11 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    await appendToAgent(agent, message, {
-      workingDirectory: await getCustomerRepoPath(),
-      acknowledge: async () => logger.log(`[email] Processing new email for ${threadSlug}`),
-      unacknowledge: async () => logger.log(`[email] Finished processing email for ${threadSlug}`),
-    });
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
 
     return c.json({
       success: true,
-      agentSlug: threadSlug,
+      agentPath,
       created: true,
       case: "new_email",
       eventId,
