@@ -58,6 +58,15 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - Root cause: mixed legacy default names across provider/utils/scripts/tests.
    - Fix: unify to `iterate-sandbox:local` for local defaults, keep fallback checks for GHCR tags, and align env precedence (`DOCKER_IMAGE_NAME` first).
 
+7. **Docker host-sync requested but silently disabled**
+   - Symptom: `DOCKER_SYNC_FROM_HOST_REPO=true` could still run unsynced if git metadata resolution failed.
+   - Root cause: constructor treated missing git info as `undefined` and continued.
+   - Fix: fail fast in constructor when sync is explicitly requested but git info cannot be resolved.
+
+8. **Provider/helper duplication cleanup**
+   - `getFetch()` moved into `Sandbox` base class (shared implementation).
+   - Duplicate test-helper `execInContainer` removed; tests now reuse provider Docker API helper.
+
 ### Verified Test Matrix (local)
 
 1. Daytona:

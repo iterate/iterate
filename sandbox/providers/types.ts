@@ -61,21 +61,27 @@ const PIDNAP_PORT = 9876;
 /**
  * Abstract base class for sandbox instances.
  *
- * Each provider implements the abstract methods. The base class provides
- * shared implementations for clients built on top of getFetch().
+ * Each provider implements preview URL + lifecycle methods. The base class
+ * provides shared fetch/client helpers.
  */
 export abstract class Sandbox {
   abstract readonly providerId: string;
   abstract readonly type: ProviderType;
   private pidnapRpcBaseUrl?: string;
 
-  // === Core abstraction (each provider implements) ===
+  // === Core abstraction ===
 
   /**
    * Get a fetch function configured for a specific port.
    * The returned fetch has the base URL and any required headers baked in.
    */
-  abstract getFetch(opts: { port: number }): Promise<typeof fetch>;
+  async getFetch(opts: { port: number }): Promise<typeof fetch> {
+    const baseUrl = await this.getPreviewUrl(opts);
+    return (input: string | Request | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? `${baseUrl}${input}` : input;
+      return fetch(url, init);
+    };
+  }
 
   /**
    * Get a preview URL for a specific port (for display/browser).

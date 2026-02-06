@@ -59,7 +59,7 @@ import { Agent, request } from "undici";
 import { test as baseTest } from "vitest";
 import { DockerProvider, DockerSandbox } from "../providers/docker/provider.ts";
 import { DaytonaProvider, DaytonaSandbox } from "../providers/daytona/provider.ts";
-import { getDockerHostConfig, dockerApi } from "../providers/docker/api.ts";
+import { getDockerHostConfig, dockerApi, execInContainer } from "../providers/docker/api.ts";
 import {
   getGitInfo,
   getComposeProjectName,
@@ -160,24 +160,6 @@ export function decodeDockerLogs(buffer: Uint8Array): string {
   }
 
   return lines.join("");
-}
-
-export async function execInContainer(containerId: string, cmd: string[]): Promise<string> {
-  const execCreate = await dockerApi<{ Id: string }>("POST", `/containers/${containerId}/exec`, {
-    AttachStdout: true,
-    AttachStderr: true,
-    Cmd: cmd,
-  });
-
-  const response = await request(`${DOCKER_API_URL}/exec/${execCreate.Id}/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ Detach: false, Tty: false }),
-    dispatcher: dockerDispatcher,
-  });
-
-  const buffer = await response.body.arrayBuffer();
-  return decodeDockerLogs(new Uint8Array(buffer));
 }
 
 export async function getContainerLogs(containerId: string): Promise<string> {

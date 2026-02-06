@@ -74,16 +74,6 @@ export class DockerSandbox extends Sandbox {
     this.internalPorts = internalPorts;
   }
 
-  // === Core abstraction ===
-
-  async getFetch(opts: { port: number }): Promise<typeof fetch> {
-    const baseUrl = await this.getPreviewUrl(opts);
-    return (input: string | Request | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? `${baseUrl}${input}` : input;
-      return fetch(url, init);
-    };
-  }
-
   private async ensurePortsResolved(): Promise<void> {
     if (Object.keys(this.ports).length === 0) {
       this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
@@ -174,7 +164,16 @@ export class DockerProvider extends SandboxProvider {
     super(rawEnv);
     this.parseEnv(rawEnv); // Must call after super() since envSchema is a field declaration
     this.repoRoot = this.env.DOCKER_GIT_REPO_ROOT ?? DEFAULT_REPO_ROOT;
-    this.gitInfo = this.env.DOCKER_SYNC_FROM_HOST_REPO ? getGitInfo(this.repoRoot) : undefined;
+    if (this.env.DOCKER_SYNC_FROM_HOST_REPO) {
+      this.gitInfo = getGitInfo(this.repoRoot);
+      if (!this.gitInfo) {
+        throw new Error(
+          "DOCKER_SYNC_FROM_HOST_REPO=true requires a git worktree; failed to resolve host git info",
+        );
+      }
+    } else {
+      this.gitInfo = undefined;
+    }
   }
 
   get defaultSnapshotId(): string {

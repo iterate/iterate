@@ -47,16 +47,6 @@ export class DaytonaSandbox extends Sandbox {
     this.providerId = sandboxId;
   }
 
-  // === Core abstraction ===
-
-  async getFetch(opts: { port: number }): Promise<typeof fetch> {
-    const baseUrl = await this.getPreviewUrl(opts);
-    return (input: string | Request | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? `${baseUrl}${input}` : input;
-      return fetch(url, init);
-    };
-  }
-
   async getPreviewUrl(opts: { port: number }): Promise<string> {
     return `https://${opts.port}-${this.providerId}.proxy.daytona.works`;
   }
