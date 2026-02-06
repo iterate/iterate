@@ -29,6 +29,7 @@
     "super-reset": "rm -f db.sqlite && drizzle-kit migrate"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.22",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/language": "^6.11.3",

@@ -9,8 +9,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
+import { and, eq, isNull } from "drizzle-orm";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { createAgent, appendToAgent, getAgent } from "../services/agent-manager.ts";
+import { db } from "../db/index.ts";
+import * as schema from "../db/schema.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -39,11 +41,49 @@ const DEFAULT_INTERVAL_MS = 1 * 15 * 1000;
 /** Default stale threshold for nudging agents to "close the loop" */
 const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 
+const DAEMON_PORT = process.env.PORT || "3001";
+const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
+
 // ============================================================================
 // Directory Helpers
 // ============================================================================
 
 let schedulerRunning = false;
+
+interface CronAgent {
+  slug: string;
+  path: string;
+}
+
+function getCronAgentPath(slug: string): string {
+  return `/cron/${slug}`;
+}
+
+async function getAgent(slug: string): Promise<CronAgent | null> {
+  const agentPath = getCronAgentPath(slug);
+  const existing = await db
+    .select()
+    .from(schema.agents)
+    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
+    .limit(1);
+  if (!existing[0]) return null;
+  return { slug, path: agentPath };
+}
+
+async function createAgent({ slug }: { slug: string }): Promise<CronAgent> {
+  return { slug, path: getCronAgentPath(slug) };
+}
+
+async function appendToAgent(agent: CronAgent, message: string): Promise<void> {
+  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agent.path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "prompt", message }),
+  });
+  if (!response.ok) {
+    throw new Error(`Agent gateway failed for ${agent.path}: ${response.status}`);
+  }
+}
 
 export const getTasksDir = async () => {
   const customerRepoPath = await getCustomerRepoPath();
@@ -233,8 +273,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
     \`\`\`
   `;
 
-  const workingDirectory = await getCustomerRepoPath();
-  await appendToAgent(agent, message, { workingDirectory });
+  await appendToAgent(agent, message);
 
   // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
@@ -270,18 +309,12 @@ async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
     const prompt = buildPromptFromTask(task, slug);
 
     // Create cron agent
-    const workingDirectory = await getCustomerRepoPath();
-    const agent = await createAgent({
-      slug,
-      harnessType: "opencode",
-      workingDirectory,
-      initialPrompt: `[Agent slug: ${slug}]\n[Source: cron]\n[Task: ${task.filename}]`,
-    });
+    const agent = await createAgent({ slug });
 
     console.log(`[cron-tasks] Created agent ${agent.slug} for task ${task.filename}`);
 
     // Send the initial prompt to start the agent working
-    await appendToAgent(agent, prompt, { workingDirectory });
+    await appendToAgent(agent, prompt);
     console.log(`[cron-tasks] Sent prompt to agent ${agent.slug}`);
 
     // Note: The agent now runs asynchronously. We don't wait for completion here.
