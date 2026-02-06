@@ -61,6 +61,7 @@ If dependencies change, run `pnpm install` inside the container.
 - `LOCAL_DOCKER_REPO_CHECKOUT` (host repo root)
 - `LOCAL_DOCKER_GIT_DIR` (worktree git dir)
 - `LOCAL_DOCKER_COMMON_DIR` (main .git)
+- `LOCAL_DOCKER_SYNC_FROM_GIT_TARGET` (optional startup git sync target, format `<remote>:<ref>`, e.g. `origin:main`)
 - `LOCAL_DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
 
 These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
