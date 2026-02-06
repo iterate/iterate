@@ -14,6 +14,9 @@ const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 // Headers to forward from upstream response (excluding hop-by-hop headers)
 const FORWARDED_HEADERS = ["content-type", "cache-control", "x-request-id", "x-correlation-id"];
 
+const ROUTE_READY_MAX_ATTEMPTS = 40;
+const ROUTE_READY_DELAY_MS = 250;
+
 /** Determine which agent router to use for creating new agents based on path prefix */
 function getNewAgentPath(agentPath: string): string {
   const prefix = agentPath.split("/")[1]; // e.g., "/pi/test" → "pi"
@@ -27,6 +30,26 @@ function getNewAgentPath(agentPath: string): string {
     default:
       return "/opencode/new";
   }
+}
+
+async function waitForReadyRoute(
+  caller: ReturnType<typeof trpcRouter.createCaller>,
+  agentPath: string,
+  initialRoute: { destination: string } | null,
+): Promise<{ destination: string } | null> {
+  if (initialRoute && initialRoute.destination !== "pending") {
+    return initialRoute;
+  }
+
+  for (let attempt = 0; attempt < ROUTE_READY_MAX_ATTEMPTS; attempt += 1) {
+    const route = await caller.getActiveRoute({ agentPath });
+    if (route && route.destination !== "pending") {
+      return route;
+    }
+    await new Promise((resolve) => setTimeout(resolve, ROUTE_READY_DELAY_MS));
+  }
+
+  return initialRoute;
 }
 
 agentsRouter.post("/*", async (c) => {
@@ -48,10 +71,21 @@ agentsRouter.post("/*", async (c) => {
     newAgentPath: getNewAgentPath(agentPath),
   });
 
-  if (!wasCreated && route) {
-    const destination = route.destination.startsWith("http")
-      ? route.destination
-      : `${DAEMON_BASE_URL}/api${route.destination}`;
+  const readyRoute = await waitForReadyRoute(caller, agentPath, route);
+  if (!readyRoute || readyRoute.destination === "pending") {
+    return c.json(
+      {
+        error: "Agent route is not ready",
+        agentPath,
+      },
+      503,
+    );
+  }
+
+  if (!wasCreated) {
+    const destination = readyRoute.destination.startsWith("http")
+      ? readyRoute.destination
+      : `${DAEMON_BASE_URL}/api${readyRoute.destination}`;
 
     const upstreamResponse = await fetch(destination, {
       method: "POST",
@@ -92,6 +126,6 @@ agentsRouter.post("/*", async (c) => {
     success: true,
     agentPath,
     wasCreated,
-    route: route?.destination ?? null,
+    route: readyRoute.destination,
   });
 });

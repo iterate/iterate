@@ -46,7 +46,7 @@ function serializeAgent(agent: Agent, route: AgentRoute | null): SerializedAgent
 }
 
 async function waitForActiveRoute(agentPath: string): Promise<AgentRoute | null> {
-  const maxAttempts = 10;
+  const maxAttempts = 400;
   const delayMs = 25;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -208,6 +208,20 @@ export const trpcRouter = createTRPCRouter({
           .get();
 
         if (!newAgent) {
+          const existingByPath = tx
+            .select()
+            .from(schema.agents)
+            .where(eq(schema.agents.path, agentPath))
+            .limit(1)
+            .get();
+
+          if (existingByPath?.archivedAt) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Agent path is reserved by an archived agent: ${agentPath}`,
+            });
+          }
+
           const agent = tx
             .select()
             .from(schema.agents)

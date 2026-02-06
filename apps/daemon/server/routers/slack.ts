@@ -59,13 +59,20 @@ async function sendToAgentGateway(
     body: JSON.stringify(event),
   });
 
-  const body = (await response.json()) as {
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
+    );
+  }
+
+  const body = (await response.json().catch(() => ({}))) as {
     wasCreated?: boolean;
     route?: string | null;
   };
 
-  if (!response.ok) {
-    throw new Error(`Agent gateway failed: ${response.status}`);
+  if (typeof body !== "object" || body === null) {
+    return { wasCreated: false, route: null };
   }
 
   return { wasCreated: body.wasCreated ?? false, route: body.route ?? null };
