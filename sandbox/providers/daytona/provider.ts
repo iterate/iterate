@@ -30,6 +30,7 @@ const DaytonaEnv = z.object({
 });
 
 type DaytonaEnv = z.infer<typeof DaytonaEnv>;
+const DAYTONA_CREATE_TIMEOUT_SECONDS = 180;
 
 /**
  * Daytona sandbox implementation.
@@ -167,7 +168,7 @@ export class DaytonaProvider extends SandboxProvider {
       : undefined;
 
     const envVars = { ...opts.envVars };
-    const entrypointArguments = opts.providerOptions?.daytona?.entrypointArguments;
+    const entrypointArguments = opts.entrypointArguments;
     if (entrypointArguments && entrypointArguments.length > 0) {
       // Providers like Daytona cannot pass container start args at sandbox creation time.
       // We tunnel entrypoint args via env var so sandbox/entry.sh can exec them.
@@ -175,14 +176,17 @@ export class DaytonaProvider extends SandboxProvider {
     }
 
     const snapshotId = opts.providerSnapshotId ?? this.defaultSnapshotId;
-    const sdkSandbox = await this.daytona.create({
-      name: sandboxName,
-      snapshot: snapshotId,
-      envVars,
-      autoStopInterval,
-      autoDeleteInterval,
-      public: true,
-    });
+    const sdkSandbox = await this.daytona.create(
+      {
+        name: sandboxName,
+        snapshot: snapshotId,
+        envVars,
+        autoStopInterval,
+        autoDeleteInterval,
+        public: true,
+      },
+      { timeout: DAYTONA_CREATE_TIMEOUT_SECONDS },
+    );
 
     return new DaytonaSandbox(this.daytona, sdkSandbox.id);
   }

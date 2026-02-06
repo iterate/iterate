@@ -100,7 +100,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
           return info.effectiveEnv?.DYNAMIC_TEST_VAR;
         }, POLL_DEFAULTS)
         .toBe("added_at_runtime");
-    }, 90000);
+    }, 180000);
   });
 
   describe("Process Management", () => {

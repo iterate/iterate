@@ -22,11 +22,7 @@ describe
         name: "Base Image Test",
         envVars: {},
         providerSnapshotId: TEST_BASE_SNAPSHOT_ID,
-        providerOptions: {
-          docker: { entrypointArguments: ["sleep", "infinity"] },
-          daytona: { entrypointArguments: ["sleep", "infinity"] },
-          fly: { entrypointArguments: ["sleep", "infinity"] },
-        },
+        entrypointArguments: ["sleep", "infinity"],
       },
     });
 

@@ -52,12 +52,8 @@ export interface CreateSandboxOptions {
   envVars: Record<string, string>;
   /** Override the provider's default snapshot/image */
   providerSnapshotId?: string;
-  /** Provider-specific create options keyed by provider type. */
-  providerOptions?: {
-    docker?: { entrypointArguments?: string[] };
-    daytona?: { entrypointArguments?: string[] };
-    fly?: { entrypointArguments?: string[] };
-  };
+  /** Optional container entrypoint args (e.g. ["sleep", "infinity"]). */
+  entrypointArguments?: string[];
 }
 
 /**

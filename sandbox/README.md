@@ -15,10 +15,10 @@ Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked re
 
 ## Dependency boundaries
 
-- `sandbox/*` is provider/runtime infra code only.
-- `apps/os/backend` (worker/control plane) may import `@iterate-com/sandbox`.
-- `apps/daemon` must not depend on sandbox provider abstractions.
-- `sandbox/*` must not import `apps/os/*` or any OS worker package.
+- `apps/os/backend` (OS worker/control plane) may import `@iterate-com/sandbox`.
+- `apps/daemon` must not import `@iterate-com/sandbox`.
+- `sandbox/*` must not import `apps/os/*` or `apps/daemon/*`.
+- Flow is one-way: `apps/os/backend -> @iterate-com/sandbox -> provider SDKs`.
 
 ## Build
 

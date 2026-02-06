@@ -269,7 +269,7 @@ export class FlyProvider extends SandboxProvider {
     const suffix = randomBytes(4).toString("hex");
     const base = slugify(opts.id ?? opts.name) || "sandbox";
     const appName = `${this.env.FLY_APP_PREFIX}-${base}-${suffix}`.slice(0, 63);
-    const entrypointArguments = opts.providerOptions?.fly?.entrypointArguments;
+    const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
     try {

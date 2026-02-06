@@ -24,7 +24,10 @@
  */
 
 import { describe, expect } from "vitest";
-import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS } from "./helpers.ts";
+import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, TEST_CONFIG } from "./helpers.ts";
+
+const BASE_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "daytona" ? 180_000 : 30_000;
+const CLI_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "daytona" ? 60_000 : 15_000;
 
 // ============ Minimal Container Tests ============
 
@@ -32,89 +35,118 @@ import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS } from "./helpers.ts";
  * Tests that don't require pidnap or daemon - just a running container.
  * Uses `sleep infinity` provider entrypoint args to keep container alive without starting pidnap.
  */
-describe.runIf(RUN_SANDBOX_TESTS).concurrent("Minimal Container Tests", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Minimal Container Tests", () => {
   // Override provider entrypoint args to skip pidnap - entry.sh will exec these directly
   test.scoped({
     sandboxOptions: {
       id: "minimal-test",
       name: "Minimal Test",
       envVars: {},
-      providerOptions: {
-        docker: { entrypointArguments: ["sleep", "infinity"] },
-        daytona: { entrypointArguments: ["sleep", "infinity"] },
-        fly: { entrypointArguments: ["sleep", "infinity"] },
-      },
+      entrypointArguments: ["sleep", "infinity"],
     },
   });
 
   describe("Container Setup", () => {
-    test("container setup correct", async ({ sandbox }) => {
-      // repo cloned
-      const ls = await sandbox.exec(["ls", ITERATE_REPO_PATH]);
-      expect(ls).toContain("README.md");
-      expect(ls).toContain("apps");
-    });
+    test(
+      "container setup correct",
+      async ({ sandbox }) => {
+        // repo cloned
+        const ls = await sandbox.exec(["ls", ITERATE_REPO_PATH]);
+        expect(ls).toContain("README.md");
+        expect(ls).toContain("apps");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
 
-    test("git operations work", async ({ sandbox }) => {
-      const init = await sandbox.exec(["git", "init", "/tmp/test-repo"]);
-      expect(init).toContain("Initialized");
+    test(
+      "git operations work",
+      async ({ sandbox }) => {
+        const init = await sandbox.exec(["git", "init", "/tmp/test-repo"]);
+        expect(init).toContain("Initialized");
 
-      const config = await sandbox.exec(["git", "-C", "/tmp/test-repo", "config", "user.email"]);
-      expect(config).toContain("@");
+        const config = await sandbox.exec(["git", "-C", "/tmp/test-repo", "config", "user.email"]);
+        expect(config).toContain("@");
 
-      await sandbox.exec(["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
-      await sandbox.exec(["git", "-C", "/tmp/test-repo", "add", "."]);
+        await sandbox.exec(["sh", "-c", "echo 'hello' > /tmp/test-repo/test.txt"]);
+        await sandbox.exec(["git", "-C", "/tmp/test-repo", "add", "."]);
 
-      const commit = await sandbox.exec(["git", "-C", "/tmp/test-repo", "commit", "-m", "test"]);
-      expect(commit).toContain("test");
-    });
+        const commit = await sandbox.exec(["git", "-C", "/tmp/test-repo", "commit", "-m", "test"]);
+        expect(commit).toContain("test");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
 
-    test("shell sources ~/.iterate/.env automatically", async ({ sandbox }) => {
-      // Write env var to ~/.iterate/.env
-      await sandbox.exec([
-        "sh",
-        "-c",
-        'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
-      ]);
+    test(
+      "shell sources ~/.iterate/.env automatically",
+      async ({ sandbox }) => {
+        // Write env var to ~/.iterate/.env
+        await sandbox.exec([
+          "sh",
+          "-c",
+          'echo "TEST_ITERATE_ENV_VAR=hello_from_env_file" >> ~/.iterate/.env',
+        ]);
 
-      // Start a new login shell and check if env var is available
-      const envOutput = await sandbox.exec(["bash", "-l", "-c", "env | grep TEST_ITERATE_ENV_VAR"]);
+        // Start a new login shell and check if env var is available
+        const envOutput = await sandbox.exec([
+          "bash",
+          "-l",
+          "-c",
+          "env | grep TEST_ITERATE_ENV_VAR",
+        ]);
 
-      expect(envOutput).toContain("hello_from_env_file");
-    });
+        expect(envOutput).toContain("hello_from_env_file");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
 
-    test("DUMMY_ENV_VAR from skeleton .env is present", async ({ sandbox }) => {
-      // The sync-home-skeleton.sh runs even with sleep infinity since it's baked into the image
-      // Check that DUMMY_ENV_VAR from skeleton .env is available
-      const envOutput = await sandbox.exec(["bash", "-l", "-c", "env"]);
-      expect(envOutput).toContain("DUMMY_ENV_VAR=42");
-    }, 30000);
+    test(
+      "DUMMY_ENV_VAR from skeleton .env is present",
+      async ({ sandbox }) => {
+        // The sync-home-skeleton.sh runs even with sleep infinity since it's baked into the image
+        // Check that DUMMY_ENV_VAR from skeleton .env is available
+        const envOutput = await sandbox.exec(["bash", "-l", "-c", "env"]);
+        expect(envOutput).toContain("DUMMY_ENV_VAR=42");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
   });
 
   describe("Git Repository State", () => {
-    test("repo is a valid git repository", async ({ sandbox }) => {
-      const gitStatus = await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "status", "--short"]);
-      // Should not throw - just verify git works
-      expect(typeof gitStatus).toBe("string");
-    });
+    test(
+      "repo is a valid git repository",
+      async ({ sandbox }) => {
+        const gitStatus = await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "status", "--short"]);
+        // Should not throw - just verify git works
+        expect(typeof gitStatus).toBe("string");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
 
-    test("can read git branch", async ({ sandbox }) => {
-      const branch = await sandbox.exec([
-        "git",
-        "-C",
-        ITERATE_REPO_PATH,
-        "branch",
-        "--show-current",
-      ]);
-      // Branch might be empty string (detached HEAD) or a branch name
-      expect(typeof branch.trim()).toBe("string");
-    });
+    test(
+      "can read git branch",
+      async ({ sandbox }) => {
+        const branch = await sandbox.exec([
+          "git",
+          "-C",
+          ITERATE_REPO_PATH,
+          "branch",
+          "--show-current",
+        ]);
+        // Branch might be empty string (detached HEAD) or a branch name
+        expect(typeof branch.trim()).toBe("string");
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
 
-    test("can read git commit", async ({ sandbox }) => {
-      const commit = await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "rev-parse", "HEAD"]);
-      // Should be a 40-char SHA
-      expect(commit.trim()).toMatch(/^[a-f0-9]{40}$/);
-    });
+    test(
+      "can read git commit",
+      async ({ sandbox }) => {
+        const commit = await sandbox.exec(["git", "-C", ITERATE_REPO_PATH, "rev-parse", "HEAD"]);
+        // Should be a 40-char SHA
+        expect(commit.trim()).toMatch(/^[a-f0-9]{40}$/);
+      },
+      BASE_TEST_TIMEOUT_MS,
+    );
   });
 });
 
@@ -130,16 +162,12 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Minimal Container Tests", () => {
 // Skip if API keys not available (checked at test registration time, not module load)
 const hasApiKeys = Boolean(process.env.OPENAI_API_KEY && process.env.ANTHROPIC_API_KEY);
 
-describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys).concurrent("Agent CLI Tests", () => {
+describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys)("Agent CLI Tests", () => {
   test.scoped({
     sandboxOptions: {
       id: "agent-cli-test",
       name: "Agent CLI Test",
-      providerOptions: {
-        docker: { entrypointArguments: ["sleep", "infinity"] },
-        daytona: { entrypointArguments: ["sleep", "infinity"] },
-        fly: { entrypointArguments: ["sleep", "infinity"] },
-      },
+      entrypointArguments: ["sleep", "infinity"],
       envVars: {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY!,
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
@@ -147,18 +175,30 @@ describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys).concurrent("Agent CLI Tests", ()
     },
   });
 
-  test("opencode answers question", async ({ sandbox }) => {
-    const output = await sandbox.exec(["bash", "-l", "-c", "opencode run 'what is 50 minus 8?'"]);
-    expect(output).toContain("42");
-  }, 15000);
+  test(
+    "opencode answers question",
+    async ({ sandbox }) => {
+      const output = await sandbox.exec(["bash", "-l", "-c", "opencode run 'what is 50 minus 8?'"]);
+      expect(output).toContain("42");
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  test("claude answers question", async ({ sandbox }) => {
-    const output = await sandbox.exec(["bash", "-l", "-c", "claude -p 'what is 50 minus 8?'"]);
-    expect(output).toContain("42");
-  }, 15000);
+  test(
+    "claude answers question",
+    async ({ sandbox }) => {
+      const output = await sandbox.exec(["bash", "-l", "-c", "claude -p 'what is 50 minus 8?'"]);
+      expect(output).toContain("42");
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  test("pi answers question", async ({ sandbox }) => {
-    const output = await sandbox.exec(["bash", "-l", "-c", "pi -p 'what is 50 minus 8?'"]);
-    expect(output).toContain("42");
-  }, 15000);
+  test(
+    "pi answers question",
+    async ({ sandbox }) => {
+      const output = await sandbox.exec(["bash", "-l", "-c", "pi -p 'what is 50 minus 8?'"]);
+      expect(output).toContain("42");
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 });

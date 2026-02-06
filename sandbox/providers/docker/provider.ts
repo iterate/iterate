@@ -50,8 +50,8 @@ const DockerEnv = z.object({
   DOCKER_GIT_COMMON_DIR: z.string().optional(),
   DOCKER_SYNC_FROM_HOST_REPO: z
     .string()
-    .transform((v) => v === "true")
-    .default(false),
+    .optional()
+    .transform((v) => v === "true"),
 });
 
 type DockerEnv = z.infer<typeof DockerEnv>;
@@ -183,7 +183,7 @@ export class DockerProvider extends SandboxProvider {
       this.repoRoot,
       opts.providerSnapshotId ?? this.defaultSnapshotId,
     );
-    const entrypointArguments = opts.providerOptions?.docker?.entrypointArguments;
+    const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
     const portBindings: Record<string, Array<{ HostPort: string }>> = {};

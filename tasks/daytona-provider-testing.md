@@ -10,6 +10,34 @@ Validate that sandbox integration tests work against Daytona provider, not just 
 
 ## Status Update (2026-02-06)
 
+### Status Update (2026-02-06, Post-Merge Cleanup Pass)
+
+1. Provider create API cleaned up:
+   - `CreateSandboxOptions.entrypointArguments` is now top-level.
+   - Removed provider-specific `providerOptions` shape.
+   - Docker/Daytona/Fly providers all consume the same `entrypointArguments`.
+2. Daytona stability improved:
+   - Daytona create timeout explicitly set to 180s in provider.
+   - Daytona-only timeout-heavy tests increased to avoid false negatives from remote startup latency.
+3. Review comments closed:
+   - Docker Zod v4 default bug fixed (`DOCKER_SYNC_FROM_HOST_REPO` now `optional().transform(...)`).
+   - Daemon client helper now supports typed generic return (no untyped `createTRPCClient` usage at callsite).
+   - Fly shared-egress test now cleanly skips when `FLY_API_TOKEN` is not present.
+4. Dependency boundary docs clarified in `sandbox/README.md`:
+   - one-way dependency flow documented explicitly.
+
+### Validation Summary (local, 2026-02-06)
+
+1. Repo checks:
+   - `pnpm typecheck` PASS
+   - `pnpm lint` PASS
+   - `pnpm test` PASS
+   - `pnpm spec` PASS
+2. Sandbox integration:
+   - Docker full suite: PASS (`RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker pnpm --dir sandbox test`)
+   - Daytona full suite: PASS (with fresh snapshot + `SANDBOX_TEST_SNAPSHOT_ID`)
+   - Fly shared egress test: SKIPPED locally due missing `FLY_API_TOKEN` in active Doppler config (test now skips by design when token absent).
+
 ### What Is Working
 
 1. Daytona daemon integration now passes with snapshot `iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6`.

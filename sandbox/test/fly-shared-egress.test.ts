@@ -6,7 +6,8 @@ import { RUN_SANDBOX_TESTS, TEST_CONFIG } from "./helpers.ts";
 const RUN_FLY_SHARED_EGRESS_TEST =
   RUN_SANDBOX_TESTS &&
   TEST_CONFIG.provider === "fly" &&
-  process.env.RUN_FLY_SHARED_EGRESS_TESTS === "true";
+  process.env.RUN_FLY_SHARED_EGRESS_TESTS === "true" &&
+  Boolean(process.env.FLY_API_TOKEN);
 
 function buildTestEnv(network: string, prefix: string): Record<string, string | undefined> {
   return {
@@ -68,18 +69,14 @@ describe.runIf(RUN_FLY_SHARED_EGRESS_TEST)("Fly shared egress", () => {
         id: `fly-a-${suffix}`,
         name: "Fly A",
         envVars: {},
-        providerOptions: {
-          fly: { entrypointArguments: ["sleep", "infinity"] },
-        },
+        entrypointArguments: ["sleep", "infinity"],
       });
 
       const sandboxB = await provider.create({
         id: `fly-b-${suffix}`,
         name: "Fly B",
         envVars: {},
-        providerOptions: {
-          fly: { entrypointArguments: ["sleep", "infinity"] },
-        },
+        entrypointArguments: ["sleep", "infinity"],
       });
 
       let egressMachineId: string | null = null;

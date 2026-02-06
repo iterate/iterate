@@ -19,13 +19,15 @@ export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<Pidna
  * Build a daemon tRPC client for sandboxes that expose daemon-backend on port 3000.
  * Caller is responsible for using this only on sandboxes that actually run daemon-backend.
  */
-export async function getDaemonClientForSandbox(sandbox: Sandbox): Promise<TRPCClient<AnyRouter>>;
 export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
   sandbox: Sandbox,
 ): Promise<TRPCClient<TRouter>>;
-export async function getDaemonClientForSandbox(sandbox: Sandbox): Promise<TRPCClient<AnyRouter>> {
+export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
+  sandbox: Sandbox,
+): Promise<TRPCClient<TRouter>> {
   const previewUrl = await sandbox.getPreviewUrl({ port: DAEMON_PORT });
-  return createTRPCClient({
+  const client = createTRPCClient<AnyRouter>({
     links: [httpLink({ url: `${previewUrl}/api/trpc` })],
   });
+  return client as unknown as TRPCClient<TRouter>;
 }

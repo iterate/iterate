@@ -9,35 +9,33 @@ describe
         id: "daytona-entrypoint-arguments",
         name: "Daytona Entrypoint Arguments",
         envVars: {},
-        providerOptions: {
-          daytona: { entrypointArguments: ["sleep", "infinity"] },
-        },
+        entrypointArguments: ["sleep", "infinity"],
       },
     });
 
-    test.concurrent(
-      "maps entrypoint args to SANDBOX_ENTRY_ARGS and bypasses pidnap",
-      async ({ sandbox, expect }) => {
-        const reachedEntrypoint = await sandbox.exec([
-          "sh",
-          "-c",
-          "test -f /tmp/reached-entrypoint && echo yes || echo no",
-        ]);
-        expect(reachedEntrypoint.trim()).toBe("yes");
+    test("maps entrypoint args to SANDBOX_ENTRY_ARGS and bypasses pidnap", async ({
+      sandbox,
+      expect,
+    }) => {
+      const reachedEntrypoint = await sandbox.exec([
+        "sh",
+        "-c",
+        "test -f /tmp/reached-entrypoint && echo yes || echo no",
+      ]);
+      expect(reachedEntrypoint.trim()).toBe("yes");
 
-        const entryArgsFromEnv = await sandbox.exec([
-          "sh",
-          "-c",
-          "printf '%s' \"${SANDBOX_ENTRY_ARGS:-}\"",
-        ]);
-        expect(entryArgsFromEnv).toBe("sleep\tinfinity");
+      const entryArgsFromEnv = await sandbox.exec([
+        "sh",
+        "-c",
+        "printf '%s' \"${SANDBOX_ENTRY_ARGS:-}\"",
+      ]);
+      expect(entryArgsFromEnv).toBe("sleep\tinfinity");
 
-        const pidnapRunning = await sandbox.exec([
-          "sh",
-          "-c",
-          "ps -ef | grep -v grep | grep -q 'pidnap/src/cli.ts' && echo yes || echo no",
-        ]);
-        expect(pidnapRunning.trim()).toBe("no");
-      },
-    );
+      const pidnapRunning = await sandbox.exec([
+        "sh",
+        "-c",
+        "ps -ef | grep -v grep | grep -q 'pidnap/src/cli.ts' && echo yes || echo no",
+      ]);
+      expect(pidnapRunning.trim()).toBe("no");
+    }, 180_000);
   });
