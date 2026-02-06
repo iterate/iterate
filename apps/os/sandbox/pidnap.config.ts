@@ -129,6 +129,10 @@ export default defineConfig({
           "--print-logs",
         ],
       },
+      envOptions: {
+        // TODO: confirm why opencode needs a lower env reload delay than default.
+        reloadDelay: 500,
+      },
       options: {
         restartPolicy: "always",
       },
