@@ -29,6 +29,7 @@
  *
  * Docker provider requires:
  *   - DOCKER_HOST (optional, defaults to tcp://127.0.0.1:2375)
+ *   - DOCKER_SERVICE_TRANSPORT (optional: "port-map" | "cloudflare-tunnel")
  *
  * Daytona provider requires (typically from Doppler):
  *   - DAYTONA_API_KEY

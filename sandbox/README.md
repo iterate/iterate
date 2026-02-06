@@ -60,6 +60,8 @@ If dependencies change, run `pnpm install` inside the container.
 - `DOCKER_GIT_GITDIR` (worktree git dir)
 - `DOCKER_GIT_COMMON_DIR` (main .git)
 - `DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
+- `DOCKER_SERVICE_TRANSPORT` (`port-map` or `cloudflare-tunnel`; default `port-map`)
+- `DOCKER_CLOUDFLARE_TUNNEL_PORTS` (optional CSV, default `3000,3001,4096,9876`)
 
 These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
 
@@ -125,6 +127,11 @@ Default snapshot IDs:
 # Docker provider (requires local image build first)
 pnpm sandbox docker:build
 pnpm sandbox test:docker
+
+# Docker provider, Cloudflare tunnel transport
+RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
+  RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS=true \
+  pnpm sandbox test --run providers/docker/cloudflare-tunnel.test.ts
 
 # Daytona provider (requires Doppler secrets)
 doppler run -- pnpm sandbox test:daytona

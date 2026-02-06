@@ -14,6 +14,10 @@ fi
 # where we want to exec commands in the container _after_ the initial sync.
 touch /tmp/reached-entrypoint
 
+if [[ "${DOCKER_SERVICE_TRANSPORT:-port-map}" == "cloudflare-tunnel" ]]; then
+  bash "${ITERATE_REPO}/sandbox/providers/docker/start-cloudflare-tunnels.sh"
+fi
+
 # Allow overriding entrypoint args in two ways:
 # 1) Positional args (normal Docker/CMD path), e.g.:
 #    docker run --rm -it iterate-sandbox:local /bin/bash

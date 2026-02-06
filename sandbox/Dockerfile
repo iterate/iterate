@@ -39,6 +39,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && rm -rf /var/lib/apt/lists/* \
     && ln -s $(which fdfind) /usr/local/bin/fd
 
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then CLOUD_FLARED_ARCH="arm64"; else CLOUD_FLARED_ARCH="amd64"; fi && \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CLOUD_FLARED_ARCH}" -o /usr/local/bin/cloudflared && \
+    chmod +x /usr/local/bin/cloudflared
+
 RUN corepack enable
 
 # Global npm tools (as root for system-wide access)

@@ -31,6 +31,7 @@ const DEFAULT_REPO_ROOT = join(__dirname, "../../..");
 
 const PIDNAP_PORT = 9876;
 const LIFECYCLE_TIMEOUT_MS = 120_000;
+const TUNNEL_URL_TIMEOUT_MS = 60_000;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -38,6 +39,7 @@ const DAEMON_PORTS = [
   { id: "iterate-daemon-server", internalPort: 3001 },
   { id: "opencode", internalPort: 4096 },
 ] as const;
+type DockerServiceTransport = "port-map" | "cloudflare-tunnel";
 
 /**
  * Zod schema for Docker provider environment variables.
@@ -48,6 +50,8 @@ const DockerEnv = z.object({
   DOCKER_GIT_REPO_ROOT: z.string().optional(),
   DOCKER_GIT_GITDIR: z.string().optional(),
   DOCKER_GIT_COMMON_DIR: z.string().optional(),
+  DOCKER_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
+  DOCKER_CLOUDFLARE_TUNNEL_PORTS: z.string().optional(),
   DOCKER_SYNC_FROM_HOST_REPO: z
     .string()
     .optional()
@@ -66,12 +70,19 @@ export class DockerSandbox extends Sandbox {
 
   private ports: Record<number, number>;
   private readonly internalPorts: number[];
+  private readonly serviceTransport: DockerServiceTransport;
 
-  constructor(containerId: string, ports: Record<number, number>, internalPorts: number[]) {
+  constructor(
+    containerId: string,
+    ports: Record<number, number>,
+    internalPorts: number[],
+    serviceTransport: DockerServiceTransport,
+  ) {
     super();
     this.providerId = containerId;
     this.ports = ports;
     this.internalPorts = internalPorts;
+    this.serviceTransport = serviceTransport;
   }
 
   private async ensurePortsResolved(): Promise<void> {
@@ -80,7 +91,32 @@ export class DockerSandbox extends Sandbox {
     }
   }
 
+  private async getCloudflarePreviewUrl(port: number): Promise<string> {
+    const start = Date.now();
+    while (Date.now() - start < TUNNEL_URL_TIMEOUT_MS) {
+      try {
+        const url = (
+          await execInContainer(this.providerId, [
+            "sh",
+            "-c",
+            `cat /tmp/cloudflare-tunnels/${port}.url 2>/dev/null || true`,
+          ])
+        ).trim();
+        if (url.startsWith("https://")) {
+          return url;
+        }
+      } catch {
+        // Container may still be starting.
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`Timeout waiting for Cloudflare tunnel URL for port ${port}`);
+  }
+
   async getPreviewUrl(opts: { port: number }): Promise<string> {
+    if (this.serviceTransport === "cloudflare-tunnel") {
+      return this.getCloudflarePreviewUrl(opts.port);
+    }
     await this.ensurePortsResolved();
     const hostPort = this.ports[opts.port];
     if (!hostPort) {
@@ -211,6 +247,10 @@ export class DockerProvider extends SandboxProvider {
 
     const dockerEnv: Record<string, string> = {
       ITERATE_DEV: "true",
+      DOCKER_SERVICE_TRANSPORT: this.env.DOCKER_SERVICE_TRANSPORT,
+      ...(this.env.DOCKER_CLOUDFLARE_TUNNEL_PORTS
+        ? { DOCKER_CLOUDFLARE_TUNNEL_PORTS: this.env.DOCKER_CLOUDFLARE_TUNNEL_PORTS }
+        : {}),
       ...(this.gitInfo ? { DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
     };
 
@@ -260,7 +300,12 @@ export class DockerProvider extends SandboxProvider {
 
     const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
     const ports = await resolveHostPorts(containerId, internalPorts);
-    const sandbox = new DockerSandbox(containerId, ports, internalPorts);
+    const sandbox = new DockerSandbox(
+      containerId,
+      ports,
+      internalPorts,
+      this.env.DOCKER_SERVICE_TRANSPORT,
+    );
     const maxWaitMs = 30000;
 
     if (hasEntrypointArguments) {
@@ -324,7 +369,7 @@ export class DockerProvider extends SandboxProvider {
     // Return a handle and let operations fail if container doesn't exist
     const internalPorts = [...DAEMON_PORTS.map((d) => d.internalPort), PIDNAP_PORT];
     // Ports will be resolved lazily or on start/restart
-    return new DockerSandbox(providerId, {}, internalPorts);
+    return new DockerSandbox(providerId, {}, internalPorts, this.env.DOCKER_SERVICE_TRANSPORT);
   }
 
   async listSandboxes(): Promise<SandboxInfo[]> {
