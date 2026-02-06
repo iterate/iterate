@@ -421,7 +421,7 @@ export function createLocalDockerProvider(
             const running = await handle.exec([
               "bash",
               "-c",
-              "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
+              "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh|sync-repo-from-git-remote.sh' || true",
             ]);
             if (!running.trim()) break;
             await new Promise((r) => setTimeout(r, 500));

@@ -10,6 +10,8 @@ import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
 // add debug logging by default so that agents always see the message_ts info etc. when they send messages
+// Note: Proxy support comes from NODE_USE_ENV_PROXY=1 which makes Node's http module
+// respect HTTPS_PROXY. This is set in ~/.iterate/.env and loaded via --env-file-if-exists.
 function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");

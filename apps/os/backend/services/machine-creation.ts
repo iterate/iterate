@@ -129,6 +129,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       ITERATE_PROJECT_ID: projectId,
       ITERATE_PROJECT_SLUG: projectSlug,
       ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
+      // When raw secrets mode is enabled, tell pidnap to skip proxy/CA env vars
+      ...(env.DANGEROUS_RAW_SECRETS_ENABLED === "true" ? { ITERATE_SKIP_PROXY: "true" } : {}),
       GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
       GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
     },

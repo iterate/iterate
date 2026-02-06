@@ -10,10 +10,33 @@ const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
 
-const bash = (command: string) => ({
-  command: "bash",
-  args: ["-c", command.trim()],
-});
+// ITERATE_SKIP_PROXY is set by the control plane at machine creation when
+// DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
+// so managed processes connect directly to the internet using system CAs.
+const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
+
+// Proxy and CA env vars for pidnap-managed processes.
+// When skipProxy is true, these are omitted so traffic goes direct.
+// The user's interactive shell gets these from ~/.iterate/.env instead (managed by daemon).
+const proxyEnv: Record<string, string> = skipProxy
+  ? {}
+  : {
+      HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+      HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+      http_proxy: `http://127.0.0.1:${proxyPort}`,
+      https_proxy: `http://127.0.0.1:${proxyPort}`,
+      NO_PROXY: "localhost,127.0.0.1",
+      no_proxy: "localhost,127.0.0.1",
+      SSL_CERT_FILE: caCert,
+      SSL_CERT_DIR: mitmproxyDir,
+      REQUESTS_CA_BUNDLE: caCert,
+      CURL_CA_BUNDLE: caCert,
+      NODE_EXTRA_CA_CERTS: caCert,
+      GIT_SSL_CAINFO: caCert,
+      GITHUB_MAGIC_TOKEN: encodeURIComponent(
+        "getIterateSecret({secretKey: 'github.access_token'})",
+      ),
+    };
 
 export default defineConfig({
   http: {
@@ -25,101 +48,12 @@ export default defineConfig({
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,
     CA_CERT_PATH: caCert,
-    HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
-    HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-    http_proxy: `http://127.0.0.1:${proxyPort}`,
-    https_proxy: `http://127.0.0.1:${proxyPort}`,
-    NO_PROXY: "localhost,127.0.0.1",
-    no_proxy: "localhost,127.0.0.1",
-    SSL_CERT_FILE: caCert,
-    SSL_CERT_DIR: mitmproxyDir,
-    REQUESTS_CA_BUNDLE: caCert,
-    CURL_CA_BUNDLE: caCert,
-    NODE_EXTRA_CA_CERTS: caCert,
-    GIT_SSL_CAINFO: caCert,
-    // Github Stuff (magic token available as env var for non-git use cases)
-    GITHUB_MAGIC_TOKEN: encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})"),
+    ...proxyEnv,
   },
   processes: [
-    // Init tasks (run once, sequential)
-    {
-      name: "task-git-config",
-      definition: bash(
-        `
-          # Use credential helper instead of insteadOf URL credentials.
-          # The insteadOf approach embeds magic strings in the URL, which causes git to use
-          # a 401-challenge flow (two requests) that breaks through the mitmproxy proxy chain.
-          # A credential helper provides credentials directly, avoiding this issue.
-          # The helper script lives in home-skeleton/.git-credential-helper.sh
-          chmod +x ~/.git-credential-helper.sh
-          git config --global credential.helper '!~/.git-credential-helper.sh'
-          # Rewrite git@github.com: SSH URLs to HTTPS so they go through the proxy
-          git config --global "url.https://github.com/.insteadOf" "git@github.com:"
-        `,
-      ),
-      options: { restartPolicy: "never" },
-    },
-    {
-      name: "task-generate-ca",
-      definition: bash(
-        `
-          if [ ! -f "${caCert}" ]; then
-            echo "Generating CA certificate..."
-            mkdir -p "${mitmproxyDir}"
-            mitmdump -p 0 --set confdir="${mitmproxyDir}" &
-            PID=$!
-            sleep 2
-            kill $PID 2>/dev/null || true
-          else
-            echo "CA certificate already exists"
-          fi
-          `,
-      ),
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-git-config"],
-    },
-    {
-      name: "task-install-ca",
-      definition: bash(
-        `
-          if [ -f "${caCert}" ]; then
-            sudo mkdir -p /usr/local/share/ca-certificates/iterate
-            sudo cp "${caCert}" /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt
-            sudo update-ca-certificates
-          fi
-        `,
-      ),
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-generate-ca"],
-    },
-    {
-      name: "task-db-migrate",
-      definition: {
-        command: "pnpm",
-        args: ["db:migrate"],
-        cwd: `${iterateRepo}/apps/daemon`,
-      },
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-install-ca"],
-    },
-    {
-      name: "task-build-daemon-client",
-      definition: {
-        command: "pnpm",
-        args: ["exec", "vite", "build", "--mode", "production"],
-        cwd: `${iterateRepo}/apps/daemon`,
-        env: {
-          NODE_ENV: "production",
-        },
-      },
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-db-migrate"],
-    },
-    // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
       definition: {
@@ -139,9 +73,7 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
-      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-backend",
@@ -157,16 +89,15 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
       envOptions: {
         inheritGlobalEnv: false,
       },
-      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-frontend",
       definition: {
+        // Build is baked into the image.
         command: "pnpm",
         args: ["exec", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"],
         cwd: `${iterateRepo}/apps/daemon`,
@@ -176,12 +107,11 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
       envOptions: {
         inheritGlobalEnv: false,
       },
-      dependsOn: ["task-build-daemon-client"],
+      dependsOn: ["daemon-backend"],
     },
     {
       name: "opencode",
@@ -200,13 +130,12 @@ export default defineConfig({
         ],
       },
       envOptions: {
+        // TODO: confirm why opencode needs a lower env reload delay than default.
         reloadDelay: 500,
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
-      dependsOn: ["task-build-daemon-client"],
     },
   ],
 });
