@@ -1,0 +1,12 @@
+[user]
+  name = iterate
+  email = 233973017+iterate[bot]@users.noreply.github.com
+
+[credential]
+  # Use helper to avoid URL-embedded credentials (401 challenge breaks proxy chain).
+  # Helper returns a magic string; egress proxy swaps in real token.
+  helper = !~/.iterate/bin/iterate-git-credential-helper
+
+[url "https://github.com/"]
+  # Rewrite SSH-style GitHub URLs to HTTPS so they go through proxy.
+  insteadOf = git@github.com:

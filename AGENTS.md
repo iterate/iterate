@@ -10,6 +10,10 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
 Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
 
+## Git
+
+- PR descriptions: only add `Testing`/`Validation` when non-standard human/manual steps were done/are needed. Skip trivial stuff (e.g. `pnpm test`).
+
 ## Environment variables (Doppler)
 
 We use [Doppler](https://doppler.com) for secrets management. Configs: `dev`, `stg`, `prd`.
