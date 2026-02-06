@@ -8,7 +8,7 @@ function toErrorMessage(error: unknown): string {
 
 export async function withSpan<T>(
   name: string,
-  options: { attributes?: Attributes } = {},
+  options: { attributes?: Attributes },
   fn: (span: Span) => Promise<T>,
 ): Promise<T> {
   return tracer.startActiveSpan(name, { attributes: options.attributes }, async (span) => {
