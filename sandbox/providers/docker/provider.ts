@@ -31,7 +31,8 @@ const DEFAULT_REPO_ROOT = join(__dirname, "../../..");
 
 const PIDNAP_PORT = 9876;
 const LIFECYCLE_TIMEOUT_MS = 120_000;
-const TUNNEL_URL_TIMEOUT_MS = 60_000;
+const TUNNEL_URL_TIMEOUT_MS = 120_000;
+const TUNNEL_RATE_LIMIT_MARKER = "__CLOUDFLARE_TUNNEL_RATE_LIMIT__";
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -95,22 +96,52 @@ export class DockerSandbox extends Sandbox {
     const start = Date.now();
     while (Date.now() - start < TUNNEL_URL_TIMEOUT_MS) {
       try {
-        const url = (
+        const urlOrMarker = (
           await execInContainer(this.providerId, [
             "sh",
             "-c",
-            `cat /tmp/cloudflare-tunnels/${port}.url 2>/dev/null || true`,
+            `set -eu
+              log_file="/var/log/pidnap/cloudflared-${port}.log"
+              url="$(cat /tmp/cloudflare-tunnels/${port}.url 2>/dev/null || true)"
+              if [ -z "$url" ]; then
+                url="$(grep -Eo 'https://[[:alnum:]-]+\\.trycloudflare\\.com' "$log_file" 2>/dev/null | tail -n 1 || true)"
+              fi
+              if [ -z "$url" ] && [ -f "$log_file" ] && grep -Eq '429 Too Many Requests|error code: 1015' "$log_file"; then
+                printf '%s' "${TUNNEL_RATE_LIMIT_MARKER}"
+              else
+                printf '%s' "$url"
+              fi`,
           ])
         ).trim();
-        if (url.startsWith("https://")) {
-          return url;
+        if (urlOrMarker === TUNNEL_RATE_LIMIT_MARKER) {
+          const logTail = await execInContainer(this.providerId, [
+            "sh",
+            "-c",
+            `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`,
+          ]).catch(() => "");
+          throw new Error(`Cloudflare quick tunnel rate-limited for port ${port}.\n${logTail}`);
         }
-      } catch {
+
+        if (urlOrMarker.startsWith("https://")) {
+          return urlOrMarker;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("rate-limited")) {
+          throw error;
+        }
         // Container may still be starting.
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(`Timeout waiting for Cloudflare tunnel URL for port ${port}`);
+    const logTail = await execInContainer(this.providerId, [
+      "sh",
+      "-c",
+      `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`,
+    ]).catch(() => "");
+    throw new Error(
+      `Timeout waiting for Cloudflare tunnel URL for port ${port}. cloudflared log:\n${logTail}`,
+    );
   }
 
   async getPreviewUrl(opts: { port: number }): Promise<string> {

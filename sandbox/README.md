@@ -132,6 +132,8 @@ pnpm sandbox test:docker
 RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
   RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS=true \
   pnpm sandbox test --run providers/docker/cloudflare-tunnel.test.ts
+# Optional: REQUIRE_CLOUDFLARE_TUNNEL_TEST_SUCCESS=true to fail instead of
+# soft-skipping when Cloudflare quick tunnels are rate-limited (HTTP 429/1015).
 
 # Daytona provider (requires Doppler secrets)
 doppler run -- pnpm sandbox test:daytona

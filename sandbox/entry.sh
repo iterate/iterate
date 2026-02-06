@@ -15,7 +15,7 @@ fi
 touch /tmp/reached-entrypoint
 
 if [[ "${DOCKER_SERVICE_TRANSPORT:-port-map}" == "cloudflare-tunnel" ]]; then
-  bash "${ITERATE_REPO}/sandbox/providers/docker/start-cloudflare-tunnels.sh"
+  bash "${ITERATE_REPO}/sandbox/providers/docker/start-cloudflare-tunnels.sh" >/tmp/cloudflare-tunnels-bootstrap.log 2>&1 &
 fi
 
 # Allow overriding entrypoint args in two ways:
