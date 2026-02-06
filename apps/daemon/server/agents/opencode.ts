@@ -34,7 +34,6 @@ const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 // Polling config for session readiness
 const READINESS_POLL_INTERVAL_MS = 200;
 const READINESS_TIMEOUT_MS = 10000;
-const IDLE_WAIT_TIMEOUT_MS = 60000;
 const eventTracer = trace.getTracer("iterate.daemon.opencode.events");
 
 function createClient(params: { directory: string }): OpencodeClient {
@@ -165,16 +164,6 @@ export const opencodeHarness: AgentHarness = {
             });
           },
         );
-
-        await withSpan(
-          "daemon.opencode.wait_for_idle",
-          {
-            attributes: {
-              "opencode.session_id": harnessSessionId,
-            },
-          },
-          async () => waitForSessionIdle(harnessSessionId),
-        );
       },
     );
   },
@@ -197,14 +186,12 @@ export const opencodeHarness: AgentHarness = {
 
 interface SessionTracking {
   sessionId: string;
-  unacknowledge: () => Promise<void>;
+  unacknowledgeCallbacks: Array<() => Promise<void>>;
   workingDirectory: string;
   startedAtMs: number;
   firstBusyAtMs?: number;
   firstAssistantMessageAtMs?: number;
   firstPartAtMs?: number;
-  idlePromise: Promise<void>;
-  resolveIdle: () => void;
   activePhase?: {
     kind: string;
     startedAtMs: number;
@@ -219,66 +206,14 @@ const trackedSessions = new Map<string, SessionTracking>();
 // Event subscription state
 let subscriptionActive = false;
 
-function summarizeEvent(event: OpencodeRuntimeEvent): Record<string, unknown> {
-  const props = event.properties as Record<string, unknown>;
-  return {
-    type: event.type,
-    sessionId:
-      (typeof props?.sessionID === "string" && props.sessionID) ||
-      (typeof props?.sessionId === "string" && props.sessionId) ||
-      null,
-    status:
-      props?.status && typeof props.status === "object"
-        ? ((props.status as { type?: unknown }).type ?? null)
-        : null,
-    propertyKeys: props ? Object.keys(props).slice(0, 10) : [],
-  };
-}
-
 function getTrackedSession(sessionId: string): SessionTracking | undefined {
   return trackedSessions.get(sessionId);
-}
-
-function getIdlePromise(sessionId: string): Promise<void> | undefined {
-  return getTrackedSession(sessionId)?.idlePromise;
 }
 
 function setTrackedSessionParentContext(sessionId: string, parentContext: Context): void {
   const tracking = getTrackedSession(sessionId);
   if (!tracking) return;
   tracking.parentContext = parentContext;
-}
-
-async function waitForSessionIdle(
-  sessionId: string,
-  timeoutMs = IDLE_WAIT_TIMEOUT_MS,
-): Promise<void> {
-  const idlePromise = getIdlePromise(sessionId);
-  if (!idlePromise) return;
-
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const timeoutId = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      logger.warn("[opencode] Timed out waiting for session idle", { sessionId, timeoutMs });
-      resolve();
-    }, timeoutMs);
-
-    idlePromise
-      .then(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        resolve();
-      })
-      .catch(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        resolve();
-      });
-  });
 }
 
 function endActivePhase(tracking: SessionTracking, reason: string): void {
@@ -348,12 +283,13 @@ async function stopTracking(sessionId: string): Promise<void> {
     trackedSessionCount: trackedSessions.size,
   });
   endActivePhase(tracking, "session_stopped");
-  tracking.resolveIdle();
 
-  try {
-    await tracking.unacknowledge();
-  } catch (error) {
-    logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
+  for (const unacknowledge of tracking.unacknowledgeCallbacks) {
+    try {
+      await unacknowledge();
+    } catch (error) {
+      logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
+    }
   }
 }
 
@@ -441,6 +377,9 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
       tracking.activePhase.span.setStatus({ code: SpanStatusCode.ERROR, message: "session.error" });
       endActivePhase(tracking, "session_error");
     }
+    if (sessionId) {
+      void stopTracking(sessionId);
+    }
   }
 
   if (event.type === "session.idle" && tracking && sessionId) {
@@ -457,7 +396,6 @@ async function processEvents(stream: AsyncGenerator<OpencodeRuntimeEvent>): Prom
 
   for await (const event of stream) {
     try {
-      logger.log("[opencode] Event emitted", summarizeEvent(event));
       handleEvent(event);
     } catch (error) {
       logger.error(`[opencode] Error handling event:`, error);
@@ -465,6 +403,11 @@ async function processEvents(stream: AsyncGenerator<OpencodeRuntimeEvent>): Prom
   }
 
   logger.log(`[opencode] Event subscription ended`);
+  const trackedSessionIds = [...trackedSessions.keys()];
+  for (const sessionId of trackedSessionIds) {
+    logger.warn("[opencode] Cleaning up tracked session after subscription ended", { sessionId });
+    await stopTracking(sessionId);
+  }
   subscriptionActive = false;
 }
 
@@ -504,21 +447,23 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     logger.error(`[opencode] Error calling acknowledge for session ${sessionId}:`, error);
   }
 
-  let resolveIdle = () => {};
-  const idlePromise = new Promise<void>((resolve) => {
-    resolveIdle = resolve;
-  });
-
-  // Store tracking info
-  trackedSessions.set(sessionId, {
-    sessionId,
-    unacknowledge: params.unacknowledge,
-    workingDirectory: params.workingDirectory,
-    startedAtMs: Date.now(),
-    idlePromise,
-    resolveIdle,
-    parentContext: context.active(),
-  });
+  const existing = trackedSessions.get(sessionId);
+  if (existing) {
+    existing.unacknowledgeCallbacks.push(params.unacknowledge);
+    existing.workingDirectory = params.workingDirectory;
+    existing.parentContext = context.active();
+    logger.log(`[opencode] Updated tracking session ${sessionId}`, {
+      unackCount: existing.unacknowledgeCallbacks.length,
+    });
+  } else {
+    trackedSessions.set(sessionId, {
+      sessionId,
+      unacknowledgeCallbacks: [params.unacknowledge],
+      workingDirectory: params.workingDirectory,
+      startedAtMs: Date.now(),
+      parentContext: context.active(),
+    });
+  }
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
 
