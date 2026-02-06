@@ -4,7 +4,12 @@
  * Uses @opencode-ai/sdk to manage sessions and send messages.
  */
 
-import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk/v2";
+import {
+  createOpencodeClient,
+  type OpencodeClient,
+  type Session,
+  type Event as OpencodeRuntimeEvent,
+} from "@opencode-ai/sdk/v2";
 import { getConfig } from "../config-loader.ts";
 import { withSpan } from "../utils/otel.ts";
 import type {
@@ -28,6 +33,7 @@ const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 // Polling config for session readiness
 const READINESS_POLL_INTERVAL_MS = 200;
 const READINESS_TIMEOUT_MS = 10000;
+const IDLE_WAIT_TIMEOUT_MS = 60000;
 
 function createClient(params: { directory: string }): OpencodeClient {
   return createOpencodeClient({
@@ -43,11 +49,7 @@ async function waitForSessionReady(
 ): Promise<void> {
   await withSpan(
     "daemon.opencode.wait_for_session_ready",
-    {
-      attributes: {
-        "opencode.session_id": sessionId,
-      },
-    },
+    { attributes: { "opencode.session_id": sessionId } },
     async (span) => {
       const startTime = Date.now();
       let pollCount = 0;
@@ -159,6 +161,16 @@ export const opencodeHarness: AgentHarness = {
               ...(config.defaultModel && { model: config.defaultModel }),
             }),
         );
+
+        await withSpan(
+          "daemon.opencode.wait_for_idle",
+          {
+            attributes: {
+              "opencode.session_id": harnessSessionId,
+            },
+          },
+          async () => waitForSessionIdle(harnessSessionId),
+        );
       },
     );
   },
@@ -184,6 +196,11 @@ interface SessionTracking {
   unacknowledge: () => Promise<void>;
   workingDirectory: string;
   startedAtMs: number;
+  firstBusyAtMs?: number;
+  firstAssistantMessageAtMs?: number;
+  firstPartAtMs?: number;
+  idlePromise: Promise<void>;
+  resolveIdle: () => void;
 }
 
 // Track active sessions and their callbacks
@@ -192,17 +209,10 @@ const trackedSessions = new Map<string, SessionTracking>();
 // Event subscription state
 let subscriptionActive = false;
 
-function summarizeEvent(event: unknown): Record<string, unknown> {
-  if (!event || typeof event !== "object") return { rawType: typeof event };
-
-  const evt = event as { type?: unknown; properties?: unknown };
-  const props =
-    evt.properties && typeof evt.properties === "object"
-      ? (evt.properties as Record<string, unknown>)
-      : undefined;
-
+function summarizeEvent(event: OpencodeRuntimeEvent): Record<string, unknown> {
+  const props = event.properties as Record<string, unknown>;
   return {
-    type: typeof evt.type === "string" ? evt.type : "unknown",
+    type: event.type,
     sessionId:
       (typeof props?.sessionID === "string" && props.sessionID) ||
       (typeof props?.sessionId === "string" && props.sessionId) ||
@@ -213,6 +223,48 @@ function summarizeEvent(event: unknown): Record<string, unknown> {
         : null,
     propertyKeys: props ? Object.keys(props).slice(0, 10) : [],
   };
+}
+
+function getTrackedSession(sessionId: string): SessionTracking | undefined {
+  return trackedSessions.get(sessionId);
+}
+
+function getIdlePromise(sessionId: string): Promise<void> | undefined {
+  return getTrackedSession(sessionId)?.idlePromise;
+}
+
+async function waitForSessionIdle(
+  sessionId: string,
+  timeoutMs = IDLE_WAIT_TIMEOUT_MS,
+): Promise<void> {
+  const idlePromise = getIdlePromise(sessionId);
+  if (!idlePromise) return;
+
+  await Promise.race([
+    idlePromise,
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        logger.warn("[opencode] Timed out waiting for session idle", { sessionId, timeoutMs });
+        resolve();
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+function getSessionIdFromEvent(event: OpencodeRuntimeEvent): string | undefined {
+  switch (event.type) {
+    case "session.status":
+    case "session.idle":
+      return event.properties.sessionID;
+    case "message.updated":
+      return event.properties.info.sessionID;
+    case "message.part.updated":
+      return event.properties.part.sessionID;
+    case "session.error":
+      return event.properties.sessionID;
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -229,6 +281,7 @@ async function stopTracking(sessionId: string): Promise<void> {
     elapsedMs,
     trackedSessionCount: trackedSessions.size,
   });
+  tracking.resolveIdle();
 
   try {
     await tracking.unacknowledge();
@@ -241,41 +294,73 @@ async function stopTracking(sessionId: string): Promise<void> {
  * Handle a single event from opencode.
  * Events come directly as { type, properties } objects (not wrapped in GlobalEvent).
  */
-function handleEvent(event: unknown): void {
-  if (!event || typeof event !== "object") return;
+function handleEvent(event: OpencodeRuntimeEvent): void {
+  const sessionId = getSessionIdFromEvent(event);
+  const tracking = sessionId ? getTrackedSession(sessionId) : undefined;
 
-  // Events are { type: string, properties: { ... } }
-  const evt = event as { type?: string; properties?: unknown };
-  const eventType = evt.type;
-  if (!eventType) return;
-
-  // Handle session.idle events - this fires when the agent finishes its turn
-  if (eventType === "session.idle") {
-    const props = evt.properties as { sessionID?: string } | undefined;
-    if (props?.sessionID && trackedSessions.has(props.sessionID)) {
-      logger.log(`[opencode] Session ${props.sessionID} became idle`);
-      stopTracking(props.sessionID);
+  if (event.type === "session.status" && tracking) {
+    const statusType = event.properties.status.type;
+    if (statusType === "busy" && !tracking.firstBusyAtMs) {
+      tracking.firstBusyAtMs = Date.now();
+      logger.log("[opencode] First busy status", {
+        sessionId,
+        elapsedMs: tracking.firstBusyAtMs - tracking.startedAtMs,
+      });
+    }
+    if (statusType === "retry") {
+      logger.warn("[opencode] Retry status", {
+        sessionId,
+        attempt: event.properties.status.attempt,
+        message: event.properties.status.message,
+        nextMs: event.properties.status.next,
+      });
+    }
+    if (statusType === "idle") {
+      logger.log(`[opencode] Session ${sessionId} status changed to idle`);
+      if (sessionId) {
+        void stopTracking(sessionId);
+      }
     }
   }
 
-  // Also handle session.status with type: idle
-  if (eventType === "session.status") {
-    const props = evt.properties as { sessionID?: string; status?: { type?: string } } | undefined;
-    if (
-      props?.sessionID &&
-      props?.status?.type === "idle" &&
-      trackedSessions.has(props.sessionID)
-    ) {
-      logger.log(`[opencode] Session ${props.sessionID} status changed to idle`);
-      stopTracking(props.sessionID);
+  if (event.type === "message.updated" && tracking && event.properties.info.role === "assistant") {
+    if (!tracking.firstAssistantMessageAtMs) {
+      tracking.firstAssistantMessageAtMs = Date.now();
+      logger.log("[opencode] First assistant message", {
+        sessionId,
+        elapsedMs: tracking.firstAssistantMessageAtMs - tracking.startedAtMs,
+      });
     }
+  }
+
+  if (event.type === "message.part.updated" && tracking) {
+    if (!tracking.firstPartAtMs) {
+      tracking.firstPartAtMs = Date.now();
+      logger.log("[opencode] First message part", {
+        sessionId,
+        partType: event.properties.part.type,
+        elapsedMs: tracking.firstPartAtMs - tracking.startedAtMs,
+      });
+    }
+  }
+
+  if (event.type === "session.error") {
+    logger.error("[opencode] Session error event", {
+      sessionId: event.properties.sessionID ?? null,
+      error: event.properties.error,
+    });
+  }
+
+  if (event.type === "session.idle" && tracking && sessionId) {
+    logger.log(`[opencode] Session ${sessionId} became idle`);
+    void stopTracking(sessionId);
   }
 }
 
 /**
  * Process incoming events from opencode.
  */
-async function processEvents(stream: AsyncGenerator<unknown>): Promise<void> {
+async function processEvents(stream: AsyncGenerator<OpencodeRuntimeEvent>): Promise<void> {
   logger.log(`[opencode] Event subscription started`);
 
   for await (const event of stream) {
@@ -305,7 +390,7 @@ async function ensureEventSubscription(workingDirectory: string): Promise<void> 
     const subscription = await client.event.subscribe();
 
     // Process events in background using the stream property
-    processEvents(subscription.stream).catch((error) => {
+    processEvents(subscription.stream as AsyncGenerator<OpencodeRuntimeEvent>).catch((error) => {
       logger.error(`[opencode] Event processing error:`, error);
       subscriptionActive = false;
     });
@@ -327,12 +412,19 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     logger.error(`[opencode] Error calling acknowledge for session ${sessionId}:`, error);
   }
 
+  let resolveIdle = () => {};
+  const idlePromise = new Promise<void>((resolve) => {
+    resolveIdle = resolve;
+  });
+
   // Store tracking info
   trackedSessions.set(sessionId, {
     sessionId,
     unacknowledge: params.unacknowledge,
     workingDirectory: params.workingDirectory,
     startedAtMs: Date.now(),
+    idlePromise,
+    resolveIdle,
   });
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
