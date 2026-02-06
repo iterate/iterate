@@ -18,7 +18,7 @@ We should be able to run full Playwright-based spec tests against the daemon app
 
 ## Current State
 
-- `apps/os/sandbox/local-docker.test.ts` has basic integration tests that verify the Docker container works (s6, iterate-daemon, PTY endpoints)
+- `apps/os/sandbox/test/daemon-in-sandbox.test.ts` and `sandbox-without-daemon.test.ts` have basic integration tests that verify the Docker container works (s6, iterate-daemon, PTY endpoints)
 - These tests use `expect.poll()` and direct HTTP/WebSocket calls rather than Playwright
 - No proper Playwright spec tests exist for the daemon UI
 
@@ -34,7 +34,7 @@ We should be able to run full Playwright-based spec tests against the daemon app
 
 3. Consider whether to:
    - Add a new `spec/daemon/` directory similar to `spec/`
-   - Or extend the existing `apps/os/sandbox/local-docker.test.ts` with Playwright
+   - Or extend the existing `apps/os/sandbox/test/` tests with Playwright
 
 ## Implementation Notes
 
@@ -46,6 +46,6 @@ We should be able to run full Playwright-based spec tests against the daemon app
 ## Related Files
 
 - `apps/daemon/` - The daemon app
-- `apps/os/sandbox/local-docker.test.ts` - Existing integration tests
+- `apps/os/sandbox/test/` - Existing integration tests
 - `apps/os/sandbox/Dockerfile` - Container image definition
 - `spec/` - Existing spec test infrastructure

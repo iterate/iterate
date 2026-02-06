@@ -33,7 +33,8 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64)",
+          description:
+            "Build platform (linux/amd64 or linux/arm64). Auto-detects from runner if empty.",
           required: false,
           type: "string",
           default: "",
@@ -56,7 +57,8 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64). Auto-detects if empty.",
+          description:
+            "Build platform (linux/amd64 or linux/arm64). Auto-detects from runner if empty.",
           required: false,
           type: "string",
           default: "",
@@ -78,8 +80,8 @@ export default workflow({
   },
   jobs: {
     "build-and-test": {
-      // Run on AMD64 to match Daytona snapshot builds and maximize shared Depot cache hits.
-      ...utils.runsOnFastStartingUbuntuLatest,
+      // Container build/test workflow should run on Depot builders.
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         test_result: "${{ steps.test.outcome }}",
       },
@@ -117,8 +119,8 @@ export default workflow({
           name: "Build Docker image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            // Default to AMD64 to share cache with Daytona snapshot builds.
-            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ inputs.docker_platform || (runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64') }}",
             // Avoid builder -> runner --load transfer: save image to Depot Registry first.
             SANDBOX_USE_DEPOT_REGISTRY: "true",
             SANDBOX_DEPOT_SAVE_TAG:
@@ -135,6 +137,8 @@ export default workflow({
           name: "Pull Docker image from Depot Registry",
           env: {
             IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
+            PULL_PLATFORM:
+              "${{ inputs.docker_platform || (runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64') }}",
           },
           run: [
             "echo '::group::Pull timing'",
@@ -146,7 +150,7 @@ export default workflow({
             '  echo "Missing Depot registry metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
-            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            'time depot pull --platform "$PULL_PLATFORM" --project "$depot_project_id" "$depot_save_tag"',
             'docker image inspect "$image_ref" > /dev/null',
             'docker tag "$image_ref" "$IMAGE_NAME"',
             "echo 'Pulled image: $image_ref'",

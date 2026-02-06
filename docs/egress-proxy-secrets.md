@@ -29,7 +29,7 @@ Git auth uses a credential helper that returns the magic string (set in `apps/os
 # ~/.git-credential-helper.sh
 #!/bin/bash
 echo "username=x-access-token"
-echo "password=getIterateSecret({secretKey: 'github.access_token'})"
+echo "password=$GITHUB_ACCESS_TOKEN"
 
 # ~/.gitconfig
 [credential]

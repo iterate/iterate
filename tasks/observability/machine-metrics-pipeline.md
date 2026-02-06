@@ -7,8 +7,6 @@ tags:
   - metrics
   - cloudflare
   - pidnap
-dependsOn:
-  - pidnap-unify-processes-and-tasks
 ---
 
 # Machine Metrics Pipeline: Daemon to Cloudflare Analytics Engine
@@ -193,7 +191,7 @@ interface MachineMetricsDataPoint {
 
 ### Phase 3: pidnap Timing Instrumentation
 
-Depends on `pidnap-unify-processes-and-tasks` for unified process abstraction.
+Requires pidnap timing instrumentation (unified process abstraction is complete).
 
 1. Add timing data to process state:
 
@@ -320,9 +318,8 @@ Depends on `pidnap-unify-processes-and-tasks` for unified process abstraction.
 
 ## Related Tasks
 
-- `machine-health-metrics-clickhouse.md` - Original task (this supersedes/expands it)
 - `machine-monitoring-durable-objects.md` - DO-based health monitoring (complementary)
-- `pidnap-unify-processes-and-tasks.md` - Required for timing instrumentation
+- `cloudflare-analytics-to-posthog-sync.md` - Downstream sync to PostHog (depends on this)
 
 ## Files to Modify
 

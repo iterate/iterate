@@ -5,7 +5,8 @@ export * from "./github-script.ts";
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],
 };
-export const runsOnFastStartingUbuntuLatest = {
+/** use this only for jobs that do not use containers at all */
+export const runsOnGithubUbuntuStartsFastButNoContainers = {
   "runs-on": "ubuntu-24.04",
 };
 
