@@ -22,6 +22,7 @@ type RunnerConfig = {
   artifactDir: string;
   app: string;
   backend: "fly" | "docker";
+  mitmImpl: "go" | "dump";
   cleanupOnExit: boolean;
   org: string;
   region: string;
@@ -85,6 +86,8 @@ function buildConfig(): RunnerConfig {
   const flyDir = findFlyDir();
   const backendEnv = process.env["E2E_BACKEND"] ?? "fly";
   const backend = backendEnv === "docker" ? "docker" : "fly";
+  const mitmImplEnv = process.env["MITM_IMPL"] ?? "go";
+  const mitmImpl = mitmImplEnv === "dump" ? "dump" : "go";
   const app = process.env["APP_NAME"] ?? `iterate-node-egress-obsv-${nowTag()}`;
   const org = process.env["FLY_ORG"] ?? "iterate";
   const region = process.env["FLY_REGION"] ?? "iad";
@@ -100,6 +103,7 @@ function buildConfig(): RunnerConfig {
     artifactDir,
     app,
     backend,
+    mitmImpl,
     cleanupOnExit,
     org,
     region,
@@ -316,6 +320,7 @@ async function main(): Promise<void> {
   run("jq", ["--version"]);
   run("dig", ["+short", "example.com"]);
   log(`Runtime image: ${config.runtimeImage}`);
+  log(`MITM impl: ${config.mitmImpl}`);
 
   log(`Creating app: ${config.app} (org=${config.org} region=${config.region})`);
   const appCreate = run("flyctl", ["apps", "create", config.app, "-o", config.org, "-y"], { env });
@@ -346,6 +351,8 @@ async function main(): Promise<void> {
       "1024",
       "-e",
       `PROOF_REGION=${config.region}`,
+      "-e",
+      `MITM_IMPL=${config.mitmImpl}`,
     ],
     { env },
   );
@@ -361,7 +368,7 @@ async function main(): Promise<void> {
   writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
   log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
 
-  log("Launching sandbox machine with CA trust + proxy env");
+  log("Launching sandbox machine with CA trust + egress wiring");
   const sandboxRun = run(
     "flyctl",
     [
@@ -385,6 +392,8 @@ async function main(): Promise<void> {
       `PROOF_REGION=${config.region}`,
       "-e",
       `EGRESS_PROXY_HOST=${egressHost}`,
+      "-e",
+      `MITM_IMPL=${config.mitmImpl}`,
       "-e",
       "EGRESS_MITM_PORT=18080",
       "-e",

@@ -7,8 +7,10 @@ TUNNEL_URL_FILE="/tmp/egress-viewer-tunnel-url.txt"
 MITM_LOG="${EGRESS_LOG_PATH:-/tmp/egress-proxy.log}"
 MITM_PORT="${EGRESS_MITM_PORT:-18080}"
 VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
+FORWARD_PORT="${EGRESS_FORWARD_PORT:-18082}"
 TRANSFORM_URL="${TRANSFORM_URL:-http://127.0.0.1:${VIEWER_PORT}/transform}"
 MITM_DIR="${MITM_DIR:-/data/mitm}"
+MITM_IMPL="${MITM_IMPL:-go}"
 APP_DIR="/proof/egress-proxy"
 
 log() {
@@ -52,11 +54,6 @@ wait_for_tunnel_url() {
 : >"$MITM_LOG"
 log "START host=$(hostname) region=${PROOF_REGION:-unknown}"
 
-if [ ! -x "/usr/local/bin/fly-mitm" ]; then
-  log "ERROR missing_mitm_binary path=/usr/local/bin/fly-mitm"
-  tail -f /dev/null
-fi
-
 if ! command -v bun >/dev/null 2>&1; then
   log "ERROR bun_not_found"
   tail -f /dev/null
@@ -67,6 +64,14 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 if ! command -v openssl >/dev/null 2>&1; then
   log "ERROR openssl_not_found"
+  tail -f /dev/null
+fi
+if [ "$MITM_IMPL" = "go" ] && [ ! -x "/usr/local/bin/fly-mitm" ]; then
+  log "ERROR missing_mitm_binary path=/usr/local/bin/fly-mitm"
+  tail -f /dev/null
+fi
+if [ "$MITM_IMPL" = "dump" ] && ! command -v mitmdump >/dev/null 2>&1; then
+  log "ERROR mitmdump_not_found"
   tail -f /dev/null
 fi
 bun --version >>"$INIT_LOG" 2>&1 || true
@@ -82,26 +87,41 @@ fi
 
 EGRESS_LOG_PATH="$MITM_LOG" \
 EGRESS_VIEWER_PORT="$VIEWER_PORT" \
+EGRESS_FORWARD_PORT="$FORWARD_PORT" \
 MITM_CA_CERT_PATH="$MITM_DIR/ca.crt" \
 PROOF_PREFIX="${PROOF_PREFIX:-__ITERATE_MITM_PROOF__\\n}" \
 bun run "$APP_DIR/server.ts" >>"$INIT_LOG" 2>&1 &
 VIEWER_PID="$!"
 log "viewer_pid=$VIEWER_PID"
 
-/usr/local/bin/fly-mitm \
-  --listen ":${MITM_PORT}" \
-  --transform-url "$TRANSFORM_URL" \
-  --ca-cert "$MITM_DIR/ca.crt" \
-  --ca-key "$MITM_DIR/ca.key" \
-  --log "$MITM_LOG" >>"$INIT_LOG" 2>&1 &
+if [ "$MITM_IMPL" = "go" ]; then
+  MITM_PORT="$MITM_PORT" \
+  TRANSFORM_URL="$TRANSFORM_URL" \
+  MITM_CA_CERT="$MITM_DIR/ca.crt" \
+  MITM_CA_KEY="$MITM_DIR/ca.key" \
+  MITM_LOG="$MITM_LOG" \
+  bash /proof/mitm-go/start.sh >>"$INIT_LOG" 2>&1 &
+elif [ "$MITM_IMPL" = "dump" ]; then
+  MITM_PORT="$MITM_PORT" \
+  FORWARD_PORT="$FORWARD_PORT" \
+  MITM_DIR="$MITM_DIR" \
+  bash /proof/mitm-dump/start.sh >>"$INIT_LOG" 2>&1 &
+else
+  log "ERROR invalid_mitm_impl value=$MITM_IMPL expected=go|dump"
+  tail -f /dev/null
+fi
 MITM_PID="$!"
-log "mitm_pid=$MITM_PID"
+log "mitm_pid=$MITM_PID mitm_impl=$MITM_IMPL"
 
 for attempt in $(seq 1 60); do
   viewer_ok="0"
   mitm_ok="0"
   if curl -fsS --max-time 2 "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1; then viewer_ok="1"; fi
-  if curl -fsS --max-time 2 "http://127.0.0.1:${MITM_PORT}/healthz" >/dev/null 2>&1; then mitm_ok="1"; fi
+  if [ "$MITM_IMPL" = "go" ]; then
+    if curl -fsS --max-time 2 "http://127.0.0.1:${MITM_PORT}/healthz" >/dev/null 2>&1; then mitm_ok="1"; fi
+  else
+    if curl -sS --max-time 2 "http://127.0.0.1:${MITM_PORT}" >/dev/null 2>&1; then mitm_ok="1"; fi
+  fi
 
   if [ "$viewer_ok" = "1" ] && [ "$mitm_ok" = "1" ]; then
     log "services_health=ok"

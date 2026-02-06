@@ -28,6 +28,12 @@ type NetworkPlan = {
   egressTunnelIp: string;
 };
 
+type PublishedPorts = {
+  sandboxHostPort: number | null;
+  egressViewerHostPort: number | null;
+  upstreamHostPort: number | null;
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -104,11 +110,57 @@ function dockerCompose(
   return run("docker", ["compose", "-f", composeFile, "-p", project, ...args], options);
 }
 
+function parsePublishedPort(output: string): number | null {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  for (const line of lines) {
+    const match = line.match(/:(\d+)\s*$/);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+  }
+  return null;
+}
+
+function discoverPublishedPort(
+  composeFile: string,
+  project: string,
+  service: string,
+  containerPort: number,
+  env: NodeJS.ProcessEnv,
+): number | null {
+  const result = dockerCompose(composeFile, project, ["port", service, String(containerPort)], {
+    env,
+    allowFailure: true,
+  });
+  if (result.status !== 0) return null;
+  return parsePublishedPort(`${result.stdout}\n${result.stderr}`);
+}
+
+function discoverPublishedPorts(
+  composeFile: string,
+  project: string,
+  env: NodeJS.ProcessEnv,
+): PublishedPorts {
+  return {
+    sandboxHostPort: discoverPublishedPort(composeFile, project, "sandbox-ui", 8080, env),
+    egressViewerHostPort: discoverPublishedPort(composeFile, project, "egress-proxy", 18081, env),
+    upstreamHostPort: discoverPublishedPort(composeFile, project, "public-http", 18090, env),
+  };
+}
+
 async function waitForHealthChecks(
   composeFile: string,
   project: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const mitmImpl = env["MITM_IMPL"] === "dump" ? "dump" : "go";
+  const egressHealthCmd =
+    mitmImpl === "go"
+      ? "curl -fsS --max-time 2 http://127.0.0.1:18081/healthz >/dev/null && curl -fsS --max-time 2 http://127.0.0.1:18080/healthz >/dev/null"
+      : "curl -fsS --max-time 2 http://127.0.0.1:18081/healthz >/dev/null && curl -sS --max-time 2 http://127.0.0.1:18080 >/dev/null";
   for (let attempt = 1; attempt <= 120; attempt += 1) {
     if (attempt % 3 === 0) {
       const ps = dockerCompose(composeFile, project, ["ps", "-a", "--format", "json"], {
@@ -145,14 +197,7 @@ async function waitForHealthChecks(
     const egress = dockerCompose(
       composeFile,
       project,
-      [
-        "exec",
-        "-T",
-        "egress-proxy",
-        "sh",
-        "-lc",
-        "curl -fsS --max-time 2 http://127.0.0.1:18081/healthz >/dev/null && curl -fsS --max-time 2 http://127.0.0.1:18080/healthz >/dev/null",
-      ],
+      ["exec", "-T", "egress-proxy", "sh", "-lc", egressHealthCmd],
       { env, allowFailure: true },
     );
     const sandbox = dockerCompose(
@@ -359,6 +404,9 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
   const network = buildNetworkPlan(project);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    SANDBOX_HOST_PORT: process.env["SANDBOX_HOST_PORT"] ?? "0",
+    EGRESS_VIEWER_HOST_PORT: process.env["EGRESS_VIEWER_HOST_PORT"] ?? "0",
+    UPSTREAM_HOST_PORT: process.env["UPSTREAM_HOST_PORT"] ?? "0",
     TARGET_URL: config.targetUrl,
     FLY_TEST_SUBNET_CIDR: network.subnetCidr,
     EGRESS_GATEWAY_IP: network.gatewayIp,
@@ -368,11 +416,13 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
     SANDBOX_TUNNEL_IP: network.sandboxTunnelIp,
     EGRESS_TUNNEL_IP: network.egressTunnelIp,
   };
+  const mitmImpl = env["MITM_IMPL"] === "dump" ? "dump" : "go";
 
   let shouldCleanup = config.cleanupOnExit;
   try {
     log(`Starting docker compose stack: project=${project}`);
     log(`Docker subnet: ${network.subnetCidr}`);
+    log(`MITM impl: ${mitmImpl}`);
     const up = dockerCompose(composeFile, project, ["up", "-d", "--build"], {
       env,
       allowFailure: true,
@@ -396,6 +446,21 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
           .filter((line) => line.length > 0)
           .join("\\n"),
       );
+    }
+
+    const publishedPorts = discoverPublishedPorts(composeFile, project, env);
+    writeFileSync(
+      join(config.artifactDir, "published-host-ports.json"),
+      `${JSON.stringify(publishedPorts, null, 2)}\n`,
+    );
+    if (publishedPorts.sandboxHostPort !== null) {
+      log(`Sandbox local URL: http://127.0.0.1:${publishedPorts.sandboxHostPort}`);
+    }
+    if (publishedPorts.egressViewerHostPort !== null) {
+      log(`Egress viewer local URL: http://127.0.0.1:${publishedPorts.egressViewerHostPort}`);
+    }
+    if (publishedPorts.upstreamHostPort !== null) {
+      log(`Upstream local URL: http://127.0.0.1:${publishedPorts.upstreamHostPort}`);
     }
 
     log("Waiting for gateway + app service health checks");

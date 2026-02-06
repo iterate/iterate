@@ -5,20 +5,47 @@ Playground for proving HTTPS MITM on egress.
 Supports two backends:
 
 - `fly` (Fly Machines)
-- `docker` (local Docker gateway + explicit proxy mode)
+- `docker` (local Docker gateway + MITM interception modes)
 
 ## Layout
 
 - `fly-test/e2e/run-observability.ts`: canonical runner (`E2E_BACKEND=fly|docker`)
 - `fly-test/e2e/run-observability-docker.ts`: Docker backend runner
 - `fly-test/e2e/run-observability.docker.test.ts`: Vitest Docker e2e
-- `fly-test/egress-proxy/go-mitm/main.go`: Go `goproxy` MITM daemon
+- `fly-test/mitm-go/go-mitm/main.go`: Go `goproxy` MITM daemon
+- `fly-test/mitm-go/start.sh`: minimal Go MITM runtime command
+- `fly-test/mitm-dump/start.sh`: minimal mitmdump runtime command (no Python addons)
 - `fly-test/egress-proxy/server.ts`: Bun viewer + transform service
 - `fly-test/public-http/server.mjs`: local deterministic upstream service
 - `fly-test/sandbox/server.ts`: sandbox API/UI trigger
 - `fly-test/docker-compose.local.yml`: local sandbox/gateway/egress topology
 - `fly-test/docker/*.Dockerfile`: Docker images (sandbox/egress/gateway/public-http)
 - `fly-test/docker/*-entrypoint.sh`: runtime setup scripts for Docker services
+
+## MITM Setup Differences
+
+Two side-by-side folders:
+
+- `fly-test/mitm-go`
+- `fly-test/mitm-dump`
+
+What differs, where it applies:
+
+| Area                     | `mitm-go`                                                     | `mitm-dump`                                                                               | Where it comes into play        |
+| ------------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------- |
+| Binary/runtime           | `fly-mitm` (custom Go binary)                                 | `mitmdump` (mitmproxy CLI)                                                                | image build + startup command   |
+| Main config surface      | Go flags: `--listen --transform-url --ca-cert --ca-key --log` | CLI flags + mitmproxy confdir                                                             | process bootstrap               |
+| CA material              | reads `ca.crt` + `ca.key` directly                            | expects mitmproxy CA files; `start.sh` maps same `ca.crt`/`ca.key` into mitmproxy confdir | TLS signing setup               |
+| Node forwarding          | sends to `http://127.0.0.1:18081/transform`                   | reverse mode forwards decrypted traffic to Node listener                                  | request/response transform path |
+| Custom logic location    | compiled Go code                                              | mostly runtime flags (no addon Python file)                                               | operational complexity          |
+| Observable failure shape | Go process errors + health endpoint behavior                  | mitmdump startup/runtime errors, mode/flag mistakes                                       | incident/debug workflow         |
+
+Setup-time split:
+
+- Build-time: Go needs compile stage; dump needs mitmproxy runtime install.
+- Boot-time: Go starts with fixed flags; dump needs CA file mapping into mitmproxy confdir first.
+- Traffic-time: both terminate TLS and pass through Node transform path, but transport mode wiring differs.
+- Debug-time: Go debugging is code-level; dump debugging is mostly CLI/mode/cert wiring.
 
 ## Fly Run
 
@@ -31,6 +58,8 @@ doppler run --config dev -- pnpm --filter fly-test e2e
 
 ```bash
 pnpm --filter fly-test e2e:docker
+MITM_IMPL=go pnpm --filter fly-test e2e:docker
+MITM_IMPL=dump pnpm --filter fly-test e2e:docker
 ```
 
 This stack runs:
@@ -44,16 +73,24 @@ This stack runs:
 Traffic model:
 
 - sandbox default route points to `egress-gateway`
-- sandbox uses explicit proxy env to gateway `http://<gateway>:18080`
-- gateway DNATs sandbox TCP `18080` to egress MITM `:18080`
-- gateway still has fallback DNAT for sandbox TCP `80/443`
+- Go path (`MITM_IMPL=go`): sandbox uses explicit proxy env `http://<gateway>:18080`
+- Dump path (`MITM_IMPL=dump`): sandbox omits proxy env; gateway DNAT on TCP `80/443` captures traffic
+- gateway DNATs sandbox TCP `18080` to egress MITM `:18080` (Go compatibility path)
 - gateway logs DNS + TCP/UDP metadata
 
 Local pages:
 
-- sandbox: `http://localhost:38080`
-- egress viewer + logs: `http://localhost:38081`
-- local upstream test service: `http://localhost:38090`
+- sandbox: published dynamically by compose
+- egress viewer + logs: published dynamically by compose
+- local upstream test service: published dynamically by compose
+
+Discover published host ports for a running project:
+
+```bash
+docker compose -f fly-test/docker-compose.local.yml -p <project> port sandbox-ui 8080
+docker compose -f fly-test/docker-compose.local.yml -p <project> port egress-proxy 18081
+docker compose -f fly-test/docker-compose.local.yml -p <project> port public-http 18090
+```
 
 ## Introspection Demo
 

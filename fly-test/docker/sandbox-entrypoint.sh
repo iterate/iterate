@@ -5,6 +5,7 @@ INIT_LOG="/tmp/sandbox-init.log"
 SANDBOX_PORT="${SANDBOX_PORT:-8080}"
 EGRESS_VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
 EGRESS_MITM_PORT="${EGRESS_MITM_PORT:-18080}"
+MITM_IMPL="${MITM_IMPL:-go}"
 EGRESS_GATEWAY_IP="${EGRESS_GATEWAY_IP:?missing EGRESS_GATEWAY_IP}"
 EGRESS_VIEWER_HOST="${EGRESS_VIEWER_HOST:-egress-proxy}"
 EGRESS_PROXY_HOST="${EGRESS_PROXY_HOST:-$EGRESS_GATEWAY_IP}"
@@ -41,14 +42,18 @@ retry 20 curl -fsSL "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate
 update-ca-certificates >>"$INIT_LOG" 2>&1
 log "ca_install=ok source=${EGRESS_CA_URL}"
 
-# Route outbound traffic through gateway and use explicit proxy for HTTPS MITM.
+# Route outbound traffic through gateway; Go mode also sets explicit proxy env.
 EGRESS_PROXY_URL="http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}"
-export HTTP_PROXY="$EGRESS_PROXY_URL"
-export HTTPS_PROXY="$EGRESS_PROXY_URL"
-export http_proxy="$EGRESS_PROXY_URL"
-export https_proxy="$EGRESS_PROXY_URL"
-export NO_PROXY="localhost,127.0.0.1,::1"
-export no_proxy="localhost,127.0.0.1,::1"
+if [ "$MITM_IMPL" = "go" ]; then
+  export HTTP_PROXY="$EGRESS_PROXY_URL"
+  export HTTPS_PROXY="$EGRESS_PROXY_URL"
+  export http_proxy="$EGRESS_PROXY_URL"
+  export https_proxy="$EGRESS_PROXY_URL"
+  export NO_PROXY="localhost,127.0.0.1,::1"
+  export no_proxy="localhost,127.0.0.1,::1"
+else
+  unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy || true
+fi
 export NODE_EXTRA_CA_CERTS="/usr/local/share/ca-certificates/iterate-docker-ca.crt"
 export CURL_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-docker-ca.crt"
 export REQUESTS_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-docker-ca.crt"
@@ -64,7 +69,11 @@ fi
 
 ip route show > /tmp/sandbox-routes.txt
 log "transparent_redirect=enabled default_gw=${EGRESS_GATEWAY_IP}"
-log "proxy_env=${EGRESS_PROXY_URL}"
+if [ "$MITM_IMPL" = "go" ]; then
+  log "proxy_env=${EGRESS_PROXY_URL}"
+else
+  log "proxy_env=disabled mitm_impl=${MITM_IMPL}"
+fi
 
 cd "$APP_DIR"
 if [ ! -d "$APP_DIR/node_modules" ]; then
