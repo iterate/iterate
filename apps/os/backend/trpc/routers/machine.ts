@@ -447,7 +447,7 @@ export const machineRouter = router({
       configuredProviders.length > 0
         ? configuredProviders
         : import.meta.env.DEV
-          ? ["docker", "daytona", "local"]
+          ? ["docker", "daytona", "fly", "local"]
           : ["daytona"],
     );
     const types: Array<{
@@ -465,6 +465,15 @@ export const machineRouter = router({
         type: "daytona",
         label: "Daytona (Cloud)",
         disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
+      });
+    }
+
+    if (enabledProviders.has("fly")) {
+      const hasFlyToken = Boolean(ctx.env.FLY_API_TOKEN ?? ctx.env.FLY_API_KEY);
+      types.push({
+        type: "fly",
+        label: "Fly.io",
+        disabledReason: hasFlyToken ? undefined : "FLY_API_TOKEN (or FLY_API_KEY) not set",
       });
     }
 

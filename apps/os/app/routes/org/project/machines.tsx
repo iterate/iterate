@@ -56,7 +56,7 @@ function dateSlug() {
 
 /** Check if name matches auto-generated pattern */
 function isDefaultMachineName(name: string) {
-  return /^(daytona|docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
+  return /^(daytona|docker|fly|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
 }
 
 const Search = z.object({

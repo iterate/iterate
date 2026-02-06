@@ -268,6 +268,15 @@ const Env = z.object({
   DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
   DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_MACHINE_PROVIDERS: Optional,
+  FLY_API_TOKEN: Optional,
+  FLY_API_KEY: Optional,
+  FLY_ORG: Optional,
+  FLY_REGION: Optional,
+  FLY_IMAGE: Optional,
+  FLY_APP_PREFIX: Optional,
+  FLY_NETWORK: Optional,
+  FLY_BASE_DOMAIN: Optional,
+  FLY_APPS: Optional,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,

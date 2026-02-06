@@ -161,7 +161,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  // For local machines (docker, local), simple proxy without auth
+  // For non-Daytona machines (docker, fly, local), simple proxy without auth
   const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
   return rewriteHTMLUrls(response, proxyBasePath);
 });

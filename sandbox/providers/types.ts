@@ -9,7 +9,7 @@ export type ProviderType = "docker" | "daytona" | "fly";
  * Machine types used by OS machine management.
  * Kept here as a shared source of truth for frontend/backend callers.
  */
-export const MachineType = ["daytona", "docker", "local"] as const;
+export const MachineType = ["daytona", "docker", "fly", "local"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 /**

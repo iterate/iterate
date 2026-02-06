@@ -2,6 +2,7 @@ import type { MachineType } from "../db/schema.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import type { MachineProvider } from "./types.ts";
 import { createDaytonaProvider } from "./daytona.ts";
+import { createFlyProvider } from "./fly.ts";
 import { createLocalProvider } from "./local-docker.ts";
 
 export type {
@@ -73,6 +74,14 @@ export async function createMachineProvider(
         host: typedMeta.host ?? "localhost",
         ports: typedMeta.ports ?? {},
         buildProxyUrl,
+      });
+    }
+
+    case "fly": {
+      return createFlyProvider({
+        externalId,
+        metadata,
+        rawEnv: env as unknown as Record<string, string | undefined>,
       });
     }
 

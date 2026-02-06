@@ -131,6 +131,7 @@ function generateMeters(): Record<string, BillingMeter> {
   const sandboxProviders = [
     { provider: "daytona", displayName: "Daytona", costPerSecond: 0.0001 },
     { provider: "docker", displayName: "Docker", costPerSecond: 0 },
+    { provider: "fly", displayName: "Fly.io", costPerSecond: 0 },
   ];
 
   for (const { provider, displayName, costPerSecond } of sandboxProviders) {
