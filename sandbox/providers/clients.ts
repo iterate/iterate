@@ -21,9 +21,6 @@ export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<Pidna
  */
 export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
   sandbox: Sandbox,
-): Promise<TRPCClient<TRouter>>;
-export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
-  sandbox: Sandbox,
 ): Promise<TRPCClient<TRouter>> {
   const previewUrl = await sandbox.getPreviewUrl({ port: DAEMON_PORT });
   const client = createTRPCClient<AnyRouter>({
