@@ -59,6 +59,7 @@ import { Agent, request } from "undici";
 import { test as baseTest } from "vitest";
 import { DockerProvider, DockerSandbox } from "../providers/docker/provider.ts";
 import { DaytonaProvider, DaytonaSandbox } from "../providers/daytona/provider.ts";
+import { FlyProvider, FlySandbox } from "../providers/fly/provider.ts";
 import { getDockerHostConfig, dockerApi, execInContainer } from "../providers/docker/api.ts";
 import {
   getGitInfo,
@@ -71,7 +72,7 @@ import type { CreateSandboxOptions, Sandbox, SandboxProvider } from "../provider
 // Re-export types and utilities for convenience
 export type { CreateSandboxOptions, Sandbox, SandboxProvider } from "../providers/types.ts";
 export type { DockerGitInfo } from "../providers/docker/utils.ts";
-export { DockerProvider, DockerSandbox, DaytonaProvider, DaytonaSandbox };
+export { DockerProvider, DockerSandbox, DaytonaProvider, DaytonaSandbox, FlyProvider, FlySandbox };
 export { getDockerEnvVars, getGitInfo, getComposeProjectName, ensurePnpmStoreVolume };
 
 // ============ Test Configuration ============
@@ -79,7 +80,7 @@ export { getDockerEnvVars, getGitInfo, getComposeProjectName, ensurePnpmStoreVol
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Provider type for tests */
-export type TestProviderType = "docker" | "daytona";
+export type TestProviderType = "docker" | "daytona" | "fly";
 
 /**
  * Test configuration parsed from environment variables.
@@ -104,6 +105,7 @@ export const TEST_CONFIG = {
 const TEST_BASE_SNAPSHOTS = {
   docker: process.env.SANDBOX_TEST_BASE_DOCKER_IMAGE ?? "iterate-sandbox:local",
   daytona: process.env.SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT ?? "daytona-small",
+  fly: process.env.SANDBOX_TEST_BASE_FLY_IMAGE ?? "ghcr.io/iterate/sandbox:main",
 } as const;
 
 export const TEST_BASE_SNAPSHOT_ID = TEST_BASE_SNAPSHOTS[TEST_CONFIG.provider];
@@ -295,8 +297,10 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
   if (TEST_CONFIG.snapshotId) {
     if (TEST_CONFIG.provider === "docker") {
       env.DOCKER_IMAGE_NAME = TEST_CONFIG.snapshotId;
-    } else {
+    } else if (TEST_CONFIG.provider === "daytona") {
       env.DAYTONA_SNAPSHOT_NAME = TEST_CONFIG.snapshotId;
+    } else {
+      env.FLY_IMAGE = TEST_CONFIG.snapshotId;
     }
   }
 
@@ -305,6 +309,8 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
       return new DockerProvider(env);
     case "daytona":
       return new DaytonaProvider(env);
+    case "fly":
+      return new FlyProvider(env);
     default:
       throw new Error(`Unknown provider: ${TEST_CONFIG.provider}`);
   }

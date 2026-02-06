@@ -5,7 +5,7 @@ import type { z } from "zod/v4";
 /**
  * Provider types supported by the sandbox system.
  */
-export type ProviderType = "docker" | "daytona";
+export type ProviderType = "docker" | "daytona" | "fly";
 
 /**
  * Provider-level state info.

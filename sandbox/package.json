@@ -5,7 +5,9 @@
   "exports": {
     "./providers/types": "./providers/types.ts",
     "./providers/docker": "./providers/docker/provider.ts",
-    "./providers/daytona": "./providers/daytona/provider.ts"
+    "./providers/daytona": "./providers/daytona/provider.ts",
+    "./providers/fly": "./providers/fly/provider.ts",
+    "./providers/fly/shared-egress": "./providers/fly/shared-egress.ts"
   },
   "scripts": {
     "docker:build": "doppler run -- tsx providers/docker/build-image.ts",
