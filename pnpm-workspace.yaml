@@ -4,6 +4,7 @@ packages:
   - apps/iterate-com
   - apps/os
   - sandbox
+  - fly-test
   - packages/*
   - packages/pidnap/docker
   - repo-templates/*
