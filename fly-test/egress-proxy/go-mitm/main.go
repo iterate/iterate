@@ -243,6 +243,9 @@ func (app *proxyApp) handleRequest(req *http.Request) (*http.Request, *http.Resp
 	}
 
 	resp := &http.Response{
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
 		StatusCode:    tr.Status,
 		Status:        fmt.Sprintf("%d %s", tr.Status, http.StatusText(tr.Status)),
 		Header:        make(http.Header),

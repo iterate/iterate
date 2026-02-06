@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { hostFromUrl, proxyHostForIp, urlEncodedForm } from "./run-observability-lib.ts";
@@ -23,6 +23,7 @@ type RunnerConfig = {
   org: string;
   region: string;
   targetUrl: string;
+  runtimeImage: string;
 };
 
 const EGRESS_MACHINE_NAME = "egress-proxy";
@@ -83,9 +84,25 @@ function buildConfig(): RunnerConfig {
   const org = process.env["FLY_ORG"] ?? "iterate";
   const region = process.env["FLY_REGION"] ?? "iad";
   const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
+  const runtimeImage = resolveRuntimeImage(flyDir);
   const artifactDir = join(flyDir, "proof-logs", app);
   mkdirSync(artifactDir, { recursive: true });
-  return { flyDir, artifactDir, app, org, region, targetUrl };
+  return { flyDir, artifactDir, app, org, region, targetUrl, runtimeImage };
+}
+
+function resolveRuntimeImage(flyDir: string): string {
+  const fromEnv = process.env["FLY_TEST_RUNTIME_IMAGE"];
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+
+  const cachePath = join(flyDir, ".cache", "runtime-image.txt");
+  if (existsSync(cachePath)) {
+    const value = readFileSync(cachePath, "utf8").trim();
+    if (value.length > 0) return value;
+  }
+
+  throw new Error(
+    `Missing runtime image. Run: doppler run --config dev -- bash ${join(flyDir, "scripts", "build-runtime-image.sh")}`,
+  );
 }
 
 function makeLogger(summaryPath: string): (line: string) => void {
@@ -267,6 +284,7 @@ async function main(): Promise<void> {
   run("flyctl", ["version"]);
   run("jq", ["--version"]);
   run("dig", ["+short", "example.com"]);
+  log(`Runtime image: ${config.runtimeImage}`);
 
   log(`Creating app: ${config.app} (org=${config.org} region=${config.region})`);
   const appCreate = run("flyctl", ["apps", "create", config.app, "-o", config.org, "-y"], { env });
@@ -275,13 +293,13 @@ async function main(): Promise<void> {
     `${appCreate.stdout}${appCreate.stderr}`,
   );
 
-  log("Launching egress proxy/viewer machine (node:24 + bun + go mitm)");
+  log("Launching egress proxy/viewer machine");
   const egressRun = run(
     "flyctl",
     [
       "machine",
       "run",
-      "node:24",
+      config.runtimeImage,
       "/bin/bash",
       "/proof/egress-proxy/start.sh",
       "-a",
@@ -293,22 +311,8 @@ async function main(): Promise<void> {
       "--restart",
       "always",
       "--detach",
-      "--file-local",
-      `/proof/egress-proxy/server.ts=${join(config.flyDir, "egress-proxy", "server.ts")}`,
-      "--file-local",
-      `/proof/egress-proxy/client.tsx=${join(config.flyDir, "egress-proxy", "client.tsx")}`,
-      "--file-local",
-      `/proof/egress-proxy/index.html=${join(config.flyDir, "egress-proxy", "index.html")}`,
-      "--file-local",
-      `/proof/egress-proxy/package.json=${join(config.flyDir, "egress-proxy", "package.json")}`,
-      "--file-local",
-      `/proof/egress-proxy/tsconfig.json=${join(config.flyDir, "egress-proxy", "tsconfig.json")}`,
-      "--file-local",
-      `/proof/egress-proxy/start.sh=${join(config.flyDir, "egress-proxy", "start.sh")}`,
-      "--file-local",
-      `/proof/egress-proxy/go-mitm/main.go=${join(config.flyDir, "egress-proxy", "go-mitm", "main.go")}`,
-      "--file-local",
-      `/proof/egress-proxy/go-mitm/go.mod=${join(config.flyDir, "egress-proxy", "go-mitm", "go.mod")}`,
+      "--vm-memory",
+      "1024",
       "-e",
       `PROOF_REGION=${config.region}`,
     ],
@@ -326,13 +330,13 @@ async function main(): Promise<void> {
   writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
   log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
 
-  log("Launching sandbox machine (node:24 + bun app) with CA trust + proxy env");
+  log("Launching sandbox machine with CA trust + proxy env");
   const sandboxRun = run(
     "flyctl",
     [
       "machine",
       "run",
-      "node:24",
+      config.runtimeImage,
       "/bin/bash",
       "/proof/sandbox/start.sh",
       "-a",
@@ -344,18 +348,8 @@ async function main(): Promise<void> {
       "--restart",
       "always",
       "--detach",
-      "--file-local",
-      `/proof/sandbox/server.ts=${join(config.flyDir, "sandbox", "server.ts")}`,
-      "--file-local",
-      `/proof/sandbox/client.tsx=${join(config.flyDir, "sandbox", "client.tsx")}`,
-      "--file-local",
-      `/proof/sandbox/index.html=${join(config.flyDir, "sandbox", "index.html")}`,
-      "--file-local",
-      `/proof/sandbox/package.json=${join(config.flyDir, "sandbox", "package.json")}`,
-      "--file-local",
-      `/proof/sandbox/tsconfig.json=${join(config.flyDir, "sandbox", "tsconfig.json")}`,
-      "--file-local",
-      `/proof/sandbox/start.sh=${join(config.flyDir, "sandbox", "start.sh")}`,
+      "--vm-memory",
+      "1024",
       "-e",
       `PROOF_REGION=${config.region}`,
       "-e",
