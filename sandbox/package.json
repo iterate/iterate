@@ -26,6 +26,7 @@
     "pidnap": "workspace:*",
     "@daytonaio/sdk": "^0.128.1",
     "@trpc/client": "^11.1.4",
+    "@trpc/server": "^11.1.4",
     "undici": "^7.10.0",
     "zod": "^3.25.30"
   },

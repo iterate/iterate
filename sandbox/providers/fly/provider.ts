@@ -154,14 +154,6 @@ export class FlySandbox extends Sandbox {
     this.providerId = encodeFlyProviderId(appName, machineId);
   }
 
-  async getFetch(opts: { port: number }): Promise<typeof fetch> {
-    const baseUrl = await this.getPreviewUrl(opts);
-    return (input: string | Request | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? `${baseUrl}${input}` : input;
-      return fetch(url, init);
-    };
-  }
-
   async getPreviewUrl(opts: { port: number }): Promise<string> {
     return buildPreviewUrl(this.env.FLY_BASE_DOMAIN, this.appName, opts.port);
   }

@@ -1,4 +1,5 @@
-import { createTRPCClient, httpLink } from "@trpc/client";
+import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
+import type { AnyRouter } from "@trpc/server";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import type { Sandbox } from "./types.ts";
 
@@ -18,9 +19,11 @@ export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<Pidna
  * Build a daemon tRPC client for sandboxes that expose daemon-backend on port 3000.
  * Caller is responsible for using this only on sandboxes that actually run daemon-backend.
  */
-export async function getDaemonClientForSandbox(
+export async function getDaemonClientForSandbox(sandbox: Sandbox): Promise<TRPCClient<AnyRouter>>;
+export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
   sandbox: Sandbox,
-): Promise<ReturnType<typeof createTRPCClient>> {
+): Promise<TRPCClient<TRouter>>;
+export async function getDaemonClientForSandbox(sandbox: Sandbox): Promise<TRPCClient<AnyRouter>> {
   const previewUrl = await sandbox.getPreviewUrl({ port: DAEMON_PORT });
   return createTRPCClient({
     links: [httpLink({ url: `${previewUrl}/api/trpc` })],

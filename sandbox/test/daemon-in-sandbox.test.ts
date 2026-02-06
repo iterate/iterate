@@ -19,6 +19,7 @@
  */
 
 import { describe } from "vitest";
+import type { TRPCRouter } from "../../apps/daemon/server/trpc/router.ts";
 import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
 import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
@@ -187,7 +188,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
     await waitForServiceHealthy(sandbox, "daemon-backend");
     const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
-    const trpc = await getDaemonClientForSandbox(sandbox);
+    const trpc = await getDaemonClientForSandbox<TRPCRouter>(sandbox);
 
     // index.html
     await expect
@@ -212,7 +213,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
       .toBe(true);
 
     // tRPC
-    const hello = await (trpc as any).hello.query();
+    const hello = await trpc.hello.query();
     expect(hello.message).toContain("Hello");
 
     // CSS/JS bundles

@@ -1062,6 +1062,9 @@ importers:
       '@trpc/client':
         specifier: ^11.1.4
         version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
+      '@trpc/server':
+        specifier: ^11.1.4
+        version: 11.7.2(typescript@5.9.3)
       pidnap:
         specifier: workspace:*
         version: link:../packages/pidnap
