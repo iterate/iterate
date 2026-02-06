@@ -3,16 +3,15 @@ set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 
-# Local Docker: sync host repo into container
-# In local development this behaviour can be toggled on and off inthe os UI and is
-# implemented in providers/local-docker.ts
-if [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
-  bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
-fi
-
 # Local Docker: sync from git remote target (e.g. origin:main)
+# Takes precedence over host sync when both env vars are set.
 if [[ -n "${LOCAL_DOCKER_SYNC_FROM_GIT_TARGET:-}" ]]; then
   bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-git-remote.sh"
+elif [[ -n "${LOCAL_DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
+  # Local Docker: sync host repo into container
+  # In local development this behaviour can be toggled on and off in the os UI and is
+  # implemented in providers/local-docker.ts
+  bash "${ITERATE_REPO}/apps/os/sandbox/sync-repo-from-host.sh"
 fi
 
 # This is primarily useful for tests of the local-docker provider,
