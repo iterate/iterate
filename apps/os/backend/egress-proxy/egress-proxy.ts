@@ -727,8 +727,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     }
 
     // Forward the request to the original destination
-    const fetchImpl = getFetch(processedURL, { headers: c.req.raw.headers });
-    let response = await fetchImpl(processedURL, {
+    let response = await fetch(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
       body: requestBody,
@@ -802,8 +801,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
           }
 
           // Retry the request with buffered body
-          const retryFetchImpl = getFetch(retryUrlResult.result, { headers: c.req.raw.headers });
-          response = await retryFetchImpl(retryUrlResult.result, {
+          response = await fetch(retryUrlResult.result, {
             method: originalMethod,
             headers: retryHeaders,
             body: requestBody,
@@ -855,27 +853,6 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     );
   }
 });
-
-function getFetch(url: string, { headers }: { headers: HeadersInit }): typeof fetch {
-  const requestHeaders = new Headers(headers);
-  const requestHost = requestHeaders.get("host") ?? requestHeaders.get("x-forwarded-host");
-  if (!requestHost) {
-    return fetch;
-  }
-
-  let requestHostname: string;
-  try {
-    requestHostname = new URL(`http://${requestHost}`).hostname;
-  } catch {
-    return fetch;
-  }
-
-  if (new URL(url).hostname !== requestHostname) {
-    return fetch;
-  }
-
-  return env.SELF?.fetch ?? fetch;
-}
 
 /**
  * Check if the HTTP method typically has a request body.
