@@ -9,12 +9,39 @@ const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
-const githubMagicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
+
+// ITERATE_SKIP_PROXY is set by the control plane at machine creation when
+// DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
+// so managed processes connect directly to the internet using system CAs.
+const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
 
 const bash = (command: string) => ({
   command: "bash",
   args: ["-c", command.trim()],
 });
+
+// Proxy and CA env vars for pidnap-managed processes.
+// When skipProxy is true, these are omitted so traffic goes direct.
+// The user's interactive shell gets these from ~/.iterate/.env instead (managed by daemon).
+const proxyEnv: Record<string, string> = skipProxy
+  ? {}
+  : {
+      HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+      HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+      http_proxy: `http://127.0.0.1:${proxyPort}`,
+      https_proxy: `http://127.0.0.1:${proxyPort}`,
+      NO_PROXY: "localhost,127.0.0.1",
+      no_proxy: "localhost,127.0.0.1",
+      SSL_CERT_FILE: caCert,
+      SSL_CERT_DIR: mitmproxyDir,
+      REQUESTS_CA_BUNDLE: caCert,
+      CURL_CA_BUNDLE: caCert,
+      NODE_EXTRA_CA_CERTS: caCert,
+      GIT_SSL_CAINFO: caCert,
+      GITHUB_MAGIC_TOKEN: encodeURIComponent(
+        "getIterateSecret({secretKey: 'github.access_token'})",
+      ),
+    };
 
 export default defineConfig({
   http: {
@@ -26,34 +53,29 @@ export default defineConfig({
   env: {
     ITERATE_REPO: iterateRepo,
     SANDBOX_DIR: sandboxDir,
-    // Proxy Env
     PROXY_PORT: proxyPort,
     MITMPROXY_DIR: mitmproxyDir,
     CA_CERT_PATH: caCert,
-    HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
-    HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-    http_proxy: `http://127.0.0.1:${proxyPort}`,
-    https_proxy: `http://127.0.0.1:${proxyPort}`,
-    NO_PROXY: "localhost,127.0.0.1",
-    no_proxy: "localhost,127.0.0.1",
-    SSL_CERT_FILE: caCert,
-    SSL_CERT_DIR: mitmproxyDir,
-    REQUESTS_CA_BUNDLE: caCert,
-    CURL_CA_BUNDLE: caCert,
-    NODE_EXTRA_CA_CERTS: caCert,
-    GIT_SSL_CAINFO: caCert,
-    // Github Stuff
-    GITHUB_MAGIC_TOKEN: githubMagicToken,
+    ...proxyEnv,
   },
-  tasks: [
+  processes: [
+    // Init tasks (run once, sequential)
     {
       name: "task-git-config",
       definition: bash(
         `
-          git config --global "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "https://github.com/"
-          git config --global --add "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "git@github.com:"
+          # Use credential helper instead of insteadOf URL credentials.
+          # The insteadOf approach embeds magic strings in the URL, which causes git to use
+          # a 401-challenge flow (two requests) that breaks through the mitmproxy proxy chain.
+          # A credential helper provides credentials directly, avoiding this issue.
+          # The helper script lives in home-skeleton/.git-credential-helper.sh
+          chmod +x ~/.git-credential-helper.sh
+          git config --global credential.helper '!~/.git-credential-helper.sh'
+          # Rewrite git@github.com: SSH URLs to HTTPS so they go through the proxy
+          git config --global "url.https://github.com/.insteadOf" "git@github.com:"
         `,
       ),
+      options: { restartPolicy: "never" },
     },
     {
       name: "task-generate-ca",
@@ -71,6 +93,8 @@ export default defineConfig({
           fi
           `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-git-config"],
     },
     {
       name: "task-install-ca",
@@ -83,6 +107,8 @@ export default defineConfig({
           fi
         `,
       ),
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-generate-ca"],
     },
     {
       name: "task-db-migrate",
@@ -91,6 +117,8 @@ export default defineConfig({
         args: ["db:migrate"],
         cwd: `${iterateRepo}/apps/daemon`,
       },
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-install-ca"],
     },
     {
       name: "task-build-daemon-client",
@@ -102,9 +130,10 @@ export default defineConfig({
           NODE_ENV: "production",
         },
       },
+      options: { restartPolicy: "never" },
+      dependsOn: ["task-db-migrate"],
     },
-  ],
-  processes: [
+    // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
       definition: {
@@ -126,6 +155,7 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-backend",
@@ -146,6 +176,7 @@ export default defineConfig({
       envOptions: {
         inheritGlobalEnv: false,
       },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "daemon-frontend",
@@ -164,6 +195,7 @@ export default defineConfig({
       envOptions: {
         inheritGlobalEnv: false,
       },
+      dependsOn: ["task-build-daemon-client"],
     },
     {
       name: "opencode",
@@ -188,6 +220,7 @@ export default defineConfig({
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
+      dependsOn: ["task-build-daemon-client"],
     },
   ],
 });

@@ -27,8 +27,9 @@ export type UserRole = (typeof UserRole)[number];
 // Machine states:
 // - starting: machine is being provisioned, not yet ready for use
 // - active: machine is ready and is the current active machine for the project
+// - detached: machine was replaced by a newer active machine but may still be reachable
 // - archived: machine has been replaced or manually archived
-export const MachineState = ["starting", "active", "archived"] as const;
+export const MachineState = ["starting", "active", "detached", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types

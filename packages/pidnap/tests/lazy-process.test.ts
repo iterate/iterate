@@ -31,9 +31,8 @@ describe("LazyProcess", () => {
       await proc.start();
       expect(proc.state).toBe("running");
 
-      // Wait for process to complete
-      await proc.waitForExit();
-      expect(proc.state).toBe("stopped");
+      // Wait for process to complete using polling for reliability
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("stopped");
     });
 
     it("should log stdout output", async () => {
@@ -77,9 +76,8 @@ describe("LazyProcess", () => {
       await proc.start();
 
       // Wait for process to exit
-      await proc.waitForExit();
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("error");
 
-      expect(proc.state).toBe("error");
       // Logger now uses withPrefix, so check the child logger was called
       expect(mockLogger.withPrefix).toHaveBeenCalled();
     });

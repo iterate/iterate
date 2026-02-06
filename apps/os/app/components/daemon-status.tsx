@@ -3,7 +3,7 @@ import { Circle, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 type DaemonStatusValue = "ready" | "error" | "restarting" | "stopping" | undefined;
 
 interface DaemonStatusProps {
-  state: "starting" | "active" | "archived";
+  state: "starting" | "active" | "detached" | "archived";
   daemonStatus?: DaemonStatusValue;
   daemonReadyAt?: string;
   daemonStatusMessage?: string;
@@ -17,6 +17,10 @@ export function DaemonStatus({
 }: DaemonStatusProps) {
   if (state === "archived") {
     return <span className="text-muted-foreground text-sm">-</span>;
+  }
+
+  if (state === "detached") {
+    return <span className="text-muted-foreground text-sm">Detached</span>;
   }
 
   if (!daemonStatus) {

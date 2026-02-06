@@ -14,6 +14,7 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { trackWebhookEvent } from "../../lib/posthog.ts";
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -268,7 +269,7 @@ githubApp.get(
 
     const redirectPath =
       callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/repo` : "/");
+      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );
@@ -475,6 +476,47 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
+  const payload = JSON.parse(body);
+  const repo = payload.repository as
+    | { full_name?: string; owner?: { login?: string }; name?: string }
+    | undefined;
+  const repoFullName = repo?.full_name ?? "unknown";
+  const repoOwner = repo?.owner?.login;
+  const repoName = repo?.name;
+
+  // Track webhook in PostHog with group association (non-blocking).
+  // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
+  const db = c.var.db;
+  const env = c.env;
+  waitUntil(
+    (async () => {
+      let groups: { organization: string; project: string } | undefined;
+
+      // Look up project repo to get group association
+      if (repoOwner && repoName) {
+        const projectRepoRecord = await db.query.projectRepo.findFirst({
+          where: (pr, { eq, and }) => and(eq(pr.owner, repoOwner), eq(pr.name, repoName)),
+          with: { project: true },
+        });
+        if (projectRepoRecord?.project) {
+          groups = {
+            organization: projectRepoRecord.project.organizationId,
+            project: projectRepoRecord.projectId,
+          };
+        }
+      }
+
+      trackWebhookEvent(env, {
+        distinctId: `github:${repoFullName}`,
+        event: "github:webhook_received",
+        properties: { ...payload, _event_type: xGithubEvent },
+        groups,
+      });
+    })().catch((err) => {
+      logger.error("[GitHub Webhook] PostHog tracking error", err);
+    }),
+  );
+
   // Insert raw event immediately after signature verification for deduplication.
   // Uses ON CONFLICT DO NOTHING with unique index on externalId.
   // This pattern allows this handler to become an outbox consumer later -
@@ -484,7 +526,6 @@ githubApp.post("/webhook", async (c) => {
     return c.json({ error: "Missing delivery ID" }, 400);
   }
   const externalId = deliveryId;
-  const payload = JSON.parse(body);
 
   if (!xGithubEvent || !(xGithubEvent in WEBHOOK_FILTERS)) {
     return c.json({ message: `No filter for event type ${xGithubEvent}` }, 200);
@@ -531,6 +572,10 @@ githubApp.post("/webhook", async (c) => {
             logger.error("[GitHub Webhook] handleWorkflowRun error", err);
           }),
         );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handleWorkflowRun ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
       }
       break;
     }
@@ -545,6 +590,10 @@ githubApp.post("/webhook", async (c) => {
           }).catch((err) => {
             logger.error("[GitHub Webhook] handleCommitComment error", err);
           }),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handleCommitComment ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
         );
       }
       break;

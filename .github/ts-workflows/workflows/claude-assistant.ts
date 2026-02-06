@@ -22,7 +22,7 @@ export default workflow({
         (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
       `,
-      ...utils.runsOn,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       permissions: {
         contents: "write",
         "pull-requests": "write",

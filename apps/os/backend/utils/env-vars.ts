@@ -3,6 +3,7 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { parseMagicString, type ParsedSecret } from "../egress-proxy/egress-proxy.ts";
+import { decryptWithSecret } from "./encryption-core.ts";
 
 export type { ParsedSecret };
 
@@ -91,13 +92,34 @@ function getSecretSource(secretKey: string, isGlobal: boolean): EnvVarSource | n
   return null;
 }
 
+export type GetUnifiedEnvVarsOptions = {
+  /**
+   * DANGEROUS: When true, decrypts and returns raw secret values instead of magic strings.
+   * This bypasses the egress proxy and exposes secrets directly in env vars.
+   * Only enable for local development or trusted environments without egress proxy.
+   */
+  dangerousRawSecrets?: boolean;
+  /** Required when dangerousRawSecrets is true. */
+  encryptionSecret?: string;
+};
+
 /**
  * Get a unified list of all environment variables for a project.
  * This includes global env vars, connection-based env vars, and user-defined env vars.
  *
  * Order: global first, then connections, then user-defined (oldest to newest)
  */
-export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<UnifiedEnvVar[]> {
+export async function getUnifiedEnvVars(
+  db: DB,
+  projectId: string,
+  options?: GetUnifiedEnvVarsOptions,
+): Promise<UnifiedEnvVar[]> {
+  const { dangerousRawSecrets, encryptionSecret } = options ?? {};
+
+  if (dangerousRawSecrets && !encryptionSecret) {
+    throw new Error("encryptionSecret is required when dangerousRawSecrets is enabled");
+  }
+
   // Fetch all data in parallel
   const [connections, projectEnvVars, secrets] = await Promise.all([
     // Project connections
@@ -113,7 +135,7 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
       orderBy: (v, { asc }) => [asc(v.createdAt)],
     }),
     // Get all secrets for this project OR global secrets
-    // ONLY key, description, egressProxyRule - NEVER encryptedValue!
+    // Include encryptedValue ONLY when dangerousRawSecrets is enabled
     // Include user relation for user-scoped secrets (e.g., Google OAuth)
     db.query.secret.findMany({
       columns: {
@@ -122,6 +144,8 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
         egressProxyRule: true,
         projectId: true,
         userId: true,
+        // DANGEROUS: Only include encryptedValue when raw secrets mode is enabled
+        encryptedValue: dangerousRawSecrets ?? false,
       },
       where: or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
       with: {
@@ -144,17 +168,57 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
 
   const result: UnifiedEnvVar[] = [];
 
+  // Helper to get secret value (raw decrypted or magic string)
+  async function getSecretValue(
+    secretKey: string,
+    encryptedValue: string | undefined,
+    userEmail?: string,
+  ): Promise<string> {
+    if (dangerousRawSecrets) {
+      // In raw secrets mode, we MUST return decrypted values
+      // Falling back to magic strings would leave apps with unusable literal strings
+      // since the egress proxy is disabled
+      if (!encryptedValue) {
+        throw new Error(
+          `Secret '${secretKey}' has no encrypted value but dangerousRawSecrets is enabled`,
+        );
+      }
+      if (!encryptionSecret) {
+        throw new Error(`encryptionSecret required for dangerousRawSecrets mode`);
+      }
+      try {
+        return await decryptWithSecret(encryptedValue, encryptionSecret);
+      } catch (err) {
+        logger.error("Failed to decrypt secret in raw mode", { secretKey, err });
+        throw new Error(
+          `Failed to decrypt secret '${secretKey}' in raw mode: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    // Return magic string (normal mode - egress proxy will resolve these)
+    if (userEmail) {
+      return `getIterateSecret({secretKey: '${secretKey}', userEmail: '${userEmail}'})`;
+    }
+    return `getIterateSecret({secretKey: '${secretKey}'})`;
+  }
+
   // 1. Global secrets (iterate.*)
   for (const secret of globalSecrets) {
     const envVarNames = secretKeyToEnvVarNames(secret.key);
     const source = getSecretSource(secret.key, true);
     if (!source || envVarNames.length === 0) continue;
 
+    const encryptedValue =
+      "encryptedValue" in secret && typeof secret.encryptedValue === "string"
+        ? secret.encryptedValue
+        : undefined;
+    const value = await getSecretValue(secret.key, encryptedValue);
+    const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
+
     for (const envVarName of envVarNames) {
-      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
       result.push({
         key: envVarName,
-        value: magicString,
+        value,
         secret: parseMagicString(magicString),
         description: secret.description,
         egressProxyRule: secret.egressProxyRule,
@@ -177,11 +241,17 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
     if (!isActive) continue;
 
     const envVarNames = secretKeyToEnvVarNames(secret.key);
+    const encryptedValue =
+      "encryptedValue" in secret && typeof secret.encryptedValue === "string"
+        ? secret.encryptedValue
+        : undefined;
+    const value = await getSecretValue(secret.key, encryptedValue);
+    const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
+
     for (const envVarName of envVarNames) {
-      const magicString = `getIterateSecret({secretKey: '${secret.key}'})`;
       result.push({
         key: envVarName,
-        value: magicString,
+        value,
         secret: parseMagicString(magicString),
         description: secret.description,
         egressProxyRule: secret.egressProxyRule,
@@ -219,14 +289,20 @@ export async function getUnifiedEnvVars(db: DB, projectId: string): Promise<Unif
     if (!provider) continue; // Only support known providers
 
     const envVarNames = secretKeyToEnvVarNames(secret.key);
+    const encryptedValue =
+      "encryptedValue" in secret && typeof secret.encryptedValue === "string"
+        ? secret.encryptedValue
+        : undefined;
+    const value = await getSecretValue(secret.key, encryptedValue, secret.user.email);
+    const magicString = `getIterateSecret({secretKey: '${secret.key}', userEmail: '${secret.user.email}'})`;
+
     for (const envVarName of envVarNames) {
       // Skip if already exists as an active env var
       if (existingKeys.has(envVarName)) continue;
 
-      const magicString = `getIterateSecret({secretKey: '${secret.key}', userEmail: '${secret.user.email}'})`;
       result.push({
         key: envVarName,
-        value: magicString,
+        value,
         secret: parseMagicString(magicString),
         description: `Scoped to ${secret.user.email}`,
         egressProxyRule: secret.egressProxyRule,

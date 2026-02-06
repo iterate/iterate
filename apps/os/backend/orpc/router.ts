@@ -1,6 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq, and } from "drizzle-orm";
+import { eq, and, lt } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
@@ -147,12 +147,12 @@ export const reportStatus = os.machines.reportStatus
     };
 
     // If machine is in 'starting' state and daemon reports ready, activate it
-    // This archives any existing active machine and promotes this one to active
+    // This detaches any existing active machine and promotes this one to active
     if (status === "ready" && machineWithOrg.state === "starting") {
       // Use transaction to ensure atomic activation - prevents race conditions
       // if two machines report ready simultaneously
-      const archivedMachines = await db.transaction(async (tx) => {
-        // Archive all currently active machines for this project
+      const detachedMachines = await db.transaction(async (tx) => {
+        // Detach all currently active machines for this project
         const activeMachines = await tx.query.machine.findMany({
           where: and(
             eq(schema.machine.projectId, machineWithOrg.projectId),
@@ -161,13 +161,13 @@ export const reportStatus = os.machines.reportStatus
         });
 
         for (const activeMachine of activeMachines) {
-          // Archive in DB (within transaction)
+          // Detach in DB (within transaction)
           await tx
             .update(schema.machine)
-            .set({ state: "archived" })
+            .set({ state: "detached" })
             .where(eq(schema.machine.id, activeMachine.id));
 
-          logger.info("Archived existing active machine", { machineId: activeMachine.id });
+          logger.info("Detached existing active machine", { machineId: activeMachine.id });
         }
 
         // Promote this machine to active
@@ -181,25 +181,42 @@ export const reportStatus = os.machines.reportStatus
         return activeMachines;
       });
 
-      // Archive via provider AFTER transaction commits
-      // This is intentional - we want DB state to be consistent first,
-      // then clean up provider resources. Provider failures are logged but don't rollback.
-      // TODO: Replace with outbox consumer once outbox system is added
-      for (const activeMachine of archivedMachines) {
+      // Cleanup old detached machines (older than 48h) after handoff.
+      // Run this opportunistically here to keep flow simple for now.
+      // TODO: Add scheduled/outbox cleanup across projects so detached machines
+      // from inactive projects also get archived.
+      const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      const staleDetachedMachines = await db.query.machine.findMany({
+        where: and(
+          eq(schema.machine.projectId, machineWithOrg.projectId),
+          eq(schema.machine.state, "detached"),
+          lt(schema.machine.updatedAt, detachedCleanupCutoff),
+        ),
+      });
+
+      for (const detachedMachine of staleDetachedMachines) {
         const provider = await createMachineProvider({
-          type: activeMachine.type,
+          type: detachedMachine.type,
           env,
-          externalId: activeMachine.externalId,
-          metadata: (activeMachine.metadata as Record<string, unknown>) ?? {},
+          externalId: detachedMachine.externalId,
+          metadata: (detachedMachine.metadata as Record<string, unknown>) ?? {},
           buildProxyUrl: () => "",
         });
-        await provider.archive().catch((err) => {
-          logger.error("Failed to archive machine via provider", {
-            machineId: activeMachine.id,
-            err,
-          });
-        });
+        await provider.archive();
+
+        await db
+          .update(schema.machine)
+          .set({ state: "archived" })
+          .where(eq(schema.machine.id, detachedMachine.id));
+
+        logger.info("Archived stale detached machine", { machineId: detachedMachine.id });
       }
+
+      logger.info("Machine handoff complete", {
+        activatedMachineId: machine.id,
+        detachedCount: detachedMachines.length,
+        archivedDetachedCount: staleDetachedMachines.length,
+      });
     } else {
       // Just update metadata
       await db
@@ -231,9 +248,19 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const { project } = machine;
   const machineId = machine.id;
 
+  // Check if dangerous raw secrets mode is enabled
+  // BoolyString schema only allows "true" or "false" strings
+  const dangerousRawSecrets = env.DANGEROUS_RAW_SECRETS_ENABLED === "true";
+  if (dangerousRawSecrets) {
+    logger.warn("DANGEROUS: Raw secrets mode enabled - bypassing egress proxy", { machineId });
+  }
+
   // Get unified env vars using shared function
   const [unifiedEnvVars, githubConnection, projectRepos] = await Promise.all([
-    getUnifiedEnvVars(db, project.id),
+    getUnifiedEnvVars(db, project.id, {
+      dangerousRawSecrets,
+      encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
+    }),
     db.query.projectConnection.findFirst({
       where: (conn, { and: whereAnd, eq: whereEq }) =>
         whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
@@ -311,6 +338,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     machineId,
     envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
+    skipProxy: dangerousRawSecrets,
   });
 
   // Return the unified list - daemon will handle formatting for .env file
@@ -323,6 +351,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       source: v.source,
     })),
     repos,
+    // Skip proxy when raw secrets mode is enabled - secrets are returned directly
+    skipProxy: dangerousRawSecrets,
   };
 });
 

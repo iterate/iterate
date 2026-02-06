@@ -26,6 +26,7 @@ import {
 import { decrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
+import { linkExternalIdToGroups } from "../../lib/posthog.ts";
 
 export const projectRouter = router({
   // Get minimal project info by ID (for conflict resolution, no org access required)
@@ -244,6 +245,13 @@ export const projectRouter = router({
           defaultBranch: input.defaultBranch,
         });
       }
+
+      // Link GitHub repo to org/project in PostHog
+      linkExternalIdToGroups(ctx.env, {
+        distinctId: `github:${input.owner}/${input.name}`,
+        organizationId: ctx.organization.id,
+        projectId: ctx.project.id,
+      });
 
       return { success: true };
     }),

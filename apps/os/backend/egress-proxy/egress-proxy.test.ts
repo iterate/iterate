@@ -14,13 +14,30 @@ import {
   getFullReauthUrl,
   CONNECTORS,
 } from "../services/connectors.ts";
-import { parseMagicString, MAGIC_STRING_PATTERN } from "./egress-proxy.ts";
+import { hasMagicString, parseMagicString, MAGIC_STRING_PATTERN } from "./egress-proxy.ts";
 import { matchesEgressRule } from "./egress-rules.ts";
 
 // Test the magic string parsing and secret lookup logic
 // We test these as pure functions without DB/worker dependencies
 
 describe("Egress Proxy - Magic String Parsing", () => {
+  test("magic detection ignores stale regex lastIndex", () => {
+    const input = 'Bearer getIterateSecret({secretKey: "key1"})';
+    MAGIC_STRING_PATTERN.lastIndex = input.length + 10;
+
+    expect(hasMagicString(input)).toBe(true);
+  });
+
+  test("magic detection remains correct across repeated calls", () => {
+    const input = 'Bearer getIterateSecret({secretKey: "key1"})';
+
+    MAGIC_STRING_PATTERN.lastIndex = input.length + 10;
+    expect(hasMagicString(input)).toBe(true);
+
+    MAGIC_STRING_PATTERN.lastIndex = 1;
+    expect(hasMagicString(input)).toBe(true);
+  });
+
   test("parses basic magic string", () => {
     const input = 'getIterateSecret({secretKey: "openai_api_key"})';
     const result = parseMagicString(input);

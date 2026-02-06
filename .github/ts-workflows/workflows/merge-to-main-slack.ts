@@ -12,7 +12,7 @@ export default {
   jobs: {
     notify: {
       if: "github.event.pull_request.merged == true",
-      ...utils.runsOnUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
         utils.githubScript(import.meta, async function notify_slack_on_merge({ context }) {

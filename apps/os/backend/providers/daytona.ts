@@ -119,8 +119,8 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
     },
 
     commands: [
-      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
-      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
+      { label: "Daemon logs", command: `tail -n 100 -f ${DAEMON_LOG}` },
+      { label: "OpenCode logs", command: `tail -n 100 -f ${OPENCODE_LOG}` },
       { label: "Service status", command: PIDNAP_STATUS_CMD },
     ],
 

@@ -1,11 +1,11 @@
 # Sandbox
 
-Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked repo path.
+Minimal, single-image setup. Host sync uses rsync into the baked repo path.
+Builds use [Depot](https://depot.dev) for persistent layer caching across CI and local dev.
 
 ## TL;DR
 
-- Image: `ghcr.io/iterate/sandbox`
-- Tags: `main`, `sha-<sha>`, `local`
+- Local image: `iterate-sandbox:local`
 - Repo path in container: `/home/iterate/src/github.com/iterate/iterate`
 - pnpm store: `/home/iterate/.pnpm-store` (volume `iterate-pnpm-store`)
 - Dev sync mounts (read-only):
@@ -21,19 +21,28 @@ Local build (uses current repo checkout):
 pnpm os docker:build
 ```
 
-Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
+Tags the image as `iterate-sandbox:local` by default.
+Cache is shared automatically via Depot - no manual push needed.
 
-Push to GHCR (updates shared build cache):
-
-```bash
-PUSH=1 pnpm os docker:build
-```
-
-Direct Docker build:
+Direct Depot build (bypassing pnpm script):
 
 ```bash
-docker buildx build --load -f apps/os/sandbox/Dockerfile -t ghcr.io/iterate/sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
+depot build --load -f apps/os/sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
 ```
+
+## Local Depot Setup
+
+Depot provides persistent layer caching shared between CI and all developers.
+
+One-time setup:
+
+```bash
+brew install depot/tap/depot   # or: curl -L https://depot.dev/install-cli.sh | sh
+depot login
+```
+
+After setup, `pnpm os docker:build` uses the shared layer cache automatically.
+The project ID in `depot.json` links your local builds to the same cache as CI.
 
 ## Dev sync mode
 
@@ -78,21 +87,6 @@ pnpm os daytona:build --name my-snapshot --cpu 4 --memory 8
 ```
 
 Requires `daytona` CLI (`daytona login`).
-
-## Push from local
-
-```bash
-gh auth login
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
-
-docker buildx build --push -f apps/os/sandbox/Dockerfile \\
-  -t ghcr.io/iterate/sandbox:main \\
-  -t ghcr.io/iterate/sandbox:sha-$(git rev-parse HEAD) \\
-  --build-arg GIT_SHA=$(git rev-parse HEAD) \\
-  --cache-from type=registry,ref=ghcr.io/iterate/sandbox:buildcache \\
-  --cache-to type=registry,ref=ghcr.io/iterate/sandbox:buildcache,mode=max \\
-  .
-```
 
 ## Key files
 

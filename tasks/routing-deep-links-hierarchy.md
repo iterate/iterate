@@ -1,5 +1,5 @@
 ---
-state: pending
+state: todo
 priority: medium
 size: medium
 ---

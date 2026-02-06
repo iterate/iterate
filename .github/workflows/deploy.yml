@@ -26,8 +26,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
@@ -44,20 +44,23 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Deploy apps/os
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: cd apps/os && pnpm run deploy:prd
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DAYTONA_SNAPSHOT_NAME: ${{ inputs.daytona_snapshot_name }}
           VITE_DAYTONA_SNAPSHOT_NAME: ${{ inputs.daytona_snapshot_name }}
-        run: pnpm run deploy:prd
-        working-directory: apps/os
   deploy-iterate-com:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     if: inputs.stage == 'prd'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
