@@ -197,7 +197,7 @@ async function probeDns(target: URL): Promise<void> {
 fs.mkdirSync("/tmp", { recursive: true });
 fs.appendFileSync(LOG_PATH, "");
 appendLog(
-  `BOOT pid=${process.pid} port=${PORT} http_proxy=\"${process.env.HTTP_PROXY ?? ""}\" https_proxy=\"${process.env.HTTPS_PROXY ?? ""}\"`,
+  `BOOT pid=${process.pid} port=${PORT} http_proxy="${process.env.HTTP_PROXY ?? ""}" https_proxy="${process.env.HTTPS_PROXY ?? ""}"`,
 );
 
 Bun.serve({
@@ -235,17 +235,17 @@ Bun.serve({
         return json({ ok: false, error: "only http/https supported" }, 400);
       }
 
-      appendLog(`FETCH_START method=${method} url=\"${target}\" body_bytes=${body.length}`);
+      appendLog(`FETCH_START method=${method} url="${target}" body_bytes=${body.length}`);
       await probeDns(parsed);
       const result = await safeFetchViaCurl(input);
       if (!result.ok) {
         appendLog(
-          `FETCH_ERROR method=${method} url=\"${target}\" err=\"${result.error ?? "unknown"}\"`,
+          `FETCH_ERROR method=${method} url="${target}" err="${result.error ?? "unknown"}"`,
         );
         return json(result, 502);
       }
       appendLog(
-        `FETCH_OK method=${method} url=\"${target}\" status=${result.status ?? "unknown"} proof=${result.proofDetected ? "yes" : "no"} request_id=${result.requestId ?? "-"}`,
+        `FETCH_OK method=${method} url="${target}" status=${result.status ?? "unknown"} proof=${result.proofDetected ? "yes" : "no"} request_id=${result.requestId ?? "-"}`,
       );
       return json(result);
     }
