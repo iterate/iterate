@@ -175,6 +175,8 @@ function startCloudflared(tunnel: Awaited<ReturnType<typeof createDevTunnel>>) {
       "tunnel",
       "--loglevel",
       "warn",
+      "--protocol",
+      "http2",
       "--no-autoupdate",
       "run",
       "--token",
