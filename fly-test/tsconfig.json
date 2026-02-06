@@ -3,13 +3,12 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "jsx": "react-jsx",
     "strict": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["node", "vitest/globals", "bun-types"],
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts", "./**/*.tsx", "./**/*.d.ts"],
+  "include": ["./**/*.ts", "./**/*.d.ts"],
   "exclude": ["proof-logs", "node_modules"]
 }

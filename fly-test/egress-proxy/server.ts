@@ -1,11 +1,10 @@
 import fs from "node:fs";
-import indexPage from "./index.html";
 
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
-const FORWARD_PORT = Number(process.env.EGRESS_FORWARD_PORT ?? "18082");
 const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
-const BODY_PREVIEW_MAX = Number(process.env.BODY_PREVIEW_MAX ?? "280");
+const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
+const TRANSFORM_TIMEOUT_MS = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -20,21 +19,10 @@ const HOP_BY_HOP = new Set([
   "proxy-authentication",
 ]);
 
-function nowUtc(): string {
-  return new Date().toISOString();
-}
-
 function appendLog(message: string): void {
-  const line = `${nowUtc()} ${message}`;
+  const line = `${new Date().toISOString()} ${message}`;
   process.stdout.write(`${line}\n`);
   fs.appendFileSync(LOG_PATH, `${line}\n`);
-}
-
-function getTail(path: string, maxLines: number): string[] {
-  if (!fs.existsSync(path)) return [];
-  const data = fs.readFileSync(path, "utf8");
-  const lines = data.split("\n").filter((line) => line.length > 0);
-  return lines.slice(-maxLines);
 }
 
 function json(data: unknown, status = 200): Response {
@@ -42,66 +30,6 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
-}
-
-function compactPreview(input: string, maxChars = BODY_PREVIEW_MAX): string {
-  const compact = input.replace(/\s+/g, " ").trim();
-  if (compact.length <= maxChars) return compact;
-  return `${compact.slice(0, maxChars)}...`;
-}
-
-function headerSnapshot(input: Headers): Record<string, string> {
-  const keep = [
-    "host",
-    "user-agent",
-    "accept",
-    "content-type",
-    "content-length",
-    "x-iterate-target-url",
-    "x-iterate-request-host",
-    "x-iterate-remote-addr",
-    "x-forwarded-for",
-    "x-forwarded-proto",
-    "x-forwarded-host",
-    "server",
-    "location",
-    "cache-control",
-  ];
-  const out: Record<string, string> = {};
-  for (const key of keep) {
-    const value = input.get(key);
-    if (value) out[key] = compactPreview(value, 180);
-  }
-  return out;
-}
-
-function shouldTreatAsText(contentType: string): boolean {
-  const value = contentType.toLowerCase();
-  if (value.startsWith("text/")) return true;
-  if (value.includes("json")) return true;
-  if (value.includes("xml")) return true;
-  if (value.includes("javascript")) return true;
-  return false;
-}
-
-function buildRequestId(): string {
-  return crypto.randomUUID().slice(0, 8);
-}
-
-function normalizeHost(host: string): string {
-  const trimmed = host.trim().toLowerCase();
-  if (trimmed.startsWith("[")) {
-    const end = trimmed.indexOf("]");
-    if (end > 0) return trimmed.slice(1, end);
-  }
-  const parts = trimmed.split(":");
-  if (parts.length > 1) return parts[0] ?? trimmed;
-  return trimmed;
-}
-
-function isPolicyBlockedHost(hostname: string): boolean {
-  const host = normalizeHost(hostname);
-  return host === "iterate.com" || host.endsWith(".iterate.com");
 }
 
 function sanitizeInboundHeaders(input: Headers): Headers {
@@ -118,43 +46,39 @@ function sanitizeInboundHeaders(input: Headers): Headers {
   return headers;
 }
 
-function sanitizeOutboundHeaders(headers: Headers): Headers {
-  const out = new Headers();
-  for (const [key, value] of headers.entries()) {
+function sanitizeOutboundHeaders(input: Headers): Headers {
+  const headers = new Headers();
+  for (const [key, value] of input.entries()) {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP.has(lower)) continue;
     if (lower === "content-length") continue;
-    if (lower === "transfer-encoding") continue;
-    out.append(key, value);
+    headers.append(key, value);
   }
-  return out;
+  return headers;
 }
 
-function buildTargetFromForwardRequest(request: Request, url: URL): string | null {
-  const host = (
-    request.headers.get("x-forwarded-host") ??
-    request.headers.get("host") ??
-    ""
-  ).trim();
-  if (host.length === 0) return null;
-
-  const forwardedProto = (request.headers.get("x-forwarded-proto") ?? "").trim().toLowerCase();
-  const fallbackScheme = process.env.MITM_FORWARD_DEFAULT_SCHEME === "http" ? "http" : "https";
-  const scheme =
-    forwardedProto === "http" || forwardedProto === "https" ? forwardedProto : fallbackScheme;
-
-  let path = url.pathname;
-  if (path === "/forward") path = "/";
-  if (path.startsWith("/forward/")) path = path.slice("/forward".length);
-  if (path.length === 0) path = "/";
-
-  return `${scheme}://${host}${path}${url.search}`;
+function isTextLike(contentType: string): boolean {
+  const value = contentType.toLowerCase();
+  return (
+    value.startsWith("text/") ||
+    value.includes("json") ||
+    value.includes("xml") ||
+    value.includes("javascript")
+  );
 }
 
-async function handleTransform(request: Request, targetOverride?: string): Promise<Response> {
-  const requestId = buildRequestId();
+function getTail(maxLines: number): string {
+  if (!fs.existsSync(LOG_PATH)) return "";
+  const lines = fs
+    .readFileSync(LOG_PATH, "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0);
+  return `${lines.slice(-maxLines).join("\n")}\n`;
+}
+
+async function handleTransform(request: Request): Promise<Response> {
   const method = request.method.toUpperCase();
-  const target = (targetOverride ?? request.headers.get("x-iterate-target-url") ?? "").trim();
+  const target = (request.headers.get("x-iterate-target-url") ?? "").trim();
   if (target.length === 0) return json({ error: "missing url" }, 400);
 
   let parsed: URL;
@@ -163,115 +87,62 @@ async function handleTransform(request: Request, targetOverride?: string): Promi
   } catch {
     return json({ error: "invalid url" }, 400);
   }
+
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return json({ error: "unsupported protocol" }, 400);
   }
 
-  if (isPolicyBlockedHost(parsed.hostname)) {
-    const blockedBody =
-      "<!doctype html><html><body><h1>policy violation</h1><p>Access to this destination is forbidden by egress policy.</p></body></html>";
-    const blockedHeaders = new Headers({
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "x-iterate-mitm-proof": "1",
-      "x-iterate-mitm-policy": "deny-iterate.com",
-      "x-iterate-mitm-body-modified": "policy-violation",
-      "x-iterate-mitm-request-id": requestId,
-      "x-iterate-mitm-target-url": target,
-    });
-    appendLog(
-      `POLICY_BLOCK id=${requestId} method=${method} target="${target}" host="${parsed.hostname}" rule="deny-iterate.com"`,
-    );
-    return new Response(blockedBody, {
-      status: 451,
-      headers: blockedHeaders,
-    });
-  }
+  appendLog(`MITM_REQUEST method=${method} target="${target}"`);
 
-  const requestHeaders = sanitizeInboundHeaders(request.headers);
-  let requestBodyPreview = "";
-  if (method !== "GET" && method !== "HEAD") {
-    try {
-      requestBodyPreview = compactPreview(await request.clone().text());
-    } catch {
-      requestBodyPreview = "<unavailable>";
-    }
+  if (parsed.hostname === "iterate.com" || parsed.hostname.endsWith(".iterate.com")) {
+    appendLog(`POLICY_BLOCK method=${method} target="${target}"`);
+    return new Response("policy violation\n", {
+      status: 451,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
   }
-  appendLog(
-    `INSPECT_REQUEST id=${requestId} method=${method} target="${target}" inbound_headers=${JSON.stringify(headerSnapshot(request.headers))} upstream_headers=${JSON.stringify(headerSnapshot(requestHeaders))} body_preview=${JSON.stringify(requestBodyPreview)}`,
-  );
 
   const init: RequestInit = {
     method,
-    headers: requestHeaders,
+    headers: sanitizeInboundHeaders(request.headers),
     redirect: "manual",
+    signal: AbortSignal.timeout(
+      Number.isFinite(TRANSFORM_TIMEOUT_MS) ? TRANSFORM_TIMEOUT_MS : 5000,
+    ),
   };
-  if (method !== "GET" && method !== "HEAD") {
-    init.body = request.body;
-  }
-
-  const timeoutMsRaw = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
-  const timeoutMs = Number.isFinite(timeoutMsRaw)
-    ? Math.max(500, Math.min(timeoutMsRaw, 120000))
-    : 5000;
-  const signal = AbortSignal.timeout(timeoutMs);
-  init.signal = signal;
+  if (method !== "GET" && method !== "HEAD") init.body = request.body;
 
   const startedAt = Date.now();
   try {
     const upstream = await fetch(target, init);
-    const upstreamContentType = upstream.headers.get("content-type") ?? "";
-    const responseHeaders = sanitizeOutboundHeaders(upstream.headers);
-    responseHeaders.set("x-iterate-mitm-proof", "1");
-    responseHeaders.set("x-iterate-mitm-request-id", requestId);
-    responseHeaders.set("x-iterate-mitm-target-url", target);
+    const contentType = upstream.headers.get("content-type") ?? "";
+    const headers = sanitizeOutboundHeaders(upstream.headers);
 
     let bodyOut: BodyInit | null = upstream.body;
-    let bodyPreview = "<non-text>";
-    let bodyMutation = "none";
-
     if (method === "HEAD") {
       bodyOut = null;
-      bodyPreview = "<head-no-body>";
-    } else if (shouldTreatAsText(upstreamContentType)) {
-      const rawBody = await upstream.text();
-      bodyPreview = compactPreview(rawBody);
-      if (upstreamContentType.toLowerCase().includes("text/html")) {
-        bodyOut = `<!-- iterate-mitm request_id=${requestId} -->\n${rawBody}`;
-        bodyMutation = "html-comment-prefix";
-      } else if (upstreamContentType.toLowerCase().startsWith("text/plain")) {
-        bodyOut = `__ITERATE_MITM_PROOF__ request_id=${requestId}\n${rawBody}`;
-        bodyMutation = "text-prefix";
-      } else {
-        bodyOut = rawBody;
-      }
+    } else if (isTextLike(contentType)) {
+      const raw = await upstream.text();
+      bodyOut = `${PROOF_PREFIX}${raw}`;
     }
 
-    responseHeaders.set("x-iterate-mitm-body-modified", bodyMutation);
-    responseHeaders.delete("content-length");
     appendLog(
-      `INSPECT_RESPONSE id=${requestId} method=${method} target="${target}" status=${upstream.status} content_type=${JSON.stringify(upstreamContentType)} headers=${JSON.stringify(headerSnapshot(responseHeaders))} body_preview=${JSON.stringify(bodyPreview)} body_mutation=${bodyMutation}`,
-    );
-
-    appendLog(
-      `TRANSFORM_OK id=${requestId} method=${method} url="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
+      `TRANSFORM_OK method=${method} target="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
     );
 
     return new Response(bodyOut, {
       status: upstream.status,
-      headers: responseHeaders,
+      headers,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const durationMs = Date.now() - startedAt;
-    const timedOut =
-      (error instanceof DOMException && error.name === "TimeoutError") ||
-      message.toLowerCase().includes("timed out") ||
-      message.toLowerCase().includes("timeout");
     appendLog(
-      `${timedOut ? "TRANSFORM_TIMEOUT" : "TRANSFORM_ERROR"} id=${requestId} method=${method} url="${target}" duration_ms=${durationMs} err="${message}"`,
+      `TRANSFORM_ERROR method=${method} target="${target}" duration_ms=${Date.now() - startedAt} err="${message}"`,
     );
-    return json({ error: message, timedOut, requestId }, timedOut ? 504 : 502);
+    return json({ error: message }, 502);
   }
 }
 
@@ -282,14 +153,19 @@ appendLog(`BOOT pid=${process.pid} viewer_port=${VIEWER_PORT}`);
 Bun.serve({
   port: VIEWER_PORT,
   hostname: "::",
-  idleTimeout: 120,
-  routes: {
-    "/": indexPage,
-  },
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/") {
+      return new Response("egress proxy\n", {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
     if (url.pathname === "/healthz") {
-      return new Response("ok\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
+      return new Response("ok\n", {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
     }
 
     if (url.pathname === "/ca.crt") {
@@ -299,8 +175,7 @@ Bun.serve({
           headers: { "content-type": "text/plain; charset=utf-8" },
         });
       }
-      const body = fs.readFileSync(MITM_CA_CERT_PATH);
-      return new Response(body, {
+      return new Response(fs.readFileSync(MITM_CA_CERT_PATH), {
         headers: {
           "content-type": "application/x-pem-file",
           "cache-control": "no-store",
@@ -309,12 +184,9 @@ Bun.serve({
     }
 
     if (url.pathname === "/api/tail") {
-      const requestedLines = Number(url.searchParams.get("lines") ?? "300");
-      const maxLines = Number.isNaN(requestedLines)
-        ? 300
-        : Math.max(1, Math.min(requestedLines, 1000));
-      const text = `${getTail(LOG_PATH, maxLines).join("\n")}\n`;
-      return new Response(text, {
+      const requested = Number(url.searchParams.get("lines") ?? "300");
+      const lines = Number.isFinite(requested) ? Math.max(1, Math.min(1000, requested)) : 300;
+      return new Response(getTail(lines), {
         headers: {
           "content-type": "text/plain; charset=utf-8",
           "cache-control": "no-store",
@@ -326,13 +198,7 @@ Bun.serve({
       return handleTransform(request);
     }
 
-    if (url.pathname === "/forward" || url.pathname.startsWith("/forward/")) {
-      const target = buildTargetFromForwardRequest(request, url);
-      if (!target) return json({ error: "missing host for /forward target reconstruction" }, 400);
-      return handleTransform(request, target);
-    }
-
-    return new Response("not found", {
+    return new Response("not found\n", {
       status: 404,
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
@@ -340,20 +206,3 @@ Bun.serve({
 });
 
 appendLog(`VIEWER_LISTEN port=${VIEWER_PORT}`);
-
-Bun.serve({
-  port: FORWARD_PORT,
-  hostname: "::",
-  idleTimeout: 120,
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/healthz") {
-      return new Response("ok\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
-    }
-    const target = buildTargetFromForwardRequest(request, url);
-    if (!target) return json({ error: "missing host for forward target reconstruction" }, 400);
-    return handleTransform(request, target);
-  },
-});
-
-appendLog(`FORWARD_LISTEN port=${FORWARD_PORT}`);
