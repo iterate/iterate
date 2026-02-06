@@ -67,6 +67,7 @@ const PIDNAP_PORT = 9876;
 export abstract class Sandbox {
   abstract readonly providerId: string;
   abstract readonly type: ProviderType;
+  private pidnapRpcBaseUrl?: string;
 
   // === Core abstraction (each provider implements) ===
 
@@ -96,8 +97,8 @@ export abstract class Sandbox {
    * Get a pidnap oRPC client for process management.
    */
   async pidnapClient(): Promise<PidnapClient> {
-    const baseUrl = await this.getPreviewUrl({ port: PIDNAP_PORT });
-    return createPidnapClient(`${baseUrl}/rpc`);
+    const baseUrl = await this.resolvePidnapRpcBaseUrl();
+    return createPidnapClient(baseUrl);
   }
 
   /**
@@ -109,6 +110,46 @@ export abstract class Sandbox {
     return createTRPCClient({
       links: [httpLink({ url: `${baseUrl}/api/trpc` })],
     });
+  }
+
+  /**
+   * Reset memoized client endpoint state after lifecycle changes
+   * (e.g. Docker restart can remap host ports).
+   */
+  protected resetClientCaches(): void {
+    this.pidnapRpcBaseUrl = undefined;
+  }
+
+  /**
+   * Detect pidnap RPC base path.
+   *
+   * Old snapshots use "/rpc/*" while newer builds serve at root ("/*").
+   * We probe both for compatibility so tests can target mixed snapshots.
+   */
+  private async resolvePidnapRpcBaseUrl(): Promise<string> {
+    if (this.pidnapRpcBaseUrl) return this.pidnapRpcBaseUrl;
+
+    const previewUrl = await this.getPreviewUrl({ port: PIDNAP_PORT });
+    const candidates = [`${previewUrl}/rpc`, previewUrl];
+
+    for (const candidate of candidates) {
+      try {
+        const response = await fetch(`${candidate}/health`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+          signal: AbortSignal.timeout(5000),
+        });
+        if (response.ok) {
+          this.pidnapRpcBaseUrl = candidate;
+          return candidate;
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    throw new Error("pidnap RPC endpoint is not ready yet");
   }
 }
 

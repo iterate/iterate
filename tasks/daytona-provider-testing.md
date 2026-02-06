@@ -8,93 +8,111 @@ size: medium
 
 Validate that sandbox integration tests work against Daytona provider, not just Docker.
 
-## Test Progress (2026-02-05)
+## Status Update (2026-02-06)
 
-### Bugs Fixed
+### What Is Working
 
-1. **Constructor initialization bug** (`sandbox/providers/types.ts`)
-   - Issue: Parent class constructor called `this.envSchema.parse()` but `envSchema` is a field declaration that initializes AFTER `super()` returns
-   - Fix: Removed `parseEnv` call from parent constructor; each subclass now calls `this.parseEnv(rawEnv)` after `super()`
+1. Daytona daemon integration now passes with snapshot `iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6`.
+2. Pidnap client works across snapshot variants:
+   - old path style: `/rpc/*`
+   - new path style: `/*`
+3. Daytona-specific flake reduction shipped:
+   - removed noisy debug logs from provider implementation
+   - daemon test groups now run sequentially (not concurrent sandbox bursts)
+   - readiness waits use pidnap `waitForRunning` with retries
+4. Docker restart reliability bug fixed in provider:
+   - reset cached pidnap endpoint when container lifecycle changes
+   - add hard timeout around Docker `start`/`restart` operations
+5. Provider-specific sync coverage now isolated:
+   - Docker-only host/worktree sync tests moved to `sandbox/providers/docker/host-sync.test.ts`
+   - shared minimal tests remain provider-agnostic
 
-2. **Sandbox name collisions** (`sandbox/providers/daytona/provider.ts`)
-   - Issue: Concurrent tests tried to create sandboxes with same name
-   - Fix: Added random 6-char suffix to sandbox names: `${machineSlug}-${randomSuffix}`
+### What Was Broken And Fixed
 
-3. **Shell argument quoting** (`sandbox/providers/daytona/provider.ts`)
-   - Issue: Daytona SDK takes command as string, not array; shell special chars broke piping
-   - Fix: Added quoting in `exec()` that wraps args containing special chars in single quotes
+1. **Core Daytona failure**
+   - Symptom: daemon tests timed out on `waitForServiceHealthy`.
+   - Root cause: `Sandbox.pidnapClient()` hardcoded `.../rpc`, but tested snapshot served pidnap RPC at root (`/health` and procedures under `/`).
+   - Fix: runtime RPC base-path detection in `sandbox/providers/types.ts`.
 
-### Test Results
+2. **Post-restart Docker failure**
+   - Symptom: after `sandbox.restart()`, pidnap checks failed (`fetch failed`) or hung.
+   - Root cause: cached pidnap endpoint contained old remapped host port.
+   - Fix: cache reset on lifecycle transitions + Docker lifecycle timeout guard.
 
-**Minimal Container Tests (7 tests) - ALL PASS**
+3. **Cross-provider test coupling**
+   - Symptom: host-sync/worktree assertions polluted Daytona runs.
+   - Fix: moved those cases into Docker provider test file.
 
-```bash
-doppler run --config dev -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona \
-  SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6 \
-  pnpm sandbox test --run -t "Minimal Container Tests"
-```
+### Verified Test Matrix (local)
 
-- container setup correct
-- git operations work
-- shell sources ~/.iterate/.env automatically
-- DUMMY_ENV_VAR from skeleton .env is present
-- repo is a valid git repository
-- can read git branch
-- can read git commit
+1. Daytona:
+   - `test/sandbox-without-daemon.test.ts` PASS
+   - `test/provider-base-image.test.ts` PASS
+   - `test/daemon-in-sandbox.test.ts` PASS
+2. Docker:
+   - `providers/docker/host-sync.test.ts` PASS when image is pinned to local build via `SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local`
+   - `test/daemon-in-sandbox.test.ts` PASS with same pin (`SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local`)
+   - `test/daemon-in-sandbox.test.ts -t "filesystem persists and daemon restarts"` PASS with same pin
+3. Repo checks:
+   - `pnpm typecheck` PASS
+   - `pnpm lint` PASS
 
-**Daemon Integration Tests - FAILING**
+### Still Not Great / Risk
 
-Tests timeout waiting for `waitForServiceHealthy(sandbox, "daemon-backend")`.
+1. Docker local runs are very sensitive to image selection.
+   - If you omit `SANDBOX_TEST_SNAPSHOT_ID`, tests may use `ghcr.io/iterate/sandbox:local` and produce misleading failures.
+2. Docker daemon on this machine intermittently stalls under long, mixed test runs.
+   - This caused stale hanging test processes and non-representative flake.
+3. Timeout handling is still split across tests and provider code; not fully centralized.
 
-### Root Cause Analysis
+### Coverage Gaps / Tech Debt
 
-The `waitForServiceHealthy` function uses `pidnapClient()` which calls oRPC endpoints via Daytona proxy.
+1. Base provider abstraction still lacks direct unit tests for:
+   - pidnap RPC endpoint detection behavior (`/rpc` vs `/`)
+   - cache invalidation semantics across lifecycle calls
+2. Docker provider lifecycle timeout paths are untested (no failure-injection test).
+3. Some provider contract behavior is integration-tested only, not unit-tested.
 
-**What works:**
+### Naming / Env Vars / Abstraction Notes
 
-- Daemon health endpoint: `https://3000-{id}.proxy.daytona.works/api/health` returns `200 OK`
-- Local daemon health: `curl localhost:3000/api/health` returns `{"status":"ok"}`
-- Daytona proxy works correctly for HTTP endpoints
+1. `SANDBOX_TEST_SNAPSHOT_ID` semantics are good (cross-provider), but local Docker ergonomics need one explicit warning in docs/scripts that default image may not be fresh.
+2. The base `Sandbox` now owns endpoint detection/caching. This is correct, but restart semantics forced cross-cutting cache invalidation hooks; that coupling should be documented in the base interface comments.
+3. Provider split is cleaner after moving Docker-specific sync tests out of shared files.
 
-**What doesn't work:**
+### External Reviewer Notes: Take/Leave
 
-- Pidnap oRPC endpoint: `https://9876-{id}.proxy.daytona.works/rpc/manager.status` returns `404 Not Found`
-- Local pidnap also returns 404: `curl -X POST localhost:9876/rpc/manager.status -H 'Content-Type: application/json' -d '{}'`
+1. **Taken now**
+   - Provider-specific tests separated from cross-provider tests.
+   - Reduced over-logging/debug noise in provider code.
+2. **Deferred (outside this task)**
+   - Egress-proxy regex issue
+   - migration safety changes
+   - egress-approvals route test suite
+   - broad duplication refactors in integrations/workflows
 
-**Key insight:** The issue is NOT with Daytona's proxy. Port 9876 is listening, pidnap process is running, but the oRPC endpoint paths don't match. The `RPCHandler` in `packages/pidnap/src/cli.ts` is mounted with `prefix: "/rpc"` but requests to `/rpc/manager.status` return 404.
+### Next Work To Close Task
 
-### Next Steps
-
-1. **Debug oRPC routing** - Investigate why `/rpc/manager.status` returns 404:
-   - Check oRPC version in the snapshot vs current code
-   - Test locally with Docker to see if same issue exists
-   - Add debug logging to pidnap RPCHandler to see what paths it receives
-
-2. **Alternative approach** - Since daemon works, could modify tests to:
-   - Skip `waitForServiceHealthy` for daemon tests
-   - Use daemon health check instead of pidnap health
-   - Test tRPC endpoints directly without pidnap client
-
-3. **Snapshot rebuild** - If oRPC version mismatch:
-   - Rebuild snapshot with current code: `doppler run -- pnpm sandbox daytona:push`
-   - Re-test with new snapshot
+1. Add unit tests for `pidnapClient()` endpoint detection + cache reset.
+2. Stabilize Docker full-suite run in one command on this machine (currently intermittent daemon pressure issue).
+3. Keep CI-driven follow-up separate from this task file once stable.
 
 ## Commands Reference
 
 ```bash
-# Run minimal tests (pass)
+# Daytona full integration subset
 doppler run --config dev -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona \
   SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6 \
-  pnpm sandbox test --run -t "Minimal Container Tests"
+  SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT=iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6 \
+  pnpm sandbox test --run \
+    test/sandbox-without-daemon.test.ts \
+    test/provider-base-image.test.ts \
+    test/daemon-in-sandbox.test.ts \
+    --maxWorkers=1
 
-# Run daemon tests (fail - for debugging)
-doppler run --config dev -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona \
-  SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox-f3cdc8d42015edec580b96bcb7f3a55d48b4ecc6 \
-  KEEP_SANDBOX_CONTAINER=true \
-  pnpm sandbox test --run -t "daemon accessible"
-
-# List existing snapshots
-doppler run --config dev -- pnpm sandbox daytona:list-snapshots
+# Docker host sync tests (must pin image)
+env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
+  SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local \
+  pnpm sandbox test --run providers/docker/host-sync.test.ts --maxWorkers=1
 ```
 
 ## Context

@@ -30,6 +30,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "../../..");
 
 const PIDNAP_PORT = 9876;
+const LIFECYCLE_TIMEOUT_MS = 120_000;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -120,7 +121,12 @@ export class DockerSandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    await dockerApi("POST", `/containers/${this.providerId}/start`, {});
+    this.resetClientCaches();
+    await withTimeout(
+      dockerApi("POST", `/containers/${this.providerId}/start`, {}),
+      LIFECYCLE_TIMEOUT_MS,
+      "start",
+    );
     this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
   }
 
@@ -133,7 +139,12 @@ export class DockerSandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
-    await dockerApi("POST", `/containers/${this.providerId}/restart`, {});
+    this.resetClientCaches();
+    await withTimeout(
+      dockerApi("POST", `/containers/${this.providerId}/restart`, {}),
+      LIFECYCLE_TIMEOUT_MS,
+      "restart",
+    );
     this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
   }
 
@@ -397,4 +408,24 @@ async function waitForEntrypointSignal(sandbox: Sandbox, timeoutMs: number): Pro
     }
   }
   throw new Error("Timeout waiting for /tmp/reached-entrypoint");
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  operation: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Docker lifecycle operation timed out: ${operation} (${timeoutMs}ms)`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

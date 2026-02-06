@@ -110,7 +110,7 @@ export default workflow({
             '  echo "Missing Depot build metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
-            'echo "image_name=${{ inputs.image_name || \"iterate-sandbox:ci\" }}" >> "$GITHUB_OUTPUT"',
+            'echo "image_name=${{ inputs.image_name || "iterate-sandbox:ci" }}" >> "$GITHUB_OUTPUT"',
             'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
             'echo "depot_project_id=$depot_project_id" >> "$GITHUB_OUTPUT"',
             'echo "depot_save_tag=$depot_save_tag" >> "$GITHUB_OUTPUT"',
@@ -203,7 +203,7 @@ export default workflow({
             `doppler run -- bash -c 'jq -n \\
               --arg apiKey "$DAYTONA_API_KEY" \\
               --arg orgId "$DAYTONA_ORG_ID" \\
-              "{activeProfile: \\\"ci\\\", profiles: [{id: \\\"ci\\\", name: \\\"ci\\\", api: {url: \\\"https://app.daytona.io/api\\\", key: \\\$apiKey}, activeOrganizationId: \\\$orgId}]}" \\
+              "{activeProfile: \\"ci\\", profiles: [{id: \\"ci\\", name: \\"ci\\", api: {url: \\"https://app.daytona.io/api\\", key: $apiKey}, activeOrganizationId: $orgId}]}" \\
               > ~/.config/daytona/config.json'`,
             "daytona snapshot list --limit 1",
           ].join("\n"),

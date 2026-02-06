@@ -190,7 +190,7 @@ jobs:
           doppler run -- bash -c 'jq -n \
                         --arg apiKey "$DAYTONA_API_KEY" \
                         --arg orgId "$DAYTONA_ORG_ID" \
-                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: \$apiKey}, activeOrganizationId: \$orgId}]}" \
+                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: $apiKey}, activeOrganizationId: $orgId}]}" \
                         > ~/.config/daytona/config.json'
           daytona snapshot list --limit 1
       - id: push

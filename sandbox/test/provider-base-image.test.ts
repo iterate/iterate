@@ -71,6 +71,6 @@ describe
         const fetched = await fetchPreview("/preview-ok.txt");
         expect(await fetched.text()).toContain(PREVIEW_BODY);
       },
-      30000,
+      60000,
     );
   });

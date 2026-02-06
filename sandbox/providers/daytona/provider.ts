@@ -51,7 +51,6 @@ export class DaytonaSandbox extends Sandbox {
 
   async getFetch(opts: { port: number }): Promise<typeof fetch> {
     const baseUrl = await this.getPreviewUrl(opts);
-    console.log(`[daytona] getFetch: port=${opts.port} baseUrl=${baseUrl}`);
     return (input: string | Request | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? `${baseUrl}${input}` : input;
       return fetch(url, init);
@@ -59,9 +58,7 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async getPreviewUrl(opts: { port: number }): Promise<string> {
-    const url = `https://${opts.port}-${this.providerId}.proxy.daytona.works`;
-    console.log(`[daytona] getPreviewUrl: port=${opts.port} url=${url}`);
-    return url;
+    return `https://${opts.port}-${this.providerId}.proxy.daytona.works`;
   }
 
   // === Lifecycle ===
@@ -83,10 +80,8 @@ export class DaytonaSandbox extends Sandbox {
         return arg;
       })
       .join(" ");
-    console.log(`[daytona] exec: ${quotedCmd}`);
     const sandbox = await this.getSdkSandbox();
     const result = await sandbox.process.executeCommand(quotedCmd);
-    console.log(`[daytona] exec result: ${(result.result ?? "").slice(0, 200)}`);
     return result.result ?? "";
   }
 
@@ -106,6 +101,7 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
+    this.resetClientCaches();
     const sandbox = await this.getSdkSandbox();
     await sandbox.start();
   }
@@ -118,6 +114,7 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
+    this.resetClientCaches();
     const sandbox = await this.getSdkSandbox();
     if (sandbox.state === "started") {
       await sandbox.stop();
@@ -126,14 +123,11 @@ export class DaytonaSandbox extends Sandbox {
   }
 
   async delete(): Promise<void> {
-    console.log(`[daytona] delete: ${this.providerId}`);
     const sandbox = await this.getSdkSandbox();
     if (sandbox.state === "started") {
-      console.log(`[daytona] stopping before delete...`);
       await sandbox.stop();
     }
     await sandbox.delete();
-    console.log(`[daytona] deleted: ${this.providerId}`);
   }
 }
 
@@ -185,9 +179,6 @@ export class DaytonaProvider extends SandboxProvider {
       : undefined;
 
     const snapshotId = opts.snapshotId ?? this.defaultSnapshotId;
-    console.log(`[daytona] Creating sandbox: name=${sandboxName} snapshot=${snapshotId}`);
-    const startTime = Date.now();
-
     const sdkSandbox = await this.daytona.create({
       name: sandboxName,
       snapshot: snapshotId,
@@ -197,9 +188,6 @@ export class DaytonaProvider extends SandboxProvider {
       public: true,
     });
 
-    console.log(
-      `[daytona] Sandbox created: id=${sdkSandbox.id} state=${sdkSandbox.state} (${Date.now() - startTime}ms)`,
-    );
     return new DaytonaSandbox(this.daytona, sdkSandbox.id);
   }
 

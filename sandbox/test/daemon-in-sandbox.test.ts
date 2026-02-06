@@ -31,25 +31,41 @@ import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./hel
 async function waitForServiceHealthy(
   sandbox: Sandbox,
   process: string,
-  timeoutMs = 30000,
+  timeoutMs = 60_000,
 ): Promise<void> {
-  const client = await sandbox.pidnapClient();
   const start = Date.now();
+  let lastError: unknown;
+
   while (Date.now() - start < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - start);
     try {
-      const info = await client.processes.get({ target: process });
-      if (info.state === "running") return;
-    } catch {
-      // Process not ready yet
+      const client = await sandbox.pidnapClient();
+      const status = await client.processes.waitForRunning({
+        target: process,
+        timeoutMs: Math.min(10_000, remainingMs),
+        pollIntervalMs: 500,
+        includeLogs: true,
+        logTailLines: 120,
+      });
+
+      if (status.state === "running") return;
+      if (status.state === "stopped" || status.state === "max-restarts-reached") {
+        throw new Error(
+          `Process ${process} failed while starting. Final state=${status.state}. Logs:\n${status.logs ?? "(none)"}`,
+        );
+      }
+    } catch (error) {
+      lastError = error;
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`Timeout waiting for ${process} to become healthy`);
+
+  throw new Error(`Timeout waiting for ${process} to become healthy: ${String(lastError)}`);
 }
 
 // ============ Pidnap-Specific Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS).concurrent("Pidnap Integration", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
       await waitForServiceHealthy(sandbox, "daemon-backend", 30000);
@@ -79,7 +95,7 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Pidnap Integration", () => {
           return info.effectiveEnv?.DYNAMIC_TEST_VAR;
         }, POLL_DEFAULTS)
         .toBe("added_at_runtime");
-    }, 50000);
+    }, 90000);
   });
 
   describe("Process Management", () => {
@@ -91,13 +107,13 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Pidnap Integration", () => {
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
         /Process not found/i,
       );
-    }, 50000);
+    }, 90000);
   });
 });
 
 // ============ Daemon Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS).concurrent("Daemon Integration", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   test.scoped({
     sandboxOptions: {
       id: "daemon-test",
@@ -122,7 +138,7 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Daemon Integration", () => {
     // Verify health from inside container
     const internalHealth = await sandbox.exec(["curl", "-s", "http://localhost:3000/api/health"]);
     expect(internalHealth.includes("ok") || internalHealth.includes("healthy")).toBe(true);
-  }, 50000);
+  }, 90000);
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
     // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
@@ -162,7 +178,7 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Daemon Integration", () => {
         });
       }, POLL_DEFAULTS)
       .toBe("connected");
-  }, 50000);
+  }, 90000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
     await waitForServiceHealthy(sandbox, "daemon-backend");
@@ -233,12 +249,12 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Daemon Integration", () => {
         return response.headers.get("content-type") ?? "";
       }, POLL_DEFAULTS)
       .toContain("text/html");
-  }, 50000);
+  }, 90000);
 });
 
 // ============ Container Restart Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS).concurrent("Container Restart", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
@@ -264,5 +280,5 @@ describe.runIf(RUN_SANDBOX_TESTS).concurrent("Container Restart", () => {
         { timeout: 60_000, interval: 500 }, // longer timeout for container restart
       )
       .toBe(true);
-  }, 90000);
+  }, 120000);
 });
