@@ -4,8 +4,14 @@
   "type": "module",
   "scripts": {
     "e2e": "tsx ./e2e/run-observability.ts",
+    "e2e:docker": "E2E_BACKEND=docker tsx ./e2e/run-observability.ts",
+    "docker:up": "docker compose -f ./docker-compose.local.yml -p fly-test-local up -d --build",
+    "docker:down": "docker compose -f ./docker-compose.local.yml -p fly-test-local down -v",
+    "docker:build": "docker compose -f ./docker-compose.local.yml -p fly-test-local build",
+    "docker:build:depot": "depot build --platform linux/amd64 --load -f ./docker/egress.Dockerfile -t fly-test-egress:local . && depot build --platform linux/amd64 --load -f ./docker/sandbox.Dockerfile -t fly-test-sandbox:local . && depot build --platform linux/amd64 --load -f ./docker/gateway.Dockerfile -t fly-test-gateway:local .",
     "typecheck": "tsc --noEmit -p ./tsconfig.json",
     "test": "vitest run",
+    "test:e2e:docker": "RUN_DOCKER_E2E=1 vitest run ./e2e/run-observability.docker.test.ts",
     "cleanup:all-machines": "bash ./scripts/cleanup-all-machines.sh",
     "tail:egress-log": "bash ./scripts/tail-egress-log.sh"
   },

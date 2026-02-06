@@ -4,6 +4,7 @@ import indexPage from "./index.html";
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
 const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
+const BODY_PREVIEW_MAX = Number(process.env.BODY_PREVIEW_MAX ?? "280");
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -42,6 +43,66 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function compactPreview(input: string, maxChars = BODY_PREVIEW_MAX): string {
+  const compact = input.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars)}...`;
+}
+
+function headerSnapshot(input: Headers): Record<string, string> {
+  const keep = [
+    "host",
+    "user-agent",
+    "accept",
+    "content-type",
+    "content-length",
+    "x-iterate-target-url",
+    "x-iterate-request-host",
+    "x-iterate-remote-addr",
+    "x-forwarded-for",
+    "x-forwarded-proto",
+    "x-forwarded-host",
+    "server",
+    "location",
+    "cache-control",
+  ];
+  const out: Record<string, string> = {};
+  for (const key of keep) {
+    const value = input.get(key);
+    if (value) out[key] = compactPreview(value, 180);
+  }
+  return out;
+}
+
+function shouldTreatAsText(contentType: string): boolean {
+  const value = contentType.toLowerCase();
+  if (value.startsWith("text/")) return true;
+  if (value.includes("json")) return true;
+  if (value.includes("xml")) return true;
+  if (value.includes("javascript")) return true;
+  return false;
+}
+
+function buildRequestId(): string {
+  return crypto.randomUUID().slice(0, 8);
+}
+
+function normalizeHost(host: string): string {
+  const trimmed = host.trim().toLowerCase();
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end > 0) return trimmed.slice(1, end);
+  }
+  const parts = trimmed.split(":");
+  if (parts.length > 1) return parts[0] ?? trimmed;
+  return trimmed;
+}
+
+function isPolicyBlockedHost(hostname: string): boolean {
+  const host = normalizeHost(hostname);
+  return host === "iterate.com" || host.endsWith(".iterate.com");
+}
+
 function sanitizeInboundHeaders(input: Headers): Headers {
   const headers = new Headers();
   for (const [key, value] of input.entries()) {
@@ -69,6 +130,7 @@ function sanitizeOutboundHeaders(headers: Headers): Headers {
 }
 
 async function handleTransform(request: Request): Promise<Response> {
+  const requestId = buildRequestId();
   const method = request.method.toUpperCase();
   const target = (request.headers.get("x-iterate-target-url") ?? "").trim();
   if (target.length === 0) return json({ error: "missing url" }, 400);
@@ -83,7 +145,40 @@ async function handleTransform(request: Request): Promise<Response> {
     return json({ error: "unsupported protocol" }, 400);
   }
 
+  if (isPolicyBlockedHost(parsed.hostname)) {
+    const blockedBody =
+      "<!doctype html><html><body><h1>policy violation</h1><p>Access to this destination is forbidden by egress policy.</p></body></html>";
+    const blockedHeaders = new Headers({
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-iterate-mitm-proof": "1",
+      "x-iterate-mitm-policy": "deny-iterate.com",
+      "x-iterate-mitm-body-modified": "policy-violation",
+      "x-iterate-mitm-request-id": requestId,
+      "x-iterate-mitm-target-url": target,
+    });
+    appendLog(
+      `POLICY_BLOCK id=${requestId} method=${method} target="${target}" host="${parsed.hostname}" rule="deny-iterate.com"`,
+    );
+    return new Response(blockedBody, {
+      status: 451,
+      headers: blockedHeaders,
+    });
+  }
+
   const requestHeaders = sanitizeInboundHeaders(request.headers);
+  let requestBodyPreview = "";
+  if (method !== "GET" && method !== "HEAD") {
+    try {
+      requestBodyPreview = compactPreview(await request.clone().text());
+    } catch {
+      requestBodyPreview = "<unavailable>";
+    }
+  }
+  appendLog(
+    `INSPECT_REQUEST id=${requestId} method=${method} target="${target}" inbound_headers=${JSON.stringify(headerSnapshot(request.headers))} upstream_headers=${JSON.stringify(headerSnapshot(requestHeaders))} body_preview=${JSON.stringify(requestBodyPreview)}`,
+  );
+
   const init: RequestInit = {
     method,
     headers: requestHeaders,
@@ -93,24 +188,68 @@ async function handleTransform(request: Request): Promise<Response> {
     init.body = request.body;
   }
 
+  const timeoutMsRaw = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
+  const timeoutMs = Number.isFinite(timeoutMsRaw)
+    ? Math.max(500, Math.min(timeoutMsRaw, 120000))
+    : 5000;
+  const signal = AbortSignal.timeout(timeoutMs);
+  init.signal = signal;
+
   const startedAt = Date.now();
   try {
     const upstream = await fetch(target, init);
+    const upstreamContentType = upstream.headers.get("content-type") ?? "";
     const responseHeaders = sanitizeOutboundHeaders(upstream.headers);
     responseHeaders.set("x-iterate-mitm-proof", "1");
+    responseHeaders.set("x-iterate-mitm-request-id", requestId);
+    responseHeaders.set("x-iterate-mitm-target-url", target);
 
+    let bodyOut: BodyInit | null = upstream.body;
+    let bodyPreview = "<non-text>";
+    let bodyMutation = "none";
+
+    if (method === "HEAD") {
+      bodyOut = null;
+      bodyPreview = "<head-no-body>";
+    } else if (shouldTreatAsText(upstreamContentType)) {
+      const rawBody = await upstream.text();
+      bodyPreview = compactPreview(rawBody);
+      if (upstreamContentType.toLowerCase().includes("text/html")) {
+        bodyOut = `<!-- iterate-mitm request_id=${requestId} -->\n${rawBody}`;
+        bodyMutation = "html-comment-prefix";
+      } else if (upstreamContentType.toLowerCase().startsWith("text/plain")) {
+        bodyOut = `__ITERATE_MITM_PROOF__ request_id=${requestId}\n${rawBody}`;
+        bodyMutation = "text-prefix";
+      } else {
+        bodyOut = rawBody;
+      }
+    }
+
+    responseHeaders.set("x-iterate-mitm-body-modified", bodyMutation);
+    responseHeaders.delete("content-length");
     appendLog(
-      `TRANSFORM_OK method=${method} url="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
+      `INSPECT_RESPONSE id=${requestId} method=${method} target="${target}" status=${upstream.status} content_type=${JSON.stringify(upstreamContentType)} headers=${JSON.stringify(headerSnapshot(responseHeaders))} body_preview=${JSON.stringify(bodyPreview)} body_mutation=${bodyMutation}`,
     );
 
-    return new Response(upstream.body, {
+    appendLog(
+      `TRANSFORM_OK id=${requestId} method=${method} url="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
+    );
+
+    return new Response(bodyOut, {
       status: upstream.status,
       headers: responseHeaders,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    appendLog(`TRANSFORM_ERROR method=${method} url="${target}" err="${message}"`);
-    return json({ error: message }, 502);
+    const durationMs = Date.now() - startedAt;
+    const timedOut =
+      (error instanceof DOMException && error.name === "TimeoutError") ||
+      message.toLowerCase().includes("timed out") ||
+      message.toLowerCase().includes("timeout");
+    appendLog(
+      `${timedOut ? "TRANSFORM_TIMEOUT" : "TRANSFORM_ERROR"} id=${requestId} method=${method} url="${target}" duration_ms=${durationMs} err="${message}"`,
+    );
+    return json({ error: message, timedOut, requestId }, timedOut ? 504 : 502);
   }
 }
 
@@ -121,6 +260,7 @@ appendLog(`BOOT pid=${process.pid} viewer_port=${VIEWER_PORT}`);
 Bun.serve({
   port: VIEWER_PORT,
   hostname: "::",
+  idleTimeout: 120,
   routes: {
     "/": indexPage,
   },

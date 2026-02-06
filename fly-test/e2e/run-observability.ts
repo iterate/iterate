@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { hostFromUrl, proxyHostForIp, urlEncodedForm } from "./run-observability-lib.ts";
+import { runDockerObservability } from "./run-observability-docker.ts";
 
 type Machine = {
   id: string;
@@ -20,6 +21,8 @@ type RunnerConfig = {
   flyDir: string;
   artifactDir: string;
   app: string;
+  backend: "fly" | "docker";
+  cleanupOnExit: boolean;
   org: string;
   region: string;
   targetUrl: string;
@@ -80,14 +83,29 @@ function findFlyDir(): string {
 
 function buildConfig(): RunnerConfig {
   const flyDir = findFlyDir();
+  const backendEnv = process.env["E2E_BACKEND"] ?? "fly";
+  const backend = backendEnv === "docker" ? "docker" : "fly";
   const app = process.env["APP_NAME"] ?? `iterate-node-egress-obsv-${nowTag()}`;
   const org = process.env["FLY_ORG"] ?? "iterate";
   const region = process.env["FLY_REGION"] ?? "iad";
-  const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
-  const runtimeImage = resolveRuntimeImage(flyDir);
+  const targetUrl =
+    process.env["TARGET_URL"] ??
+    (backend === "docker" ? "http://public-http:18090/" : "https://example.com/");
+  const runtimeImage = backend === "fly" ? resolveRuntimeImage(flyDir) : "unused-for-docker";
+  const cleanupOnExit = process.env["E2E_CLEANUP_ON_EXIT"] === "1";
   const artifactDir = join(flyDir, "proof-logs", app);
   mkdirSync(artifactDir, { recursive: true });
-  return { flyDir, artifactDir, app, org, region, targetUrl, runtimeImage };
+  return {
+    flyDir,
+    artifactDir,
+    app,
+    backend,
+    cleanupOnExit,
+    org,
+    region,
+    targetUrl,
+    runtimeImage,
+  };
 }
 
 function resolveRuntimeImage(flyDir: string): string {
@@ -271,10 +289,23 @@ function readFileOrEmpty(path: string): string {
 }
 
 async function main(): Promise<void> {
-  const flyApiKey = requireEnv("FLY_API_KEY");
   const config = buildConfig();
   const summaryPath = join(config.artifactDir, "summary.txt");
   const log = makeLogger(summaryPath);
+
+  if (config.backend === "docker") {
+    await runDockerObservability({
+      flyDir: config.flyDir,
+      artifactDir: config.artifactDir,
+      app: config.app,
+      targetUrl: config.targetUrl,
+      cleanupOnExit: config.cleanupOnExit,
+      log,
+    });
+    return;
+  }
+
+  const flyApiKey = requireEnv("FLY_API_KEY");
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,

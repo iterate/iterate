@@ -1,0 +1,103 @@
+services:
+  public-http:
+    build:
+      context: .
+      dockerfile: docker/public-http.Dockerfile
+    ports:
+      - "${UPSTREAM_HOST_PORT:-38090}:18090"
+    networks:
+      fly-test-net:
+        ipv4_address: "${UPSTREAM_IP:-172.30.0.5}"
+
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: docker/egress.Dockerfile
+    environment:
+      EGRESS_MITM_PORT: "18080"
+      EGRESS_VIEWER_PORT: "18081"
+      MITM_DIR: /data/mitm
+      EGRESS_LOG_PATH: /tmp/egress-proxy.log
+    volumes:
+      - fly-test-mitm-data:/data/mitm
+    ports:
+      - "${EGRESS_VIEWER_HOST_PORT:-38081}:18081"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      fly-test-net:
+        ipv4_address: "${EGRESS_PROXY_IP:-172.30.0.4}"
+
+  egress-gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    environment:
+      SANDBOX_IP: "${SANDBOX_IP:-172.30.0.3}"
+      MITM_IP: "${EGRESS_PROXY_IP:-172.30.0.4}"
+      GATEWAY_IP: "${EGRESS_GATEWAY_IP:-172.30.0.2}"
+      SUBNET_CIDR: "${FLY_TEST_SUBNET_CIDR:-172.30.0.0/24}"
+      EGRESS_MITM_PORT: "18080"
+      UPSTREAM_IP: "${UPSTREAM_IP:-172.30.0.5}"
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    networks:
+      fly-test-net:
+        ipv4_address: "${EGRESS_GATEWAY_IP:-172.30.0.2}"
+
+  sandbox-ui:
+    build:
+      context: .
+      dockerfile: docker/sandbox.Dockerfile
+    environment:
+      SANDBOX_PORT: "8080"
+      EGRESS_GATEWAY_IP: "${EGRESS_GATEWAY_IP:-172.30.0.2}"
+      EGRESS_PROXY_HOST: "${EGRESS_GATEWAY_IP:-172.30.0.2}"
+      EGRESS_MITM_PORT: "18080"
+      EGRESS_VIEWER_HOST: "egress-proxy"
+      EGRESS_VIEWER_PORT: "18081"
+      DEFAULT_TARGET_URL: "${TARGET_URL:-http://public-http:18090/}"
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "${SANDBOX_HOST_PORT:-38080}:8080"
+    dns:
+      - "${EGRESS_GATEWAY_IP:-172.30.0.2}"
+    depends_on:
+      - public-http
+      - egress-proxy
+      - egress-gateway
+    networks:
+      fly-test-net:
+        ipv4_address: "${SANDBOX_IP:-172.30.0.3}"
+
+  sandbox-tunnel:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--url", "http://sandbox-ui:8080", "--no-autoupdate", "--loglevel", "info"]
+    depends_on:
+      - sandbox-ui
+    networks:
+      fly-test-net:
+        ipv4_address: "${SANDBOX_TUNNEL_IP:-172.30.0.10}"
+
+  egress-tunnel:
+    image: cloudflare/cloudflared:latest
+    command:
+      ["tunnel", "--url", "http://egress-proxy:18081", "--no-autoupdate", "--loglevel", "info"]
+    depends_on:
+      - egress-proxy
+    networks:
+      fly-test-net:
+        ipv4_address: "${EGRESS_TUNNEL_IP:-172.30.0.11}"
+
+volumes:
+  fly-test-mitm-data:
+
+networks:
+  fly-test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${FLY_TEST_SUBNET_CIDR:-172.30.0.0/24}"
