@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Loader2Icon } from "lucide-react";
@@ -13,103 +13,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
-import { AgentTypeIcon } from "@/components/agent-type-icons.tsx";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 
-const adjectives = [
-  "swift",
-  "bright",
-  "calm",
-  "bold",
-  "keen",
-  "warm",
-  "cool",
-  "wild",
-  "soft",
-  "sharp",
-  "quick",
-  "quiet",
-  "brave",
-  "fair",
-  "kind",
-  "wise",
-  "free",
-  "pure",
-  "true",
-  "clear",
-  "fresh",
-  "light",
-  "dark",
-  "deep",
-  "high",
-  "low",
-  "wide",
-  "thin",
-  "vast",
-  "dense",
-  "rare",
-  "rich",
-  "slim",
-  "trim",
-  "loud",
-  "mild",
-  "pale",
-  "pink",
-  "gold",
-  "jade",
-];
-
-const nouns = [
-  "fox",
-  "owl",
-  "oak",
-  "river",
-  "peak",
-  "cloud",
-  "stone",
-  "wave",
-  "leaf",
-  "spark",
-  "wind",
-  "rain",
-  "snow",
-  "fire",
-  "star",
-  "moon",
-  "sun",
-  "tree",
-  "lake",
-  "hill",
-  "bird",
-  "fish",
-  "bear",
-  "deer",
-  "wolf",
-  "hawk",
-  "crow",
-  "frog",
-  "moth",
-  "swan",
-  "rose",
-  "fern",
-  "pine",
-  "elm",
-  "ash",
-  "bay",
-  "cove",
-  "glen",
-  "vale",
-  "ridge",
-];
-
-function generateRandomName(): string {
-  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  const num = Math.floor(Math.random() * 1000);
-  return `${adj}-${noun}-${num}`;
-}
-
-export const Route = createFileRoute("/_app/agents/new")({
+export const Route = createFileRoute("/_app/agent/new")({
   validateSearch: (search: Record<string, unknown>) => ({
     name: typeof search.name === "string" ? search.name : undefined,
   }),
@@ -124,7 +30,11 @@ const agentTypeOptions: { value: AgentType; label: string }[] = [
 
 function NewAgentPage() {
   return (
-    <div className="h-full p-4 md:p-6">
+    <div className="h-full p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold">New Agent</h1>
+        <p className="text-muted-foreground">Create a new coding agent session.</p>
+      </div>
       <Suspense
         fallback={
           <div className="flex items-center justify-center py-8">
@@ -158,12 +68,6 @@ function NewAgentForm() {
   const [slug, setSlug] = useState(initialName ?? "");
   const [harnessType, setHarnessType] = useState<AgentType>("claude-code");
   const [workingDirectory, setWorkingDirectory] = useState(defaultCwd);
-
-  useEffect(() => {
-    if (!initialName && !slug) {
-      setSlug(generateRandomName());
-    }
-  }, [initialName, slug]);
 
   const displayPath = (path: string) =>
     path.startsWith(homeDir) ? path.replace(homeDir, "~") : path;
@@ -217,10 +121,7 @@ function NewAgentForm() {
           <SelectContent>
             {agentTypeOptions.map((opt) => (
               <SelectItem key={opt.value} value={opt.value}>
-                <div className="flex items-center gap-2">
-                  <AgentTypeIcon type={opt.value} className="size-4" />
-                  {opt.label}
-                </div>
+                {opt.label}
               </SelectItem>
             ))}
           </SelectContent>

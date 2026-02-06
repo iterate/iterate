@@ -12,12 +12,11 @@ export const Route = createFileRoute("/_app")({
 function AppLayout() {
   const params = useParams({ strict: false });
   const agentSlug = "slug" in params ? (params.slug as string) : undefined;
-  const agentPath = agentSlug ? decodeURIComponent(agentSlug) : undefined;
 
   const trpc = useTRPC();
   const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
 
-  const currentAgent = agents.find((a) => a.path === agentPath);
+  const currentAgent = agents.find((a) => a.slug === agentSlug);
 
   return (
     <SidebarProvider defaultOpen={true}>
