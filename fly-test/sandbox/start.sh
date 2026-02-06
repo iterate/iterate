@@ -7,6 +7,7 @@ TUNNEL_URL_FILE="/tmp/sandbox-tunnel-url.txt"
 SANDBOX_PORT="${SANDBOX_PORT:-8080}"
 EGRESS_MITM_PORT="${EGRESS_MITM_PORT:-18080}"
 EGRESS_VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
+MITM_IMPL="${MITM_IMPL:-go}"
 APP_DIR="/proof/sandbox"
 
 log() {
@@ -79,18 +80,26 @@ retry 15 curl -fsSL "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate
 update-ca-certificates >>"$INIT_LOG" 2>&1
 log "ca_install=ok source=${EGRESS_CA_URL}"
 
-export HTTP_PROXY="$EGRESS_PROXY_URL"
-export HTTPS_PROXY="$EGRESS_PROXY_URL"
-export http_proxy="$EGRESS_PROXY_URL"
-export https_proxy="$EGRESS_PROXY_URL"
-export NO_PROXY="localhost,127.0.0.1,::1"
-export no_proxy="localhost,127.0.0.1,::1"
+if [ "$MITM_IMPL" = "go" ]; then
+  export HTTP_PROXY="$EGRESS_PROXY_URL"
+  export HTTPS_PROXY="$EGRESS_PROXY_URL"
+  export http_proxy="$EGRESS_PROXY_URL"
+  export https_proxy="$EGRESS_PROXY_URL"
+  export NO_PROXY="localhost,127.0.0.1,::1"
+  export no_proxy="localhost,127.0.0.1,::1"
+else
+  unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy || true
+fi
 export NODE_EXTRA_CA_CERTS="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 export CURL_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 export REQUESTS_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 export GIT_SSL_CAINFO="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 
-log "proxy_env=\"${EGRESS_PROXY_URL}\""
+if [ "$MITM_IMPL" = "go" ]; then
+  log "proxy_env=\"${EGRESS_PROXY_URL}\""
+else
+  log "proxy_env=disabled mitm_impl=${MITM_IMPL}"
+fi
 
 cd "$APP_DIR"
 if [ ! -d "$APP_DIR/node_modules" ]; then

@@ -1,4 +1,4 @@
-module fly-test/egress-proxy/go-mitm
+module fly-test/mitm-go/go-mitm
 
 go 1.23.0
 

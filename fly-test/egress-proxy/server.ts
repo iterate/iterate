@@ -3,6 +3,7 @@ import indexPage from "./index.html";
 
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
+const FORWARD_PORT = Number(process.env.EGRESS_FORWARD_PORT ?? "18082");
 const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
 const BODY_PREVIEW_MAX = Number(process.env.BODY_PREVIEW_MAX ?? "280");
 
@@ -129,10 +130,31 @@ function sanitizeOutboundHeaders(headers: Headers): Headers {
   return out;
 }
 
-async function handleTransform(request: Request): Promise<Response> {
+function buildTargetFromForwardRequest(request: Request, url: URL): string | null {
+  const host = (
+    request.headers.get("x-forwarded-host") ??
+    request.headers.get("host") ??
+    ""
+  ).trim();
+  if (host.length === 0) return null;
+
+  const forwardedProto = (request.headers.get("x-forwarded-proto") ?? "").trim().toLowerCase();
+  const fallbackScheme = process.env.MITM_FORWARD_DEFAULT_SCHEME === "http" ? "http" : "https";
+  const scheme =
+    forwardedProto === "http" || forwardedProto === "https" ? forwardedProto : fallbackScheme;
+
+  let path = url.pathname;
+  if (path === "/forward") path = "/";
+  if (path.startsWith("/forward/")) path = path.slice("/forward".length);
+  if (path.length === 0) path = "/";
+
+  return `${scheme}://${host}${path}${url.search}`;
+}
+
+async function handleTransform(request: Request, targetOverride?: string): Promise<Response> {
   const requestId = buildRequestId();
   const method = request.method.toUpperCase();
-  const target = (request.headers.get("x-iterate-target-url") ?? "").trim();
+  const target = (targetOverride ?? request.headers.get("x-iterate-target-url") ?? "").trim();
   if (target.length === 0) return json({ error: "missing url" }, 400);
 
   let parsed: URL;
@@ -304,6 +326,12 @@ Bun.serve({
       return handleTransform(request);
     }
 
+    if (url.pathname === "/forward" || url.pathname.startsWith("/forward/")) {
+      const target = buildTargetFromForwardRequest(request, url);
+      if (!target) return json({ error: "missing host for /forward target reconstruction" }, 400);
+      return handleTransform(request, target);
+    }
+
     return new Response("not found", {
       status: 404,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -312,3 +340,20 @@ Bun.serve({
 });
 
 appendLog(`VIEWER_LISTEN port=${VIEWER_PORT}`);
+
+Bun.serve({
+  port: FORWARD_PORT,
+  hostname: "::",
+  idleTimeout: 120,
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/healthz") {
+      return new Response("ok\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+    const target = buildTargetFromForwardRequest(request, url);
+    if (!target) return json({ error: "missing host for forward target reconstruction" }, 400);
+    return handleTransform(request, target);
+  },
+});
+
+appendLog(`FORWARD_LISTEN port=${FORWARD_PORT}`);
