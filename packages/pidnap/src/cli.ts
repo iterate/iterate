@@ -146,7 +146,10 @@ const cliRouter = os.router({
             }
           }
 
-          const { matched } = await handler.handle(req, res, { context: { manager } });
+          const { matched } = await handler.handle(req, res, {
+            prefix: "/rpc",
+            context: { manager },
+          });
           if (!matched) {
             res.writeHead(404).end();
           }
