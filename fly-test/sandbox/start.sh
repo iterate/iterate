@@ -5,6 +5,8 @@ INIT_LOG="/tmp/sandbox-init.log"
 TUNNEL_LOG="/tmp/sandbox-tunnel.log"
 TUNNEL_URL_FILE="/tmp/sandbox-tunnel-url.txt"
 SANDBOX_PORT="${SANDBOX_PORT:-8080}"
+EGRESS_MITM_PORT="${EGRESS_MITM_PORT:-18080}"
+EGRESS_VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
 APP_DIR="/opt/sandbox-app"
 
 log() {
@@ -72,12 +74,15 @@ wait_for_tunnel_url() {
 
 : >"$INIT_LOG"
 log "START host=$(hostname) region=${PROOF_REGION:-unknown}"
-log "EGRESS_PROXY_URL=${EGRESS_PROXY_URL:-unset}"
+log "EGRESS_PROXY_HOST=${EGRESS_PROXY_HOST:-unset}"
 
-if [ -z "${EGRESS_PROXY_URL:-}" ]; then
-  log "ERROR missing EGRESS_PROXY_URL"
+if [ -z "${EGRESS_PROXY_HOST:-}" ]; then
+  log "ERROR missing EGRESS_PROXY_HOST"
   tail -f /dev/null
 fi
+
+EGRESS_CA_URL="${EGRESS_CA_URL:-http://${EGRESS_PROXY_HOST}:${EGRESS_VIEWER_PORT}/ca.crt}"
+EGRESS_PROXY_URL="http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}"
 
 export DEBIAN_FRONTEND=noninteractive
 retry 5 apt-get update >>"$INIT_LOG" 2>&1
@@ -87,6 +92,23 @@ install_bun
 bun --version >>"$INIT_LOG" 2>&1
 cloudflared --version >>"$INIT_LOG" 2>&1
 curl --version >>"$INIT_LOG" 2>&1
+
+retry 15 curl -fsSL "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate-fly-test-ca.crt >>"$INIT_LOG" 2>&1
+update-ca-certificates >>"$INIT_LOG" 2>&1
+log "ca_install=ok source=${EGRESS_CA_URL}"
+
+export HTTP_PROXY="$EGRESS_PROXY_URL"
+export HTTPS_PROXY="$EGRESS_PROXY_URL"
+export http_proxy="$EGRESS_PROXY_URL"
+export https_proxy="$EGRESS_PROXY_URL"
+export NO_PROXY="localhost,127.0.0.1,::1"
+export no_proxy="localhost,127.0.0.1,::1"
+export NODE_EXTRA_CA_CERTS="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
+export CURL_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
+export REQUESTS_CA_BUNDLE="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
+export GIT_SSL_CAINFO="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
+
+log "proxy_env=\"${EGRESS_PROXY_URL}\""
 
 mkdir -p "$APP_DIR"
 cp /proof/sandbox/server.ts "$APP_DIR/server.ts"
@@ -98,7 +120,9 @@ cd "$APP_DIR"
 
 retry 5 bun install >>"$INIT_LOG" 2>&1
 
-SANDBOX_PORT="$SANDBOX_PORT" bun run start >>"$INIT_LOG" 2>&1 &
+SANDBOX_PORT="$SANDBOX_PORT" \
+PROOF_PREFIX="${PROOF_PREFIX:-__ITERATE_MITM_PROOF__\\n}" \
+bun run "$APP_DIR/server.ts" >>"$INIT_LOG" 2>&1 &
 APP_PID="$!"
 log "app_pid=$APP_PID"
 

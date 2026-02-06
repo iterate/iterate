@@ -82,7 +82,7 @@ function buildConfig(): RunnerConfig {
   const app = process.env["APP_NAME"] ?? `iterate-node-egress-obsv-${nowTag()}`;
   const org = process.env["FLY_ORG"] ?? "iterate";
   const region = process.env["FLY_REGION"] ?? "iad";
-  const targetUrl = process.env["TARGET_URL"] ?? "http://neverssl.com/";
+  const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
   const artifactDir = join(flyDir, "proof-logs", app);
   mkdirSync(artifactDir, { recursive: true });
   return { flyDir, artifactDir, app, org, region, targetUrl };
@@ -275,7 +275,7 @@ async function main(): Promise<void> {
     `${appCreate.stdout}${appCreate.stderr}`,
   );
 
-  log("Launching egress proxy/viewer machine (node:24 + bun app)");
+  log("Launching egress proxy/viewer machine (node:24 + bun + go mitm)");
   const egressRun = run(
     "flyctl",
     [
@@ -305,6 +305,10 @@ async function main(): Promise<void> {
       `/proof/egress-proxy/tsconfig.json=${join(config.flyDir, "egress-proxy", "tsconfig.json")}`,
       "--file-local",
       `/proof/egress-proxy/start.sh=${join(config.flyDir, "egress-proxy", "start.sh")}`,
+      "--file-local",
+      `/proof/egress-proxy/go-mitm/main.go=${join(config.flyDir, "egress-proxy", "go-mitm", "main.go")}`,
+      "--file-local",
+      `/proof/egress-proxy/go-mitm/go.mod=${join(config.flyDir, "egress-proxy", "go-mitm", "go.mod")}`,
       "-e",
       `PROOF_REGION=${config.region}`,
     ],
@@ -322,7 +326,7 @@ async function main(): Promise<void> {
   writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
   log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
 
-  log("Launching sandbox machine (node:24 + bun app) wired to egress proxy");
+  log("Launching sandbox machine (node:24 + bun app) with CA trust + proxy env");
   const sandboxRun = run(
     "flyctl",
     [
@@ -355,7 +359,11 @@ async function main(): Promise<void> {
       "-e",
       `PROOF_REGION=${config.region}`,
       "-e",
-      `EGRESS_PROXY_URL=http://${egressHost}:18081`,
+      `EGRESS_PROXY_HOST=${egressHost}`,
+      "-e",
+      "EGRESS_MITM_PORT=18080",
+      "-e",
+      "EGRESS_VIEWER_PORT=18081",
       "-e",
       `DEFAULT_TARGET_URL=${config.targetUrl}`,
     ],
@@ -454,9 +462,26 @@ async function main(): Promise<void> {
 
   const sandboxLog = readFileOrEmpty(join(config.artifactDir, "sandbox-ui.log"));
   const egressLog = readFileOrEmpty(join(config.artifactDir, "egress-proxy.log"));
+  const sandboxFetchResponseRaw = readFileOrEmpty(
+    join(config.artifactDir, "sandbox-fetch-response.json"),
+  );
+  const sandboxFetchResponse = JSON.parse(sandboxFetchResponseRaw) as {
+    ok?: boolean;
+    body?: string;
+    proofDetected?: boolean;
+  };
   if (!/FETCH_(OK|ERROR)/.test(sandboxLog)) throw new Error("sandbox did not report fetch attempt");
-  if (!/FETCH_(START|OK|ERROR)/.test(egressLog)) {
-    throw new Error("egress log does not show fetch event");
+  if (!/(MITM_REQUEST|MITM_RESPONSE|TRANSFORM_OK)/.test(egressLog)) {
+    throw new Error("egress log does not show MITM transform event");
+  }
+  if (!sandboxFetchResponse.ok) {
+    throw new Error("sandbox fetch response was not ok");
+  }
+  if (
+    !sandboxFetchResponse.proofDetected &&
+    !sandboxFetchResponse.body?.startsWith("__ITERATE_MITM_PROOF__")
+  ) {
+    throw new Error("sandbox response did not include MITM proof prefix");
   }
 
   log("SUCCESS");
