@@ -20,6 +20,11 @@ import {
 } from "@opentelemetry/api";
 import { getConfig } from "../config-loader.ts";
 import { withSpan } from "../utils/otel.ts";
+import {
+  buildJaegerTraceUrl,
+  buildLogsSearchUrl,
+  buildOpencodeAttachUrl,
+} from "../utils/observability-links.ts";
 import type {
   AgentHarness,
   AgentEvent,
@@ -161,8 +166,20 @@ export const opencodeHarness: AgentHarness = {
               ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
             },
           },
-          async () => {
+          async (span) => {
             setTrackedSessionParentContext(harnessSessionId, context.active());
+
+            const attachUrl = buildOpencodeAttachUrl({
+              sessionId: harnessSessionId,
+              workingDirectory: params.workingDirectory,
+            });
+            const logsUrl = buildLogsSearchUrl(harnessSessionId);
+            const traceUrl = buildJaegerTraceUrl(span.spanContext().traceId);
+
+            if (attachUrl) span.setAttribute("iterate.link.attach_url", attachUrl);
+            if (logsUrl) span.setAttribute("iterate.link.log_url", logsUrl);
+            if (traceUrl) span.setAttribute("iterate.link.trace_url", traceUrl);
+
             await client.session.prompt({
               sessionID: harnessSessionId,
               parts: [{ type: "text", text: event.content }],

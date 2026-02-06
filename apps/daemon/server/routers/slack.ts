@@ -31,6 +31,7 @@ import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
 import { withSpan } from "../utils/otel.ts";
+import { buildJaegerTraceUrl, buildLogsSearchUrl } from "../utils/observability-links.ts";
 
 const logger = console;
 
@@ -311,6 +312,11 @@ slackRouter.post("/webhook", async (c) => {
       },
     },
     async (span) => {
+      const traceUrl = buildJaegerTraceUrl(span.spanContext().traceId);
+      const logsUrl = buildLogsSearchUrl(correlation.requestId);
+      if (traceUrl) span.setAttribute("iterate.link.trace_url", traceUrl);
+      if (logsUrl) span.setAttribute("iterate.link.log_url", logsUrl);
+
       const eventId = await withSpan(
         "daemon.slack.store_event",
         {
