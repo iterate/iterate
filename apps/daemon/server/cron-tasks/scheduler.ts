@@ -234,7 +234,12 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
   `;
 
   const workingDirectory = await getCustomerRepoPath();
-  await appendToAgent(agent, message, { workingDirectory });
+  await appendToAgent(agent, message, {
+    workingDirectory,
+    acknowledge: async () => console.log(`[cron-tasks] Nudging agent ${agent.slug}`),
+    unacknowledge: async () =>
+      console.log(`[cron-tasks] Agent ${agent.slug} finished processing nudge`),
+  });
 
   // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
@@ -281,7 +286,12 @@ async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
     console.log(`[cron-tasks] Created agent ${agent.slug} for task ${task.filename}`);
 
     // Send the initial prompt to start the agent working
-    await appendToAgent(agent, prompt, { workingDirectory });
+    await appendToAgent(agent, prompt, {
+      workingDirectory,
+      acknowledge: async () => console.log(`[cron-tasks] Starting task ${task.filename}`),
+      unacknowledge: async () =>
+        console.log(`[cron-tasks] Agent finished processing task ${task.filename}`),
+    });
     console.log(`[cron-tasks] Sent prompt to agent ${agent.slug}`);
 
     // Note: The agent now runs asynchronously. We don't wait for completion here.

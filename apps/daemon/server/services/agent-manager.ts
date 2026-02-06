@@ -11,6 +11,7 @@ import * as schema from "../db/schema.ts";
 import type { Agent, AgentType } from "../db/schema.ts";
 import { getHarness as defaultGetHarness, type AgentHarness } from "../agents/index.ts";
 import { withSpan } from "../utils/otel.ts";
+import type { AppendParams } from "../agents/types.ts";
 
 export interface GetOrCreateAgentParams {
   slug: string;
@@ -158,7 +159,7 @@ export async function resetAgent(
 export async function appendToAgent(
   agent: Agent,
   message: string,
-  params: { workingDirectory: string },
+  params: AppendParams,
   deps: HarnessAgentManagerDeps = defaultHarnessDeps,
 ): Promise<void> {
   const { getHarness } = deps;

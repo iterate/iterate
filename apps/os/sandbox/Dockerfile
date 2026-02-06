@@ -122,7 +122,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 
 # Copy repo, exclude git metadata from context.
 # If .git is a worktree file, replace with dir
-COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ . .
+COPY --chown=iterate:iterate --exclude=.git --exclude=.git/ --exclude=node_modules . .
 RUN if [ -f .git ]; then rm .git && mkdir .git; fi
 
 # Ensure shell scripts are executable (git may not preserve permissions on all platforms)
