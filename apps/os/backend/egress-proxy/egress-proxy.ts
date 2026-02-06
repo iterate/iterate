@@ -727,8 +727,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     }
 
     // Forward the request to the original destination
-    const fetchImpl =
-      new URL(c.req.url).hostname === new URL(processedURL).hostname ? c.env.SELF.fetch : fetch;
+    const requestHost = new URL(c.req.url).hostname;
+    const shouldUseSelfFetch = (url: string) => new URL(url).hostname === requestHost;
+    const fetchImpl = shouldUseSelfFetch(processedURL) ? c.env.SELF.fetch : fetch;
     let response = await fetchImpl(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
@@ -803,7 +804,10 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
           }
 
           // Retry the request with buffered body
-          response = await fetch(retryUrlResult.result, {
+          const retryFetchImpl = shouldUseSelfFetch(retryUrlResult.result)
+            ? c.env.SELF.fetch
+            : fetch;
+          response = await retryFetchImpl(retryUrlResult.result, {
             method: originalMethod,
             headers: retryHeaders,
             body: requestBody,
