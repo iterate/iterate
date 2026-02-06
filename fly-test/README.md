@@ -1,89 +1,120 @@
 # fly-test
 
-Fly Machines playground for proving HTTPS MITM on the egress machine.
+Playground for proving HTTPS MITM on egress.
+
+Supports two backends:
+
+- `fly` (Fly Machines)
+- `docker` (local Docker gateway + explicit proxy mode)
 
 ## Layout
 
-- `fly-test/e2e/run-observability.ts`: canonical e2e runner
-- `fly-test/e2e/run-observability-lib.ts`: helper utilities
-- `fly-test/e2e/run-observability.test.ts`: helper unit tests
+- `fly-test/e2e/run-observability.ts`: canonical runner (`E2E_BACKEND=fly|docker`)
+- `fly-test/e2e/run-observability-docker.ts`: Docker backend runner
+- `fly-test/e2e/run-observability.docker.test.ts`: Vitest Docker e2e
 - `fly-test/egress-proxy/go-mitm/main.go`: Go `goproxy` MITM daemon
-- `fly-test/runtime-image.Dockerfile`: prebuilt runtime image (bun + cloudflared + fly-mitm)
-- `fly-test/egress-proxy/server.ts`: Bun viewer + TS transform service
-- `fly-test/egress-proxy/start.sh`: egress init (OpenSSL CA + service launch)
-- `fly-test/sandbox/server.ts`: sandbox API/UI that fetches direct HTTPS
-- `fly-test/sandbox/start.sh`: sandbox init (trust CA + proxy env)
-- `fly-test/scripts/build-runtime-image.sh`: Depot build + push helper (Fly registry default)
-- `fly-test/scripts/tail-egress-log.sh`: tail egress proxy log from host
-- `fly-test/scripts/cleanup-all-machines.sh`: delete all machines in account/org
+- `fly-test/egress-proxy/server.ts`: Bun viewer + transform service
+- `fly-test/public-http/server.mjs`: local deterministic upstream service
+- `fly-test/sandbox/server.ts`: sandbox API/UI trigger
+- `fly-test/docker-compose.local.yml`: local sandbox/gateway/egress topology
+- `fly-test/docker/*.Dockerfile`: Docker images (sandbox/egress/gateway/public-http)
+- `fly-test/docker/*-entrypoint.sh`: runtime setup scripts for Docker services
 
-## Quick Run
+## Fly Run
 
 ```bash
 doppler run --config dev -- bash fly-test/scripts/build-runtime-image.sh
 doppler run --config dev -- pnpm --filter fly-test e2e
 ```
 
-## One-time Setup (Doppler + Fly)
-
-Required Doppler secrets in `dev`:
-
-- `FLY_API_KEY`
-- `DEPOT_TOKEN`
-- `DEPOT_PROJECT_ID`
-- `FLY_ORG` (default: `iterate`)
-- `FLY_TEST_RUNTIME_APP` (default: `iterate-node-egress-runtime`)
-
-Build/push runtime image to Fly registry (default):
+## Docker Run
 
 ```bash
-doppler run --config dev -- bash fly-test/scripts/build-runtime-image.sh
+pnpm --filter fly-test e2e:docker
 ```
 
-Optional: push to Depot registry instead:
+This stack runs:
+
+- `public-http` (local upstream test target)
+- `sandbox-ui`
+- `egress-proxy` (MITM + transform + viewer)
+- `egress-gateway` (default route gateway + DNS logging + traffic metadata logging)
+- `sandbox-tunnel`, `egress-tunnel` (Cloudflare tunnels)
+
+Traffic model:
+
+- sandbox default route points to `egress-gateway`
+- sandbox uses explicit proxy env to gateway `http://<gateway>:18080`
+- gateway DNATs sandbox TCP `18080` to egress MITM `:18080`
+- gateway still has fallback DNAT for sandbox TCP `80/443`
+- gateway logs DNS + TCP/UDP metadata
+
+Local pages:
+
+- sandbox: `http://localhost:38080`
+- egress viewer + logs: `http://localhost:38081`
+- local upstream test service: `http://localhost:38090`
+
+## Introspection Demo
+
+Trigger from sandbox through MITM to local upstream:
 
 ```bash
-doppler run --config dev -- env RUNTIME_IMAGE_REGISTRY=depot bash fly-test/scripts/build-runtime-image.sh
+curl --data 'url=http://public-http:18090/' http://127.0.0.1:38080/api/fetch
+curl --data 'url=http://public-http:18090/text' http://127.0.0.1:38080/api/fetch
+curl --data 'url=http://public-http:18090/html' http://127.0.0.1:38080/api/fetch
+curl --data 'url=http://public-http:18090/slow?ms=9000' http://127.0.0.1:38080/api/fetch
+curl --data 'url=https://iterate.com/' http://127.0.0.1:38080/api/fetch
 ```
 
-Platform: use `linux/amd64` (default). Override via `RUNTIME_IMAGE_PLATFORM`.
-
-## What This Proves
-
-The run provisions two machines and proves interception end-to-end:
-
-1. Build runtime image with Depot and push to registry (Fly registry by default).
-2. Egress machine generates app CA (`openssl`, ECDSA P-256).
-3. Sandbox installs and trusts that CA.
-4. Sandbox outbound HTTPS uses `HTTP_PROXY`/`HTTPS_PROXY` -> egress MITM.
-5. Go MITM decrypts request, streams request to local TS `/transform`.
-6. TS streams upstream response back and adds `x-iterate-mitm-proof: 1`.
-7. Sandbox receives modified response header and e2e asserts proof marker exists.
-8. Egress logs include decrypted request + transform events.
-
-Artifacts land in:
+Read introspection logs:
 
 ```bash
-fly-test/proof-logs/<app-name>/
+curl 'http://127.0.0.1:38081/api/tail?lines=120'
+```
+
+Look for:
+
+- `INSPECT_REQUEST` (request headers/body preview)
+- `INSPECT_RESPONSE` (response headers/body preview)
+- `TRANSFORM_OK` / `TRANSFORM_TIMEOUT` / `TRANSFORM_ERROR`
+
+Response mutation markers:
+
+- `x-iterate-mitm-proof: 1`
+- `x-iterate-mitm-request-id: <id>`
+- `x-iterate-mitm-body-modified: html-comment-prefix|text-prefix|none`
+
+Policy deny example:
+
+- destination `https://iterate.com/` (and `*.iterate.com`) is blocked in egress transform
+- returns status `451` with error page containing `policy violation`
+- log line: `POLICY_BLOCK ... rule="deny-iterate.com"`
+
+## Browser Demo
+
+1. Open `http://localhost:38080` (sandbox) and `http://localhost:38081` (egress viewer) side by side.
+2. In sandbox, click:
+   - local Docker mode: `GET JSON /`, `GET Text /text (mutated)`, `GET HTML /html (mutated)`, `POST Echo /echo`, `GET Slow /slow?ms=9000 (timeout demo)`, `GET Blocked iterate.com (policy)`
+   - Fly mode: `GET example.com (allowed)`, `GET Blocked iterate.com (policy)`
+3. In egress viewer, set filter to:
+   - `INSPECT only` for request/response introspection
+   - `TRANSFORM only` for transform lifecycle
+   - `Errors only` for timeout/error paths
+
+## Docker Vitest Proof
+
+```bash
+pnpm --filter fly-test test:e2e:docker
 ```
 
 ## Useful Commands
 
-Typecheck + unit tests:
-
 ```bash
 pnpm --filter fly-test typecheck
 pnpm --filter fly-test test
-```
-
-Tail egress log:
-
-```bash
-doppler run --config dev -- pnpm --filter fly-test tail:egress-log <app-name> egress-proxy
-```
-
-Cleanup:
-
-```bash
+pnpm --filter fly-test docker:up
+pnpm --filter fly-test docker:down
+pnpm --filter fly-test docker:build
 doppler run --config dev -- pnpm --filter fly-test cleanup:all-machines
 ```
