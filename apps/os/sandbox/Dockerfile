@@ -66,10 +66,6 @@ USER iterate
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-# Git config for iterate user
-RUN git config --global user.name "iterate" && \
-    git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
-
 # Install uv and use that to install mitmproxy
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 RUN uv tool install mitmproxy

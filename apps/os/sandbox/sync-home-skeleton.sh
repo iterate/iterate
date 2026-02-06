@@ -49,4 +49,4 @@ else
   rsync -a "$HOME_SKELETON/" "$HOME/"
 fi
 
-chmod +x "$HOME/.local/bin/"* "$HOME/.iterate/bin/"* 2>/dev/null || true
+chmod +x "$HOME/.local/bin/"* "$HOME/.iterate/bin/"* "$HOME/.git-credential-helper.sh" 2>/dev/null || true
