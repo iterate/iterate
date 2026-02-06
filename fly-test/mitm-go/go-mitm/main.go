@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,28 +39,28 @@ func (cs *certStorage) Fetch(hostname string, gen func() (*tls.Certificate, erro
 	}
 
 	cs.mu.Lock()
+	defer cs.mu.Unlock()
 	if cached, ok := cs.certs[hostname]; ok {
-		cs.mu.Unlock()
 		return cached, nil
 	}
 	cs.certs[hostname] = cert
-	cs.mu.Unlock()
 	return cert, nil
 }
 
-type proxyApp struct {
+type app struct {
 	transformURL string
 	client       *http.Client
 	logger       *log.Logger
 	logFile      *os.File
 }
 
-func newProxyApp(transformURL, logPath string) (*proxyApp, error) {
+func newApp(transformURL, logPath string) (*app, error) {
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
 
+	logger := log.New(io.MultiWriter(os.Stdout, logFile), "", 0)
 	client := &http.Client{
 		Timeout: 90 * time.Second,
 		Transport: &http.Transport{
@@ -73,8 +72,7 @@ func newProxyApp(transformURL, logPath string) (*proxyApp, error) {
 		},
 	}
 
-	logger := log.New(io.MultiWriter(os.Stdout, logFile), "", 0)
-	return &proxyApp{
+	return &app{
 		transformURL: transformURL,
 		client:       client,
 		logger:       logger,
@@ -82,43 +80,15 @@ func newProxyApp(transformURL, logPath string) (*proxyApp, error) {
 	}, nil
 }
 
-func (app *proxyApp) close() error {
-	if app.logFile == nil {
+func (a *app) close() error {
+	if a.logFile == nil {
 		return nil
 	}
-	return app.logFile.Close()
+	return a.logFile.Close()
 }
 
-func (app *proxyApp) logf(format string, args ...any) {
-	app.logger.Printf("%s %s", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
-}
-
-func cloneHeaders(input http.Header) http.Header {
-	out := make(http.Header, len(input))
-	for key, values := range input {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		out[key] = copied
-	}
-	return out
-}
-
-func removeHopHeaders(headers http.Header) http.Header {
-	out := make(http.Header)
-	for key, values := range headers {
-		lower := strings.ToLower(key)
-		switch lower {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
-			continue
-		case "proxy-connection", "proxy-authentication", "host", "content-length":
-			continue
-		default:
-			copied := make([]string, len(values))
-			copy(copied, values)
-			out[key] = copied
-		}
-	}
-	return out
+func (a *app) logf(format string, args ...any) {
+	a.logger.Printf("%s %s", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
 func parseCA(certPath, keyPath string) (tls.Certificate, error) {
@@ -130,6 +100,7 @@ func parseCA(certPath, keyPath string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("read CA key: %w", err)
 	}
+
 	cert, err := tls.X509KeyPair(certBytes, keyBytes)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("parse CA keypair: %w", err)
@@ -137,6 +108,7 @@ func parseCA(certPath, keyPath string) (tls.Certificate, error) {
 	if len(cert.Certificate) == 0 {
 		return tls.Certificate{}, errors.New("CA cert chain is empty")
 	}
+
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("parse CA leaf: %w", err)
@@ -145,8 +117,37 @@ func parseCA(certPath, keyPath string) (tls.Certificate, error) {
 	return cert, nil
 }
 
-func (app *proxyApp) callTransform(req *http.Request) (*http.Response, error) {
-	headers := removeHopHeaders(cloneHeaders(req.Header))
+func copyHeaders(headers http.Header) http.Header {
+	out := make(http.Header, len(headers))
+	for key, values := range headers {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		out[key] = copied
+	}
+	return out
+}
+
+func removeHopHeaders(headers http.Header) {
+	headers.Del("Connection")
+	headers.Del("Keep-Alive")
+	headers.Del("Proxy-Authenticate")
+	headers.Del("Proxy-Authorization")
+	headers.Del("TE")
+	headers.Del("Trailer")
+	headers.Del("Transfer-Encoding")
+	headers.Del("Upgrade")
+	headers.Del("Proxy-Connection")
+	headers.Del("Proxy-Authentication")
+	headers.Del("Host")
+	headers.Del("Content-Length")
+}
+
+func (a *app) handleRequest(req *http.Request) (*http.Request, *http.Response) {
+	start := time.Now()
+	a.logf("MITM_REQUEST method=%s target=%q", req.Method, req.URL.String())
+
+	headers := copyHeaders(req.Header)
+	removeHopHeaders(headers)
 	headers.Set("X-Iterate-Target-Url", req.URL.String())
 	if req.Host != "" {
 		headers.Set("X-Iterate-Request-Host", req.Host)
@@ -155,43 +156,23 @@ func (app *proxyApp) callTransform(req *http.Request) (*http.Response, error) {
 		headers.Set("X-Iterate-Remote-Addr", req.RemoteAddr)
 	}
 
-	transformReq, err := http.NewRequestWithContext(req.Context(), req.Method, app.transformURL, req.Body)
+	transformReq, err := http.NewRequestWithContext(req.Context(), req.Method, a.transformURL, req.Body)
 	if err != nil {
-		return nil, fmt.Errorf("build transform request: %w", err)
+		a.logf("MITM_ERROR method=%s target=%q err=%q", req.Method, req.URL.String(), err.Error())
+		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "transform request build failed")
 	}
 	transformReq.Header = headers
 	transformReq.ContentLength = req.ContentLength
 
-	start := time.Now()
-	resp, err := app.client.Do(transformReq)
+	resp, err := a.client.Do(transformReq)
 	if err != nil {
-		return nil, fmt.Errorf("transform request failed: %w", err)
-	}
-
-	app.logf(
-		"TRANSFORM_STREAM method=%s target=%q status=%d duration_ms=%d",
-		req.Method,
-		req.URL.String(),
-		resp.StatusCode,
-		time.Since(start).Milliseconds(),
-	)
-	return resp, nil
-}
-
-func (app *proxyApp) handleRequest(req *http.Request) (*http.Request, *http.Response) {
-	start := time.Now()
-	app.logf("MITM_REQUEST method=%s url=%q", req.Method, req.URL.String())
-
-	resp, err := app.callTransform(req)
-	if err != nil {
-		app.logf("MITM_TRANSFORM_ERROR method=%s url=%q err=%q", req.Method, req.URL.String(), err.Error())
-		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "transform failed")
+		a.logf("MITM_ERROR method=%s target=%q err=%q", req.Method, req.URL.String(), err.Error())
+		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "transform request failed")
 	}
 
 	resp.Request = req
-	resp.Header.Set("X-Iterate-MITM", "1")
-	app.logf(
-		"MITM_RESPONSE method=%s url=%q status=%d duration_ms=%d",
+	a.logf(
+		"MITM_RESPONSE method=%s target=%q status=%d duration_ms=%d",
 		req.Method,
 		req.URL.String(),
 		resp.StatusCode,
@@ -202,13 +183,13 @@ func (app *proxyApp) handleRequest(req *http.Request) (*http.Request, *http.Resp
 
 func main() {
 	listenAddr := flag.String("listen", ":18080", "MITM proxy listen address")
-	transformURL := flag.String("transform-url", "http://127.0.0.1:19090/transform", "URL of local transform service")
+	transformURL := flag.String("transform-url", "http://127.0.0.1:18081/transform", "URL of local transform service")
 	caCertPath := flag.String("ca-cert", "/data/mitm/ca.crt", "Path to CA certificate PEM")
 	caKeyPath := flag.String("ca-key", "/data/mitm/ca.key", "Path to CA private key PEM")
 	logPath := flag.String("log", "/tmp/egress-proxy.log", "Path to append log lines")
 	flag.Parse()
 
-	app, err := newProxyApp(*transformURL, *logPath)
+	app, err := newApp(*transformURL, *logPath)
 	if err != nil {
 		panic(err)
 	}
@@ -238,14 +219,9 @@ func main() {
 		return app.handleRequest(req)
 	})
 
-	app.logf("MITM_BOOT pid=%d listen=%s transform_url=%q", os.Getpid(), *listenAddr, *transformURL)
-	server := &http.Server{
-		Addr:              *listenAddr,
-		Handler:           proxy,
-		ReadHeaderTimeout: 20 * time.Second,
-	}
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		app.logf("FATAL server_error err=%q", err.Error())
+	app.logf("MITM_LISTEN addr=%s transform=%q", *listenAddr, *transformURL)
+	if err := http.ListenAndServe(*listenAddr, proxy); err != nil {
+		app.logf("FATAL listen_failed err=%q", err.Error())
 		os.Exit(1)
 	}
 }
