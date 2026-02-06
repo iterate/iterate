@@ -1,7 +1,14 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { hostFromUrl, urlEncodedForm } from "./run-observability-lib.ts";
+import {
+  fetchWithDnsFallback,
+  postFormWithDnsFallback,
+  readFileOrEmpty,
+  runCommand,
+  sleep,
+  type CommandResult,
+  urlEncodedForm,
+} from "./run-observability-lib.ts";
 
 export type DockerRunnerConfig = {
   flyDir: string;
@@ -10,12 +17,6 @@ export type DockerRunnerConfig = {
   targetUrl: string;
   cleanupOnExit: boolean;
   log: (line: string) => void;
-};
-
-type CommandResult = {
-  status: number;
-  stdout: string;
-  stderr: string;
 };
 
 type NetworkPlan = {
@@ -34,36 +35,7 @@ type PublishedPorts = {
   upstreamHostPort: number | null;
 };
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function run(
-  command: string,
-  args: string[],
-  options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean } = {},
-): CommandResult {
-  const result = spawnSync(command, args, {
-    env: options.env ?? process.env,
-    encoding: "utf8",
-  });
-  const status = result.status ?? 1;
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (!options.allowFailure && status !== 0) {
-    throw new Error(
-      [
-        `Command failed: ${command} ${args.join(" ")}`,
-        `status=${status}`,
-        stdout.length > 0 ? `stdout:\n${stdout}` : "",
-        stderr.length > 0 ? `stderr:\n${stderr}` : "",
-      ]
-        .filter((line) => line.length > 0)
-        .join("\n"),
-    );
-  }
-  return { status, stdout, stderr };
-}
+const run = runCommand;
 
 function hashText(input: string): number {
   let hash = 2166136261;
@@ -91,14 +63,6 @@ function buildNetworkPlan(project: string): NetworkPlan {
 function parseTryCloudflareUrl(text: string): string | null {
   const match = text.match(/https:\/\/[-a-z0-9]+\.trycloudflare\.com/);
   return match?.[0] ?? null;
-}
-
-function readFileOrEmpty(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
-  }
 }
 
 function dockerCompose(
@@ -242,89 +206,6 @@ async function waitForTunnelUrl(
     await sleep(2000);
   }
   throw new Error(`tunnel URL not found for service=${service}`);
-}
-
-async function fetchWithDnsFallback(
-  url: string,
-  outputPath: string,
-  stderrPath: string,
-): Promise<void> {
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
-    const result = run("curl", ["-fsS", "--max-time", "25", url], { allowFailure: true });
-    if (result.status === 0) {
-      writeFileSync(outputPath, result.stdout);
-      writeFileSync(stderrPath, result.stderr);
-      return;
-    }
-    await sleep(1000);
-  }
-
-  const host = hostFromUrl(url).split(":")[0];
-  const dns = run("dig", ["+short", host, "@1.1.1.1"], { allowFailure: true });
-  const ip = dns.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  if (!ip) throw new Error(`DNS lookup failed for ${host}`);
-
-  for (let attempt = 1; attempt <= 20; attempt += 1) {
-    const result = run(
-      "curl",
-      ["-fsS", "--max-time", "25", "--resolve", `${host}:443:${ip}`, url],
-      {
-        allowFailure: true,
-      },
-    );
-    if (result.status === 0) {
-      writeFileSync(outputPath, result.stdout);
-      writeFileSync(stderrPath, result.stderr);
-      return;
-    }
-    await sleep(1000);
-  }
-  throw new Error(`unable to fetch URL: ${url}`);
-}
-
-async function postFormWithDnsFallback(
-  url: string,
-  body: string,
-  outputPath: string,
-  stderrPath: string,
-): Promise<void> {
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
-    const result = run("curl", ["-sS", "--max-time", "75", "--data", body, url], {
-      allowFailure: true,
-    });
-    if (result.status === 0) {
-      writeFileSync(outputPath, result.stdout);
-      writeFileSync(stderrPath, result.stderr);
-      return;
-    }
-    await sleep(1000);
-  }
-
-  const host = hostFromUrl(url).split(":")[0];
-  const dns = run("dig", ["+short", host, "@1.1.1.1"], { allowFailure: true });
-  const ip = dns.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  if (!ip) throw new Error(`DNS lookup failed for ${host}`);
-
-  for (let attempt = 1; attempt <= 20; attempt += 1) {
-    const result = run(
-      "curl",
-      ["-sS", "--max-time", "75", "--resolve", `${host}:443:${ip}`, "--data", body, url],
-      { allowFailure: true },
-    );
-    if (result.status === 0) {
-      writeFileSync(outputPath, result.stdout);
-      writeFileSync(stderrPath, result.stderr);
-      return;
-    }
-    await sleep(1000);
-  }
-  throw new Error(`unable to post form: ${url}`);
 }
 
 function collectComposeLogs(
@@ -478,11 +359,13 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
 
     log("Checking both pages from host");
     await fetchWithDnsFallback(
+      run,
       sandboxUrl,
       join(config.artifactDir, "sandbox-home.html"),
       join(config.artifactDir, "sandbox-home.stderr"),
     );
     await fetchWithDnsFallback(
+      run,
       egressViewerUrl,
       join(config.artifactDir, "egress-viewer-home.html"),
       join(config.artifactDir, "egress-viewer-home.stderr"),
@@ -490,6 +373,7 @@ export async function runDockerObservability(config: DockerRunnerConfig): Promis
 
     log(`Triggering outbound fetch via sandbox API: ${config.targetUrl}`);
     await postFormWithDnsFallback(
+      run,
       `${sandboxUrl}/api/fetch`,
       urlEncodedForm({ url: config.targetUrl }),
       join(config.artifactDir, "sandbox-fetch-response.json"),
