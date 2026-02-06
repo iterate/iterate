@@ -5,14 +5,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentRoute } from "../db/schema.ts";
+import { IterateEventSchema } from "../types/events.ts";
 import { validateAgentPath } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 import { platformRouter, getCustomerRepoPath } from "./platform.ts";
-
-const IterateEvent = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("prompt"), message: z.string() }),
-]);
 
 /** Serialized agent with ISO date strings instead of Date objects */
 type SerializedAgentRoute = Omit<AgentRoute, "createdAt" | "updatedAt"> & {
@@ -158,7 +155,8 @@ export const trpcRouter = createTRPCRouter({
     .input(
       z.object({
         agentPath: z.string(),
-        createWithEvents: z.array(IterateEvent).default([]),
+        createWithEvents: z.array(IterateEventSchema).default([]),
+        // Internal override mostly for tests; prefer daemon-local provider paths.
         newAgentPath: z.string().default("/opencode/new"),
       }),
     )

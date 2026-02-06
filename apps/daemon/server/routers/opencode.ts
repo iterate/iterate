@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { Hono } from "hono";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import type { IterateEvent } from "../types/events.ts";
-import { isPromptEvent } from "../types/events.ts";
+import { extractIterateEvents } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
@@ -21,10 +21,7 @@ export const opencodeRouter = new Hono();
 
 /** Concatenate all prompt events into a single message */
 function concatenatePrompts(events: IterateEvent[]): string {
-  return events
-    .filter(isPromptEvent)
-    .map((e) => e.message)
-    .join("\n\n");
+  return events.map((e) => e.message).join("\n\n");
 }
 
 async function sendPromptToSession(
@@ -58,7 +55,7 @@ opencodeRouter.post("/new", async (c) => {
   }
 
   const sessionId = response.data.id;
-  const eventList = Array.isArray(events) ? events : [];
+  const eventList = extractIterateEvents(events);
 
   // Concatenate all events into one prompt
   const combinedPrompt = concatenatePrompts(eventList);
@@ -77,7 +74,7 @@ opencodeRouter.post("/new", async (c) => {
 opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
   const payload = await c.req.json();
-  const events: IterateEvent[] = Array.isArray(payload) ? payload : [payload];
+  const events = extractIterateEvents(payload);
 
   // Concatenate all events into one prompt
   const combinedPrompt = concatenatePrompts(events);

@@ -3,8 +3,7 @@ import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { extractAgentPathFromUrl } from "../utils/agent-path.ts";
 import { trpcRouter } from "../trpc/router.ts";
-import type { IterateEvent } from "../types/events.ts";
-import { isPromptEvent } from "../types/events.ts";
+import { extractIterateEvents } from "../types/events.ts";
 
 export const agentsRouter = new Hono();
 
@@ -60,9 +59,7 @@ agentsRouter.post("/*", async (c) => {
   }
 
   const payload = await c.req.json();
-  const rawEvents = Array.isArray(payload) ? payload : [payload];
-  // Filter to only valid IterateEvents (prompt events)
-  const events: IterateEvent[] = rawEvents.filter(isPromptEvent);
+  const events = extractIterateEvents(payload);
 
   const caller = trpcRouter.createCaller({});
   const { route, wasCreated } = await caller.getOrCreateAgent({

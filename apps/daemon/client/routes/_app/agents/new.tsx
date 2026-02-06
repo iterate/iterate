@@ -33,18 +33,20 @@ function NewAgentPage() {
 function normalizeAgentPath(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "";
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const segments = withSlash.split("/").filter((segment, index) => index === 0 || segment);
-  return segments
-    .map((segment, index) => {
-      if (index === 0) return "";
-      return segment
+  const withoutLeadingSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  const segments = withoutLeadingSlash
+    .split("/")
+    .map((segment) =>
+      segment
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "-")
         .replace(/-+/g, "-")
-        .replace(/^-+|-+$/g, "");
-    })
-    .join("/");
+        .replace(/^-+|-+$/g, ""),
+    )
+    .filter(Boolean);
+
+  if (segments.length === 0) return "";
+  return `/${segments.join("/")}`;
 }
 
 function NewAgentForm() {
@@ -54,11 +56,12 @@ function NewAgentForm() {
   const queryClient = useQueryClient();
 
   const [path, setPath] = useState(initialPath ?? "");
+  const normalizedPath = normalizeAgentPath(path);
 
   const createAgent = useMutation({
     mutationFn: () =>
       trpcClient.getOrCreateAgent.mutate({
-        agentPath: normalizeAgentPath(path),
+        agentPath: normalizedPath,
         createWithEvents: [],
       }),
     onSuccess: (result) => {
@@ -72,11 +75,11 @@ function NewAgentForm() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!normalizeAgentPath(path)) return;
+    if (!normalizedPath) return;
     createAgent.mutate();
   }
 
-  const pathPreview = normalizeAgentPath(path);
+  const pathPreview = normalizedPath;
 
   return (
     <form onSubmit={handleSubmit} className="grid gap-4 max-w-md">
@@ -91,12 +94,12 @@ function NewAgentForm() {
           autoComplete="off"
           autoFocus
         />
-        {path && path !== pathPreview && (
+        {path && pathPreview && path !== pathPreview && (
           <p className="text-xs text-muted-foreground">Will be saved as: {pathPreview}</p>
         )}
       </div>
       <div className="flex gap-2 pt-2">
-        <Button type="submit" disabled={!normalizeAgentPath(path) || createAgent.isPending}>
+        <Button type="submit" disabled={!normalizedPath || createAgent.isPending}>
           {createAgent.isPending ? "Creating..." : "Create Agent"}
         </Button>
         <Button type="button" variant="outline" onClick={() => navigate({ to: "/agents" })}>
