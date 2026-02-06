@@ -197,236 +197,263 @@ async function main(): Promise<void> {
     FLY_API_TOKEN: flyApiKey,
   };
 
-  run("flyctl", ["version"]);
-  run("jq", ["--version"]);
-  run("dig", ["+short", "example.com"]);
-  log(`Runtime image: ${config.runtimeImage}`);
-  log(`MITM impl: ${config.mitmImpl}`);
-
-  log(`Creating app: ${config.app} (org=${config.org} region=${config.region})`);
-  const appCreate = run("flyctl", ["apps", "create", config.app, "-o", config.org, "-y"], { env });
-  writeFileSync(
-    join(config.artifactDir, "app-create.log"),
-    `${appCreate.stdout}${appCreate.stderr}`,
-  );
-
-  log("Launching egress proxy/viewer machine");
-  const egressRun = run(
-    "flyctl",
-    [
-      "machine",
-      "run",
-      config.runtimeImage,
-      "/bin/bash",
-      "/proof/egress-proxy/start.sh",
-      "-a",
-      config.app,
-      "-r",
-      config.region,
-      "--name",
-      EGRESS_MACHINE_NAME,
-      "--restart",
-      "always",
-      "--detach",
-      "--vm-memory",
-      "1024",
-      "-e",
-      `PROOF_REGION=${config.region}`,
-      "-e",
-      `MITM_IMPL=${config.mitmImpl}`,
-    ],
-    { env },
-  );
-  writeFileSync(
-    join(config.artifactDir, "egress-machine-run.log"),
-    `${egressRun.stdout}${egressRun.stderr}`,
-  );
-
-  const egress = findMachineByName(listMachines(config.app, env), EGRESS_MACHINE_NAME);
-  if (!egress.private_ip) throw new Error("egress machine private_ip missing");
-  const egressHost = proxyHostForIp(egress.private_ip);
-  writeFileSync(join(config.artifactDir, "egress-machine-id.txt"), `${egress.id}\n`);
-  writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
-  log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
-
-  log("Launching sandbox machine with CA trust + egress wiring");
-  const sandboxRun = run(
-    "flyctl",
-    [
-      "machine",
-      "run",
-      config.runtimeImage,
-      "/bin/bash",
-      "/proof/sandbox/start.sh",
-      "-a",
-      config.app,
-      "-r",
-      config.region,
-      "--name",
-      SANDBOX_MACHINE_NAME,
-      "--restart",
-      "always",
-      "--detach",
-      "--vm-memory",
-      "1024",
-      "-e",
-      `PROOF_REGION=${config.region}`,
-      "-e",
-      `EGRESS_PROXY_HOST=${egressHost}`,
-      "-e",
-      `MITM_IMPL=${config.mitmImpl}`,
-      "-e",
-      "EGRESS_MITM_PORT=18080",
-      "-e",
-      "EGRESS_VIEWER_PORT=18081",
-      "-e",
-      `DEFAULT_TARGET_URL=${config.targetUrl}`,
-    ],
-    { env },
-  );
-  writeFileSync(
-    join(config.artifactDir, "sandbox-machine-run.log"),
-    `${sandboxRun.stdout}${sandboxRun.stderr}`,
-  );
-
-  const sandbox = findMachineByName(listMachines(config.app, env), SANDBOX_MACHINE_NAME);
-  writeFileSync(join(config.artifactDir, "sandbox-machine-id.txt"), `${sandbox.id}\n`);
-  log(`Sandbox machine: id=${sandbox.id}`);
-
-  log("Waiting for cloudflared tunnel URLs from both machines");
-  const egressViewerUrl = await waitForMachineUrlFile(
-    config.app,
-    egress.id,
-    "/tmp/egress-viewer-tunnel-url.txt",
-    join(config.artifactDir, "egress-viewer-url.txt"),
-    env,
-  );
-  const sandboxUrl = await waitForMachineUrlFile(
-    config.app,
-    sandbox.id,
-    "/tmp/sandbox-tunnel-url.txt",
-    join(config.artifactDir, "sandbox-url.txt"),
-    env,
-  );
-  log(`Egress viewer URL: ${egressViewerUrl}`);
-  log(`Sandbox URL: ${sandboxUrl}`);
-
-  log("Checking both pages from host");
-  await fetchWithDnsFallback(
-    run,
-    egressViewerUrl,
-    join(config.artifactDir, "egress-viewer-home.html"),
-    join(config.artifactDir, "egress-viewer-home.stderr"),
-  );
-  await fetchWithDnsFallback(
-    run,
-    sandboxUrl,
-    join(config.artifactDir, "sandbox-home.html"),
-    join(config.artifactDir, "sandbox-home.stderr"),
-  );
-
-  log(`Triggering outbound fetch via sandbox API: ${config.targetUrl}`);
-  await postFormWithDnsFallback(
-    run,
-    `${sandboxUrl}/api/fetch`,
-    urlEncodedForm({ url: config.targetUrl }),
-    join(config.artifactDir, "sandbox-fetch-response.json"),
-    join(config.artifactDir, "sandbox-fetch.stderr"),
-  );
-
-  log("Collecting logs from both machines");
-  collectMachineFile(
-    config.app,
-    egress.id,
-    "/tmp/egress-proxy.log",
-    join(config.artifactDir, "egress-proxy.log"),
-    env,
-  );
-  collectMachineFile(
-    config.app,
-    egress.id,
-    "/tmp/egress-init.log",
-    join(config.artifactDir, "egress-init.log"),
-    env,
-  );
-  collectMachineFile(
-    config.app,
-    egress.id,
-    "/tmp/egress-tunnel.log",
-    join(config.artifactDir, "egress-tunnel.log"),
-    env,
-  );
-  collectMachineFile(
-    config.app,
-    sandbox.id,
-    "/tmp/sandbox-ui.log",
-    join(config.artifactDir, "sandbox-ui.log"),
-    env,
-  );
-  collectMachineFile(
-    config.app,
-    sandbox.id,
-    "/tmp/sandbox-init.log",
-    join(config.artifactDir, "sandbox-init.log"),
-    env,
-  );
-  collectMachineFile(
-    config.app,
-    sandbox.id,
-    "/tmp/sandbox-tunnel.log",
-    join(config.artifactDir, "sandbox-tunnel.log"),
-    env,
-  );
-
-  const sandboxLog = readFileOrEmpty(join(config.artifactDir, "sandbox-ui.log"));
-  const egressLog = readFileOrEmpty(join(config.artifactDir, "egress-proxy.log"));
-  const sandboxFetchResponseRaw = readFileOrEmpty(
-    join(config.artifactDir, "sandbox-fetch-response.json"),
-  );
-  if (sandboxFetchResponseRaw.trim().length === 0) {
-    throw new Error("sandbox fetch response file missing or empty");
-  }
-  let sandboxFetchResponse: {
-    ok?: boolean;
-    body?: string;
-    proofDetected?: boolean;
-  };
+  let appCreated = false;
+  let shouldCleanup = config.cleanupOnExit;
   try {
-    sandboxFetchResponse = JSON.parse(sandboxFetchResponseRaw) as {
+    run("flyctl", ["version"]);
+    run("jq", ["--version"]);
+    run("dig", ["+short", "example.com"]);
+    log(`Runtime image: ${config.runtimeImage}`);
+    log(`MITM impl: ${config.mitmImpl}`);
+
+    log(`Creating app: ${config.app} (org=${config.org} region=${config.region})`);
+    const appCreate = run("flyctl", ["apps", "create", config.app, "-o", config.org, "-y"], {
+      env,
+    });
+    writeFileSync(
+      join(config.artifactDir, "app-create.log"),
+      `${appCreate.stdout}${appCreate.stderr}`,
+    );
+    appCreated = true;
+
+    log("Launching egress proxy/viewer machine");
+    const egressRun = run(
+      "flyctl",
+      [
+        "machine",
+        "run",
+        config.runtimeImage,
+        "/bin/bash",
+        "/proof/egress-proxy/start.sh",
+        "-a",
+        config.app,
+        "-r",
+        config.region,
+        "--name",
+        EGRESS_MACHINE_NAME,
+        "--restart",
+        "always",
+        "--detach",
+        "--vm-memory",
+        "1024",
+        "-e",
+        `PROOF_REGION=${config.region}`,
+        "-e",
+        `MITM_IMPL=${config.mitmImpl}`,
+      ],
+      { env },
+    );
+    writeFileSync(
+      join(config.artifactDir, "egress-machine-run.log"),
+      `${egressRun.stdout}${egressRun.stderr}`,
+    );
+
+    const egress = findMachineByName(listMachines(config.app, env), EGRESS_MACHINE_NAME);
+    if (!egress.private_ip) throw new Error("egress machine private_ip missing");
+    const egressHost = proxyHostForIp(egress.private_ip);
+    writeFileSync(join(config.artifactDir, "egress-machine-id.txt"), `${egress.id}\n`);
+    writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
+    log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
+
+    log("Launching sandbox machine with CA trust + egress wiring");
+    const sandboxRun = run(
+      "flyctl",
+      [
+        "machine",
+        "run",
+        config.runtimeImage,
+        "/bin/bash",
+        "/proof/sandbox/start.sh",
+        "-a",
+        config.app,
+        "-r",
+        config.region,
+        "--name",
+        SANDBOX_MACHINE_NAME,
+        "--restart",
+        "always",
+        "--detach",
+        "--vm-memory",
+        "1024",
+        "-e",
+        `PROOF_REGION=${config.region}`,
+        "-e",
+        `EGRESS_PROXY_HOST=${egressHost}`,
+        "-e",
+        `MITM_IMPL=${config.mitmImpl}`,
+        "-e",
+        "EGRESS_MITM_PORT=18080",
+        "-e",
+        "EGRESS_VIEWER_PORT=18081",
+        "-e",
+        `DEFAULT_TARGET_URL=${config.targetUrl}`,
+      ],
+      { env },
+    );
+    writeFileSync(
+      join(config.artifactDir, "sandbox-machine-run.log"),
+      `${sandboxRun.stdout}${sandboxRun.stderr}`,
+    );
+
+    const sandbox = findMachineByName(listMachines(config.app, env), SANDBOX_MACHINE_NAME);
+    writeFileSync(join(config.artifactDir, "sandbox-machine-id.txt"), `${sandbox.id}\n`);
+    log(`Sandbox machine: id=${sandbox.id}`);
+
+    log("Waiting for cloudflared tunnel URLs from both machines");
+    const egressViewerUrl = await waitForMachineUrlFile(
+      config.app,
+      egress.id,
+      "/tmp/egress-viewer-tunnel-url.txt",
+      join(config.artifactDir, "egress-viewer-url.txt"),
+      env,
+    );
+    const sandboxUrl = await waitForMachineUrlFile(
+      config.app,
+      sandbox.id,
+      "/tmp/sandbox-tunnel-url.txt",
+      join(config.artifactDir, "sandbox-url.txt"),
+      env,
+    );
+    log(`Egress viewer URL: ${egressViewerUrl}`);
+    log(`Sandbox URL: ${sandboxUrl}`);
+
+    log("Checking both pages from host");
+    await fetchWithDnsFallback(
+      run,
+      egressViewerUrl,
+      join(config.artifactDir, "egress-viewer-home.html"),
+      join(config.artifactDir, "egress-viewer-home.stderr"),
+    );
+    await fetchWithDnsFallback(
+      run,
+      sandboxUrl,
+      join(config.artifactDir, "sandbox-home.html"),
+      join(config.artifactDir, "sandbox-home.stderr"),
+    );
+
+    log(`Triggering outbound fetch via sandbox API: ${config.targetUrl}`);
+    await postFormWithDnsFallback(
+      run,
+      `${sandboxUrl}/api/fetch`,
+      urlEncodedForm({ url: config.targetUrl }),
+      join(config.artifactDir, "sandbox-fetch-response.json"),
+      join(config.artifactDir, "sandbox-fetch.stderr"),
+    );
+
+    log("Collecting logs from both machines");
+    collectMachineFile(
+      config.app,
+      egress.id,
+      "/tmp/egress-proxy.log",
+      join(config.artifactDir, "egress-proxy.log"),
+      env,
+    );
+    collectMachineFile(
+      config.app,
+      egress.id,
+      "/tmp/egress-init.log",
+      join(config.artifactDir, "egress-init.log"),
+      env,
+    );
+    collectMachineFile(
+      config.app,
+      egress.id,
+      "/tmp/egress-tunnel.log",
+      join(config.artifactDir, "egress-tunnel.log"),
+      env,
+    );
+    collectMachineFile(
+      config.app,
+      sandbox.id,
+      "/tmp/sandbox-ui.log",
+      join(config.artifactDir, "sandbox-ui.log"),
+      env,
+    );
+    collectMachineFile(
+      config.app,
+      sandbox.id,
+      "/tmp/sandbox-init.log",
+      join(config.artifactDir, "sandbox-init.log"),
+      env,
+    );
+    collectMachineFile(
+      config.app,
+      sandbox.id,
+      "/tmp/sandbox-tunnel.log",
+      join(config.artifactDir, "sandbox-tunnel.log"),
+      env,
+    );
+
+    const sandboxLog = readFileOrEmpty(join(config.artifactDir, "sandbox-ui.log"));
+    const egressLog = readFileOrEmpty(join(config.artifactDir, "egress-proxy.log"));
+    const sandboxFetchResponseRaw = readFileOrEmpty(
+      join(config.artifactDir, "sandbox-fetch-response.json"),
+    );
+    if (sandboxFetchResponseRaw.trim().length === 0) {
+      throw new Error("sandbox fetch response file missing or empty");
+    }
+    let sandboxFetchResponse: {
       ok?: boolean;
       body?: string;
       proofDetected?: boolean;
     };
-  } catch {
-    throw new Error("sandbox fetch response was not valid json");
-  }
-  if (!/FETCH_(OK|ERROR)/.test(sandboxLog)) throw new Error("sandbox did not report fetch attempt");
-  if (!/(MITM_REQUEST|MITM_RESPONSE|TRANSFORM_OK)/.test(egressLog)) {
-    throw new Error("egress log does not show MITM transform event");
-  }
-  if (!sandboxFetchResponse.ok) {
-    throw new Error("sandbox fetch response was not ok");
-  }
-  if (
-    !sandboxFetchResponse.proofDetected &&
-    !sandboxFetchResponse.body?.startsWith("__ITERATE_MITM_PROOF__")
-  ) {
-    throw new Error("sandbox response did not include MITM proof prefix");
-  }
+    try {
+      sandboxFetchResponse = JSON.parse(sandboxFetchResponseRaw) as {
+        ok?: boolean;
+        body?: string;
+        proofDetected?: boolean;
+      };
+    } catch {
+      throw new Error("sandbox fetch response was not valid json");
+    }
+    if (!/FETCH_(OK|ERROR)/.test(sandboxLog))
+      throw new Error("sandbox did not report fetch attempt");
+    if (!/(MITM_REQUEST|MITM_RESPONSE|TRANSFORM_OK)/.test(egressLog)) {
+      throw new Error("egress log does not show MITM transform event");
+    }
+    if (!sandboxFetchResponse.ok) {
+      throw new Error("sandbox fetch response was not ok");
+    }
+    if (
+      !sandboxFetchResponse.proofDetected &&
+      !sandboxFetchResponse.body?.startsWith("__ITERATE_MITM_PROOF__")
+    ) {
+      throw new Error("sandbox response did not include MITM proof prefix");
+    }
 
-  log("SUCCESS");
-  log("Open side-by-side:");
-  log(`  sandbox: ${sandboxUrl}`);
-  log(`  egress viewer: ${egressViewerUrl}`);
-  log(`Artifacts: ${config.artifactDir}`);
-  log("Tail egress log live:");
-  log(
-    `  doppler run --config dev -- pnpm --filter fly-test tail:egress-log ${config.app} egress-proxy`,
-  );
-  log("Destroy when done:");
-  log(
-    `  doppler run --config dev -- sh -lc 'export FLY_API_TOKEN="$FLY_API_KEY"; flyctl apps destroy ${config.app} -y'`,
-  );
+    log("SUCCESS");
+    log("Open side-by-side:");
+    log(`  sandbox: ${sandboxUrl}`);
+    log(`  egress viewer: ${egressViewerUrl}`);
+    log(`Artifacts: ${config.artifactDir}`);
+    log("Tail egress log live:");
+    log(
+      `  doppler run --config dev -- pnpm --filter fly-test tail:egress-log ${config.app} egress-proxy`,
+    );
+    if (!config.cleanupOnExit) {
+      log("Destroy when done:");
+      log(
+        `  doppler run --config dev -- sh -lc 'export FLY_API_TOKEN="$FLY_API_KEY"; flyctl apps destroy ${config.app} -y'`,
+      );
+      shouldCleanup = false;
+    }
+  } finally {
+    if (shouldCleanup && appCreated) {
+      const destroy = run("flyctl", ["apps", "destroy", config.app, "-y"], {
+        env,
+        allowFailure: true,
+      });
+      writeFileSync(
+        join(config.artifactDir, "app-destroy.log"),
+        `${destroy.stdout}${destroy.stderr}`,
+      );
+      if (destroy.status === 0) {
+        log(`Cleanup complete: destroyed app ${config.app}`);
+      } else {
+        log(`WARN cleanup failed for app ${config.app}; see app-destroy.log`);
+      }
+    }
+  }
 }
 
 void main().catch((error: unknown) => {
