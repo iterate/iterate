@@ -111,16 +111,6 @@ export default defineConfig({
       dependsOn: ["task-generate-ca"],
     },
     {
-      name: "task-db-migrate",
-      definition: {
-        command: "pnpm",
-        args: ["db:migrate"],
-        cwd: `${iterateRepo}/apps/daemon`,
-      },
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-install-ca"],
-    },
-    {
       name: "task-build-daemon-client",
       definition: {
         command: "pnpm",
@@ -131,7 +121,7 @@ export default defineConfig({
         },
       },
       options: { restartPolicy: "never" },
-      dependsOn: ["task-db-migrate"],
+      dependsOn: ["task-install-ca"],
     },
     // Long-running processes (depend on init tasks)
     {

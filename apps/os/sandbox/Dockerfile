@@ -131,11 +131,8 @@ RUN chmod +x apps/os/sandbox/*.sh
 # Install dependencies (cacheable - only reruns when lockfile changes)
 RUN pnpm install --frozen-lockfile --offline
 
-# Build daemon frontend (cacheable - only reruns when source changes)
-RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm vite build)
-
-# Run database migrations
-RUN (cd "$ITERATE_REPO/apps/daemon" && pnpm db:migrate)
+# Run post-repo-sync steps (cacheable - only reruns when source changes)
+RUN bash "$ITERATE_REPO/apps/os/sandbox/after-repo-sync-steps.sh"
 
 # Generate mitmproxy CA certificate at build time.
 # This certificate is safe to share across all sandbox instances because:
@@ -160,8 +157,6 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
     sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
     sudo update-ca-certificates
 
-# Copy home skeleton into /home/iterate
-RUN bash "$ITERATE_REPO/apps/os/sandbox/sync-home-skeleton.sh"
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
 RUN opencode run "Hello" || true
 

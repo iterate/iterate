@@ -40,15 +40,4 @@ SYNC_COMMIT="$(git -C "${ITERATE_REPO}" rev-parse FETCH_HEAD)"
 echo "[entry] Checking out ${SYNC_COMMIT}"
 git -C "${ITERATE_REPO}" checkout --detach --force "${SYNC_COMMIT}"
 
-if [[ -f "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh" ]]; then
-  echo "[entry] Syncing home-skeleton"
-  bash "${ITERATE_REPO}/apps/os/sandbox/sync-home-skeleton.sh"
-fi
-
-# Rebuild daemon frontend after sync so dist/ matches fetched source.
-echo "[entry] Rebuilding daemon frontend after sync"
-(cd "${ITERATE_REPO}/apps/daemon" && pnpm vite build)
-
-# Run database migrations after sync so schema matches fetched migrations.
-echo "[entry] Running database migrations after sync"
-(cd "${ITERATE_REPO}/apps/daemon" && pnpm db:migrate)
+bash "${ITERATE_REPO}/apps/os/sandbox/after-repo-sync-steps.sh"
