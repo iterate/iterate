@@ -9,7 +9,7 @@
  *
  * SANDBOX_TEST_SNAPSHOT_ID
  *   Image (Docker) or snapshot name (Daytona) to use for tests.
- *   Default for Docker: "ghcr.io/iterate/sandbox:local"
+ *   Default for Docker: "iterate-sandbox:local" (with fallback resolution in provider)
  *   Default for Daytona: reads from DAYTONA_SNAPSHOT_NAME env var
  *
  * SANDBOX_TEST_BASE_DOCKER_IMAGE
@@ -102,7 +102,7 @@ export const TEST_CONFIG = {
 } as const;
 
 const TEST_BASE_SNAPSHOTS = {
-  docker: process.env.SANDBOX_TEST_BASE_DOCKER_IMAGE ?? "ghcr.io/iterate/sandbox:local",
+  docker: process.env.SANDBOX_TEST_BASE_DOCKER_IMAGE ?? "iterate-sandbox:local",
   daytona: process.env.SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT ?? "daytona-small",
 } as const;
 

@@ -32,7 +32,7 @@ PUSH=1 pnpm os docker:build
 Direct Docker build:
 
 ```bash
-docker buildx build --load -f sandbox/Dockerfile -t ghcr.io/iterate/sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
+docker buildx build --load -f sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
 ```
 
 ## Dev sync mode
@@ -109,7 +109,7 @@ Sandbox integration tests verify both Docker and Daytona providers work correctl
 
 Default snapshot IDs:
 
-- Docker: `ghcr.io/iterate/sandbox:local`
+- Docker: `iterate-sandbox:local` (fallbacks to `ghcr.io/iterate/sandbox:local`, then `ghcr.io/iterate/sandbox:main`)
 - Daytona: reads from `DAYTONA_SNAPSHOT_NAME` in Doppler
 
 ### Run Locally

@@ -32,7 +32,8 @@ const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
 const isMultiPlatform = buildPlatform.includes(",");
 
 // Local tag for Docker daemon (used by local-docker provider and tests)
-const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
+const localImageName =
+  process.env.DOCKER_IMAGE_NAME ?? process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
 
 // Registry image name for multi-platform builds (can't --load multiple platforms)
 const registryImageName = process.env.REGISTRY_IMAGE_NAME;

@@ -43,7 +43,7 @@ const DAEMON_PORTS = [
  * Zod schema for Docker provider environment variables.
  */
 const DockerEnv = z.object({
-  DOCKER_IMAGE_NAME: z.string().default("ghcr.io/iterate/sandbox:local"),
+  DOCKER_IMAGE_NAME: z.string().optional(),
   DOCKER_COMPOSE_PROJECT_NAME: z.string().optional(),
   DOCKER_GIT_REPO_ROOT: z.string().optional(),
   DOCKER_GIT_GITDIR: z.string().optional(),
@@ -178,7 +178,7 @@ export class DockerProvider extends SandboxProvider {
   }
 
   get defaultSnapshotId(): string {
-    return this.env.DOCKER_IMAGE_NAME;
+    return resolveBaseImage(this.repoRoot, this.env.DOCKER_IMAGE_NAME);
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {

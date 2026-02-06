@@ -110,7 +110,7 @@ export function getDockerEnvVars(repoRoot: string): Record<string, string> {
 
 /**
  * Resolve the base image for Docker containers.
- * Prefers :local tag, falls back to :main, then to compose project name.
+ * Prefers local tags, then baked main tags, then compose-derived fallback.
  */
 export function resolveBaseImage(repoRoot: string, imageName?: string): string {
   if (imageName) {
@@ -122,20 +122,24 @@ export function resolveBaseImage(repoRoot: string, imageName?: string): string {
     return envImage;
   }
 
-  const localDefault = "ghcr.io/iterate/sandbox:local";
-  try {
-    execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
-    return localDefault;
-  } catch {
-    // fall back
+  const localDefaults = ["iterate-sandbox:local", "ghcr.io/iterate/sandbox:local"];
+  for (const localDefault of localDefaults) {
+    try {
+      execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
+      return localDefault;
+    } catch {
+      // fall through
+    }
   }
 
-  const bakedDefault = "ghcr.io/iterate/sandbox:main";
-  try {
-    execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
-    return bakedDefault;
-  } catch {
-    // fall back
+  const bakedDefaults = ["ghcr.io/iterate/sandbox:main", "iterate-sandbox:main"];
+  for (const bakedDefault of bakedDefaults) {
+    try {
+      execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
+      return bakedDefault;
+    } catch {
+      // fall through
+    }
   }
 
   const baseProjectName = getDefaultComposeProjectName(repoRoot);

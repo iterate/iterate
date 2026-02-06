@@ -53,6 +53,11 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - Root cause: terminal-state throw was caught by generic retry catch.
    - Fix: terminal state now throws non-retriable error and fails fast.
 
+6. **Docker default image mismatch (local ergonomics)**
+   - Symptom: Docker provider/test defaults pointed at `ghcr.io/iterate/sandbox:local` while local builds produce `iterate-sandbox:local`.
+   - Root cause: mixed legacy default names across provider/utils/scripts/tests.
+   - Fix: unify to `iterate-sandbox:local` for local defaults, keep fallback checks for GHCR tags, and align env precedence (`DOCKER_IMAGE_NAME` first).
+
 ### Verified Test Matrix (local)
 
 1. Daytona:
@@ -63,20 +68,20 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - `providers/docker/host-sync.test.ts` PASS when image is pinned to local build via `SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local`
    - `test/daemon-in-sandbox.test.ts` PASS with same pin (`SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local`)
    - `test/provider-base-image.test.ts` PASS with same pin (`SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:local`)
+   - `test/provider-base-image.test.ts` + `providers/docker/host-sync.test.ts` PASS with no `SANDBOX_TEST_SNAPSHOT_ID` override (new default resolution)
+   - `test/daemon-in-sandbox.test.ts` PASS with no `SANDBOX_TEST_SNAPSHOT_ID` override (new default resolution)
 3. Repo checks:
    - `pnpm typecheck` PASS
    - `pnpm lint` PASS
 
 ### Still Not Great / Risk
 
-1. Docker local runs are very sensitive to image selection.
-   - If you omit `SANDBOX_TEST_SNAPSHOT_ID`, tests may use `ghcr.io/iterate/sandbox:local` and produce misleading failures.
-2. Daytona local dev config currently does not always include `DAYTONA_SNAPSHOT_NAME`.
+1. Daytona local dev config currently does not always include `DAYTONA_SNAPSHOT_NAME`.
    - Without explicit `SANDBOX_TEST_SNAPSHOT_ID`, tests fail at provider env parse.
    - CI is fine because workflows set `SANDBOX_TEST_SNAPSHOT_ID`.
-3. Docker daemon on this machine intermittently stalls under long, mixed test runs.
+2. Docker daemon on this machine intermittently stalls under long, mixed test runs.
    - This caused stale hanging test processes and non-representative flake.
-4. Timeout handling is still split across tests and provider code; not fully centralized.
+3. Timeout handling is still split across tests and provider code; not fully centralized.
 
 ### Coverage Gaps / Tech Debt
 
@@ -88,7 +93,7 @@ Validate that sandbox integration tests work against Daytona provider, not just 
 
 ### Naming / Env Vars / Abstraction Notes
 
-1. `SANDBOX_TEST_SNAPSHOT_ID` semantics are good (cross-provider), but local Docker ergonomics need one explicit warning in docs/scripts that default image may not be fresh.
+1. `SANDBOX_TEST_SNAPSHOT_ID` semantics are good and now less required for Docker local runs due aligned defaults/fallbacks.
 2. The base `Sandbox` now owns endpoint detection/caching. This is correct, but restart semantics forced cross-cutting cache invalidation hooks; that coupling should be documented in the base interface comments.
 3. Provider split is cleaner after moving Docker-specific sync tests out of shared files.
 
