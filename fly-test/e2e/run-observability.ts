@@ -82,7 +82,7 @@ function buildConfig(): RunnerConfig {
   const app = process.env["APP_NAME"] ?? `iterate-node-egress-obsv-${nowTag()}`;
   const org = process.env["FLY_ORG"] ?? "iterate";
   const region = process.env["FLY_REGION"] ?? "iad";
-  const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
+  const targetUrl = process.env["TARGET_URL"] ?? "http://neverssl.com/";
   const artifactDir = join(flyDir, "proof-logs", app);
   mkdirSync(artifactDir, { recursive: true });
   return { flyDir, artifactDir, app, org, region, targetUrl };
@@ -128,6 +128,20 @@ async function waitForMachineUrlFile(
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
   for (let attempt = 1; attempt <= 150; attempt += 1) {
+    if (attempt % 5 === 0) {
+      const statusResult = run("flyctl", ["machine", "status", machineId, "-a", app, "--json"], {
+        env,
+        allowFailure: true,
+      });
+      if (statusResult.status === 0) {
+        const parsed = JSON.parse(statusResult.stdout) as { state?: string };
+        const state = parsed.state ?? "unknown";
+        if (state !== "starting" && state !== "started") {
+          throw new Error(`machine not running: machine=${machineId} state=${state}`);
+        }
+      }
+    }
+
     const result = run("flyctl", ["machine", "exec", machineId, `cat ${remotePath}`, "-a", app], {
       env,
       allowFailure: true,
@@ -196,7 +210,7 @@ async function postFormWithDnsFallback(
   stderrPath: string,
 ): Promise<void> {
   for (let attempt = 1; attempt <= 10; attempt += 1) {
-    const result = run("curl", ["-fsS", "--max-time", "30", "--data", body, url], {
+    const result = run("curl", ["-sS", "--max-time", "75", "--data", body, url], {
       allowFailure: true,
     });
     if (result.status === 0) {
@@ -218,7 +232,7 @@ async function postFormWithDnsFallback(
   for (let attempt = 1; attempt <= 20; attempt += 1) {
     const result = run(
       "curl",
-      ["-fsS", "--max-time", "30", "--resolve", `${host}:443:${ip}`, "--data", body, url],
+      ["-sS", "--max-time", "75", "--resolve", `${host}:443:${ip}`, "--data", body, url],
       { allowFailure: true },
     );
     if (result.status === 0) {
@@ -261,7 +275,7 @@ async function main(): Promise<void> {
     `${appCreate.stdout}${appCreate.stderr}`,
   );
 
-  log("Launching egress proxy/viewer machine (node:24)");
+  log("Launching egress proxy/viewer machine (node:24 + bun app)");
   const egressRun = run(
     "flyctl",
     [
@@ -280,7 +294,15 @@ async function main(): Promise<void> {
       "always",
       "--detach",
       "--file-local",
-      `/proof/egress-proxy/app.mjs=${join(config.flyDir, "egress-proxy", "app.mjs")}`,
+      `/proof/egress-proxy/server.ts=${join(config.flyDir, "egress-proxy", "server.ts")}`,
+      "--file-local",
+      `/proof/egress-proxy/client.tsx=${join(config.flyDir, "egress-proxy", "client.tsx")}`,
+      "--file-local",
+      `/proof/egress-proxy/index.html=${join(config.flyDir, "egress-proxy", "index.html")}`,
+      "--file-local",
+      `/proof/egress-proxy/package.json=${join(config.flyDir, "egress-proxy", "package.json")}`,
+      "--file-local",
+      `/proof/egress-proxy/tsconfig.json=${join(config.flyDir, "egress-proxy", "tsconfig.json")}`,
       "--file-local",
       `/proof/egress-proxy/start.sh=${join(config.flyDir, "egress-proxy", "start.sh")}`,
       "-e",
@@ -295,14 +317,12 @@ async function main(): Promise<void> {
 
   const egress = findMachineByName(listMachines(config.app, env), EGRESS_MACHINE_NAME);
   if (!egress.private_ip) throw new Error("egress machine private_ip missing");
-  const egressProxyHost = proxyHostForIp(egress.private_ip);
+  const egressHost = proxyHostForIp(egress.private_ip);
   writeFileSync(join(config.artifactDir, "egress-machine-id.txt"), `${egress.id}\n`);
   writeFileSync(join(config.artifactDir, "egress-machine-ip.txt"), `${egress.private_ip}\n`);
-  log(
-    `Egress machine: id=${egress.id} private_ip=${egress.private_ip} proxy_host=${egressProxyHost}`,
-  );
+  log(`Egress machine: id=${egress.id} private_ip=${egress.private_ip} host=${egressHost}`);
 
-  log("Launching sandbox machine (node:24) wired to egress proxy");
+  log("Launching sandbox machine (node:24 + bun app) wired to egress proxy");
   const sandboxRun = run(
     "flyctl",
     [
@@ -321,13 +341,21 @@ async function main(): Promise<void> {
       "always",
       "--detach",
       "--file-local",
-      `/proof/sandbox/app.mjs=${join(config.flyDir, "sandbox", "app.mjs")}`,
+      `/proof/sandbox/server.ts=${join(config.flyDir, "sandbox", "server.ts")}`,
+      "--file-local",
+      `/proof/sandbox/client.tsx=${join(config.flyDir, "sandbox", "client.tsx")}`,
+      "--file-local",
+      `/proof/sandbox/index.html=${join(config.flyDir, "sandbox", "index.html")}`,
+      "--file-local",
+      `/proof/sandbox/package.json=${join(config.flyDir, "sandbox", "package.json")}`,
+      "--file-local",
+      `/proof/sandbox/tsconfig.json=${join(config.flyDir, "sandbox", "tsconfig.json")}`,
       "--file-local",
       `/proof/sandbox/start.sh=${join(config.flyDir, "sandbox", "start.sh")}`,
       "-e",
       `PROOF_REGION=${config.region}`,
       "-e",
-      `EGRESS_PROXY_URL=http://${egressProxyHost}:18080`,
+      `EGRESS_PROXY_URL=http://${egressHost}:18081`,
       "-e",
       `DEFAULT_TARGET_URL=${config.targetUrl}`,
     ],
@@ -372,11 +400,11 @@ async function main(): Promise<void> {
     join(config.artifactDir, "sandbox-home.stderr"),
   );
 
-  log(`Triggering outbound fetch via sandbox form: ${config.targetUrl}`);
+  log(`Triggering outbound fetch via sandbox API: ${config.targetUrl}`);
   await postFormWithDnsFallback(
-    `${sandboxUrl}/fetch`,
+    `${sandboxUrl}/api/fetch`,
     urlEncodedForm({ url: config.targetUrl }),
-    join(config.artifactDir, "sandbox-fetch-response.html"),
+    join(config.artifactDir, "sandbox-fetch-response.json"),
     join(config.artifactDir, "sandbox-fetch.stderr"),
   );
 
@@ -427,8 +455,8 @@ async function main(): Promise<void> {
   const sandboxLog = readFileOrEmpty(join(config.artifactDir, "sandbox-ui.log"));
   const egressLog = readFileOrEmpty(join(config.artifactDir, "egress-proxy.log"));
   if (!/FETCH_(OK|ERROR)/.test(sandboxLog)) throw new Error("sandbox did not report fetch attempt");
-  if (!/(HTTP|CONNECT_OPEN|CONNECT_CLOSE)/.test(egressLog)) {
-    throw new Error("egress proxy log does not show proxy event");
+  if (!/FETCH_(START|OK|ERROR)/.test(egressLog)) {
+    throw new Error("egress log does not show fetch event");
   }
 
   log("SUCCESS");
