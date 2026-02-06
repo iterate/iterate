@@ -10,6 +10,8 @@ services:
       EGRESS_LOG_PATH: /tmp/egress-proxy.log
     volumes:
       - fly-test-mitm-data:/data/mitm
+    ports:
+      - "${EGRESS_VIEWER_HOST_PORT:-0}:18081"
 
   sandbox-ui:
     build:
@@ -23,6 +25,8 @@ services:
       DEFAULT_TARGET_URL: "${TARGET_URL:-https://example.com/}"
     depends_on:
       - egress-proxy
+    ports:
+      - "${SANDBOX_HOST_PORT:-0}:8080"
 
 volumes:
   fly-test-mitm-data:
