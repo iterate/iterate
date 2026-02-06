@@ -51,18 +51,18 @@ function MachineDetailPage() {
     }),
   );
 
-  const metadata = machine.metadata as {
-    host?: string;
-    port?: number;
-    ports?: Record<string, number>;
-    containerId?: string;
-    containerName?: string;
-    snapshotName?: string;
-    sandboxName?: string;
-    daemonStatus?: "ready" | "error" | "restarting" | "stopping";
-    daemonReadyAt?: string;
-    daemonStatusMessage?: string;
-  };
+  const metadata = (machine.metadata as Record<string, unknown>) ?? {};
+  const daemonStatus =
+    metadata.daemonStatus === "ready" ||
+    metadata.daemonStatus === "error" ||
+    metadata.daemonStatus === "restarting" ||
+    metadata.daemonStatus === "stopping"
+      ? metadata.daemonStatus
+      : undefined;
+  const daemonReadyAt = typeof metadata.daemonReadyAt === "string" ? metadata.daemonReadyAt : null;
+  const daemonStatusMessage =
+    typeof metadata.daemonStatusMessage === "string" ? metadata.daemonStatusMessage : null;
+  const metadataJson = JSON.stringify(metadata, null, 2);
 
   // Use service info from backend
   const { services } = machine;
@@ -141,7 +141,7 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+        enabled: machine.state === "active" && daemonStatus === "ready",
         refetchInterval: 10000, // Poll every 10s
       },
     ),
@@ -225,9 +225,9 @@ function MachineDetailPage() {
           <dd className="mt-1">
             <DaemonStatus
               state={machine.state}
-              daemonStatus={metadata.daemonStatus}
-              daemonReadyAt={metadata.daemonReadyAt}
-              daemonStatusMessage={metadata.daemonStatusMessage}
+              daemonStatus={daemonStatus}
+              daemonReadyAt={daemonReadyAt ?? undefined}
+              daemonStatusMessage={daemonStatusMessage ?? undefined}
             />
           </dd>
         </div>
@@ -236,59 +236,33 @@ function MachineDetailPage() {
           <dd className="mt-1">{machine.type}</dd>
         </div>
         <div>
+          <dt className="text-muted-foreground text-xs">External ID</dt>
+          <dd className="mt-1 font-mono text-xs truncate">{machine.externalId}</dd>
+        </div>
+        <div>
           <dt className="text-muted-foreground text-xs">Created</dt>
           <dd className="mt-1">
             {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
           </dd>
         </div>
-        {metadata.containerName && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Container</dt>
-            <dd className="mt-1">
-              <button
-                onClick={() => copyToClipboard(metadata.containerName!)}
-                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
-              >
-                {metadata.containerName}
-                <Copy className="h-3 w-3 opacity-50" />
-              </button>
-            </dd>
-          </div>
-        )}
-        {metadata.containerId && !metadata.containerName && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Container ID</dt>
-            <dd className="mt-1">
-              <button
-                onClick={() => copyToClipboard(metadata.containerId!)}
-                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
-              >
-                {metadata.containerId.slice(0, 12)}
-                <Copy className="h-3 w-3 opacity-50" />
-              </button>
-            </dd>
-          </div>
-        )}
-        {metadata.snapshotName && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Snapshot</dt>
-            <dd className="mt-1 font-mono text-xs truncate">{metadata.snapshotName}</dd>
-          </div>
-        )}
-        {machine.type === "daytona" && (
-          <div>
-            <dt className="text-muted-foreground text-xs">Sandbox</dt>
-            <dd className="mt-1">
-              <button
-                onClick={() => copyToClipboard(metadata.sandboxName ?? machine.externalId)}
-                className="font-mono text-xs hover:text-foreground text-muted-foreground flex items-center gap-1"
-              >
-                <span className="truncate">{metadata.sandboxName ?? machine.externalId}</span>
-                <Copy className="h-3 w-3 opacity-50 shrink-0" />
-              </button>
-            </dd>
-          </div>
-        )}
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-muted-foreground">Metadata</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => copyToClipboard(metadataJson)}
+            className="h-7 px-2"
+          >
+            <Copy className="h-3 w-3 mr-1" />
+            Copy JSON
+          </Button>
+        </div>
+        <pre className="border rounded-lg bg-card p-3 font-mono text-xs overflow-x-auto">
+          {metadataJson}
+        </pre>
       </div>
 
       {/* Services List */}

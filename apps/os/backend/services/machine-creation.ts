@@ -144,7 +144,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       type,
       projectId,
       state: "starting",
-      metadata: { ...(metadata ?? {}), ...(runtimeResult.metadata ?? {}) },
+      metadata: runtimeResult.metadata ?? {},
       externalId: runtimeResult.externalId,
     })
     .returning()

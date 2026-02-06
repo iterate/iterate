@@ -1,6 +1,6 @@
 import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider } from "./docker/provider.ts";
-import { FlyProvider, decodeFlyProviderId } from "./fly/provider.ts";
+import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox } from "./types.ts";
 
 export interface CreateMachineConfig {
@@ -14,10 +14,6 @@ export interface MachineRuntimeResult {
   metadata?: Record<string, unknown>;
 }
 
-export interface MachineDisplayInfo {
-  label: string;
-}
-
 export interface MachineRuntime {
   readonly type: MachineType;
   create(config: CreateMachineConfig): Promise<MachineRuntimeResult>;
@@ -27,7 +23,6 @@ export interface MachineRuntime {
   archive(): Promise<void>;
   delete(): Promise<void>;
   getPreviewUrl(port: number): Promise<string>;
-  readonly displayInfo: MachineDisplayInfo;
   getProviderState?(): Promise<ProviderState>;
 }
 
@@ -54,8 +49,6 @@ type DockerMetadata = {
 };
 
 type FlyMetadata = {
-  flyAppName?: string;
-  flyMachineId?: string;
   snapshotName?: string;
   providerSnapshotId?: string;
 };
@@ -112,7 +105,6 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
   const typedMetadata = metadata as LocalMetadata;
   const host = typedMetadata.host ?? "localhost";
   const ports = typedMetadata.ports ?? {};
-  const displayPort = ports["iterate-daemon"] ?? typedMetadata.port ?? 3000;
 
   const getPreviewUrl = async (port: number): Promise<string> => {
     const serviceKey = LOCAL_SERVICE_KEY_BY_PORT[port];
@@ -155,9 +147,6 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
     async archive(): Promise<void> {},
     async delete(): Promise<void> {},
     getPreviewUrl,
-    displayInfo: {
-      label: `Local ${host}:${displayPort}`,
-    },
   };
 }
 
@@ -167,9 +156,8 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
   provider: SandboxHandleProvider<TSandbox>;
   createSandbox(config: CreateMachineConfig): Promise<TSandbox>;
   createResult(config: CreateMachineConfig, sandbox: TSandbox): Promise<MachineRuntimeResult>;
-  displayInfo: MachineDisplayInfo;
 }): MachineRuntime {
-  const { type, externalId, provider, createSandbox, createResult, displayInfo } = options;
+  const { type, externalId, provider, createSandbox, createResult } = options;
 
   const getSandbox = (providerId: string): TSandbox => {
     const sandbox = provider.get(providerId);
@@ -203,7 +191,6 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
     async getPreviewUrl(port: number): Promise<string> {
       return getSandbox(externalId).getPreviewUrl({ port });
     },
-    displayInfo,
     async getProviderState(): Promise<ProviderState> {
       return getSandbox(externalId).getState();
     },
@@ -225,8 +212,6 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
         : { DOCKER_SYNC_FROM_HOST_REPO: syncRepo ? "true" : "false" }),
     }),
   );
-
-  const previewPort = typedMetadata.ports?.["iterate-daemon"] ?? typedMetadata.port;
 
   return createSandboxRuntime({
     type: "docker",
@@ -259,7 +244,6 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
       return {
         externalId: sandbox.providerId,
         metadata: {
-          ...(typedMetadata ?? {}),
           ...(imageName || syncRepo !== undefined
             ? {
                 localDocker: {
@@ -268,13 +252,9 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
                 },
               }
             : {}),
-          containerId: sandbox.providerId,
           ports,
         },
       };
-    },
-    displayInfo: {
-      label: `Local Docker :${previewPort ?? "?"}`,
     },
   });
 }
@@ -302,12 +282,8 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
         externalId: sandbox.providerId,
         metadata: {
           snapshotName: snapshotName ?? provider.defaultSnapshotId,
-          sandboxName: sandbox.providerId,
         },
       };
-    },
-    displayInfo: {
-      label: "Daytona",
     },
   });
 }
@@ -316,8 +292,6 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
   const { env, externalId, metadata } = options;
   const provider = new FlyProvider(toRawEnv(env));
   const typedMetadata = metadata as FlyMetadata;
-  const parsedProviderId = decodeFlyProviderId(externalId);
-  const appNameFromId = parsedProviderId?.appName ?? typedMetadata.flyAppName;
   const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
 
   return createSandboxRuntime({
@@ -336,14 +310,9 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
       return {
         externalId: sandbox.providerId,
         metadata: {
-          flyAppName: sandbox.appName,
-          flyMachineId: sandbox.machineId,
           snapshotName: snapshotName ?? provider.defaultSnapshotId,
         },
       };
-    },
-    displayInfo: {
-      label: appNameFromId ? `Fly.io ${appNameFromId}` : "Fly.io",
     },
   });
 }

@@ -36,7 +36,7 @@ interface ServiceOption {
   url: string;
 }
 
-/** Enrich a machine with display info and service URLs from its provider */
+/** Enrich a machine with provider-derived service URLs */
 async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
   machine: T,
   cloudflareEnv: CloudflareEnv,
@@ -78,7 +78,6 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   return {
     ...machine,
     metadata,
-    displayInfo: runtime.displayInfo,
     services,
   };
 }
@@ -482,10 +481,16 @@ export const machineRouter = router({
 
     if (enabledProviders.has("fly")) {
       const hasFlyToken = Boolean(ctx.env.FLY_API_TOKEN ?? ctx.env.FLY_API_KEY);
+      const hasFlyAppName = Boolean(ctx.env.SANDBOX_FLY_APP_NAME);
+      const flyDisabledReason = !hasFlyToken
+        ? "FLY_API_TOKEN (or FLY_API_KEY) not set"
+        : !hasFlyAppName
+          ? "SANDBOX_FLY_APP_NAME not set"
+          : undefined;
       types.push({
         type: "fly",
         label: "Fly.io",
-        disabledReason: hasFlyToken ? undefined : "FLY_API_TOKEN (or FLY_API_KEY) not set",
+        disabledReason: flyDisabledReason,
       });
     }
 

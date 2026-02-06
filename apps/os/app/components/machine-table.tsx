@@ -21,20 +21,10 @@ interface Machine {
   externalId: string;
   createdAt: Date;
   metadata: {
-    snapshotName?: string;
-    sandboxName?: string;
-    containerId?: string;
-    containerName?: string;
-    port?: number;
-    ports?: Record<string, number>;
-    host?: string;
     daemonStatus?: "ready" | "error" | "restarting" | "stopping";
     daemonReadyAt?: string;
     daemonStatusMessage?: string;
   } & Record<string, unknown>;
-  displayInfo: {
-    label: string;
-  };
 }
 
 interface MachineTableProps {
@@ -45,6 +35,16 @@ interface MachineTableProps {
   onDelete: (id: string) => void;
   onRestart: (id: string) => void;
   isLoading?: boolean;
+}
+
+function getMetadataPreview(metadata: Record<string, unknown>): string {
+  try {
+    const raw = JSON.stringify(metadata);
+    if (!raw) return "{}";
+    return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
+  } catch {
+    return "{...}";
+  }
 }
 
 export function MachineTable({
@@ -124,7 +124,9 @@ export function MachineTable({
 
               {/* Meta info */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                <span>{machine.displayInfo.label}</span>
+                <span className="font-mono text-xs">{machine.type}</span>
+                <span>·</span>
+                <span className="font-mono text-xs truncate">{machine.externalId}</span>
                 <span>·</span>
                 <DaemonStatus
                   state={machine.state}
@@ -134,30 +136,9 @@ export function MachineTable({
                 />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
-                {machine.metadata?.containerName && (
-                  <>
-                    <span className="hidden sm:inline">·</span>
-                    <span className="hidden sm:inline font-mono text-xs text-orange-600">
-                      {machine.metadata.containerName}
-                    </span>
-                  </>
-                )}
-                {machine.type === "daytona" && (
-                  <>
-                    <span className="hidden sm:inline">·</span>
-                    <span className="hidden sm:inline font-mono text-xs">
-                      {machine.metadata?.sandboxName ?? machine.externalId}
-                    </span>
-                  </>
-                )}
-                {machine.metadata?.snapshotName && machine.type !== "daytona" && (
-                  <>
-                    <span className="hidden sm:inline">·</span>
-                    <span className="hidden sm:inline font-mono text-xs">
-                      {machine.metadata.snapshotName}
-                    </span>
-                  </>
-                )}
+              </div>
+              <div className="font-mono text-xs text-muted-foreground truncate">
+                metadata: {getMetadataPreview(machine.metadata)}
               </div>
 
               {/* ID */}
