@@ -1,23 +1,18 @@
 # fly-test
 
-Minimal Fly Machines playground for sandbox-egress observability.
+Fly Machines playground for proving HTTPS MITM on the egress machine.
 
 ## Layout
 
-- `fly-test/e2e/run-observability.ts`: single canonical e2e runner
-- `fly-test/e2e/run-observability-lib.ts`: small pure helpers
-- `fly-test/e2e/run-observability.test.ts`: unit tests for helpers
-- `fly-test/sandbox/server.ts`: Bun full-stack server + `/api/fetch`
-- `fly-test/sandbox/client.tsx`: React sandbox UI
-- `fly-test/sandbox/index.html`: sandbox shell + Tailwind CDN
-- `fly-test/sandbox/package.json`, `fly-test/sandbox/tsconfig.json`: sandbox app package config
-- `fly-test/sandbox/start.sh`: machine init + cloudflared tunnel for sandbox
-- `fly-test/egress-proxy/server.ts`: Bun egress service (`/api/fetch`) + viewer API
-- `fly-test/egress-proxy/client.tsx`: React live log viewer
-- `fly-test/egress-proxy/index.html`: viewer shell + Tailwind CDN
-- `fly-test/egress-proxy/package.json`, `fly-test/egress-proxy/tsconfig.json`: egress app package config
-- `fly-test/egress-proxy/start.sh`: machine init + cloudflared tunnel for viewer
-- `fly-test/scripts/tail-egress-log.sh`: tail proxy log from terminal
+- `fly-test/e2e/run-observability.ts`: canonical e2e runner
+- `fly-test/e2e/run-observability-lib.ts`: helper utilities
+- `fly-test/e2e/run-observability.test.ts`: helper unit tests
+- `fly-test/egress-proxy/go-mitm/main.go`: Go `goproxy` MITM daemon
+- `fly-test/egress-proxy/server.ts`: Bun viewer + TS transform service
+- `fly-test/egress-proxy/start.sh`: egress init (OpenSSL CA, Go build, Bun, tunnel)
+- `fly-test/sandbox/server.ts`: sandbox API/UI that fetches direct HTTPS
+- `fly-test/sandbox/start.sh`: sandbox init (trust CA, proxy env, Bun, tunnel)
+- `fly-test/scripts/tail-egress-log.sh`: tail egress proxy log from host
 - `fly-test/scripts/cleanup-all-machines.sh`: delete all machines in account/org
 
 ## Quick Run
@@ -26,24 +21,17 @@ Minimal Fly Machines playground for sandbox-egress observability.
 doppler run --config dev -- pnpm --filter fly-test e2e
 ```
 
-This prints:
+## What This Proves
 
-- sandbox URL (use form to trigger outbound traffic)
-- egress viewer URL (live polling log page)
-- tail command
-- destroy command
+The run provisions two machines and proves interception end-to-end:
 
-## Proving It Works
-
-The e2e runner does this automatically:
-
-1. Creates Fly app + 2 machines (`node:24`)
-2. Installs Bun on each machine and starts sandbox + egress services
-3. Gets both Cloudflare tunnel URLs
-4. Calls sandbox API endpoint, which calls egress `/api/fetch` for outbound HTTP
-5. Pulls machine logs and asserts:
-   - sandbox log has `FETCH_OK` or `FETCH_ERROR`
-   - egress log has egress events (`FETCH_START` / `FETCH_OK` / `FETCH_ERROR`)
+1. Egress machine generates app CA (`openssl`, ECDSA P-256).
+2. Sandbox installs and trusts that CA.
+3. Sandbox outbound HTTPS uses `HTTP_PROXY`/`HTTPS_PROXY` -> egress MITM.
+4. Go MITM decrypts request, calls local TS `/transform`.
+5. TS fetches upstream and prepends proof bytes to response body.
+6. Sandbox receives modified body and e2e asserts proof marker exists.
+7. Egress logs include decrypted request + transform events.
 
 Artifacts land in:
 
@@ -66,14 +54,8 @@ Tail egress log:
 doppler run --config dev -- pnpm --filter fly-test tail:egress-log <app-name> egress-proxy
 ```
 
-Cleanup all machines:
+Cleanup:
 
 ```bash
 doppler run --config dev -- pnpm --filter fly-test cleanup:all-machines
-```
-
-Dry run:
-
-```bash
-doppler run --config dev -- pnpm --filter fly-test cleanup:all-machines -- --dry-run
 ```

@@ -3,19 +3,15 @@ import { spawn } from "node:child_process";
 import indexPage from "./index.html";
 
 const PORT = Number(process.env.SANDBOX_PORT ?? "8080");
-const EGRESS_PROXY_URL = process.env.EGRESS_PROXY_URL ?? "";
 const LOG_PATH = process.env.SANDBOX_LOG_PATH ?? "/tmp/sandbox-ui.log";
-const DEFAULT_TARGET_URL = process.env.DEFAULT_TARGET_URL ?? "http://neverssl.com/";
-
-if (EGRESS_PROXY_URL.length === 0) {
-  process.stderr.write("Missing EGRESS_PROXY_URL\n");
-  process.exit(1);
-}
+const DEFAULT_TARGET_URL = process.env.DEFAULT_TARGET_URL ?? "https://example.com/";
+const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
 
 type FetchResult = {
   ok: boolean;
-  status?: number;
+  status?: string;
   body?: string;
+  proofDetected?: boolean;
   error?: string;
 };
 
@@ -46,24 +42,17 @@ async function parseTargetUrl(request: Request): Promise<string> {
   return String(new URLSearchParams(text).get("url") ?? "").trim();
 }
 
-async function fetchViaEgress(target: string): Promise<FetchResult> {
-  const endpoint = `${EGRESS_PROXY_URL.replace(/\/$/, "")}/api/fetch`;
-  const payload = JSON.stringify({ url: target });
-  const body = await new Promise<string>((resolve, reject) => {
+async function fetchViaCurl(target: string): Promise<FetchResult> {
+  const marker = "\n__STATUS__:";
+  const output = await new Promise<string>((resolve, reject) => {
     const child = spawn(
       "curl",
-      [
-        "-sS",
-        "--max-time",
-        "30",
-        "-H",
-        "content-type: application/json",
-        "--data",
-        payload,
-        endpoint,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      ["-sS", "-L", "--max-time", "35", "-w", `${marker}%{http_code}\n`, target],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
+
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -78,14 +67,26 @@ async function fetchViaEgress(target: string): Promise<FetchResult> {
     });
   });
 
-  const data = JSON.parse(body) as FetchResult;
-  if (!data.ok) throw new Error(data.error ?? "egress fetch failed");
-  return data;
+  const idx = output.lastIndexOf(marker);
+  if (idx < 0) {
+    return { ok: true, status: "unknown", body: output.slice(0, 2500), proofDetected: false };
+  }
+
+  const status = output.slice(idx + marker.length).trim();
+  const body = output.slice(0, idx);
+  return {
+    ok: true,
+    status,
+    body: body.slice(0, 2500),
+    proofDetected: body.startsWith(PROOF_PREFIX),
+  };
 }
 
 fs.mkdirSync("/tmp", { recursive: true });
 fs.appendFileSync(LOG_PATH, "");
-appendLog(`BOOT pid=${process.pid} port=${PORT} egress="${EGRESS_PROXY_URL}"`);
+appendLog(
+  `BOOT pid=${process.pid} port=${PORT} http_proxy=\"${process.env.HTTP_PROXY ?? ""}\" https_proxy=\"${process.env.HTTPS_PROXY ?? ""}\"`,
+);
 
 Bun.serve({
   port: PORT,
@@ -117,14 +118,16 @@ Bun.serve({
         return json({ ok: false, error: "only http/https supported" }, 400);
       }
 
-      appendLog(`FETCH_START url="${target}" egress="${EGRESS_PROXY_URL}"`);
+      appendLog(`FETCH_START url=\"${target}\"`);
       try {
-        const result = await fetchViaEgress(target);
-        appendLog(`FETCH_OK url="${target}" status=${result.status ?? 0}`);
+        const result = await fetchViaCurl(target);
+        appendLog(
+          `FETCH_OK url=\"${target}\" status=${result.status ?? "unknown"} proof=${result.proofDetected ? "yes" : "no"}`,
+        );
         return json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        appendLog(`FETCH_ERROR url="${target}" err="${message}"`);
+        appendLog(`FETCH_ERROR url=\"${target}\" err=\"${message}\"`);
         return json({ ok: false, error: message } satisfies FetchResult, 502);
       }
     }
