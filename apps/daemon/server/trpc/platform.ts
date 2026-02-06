@@ -433,6 +433,7 @@ HTTP_PROXY=""
 HTTPS_PROXY=""
 http_proxy=""
 https_proxy=""
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:4318/v1/traces"
 `;
   }
 
@@ -459,5 +460,6 @@ REQUESTS_CA_BUNDLE="${ca}"
 CURL_CA_BUNDLE="${ca}"
 NODE_EXTRA_CA_CERTS="${ca}"
 GITHUB_MAGIC_TOKEN="${magicToken}"
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:4318/v1/traces"
 `;
 }
