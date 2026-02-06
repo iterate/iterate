@@ -11,13 +11,6 @@ const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
 const jaegerVersion = "1.67.0";
 
-function bash(script: string) {
-  return {
-    command: "bash",
-    args: ["-lc", script],
-  };
-}
-
 // ITERATE_SKIP_PROXY is set by the control plane at machine creation when
 // DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
 // so managed processes connect directly to the internet using system CAs.
@@ -62,110 +55,38 @@ export default defineConfig({
     ...proxyEnv,
   },
   processes: [
-    // Init tasks (run once, sequential)
-    {
-      name: "task-git-config",
-      definition: bash(
-        `
-          # Use credential helper instead of insteadOf URL credentials.
-          # The insteadOf approach embeds magic strings in the URL, which causes git to use
-          # a 401-challenge flow (two requests) that breaks through the mitmproxy proxy chain.
-          # A credential helper provides credentials directly, avoiding this issue.
-          # The helper script lives in home-skeleton/.git-credential-helper.sh
-          chmod +x ~/.git-credential-helper.sh
-          git config --global credential.helper '!~/.git-credential-helper.sh'
-          # Rewrite git@github.com: SSH URLs to HTTPS so they go through the proxy
-          git config --global "url.https://github.com/.insteadOf" "git@github.com:"
-        `,
-      ),
-      options: { restartPolicy: "never" },
-    },
-    {
-      name: "task-generate-ca",
-      definition: bash(
-        `
-          if [ ! -f "${caCert}" ]; then
-            echo "Generating CA certificate..."
-            mkdir -p "${mitmproxyDir}"
-            mitmdump -p 0 --set confdir="${mitmproxyDir}" &
-            PID=$!
-            sleep 2
-            kill $PID 2>/dev/null || true
-          else
-            echo "CA certificate already exists"
-          fi
-          `,
-      ),
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-git-config"],
-    },
-    {
-      name: "task-install-ca",
-      definition: bash(
-        `
-          if [ -f "${caCert}" ]; then
-            sudo mkdir -p /usr/local/share/ca-certificates/iterate
-            sudo cp "${caCert}" /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt
-            sudo update-ca-certificates
-          fi
-        `,
-      ),
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-generate-ca"],
-    },
-    {
-      name: "task-db-migrate",
-      definition: {
-        command: "pnpm",
-        args: ["db:migrate"],
-        cwd: `${iterateRepo}/apps/daemon`,
-      },
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-install-ca"],
-    },
-    {
-      name: "task-build-daemon-client",
-      definition: {
-        command: "pnpm",
-        args: ["exec", "vite", "build", "--mode", "production"],
-        cwd: `${iterateRepo}/apps/daemon`,
-        env: {
-          NODE_ENV: "production",
-        },
-      },
-      options: { restartPolicy: "never" },
-      dependsOn: ["task-db-migrate"],
-    },
     {
       name: "task-install-jaeger",
-      definition: bash(
-        `
-          set -euo pipefail
-          BIN_DIR="$HOME/.local/bin"
-          BIN_PATH="$BIN_DIR/jaeger-all-in-one"
-          if [ -x "$BIN_PATH" ]; then
-            exit 0
-          fi
-          mkdir -p "$BIN_DIR"
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-            JAEGER_ARCH="arm64"
-          else
-            JAEGER_ARCH="amd64"
-          fi
-          URL="https://github.com/jaegertracing/jaeger/releases/download/v${jaegerVersion}/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}.tar.gz"
-          TMP_DIR=$(mktemp -d)
-          curl -fsSL "$URL" -o "$TMP_DIR/jaeger.tgz"
-          tar -xzf "$TMP_DIR/jaeger.tgz" -C "$TMP_DIR"
-          cp "$TMP_DIR/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}/jaeger-all-in-one" "$BIN_PATH"
-          chmod +x "$BIN_PATH"
-          rm -rf "$TMP_DIR"
-        `,
-      ),
+      definition: {
+        command: "bash",
+        args: [
+          "-lc",
+          `
+set -euo pipefail
+BIN_DIR="$HOME/.local/bin"
+BIN_PATH="$BIN_DIR/jaeger-all-in-one"
+if [ -x "$BIN_PATH" ]; then
+  exit 0
+fi
+mkdir -p "$BIN_DIR"
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+  JAEGER_ARCH="arm64"
+else
+  JAEGER_ARCH="amd64"
+fi
+URL="https://github.com/jaegertracing/jaeger/releases/download/v${jaegerVersion}/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}.tar.gz"
+TMP_DIR=$(mktemp -d)
+curl -fsSL "$URL" -o "$TMP_DIR/jaeger.tgz"
+tar -xzf "$TMP_DIR/jaeger.tgz" -C "$TMP_DIR"
+cp "$TMP_DIR/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}/jaeger-all-in-one" "$BIN_PATH"
+chmod +x "$BIN_PATH"
+rm -rf "$TMP_DIR"
+`,
+        ],
+      },
       options: { restartPolicy: "never" },
-      dependsOn: ["task-build-daemon-client"],
     },
-    // Long-running processes (depend on init tasks)
     {
       name: "egress-proxy",
       definition: {
@@ -186,7 +107,6 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["task-install-jaeger"],
     },
     {
       name: "daemon-backend",
