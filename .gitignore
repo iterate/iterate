@@ -56,3 +56,6 @@ playwriter-screenshot-*
 # PR video recordings
 pr-videos/
 *.log
+
+# fly-test generated artifacts
+fly-test/proof-logs/
