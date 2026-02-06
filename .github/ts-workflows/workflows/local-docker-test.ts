@@ -21,23 +21,8 @@ export default workflow({
   on: {
     push: {
       branches: ["main"],
-      paths: [
-        "apps/os/sandbox/**",
-        "apps/os/backend/providers/local-docker.ts",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/local-docker-test.yml",
-      ],
     },
-    pull_request: {
-      paths: [
-        "apps/os/sandbox/**",
-        "apps/os/backend/providers/local-docker.ts",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/local-docker-test.yml",
-      ],
-    },
+    pull_request: {},
     // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
