@@ -540,6 +540,10 @@ githubApp.post("/webhook", async (c) => {
             logger.error("[GitHub Webhook] handleWorkflowRun error", err);
           }),
         );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handleWorkflowRun ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
       }
       break;
     }
@@ -554,6 +558,10 @@ githubApp.post("/webhook", async (c) => {
           }).catch((err) => {
             logger.error("[GitHub Webhook] handleCommitComment error", err);
           }),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handleCommitComment ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
         );
       }
       break;

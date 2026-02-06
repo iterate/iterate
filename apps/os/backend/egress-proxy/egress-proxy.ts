@@ -727,7 +727,9 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     }
 
     // Forward the request to the original destination
-    let response = await fetch(processedURL, {
+    const fetchImpl =
+      new URL(c.req.url).hostname === new URL(processedURL).hostname ? c.env.SELF.fetch : fetch;
+    let response = await fetchImpl(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
       body: requestBody,
