@@ -34,7 +34,7 @@ async function buildDaemonBaseUrl(
       externalId: machine.externalId,
       metadata,
     });
-    return runtime.getPreviewUrl(3000);
+    return await runtime.getPreviewUrl(3000);
   } catch (err) {
     logger.warn("[poke-machines] Failed to build daemon URL", {
       machineId: machine.id,
