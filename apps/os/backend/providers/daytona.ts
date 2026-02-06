@@ -7,12 +7,6 @@ import type {
   ProviderState,
 } from "./types.ts";
 
-// Common log paths in sandbox (pidnap process manager)
-const DAEMON_LOG = "/var/log/pidnap/process/daemon-backend.log";
-const OPENCODE_LOG = "/var/log/pidnap/process/opencode.log";
-const PIDNAP_STATUS_CMD = "pidnap status";
-
-const TERMINAL_PORT = 22222;
 const DEFAULT_DAEMON_PORT = 3000;
 
 export interface DaytonaProviderConfig {
@@ -22,7 +16,6 @@ export interface DaytonaProviderConfig {
   autoStopInterval: number; // minutes, 0 = disabled
   autoDeleteInterval: number; // minutes, -1 = disabled, 0 = delete on stop
   externalId: string;
-  buildProxyUrl: (port: number) => string;
   dopplerConfig?: string;
   appStage?: string;
 }
@@ -35,7 +28,6 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
     autoStopInterval,
     autoDeleteInterval,
     externalId,
-    buildProxyUrl,
     dopplerConfig,
     appStage,
   } = config;
@@ -116,17 +108,6 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
     displayInfo: {
       label: "Daytona",
     },
-
-    commands: [
-      { label: "Daemon logs", command: `tail -f ${DAEMON_LOG}` },
-      { label: "OpenCode logs", command: `tail -f ${OPENCODE_LOG}` },
-      { label: "Service status", command: PIDNAP_STATUS_CMD },
-    ],
-
-    terminalOptions: [
-      { label: "Direct", url: getNativeUrl(TERMINAL_PORT) },
-      { label: "Proxy", url: buildProxyUrl(TERMINAL_PORT) },
-    ],
 
     async getProviderState(): Promise<ProviderState> {
       const sandbox = await daytona.get(externalId);

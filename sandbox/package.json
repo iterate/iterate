@@ -4,6 +4,7 @@
   "private": true,
   "exports": {
     "./providers/types": "./providers/types.ts",
+    "./providers/docker/api": "./providers/docker/api.ts",
     "./providers/docker": "./providers/docker/provider.ts",
     "./providers/daytona": "./providers/daytona/provider.ts",
     "./providers/fly": "./providers/fly/provider.ts",

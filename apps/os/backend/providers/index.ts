@@ -9,8 +9,6 @@ export type {
   CreateMachineConfig,
   MachineProviderResult,
   MachineDisplayInfo,
-  MachineCommand,
-  TerminalOption,
 } from "./types.ts";
 
 export interface CreateMachineProviderOptions {
@@ -44,7 +42,6 @@ export async function createMachineProvider(
         autoStopInterval: Number(env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL),
         autoDeleteInterval: Number(env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL),
         externalId,
-        buildProxyUrl,
         appStage: env.APP_STAGE,
       });
     }

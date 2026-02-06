@@ -420,8 +420,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     LOCAL_DOCKER_GIT_GITDIR: "",
     LOCAL_DOCKER_GIT_COMMON_DIR: "",
     LOCAL_DOCKER_REPO_CHECKOUT: "",
-    LOCAL_DOCKER_GIT_DIR: "",
-    LOCAL_DOCKER_COMMON_DIR: "",
   };
   if (isDevelopment) {
     const composeProjectName =
@@ -449,8 +447,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       LOCAL_DOCKER_GIT_GITDIR: process.env.LOCAL_DOCKER_GIT_GITDIR ?? gitDir,
       LOCAL_DOCKER_GIT_COMMON_DIR: process.env.LOCAL_DOCKER_GIT_COMMON_DIR ?? commonDir,
       LOCAL_DOCKER_REPO_CHECKOUT: process.env.LOCAL_DOCKER_REPO_CHECKOUT ?? repoCheckout,
-      LOCAL_DOCKER_GIT_DIR: process.env.LOCAL_DOCKER_GIT_DIR ?? gitDir,
-      LOCAL_DOCKER_COMMON_DIR: process.env.LOCAL_DOCKER_COMMON_DIR ?? commonDir,
     });
   }
 

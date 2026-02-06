@@ -7,145 +7,18 @@
  * Optional: DOCKER_COMPOSE_PROJECT_NAME is used for UI grouping labels.
  */
 
+import {
+  dockerApi,
+  rewriteLocalhost,
+  sanitizeEnvVars,
+  type DockerInspect,
+} from "@iterate-com/sandbox/providers/docker/api";
 import { DAEMON_DEFINITIONS } from "../daemons.ts";
 import { slugify } from "../utils/slug.ts";
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
 const DEFAULT_DAEMON_PORT = 3000;
 const PIDNAP_PORT = 9876;
-
-// ============================================================================
-// Docker API helpers (used by test-helpers.ts, not by the provider itself)
-// ============================================================================
-
-interface DockerHostConfig {
-  socketPath?: string;
-  url: string;
-}
-
-function parseDockerHost(): DockerHostConfig {
-  const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
-
-  if (dockerHost.startsWith("unix://")) {
-    return { socketPath: dockerHost.slice(7), url: "http://localhost" };
-  }
-  if (dockerHost.startsWith("tcp://")) {
-    return { url: `http://${dockerHost.slice(6)}` };
-  }
-  return { url: dockerHost };
-}
-
-/** Get Docker API URL and socket path. Used by test helpers. */
-export function getDockerHostConfig(): DockerHostConfig {
-  return parseDockerHost();
-}
-
-// Lazy-loaded undici dispatcher for Unix socket support
-let undiciDispatcher: unknown | undefined;
-
-async function getUndiciDispatcher(socketPath: string): Promise<unknown> {
-  if (!undiciDispatcher) {
-    const { Agent } = await import("undici");
-    undiciDispatcher = new Agent({ connect: { socketPath } });
-  }
-  return undiciDispatcher;
-}
-
-/** Docker API helper - used by test-helpers.ts for exec, logs, etc. */
-export async function dockerApi<T>(
-  method: string,
-  endpoint: string,
-  body?: Record<string, unknown>,
-): Promise<T> {
-  const config = parseDockerHost();
-  const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
-  const url = `${config.url}${endpoint}`;
-
-  if (config.socketPath) {
-    const { request } = await import("undici");
-    const dispatcher = await getUndiciDispatcher(config.socketPath);
-    const response = await request(url, {
-      method: method as "GET" | "POST" | "DELETE",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-      dispatcher: dispatcher as import("undici").Dispatcher,
-    }).catch((e: unknown) => {
-      throw new Error(
-        `Docker API error: ${e}. DOCKER_HOST=${dockerHost}. ` +
-          `For CI, set DOCKER_HOST=unix:///var/run/docker.sock`,
-      );
-    });
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      const error = await response.body.json().catch(() => ({ message: response.statusCode }));
-      throw new Error(
-        `Docker API error: ${(error as { message?: string }).message ?? response.statusCode}. ` +
-          `DOCKER_HOST=${dockerHost}`,
-      );
-    }
-
-    const text = await response.body.text();
-    return parseDockerResponse<T>(text);
-  }
-
-  const response = await fetch(url, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  }).catch((e: unknown) => {
-    throw new Error(
-      `Docker API error: ${e}. DOCKER_HOST=${dockerHost}. ` +
-        `For local dev, enable TCP API on port 2375 (OrbStack: Docker Engine settings).`,
-    );
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.status }));
-    throw new Error(
-      `Docker API error: ${(error as { message?: string }).message ?? response.status}. ` +
-        `DOCKER_HOST=${dockerHost}`,
-    );
-  }
-
-  const text = await response.text();
-  return parseDockerResponse<T>(text);
-}
-
-/**
- * Parse Docker API response, handling both JSON and NDJSON (newline-delimited JSON).
- * Some endpoints like POST /images/create return streaming NDJSON progress updates.
- * For NDJSON, we parse the last line which typically contains the final status.
- */
-function parseDockerResponse<T>(text: string): T {
-  if (!text) return {} as T;
-
-  // Try parsing as regular JSON first
-  try {
-    return JSON.parse(text);
-  } catch {
-    // If that fails, try parsing as NDJSON (and surface streamed errors).
-    const lines = text.trim().split("\n").filter(Boolean);
-    if (lines.length > 0) {
-      const parsedLines: Array<{ error?: string; errorDetail?: { message?: string } }> = [];
-      for (const line of lines) {
-        try {
-          parsedLines.push(JSON.parse(line));
-        } catch {
-          // ignore invalid line; if everything is invalid we'll return empty object below
-        }
-      }
-      const errorLine = parsedLines.find((line) => line.error || line.errorDetail?.message);
-      if (errorLine) {
-        throw new Error(errorLine.errorDetail?.message ?? errorLine.error ?? "Docker stream error");
-      }
-      if (parsedLines.length === 0) {
-        return {} as T;
-      }
-      return parsedLines[parsedLines.length - 1] as T;
-    }
-    return {} as T;
-  }
-}
 
 // ============================================================================
 // Local Docker Utilities
@@ -176,27 +49,6 @@ function resolveDockerMounts(opts?: {
     gitDir,
     commonDir,
   };
-}
-
-interface DockerInspect {
-  NetworkSettings?: {
-    Ports?: Record<string, Array<{ HostPort?: string }> | null>;
-  };
-}
-
-function rewriteLocalhost(value: string): string {
-  return value.replace(/localhost/g, "host.docker.internal");
-}
-
-function sanitizeEnvVars(envVars: Record<string, string>): string[] {
-  return Object.entries(envVars).map(([key, value]) => {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-      throw new Error(`Invalid environment variable name: ${key}`);
-    }
-    // eslint-disable-next-line no-control-regex -- intentionally matching control chars to sanitize
-    const sanitizedValue = String(value).replace(/[\u0000-\u001f]/g, "");
-    return `${key}=${sanitizedValue}`;
-  });
 }
 
 async function resolveHostPorts(containerId: string): Promise<Record<string, number>> {
@@ -289,9 +141,6 @@ export function createLocalProvider(config: LocalProviderConfig): MachineProvide
     displayInfo: {
       label: `Local ${host}:${displayPort}`,
     },
-
-    commands: [],
-    terminalOptions: [],
   };
 }
 
@@ -462,8 +311,5 @@ export function createLocalDockerProvider(config: LocalDockerProviderConfig): Ma
     displayInfo: {
       label: `Local Docker :${displayPort ?? "?"}`,
     },
-
-    commands: [],
-    terminalOptions: [],
   };
 }

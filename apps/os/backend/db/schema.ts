@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
+import { MachineType as SandboxMachineType } from "@iterate-com/sandbox/providers/types";
 
 // Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars, not reserved
 const slugCheck = (columnName: string, constraintName: string) =>
@@ -33,7 +34,7 @@ export type MachineState = (typeof MachineState)[number];
 
 // Machine types
 // Note: "docker" replaces "local-docker" (migration 0016).
-export const MachineType = ["daytona", "docker", "local"] as const;
+export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
 
 // Secret metadata for OAuth tokens

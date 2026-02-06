@@ -64,8 +64,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  // Use commands, terminal info, and services from backend
-  const { commands, services } = machine;
+  // Use service info from backend
+  const { services } = machine;
 
   // Mutations
   const restartMachine = useMutation({
@@ -352,42 +352,6 @@ function MachineDetailPage() {
                 ))}
               </div>
             </div>
-          )}
-
-          {/* Commands - open in terminal */}
-          {commands.length > 0 && iterateDaemonService && (
-            <>
-              <div className="pt-4 border-t">
-                <h3 className="text-sm font-medium text-muted-foreground mb-2">Commands</h3>
-              </div>
-              {commands.map((cmd, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{cmd.label}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {iterateDaemonService.options.map((option, optIndex) => (
-                      <a
-                        key={optIndex}
-                        href={buildAgentTerminalUrl(option.url, cmd.command)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        {option.label}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
           )}
 
           {/* Agents */}

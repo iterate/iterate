@@ -12,6 +12,7 @@ import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-q
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
+import type { MachineType } from "@iterate-com/sandbox/providers/types";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Checkbox } from "../../../components/ui/checkbox.tsx";
@@ -34,8 +35,6 @@ import {
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
 import { HeaderActions } from "../../../components/header-actions.tsx";
-
-type MachineType = "daytona" | "docker" | "local";
 
 /** Default ports for daemons in local machine type */
 const DEFAULT_LOCAL_PORTS: Record<string, string> = {

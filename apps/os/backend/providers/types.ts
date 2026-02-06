@@ -17,18 +17,6 @@ export interface MachineDisplayInfo {
   label: string;
 }
 
-/** A copyable shell command for interacting with the machine */
-export interface MachineCommand {
-  label: string;
-  command: string;
-}
-
-/** Terminal option for accessing the machine via web UI */
-export interface TerminalOption {
-  label: string;
-  url: string;
-}
-
 /** Provider-level state info (e.g., from Daytona API) */
 export interface ProviderState {
   /** Provider-specific state (e.g., "started", "stopped", "destroyed", "error") */
@@ -60,8 +48,6 @@ export interface MachineProvider {
   // Simple getters - computed at construction time with full context
   readonly previewUrl: string;
   readonly displayInfo: MachineDisplayInfo;
-  readonly commands: MachineCommand[];
-  readonly terminalOptions: TerminalOption[];
 
   /** Get preview URL for a specific port (for services on different ports) */
   getPreviewUrl(port: number): string;

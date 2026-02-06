@@ -33,7 +33,7 @@ interface ServiceOption {
   url: string;
 }
 
-/** Enrich a machine with display info and commands from its provider */
+/** Enrich a machine with display info and service URLs from its provider */
 async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
   machine: T,
   cloudflareEnv: CloudflareEnv,
@@ -75,8 +75,6 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     ...machine,
     metadata,
     displayInfo: provider.displayInfo,
-    commands: provider.commands,
-    terminalOptions: provider.terminalOptions,
     services,
   };
 }

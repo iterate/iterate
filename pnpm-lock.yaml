@@ -681,6 +681,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.67.0(react@19.2.3))
+      '@iterate-com/sandbox':
+        specifier: workspace:*
+        version: link:../../sandbox
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
