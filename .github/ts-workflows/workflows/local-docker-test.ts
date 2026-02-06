@@ -33,10 +33,10 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64)",
+          description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "",
+          default: "linux/amd64,linux/arm64",
         },
         image_name: {
           description: "Docker image name/tag to use",
@@ -56,10 +56,10 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64). Auto-detects if empty.",
+          description: "Build platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64.",
           required: false,
           type: "string",
-          default: "",
+          default: "linux/amd64,linux/arm64",
         },
         image_name: {
           description: "Docker image name/tag to use",
@@ -117,8 +117,8 @@ export default workflow({
           name: "Build Docker image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            // Default to AMD64 to share cache with Daytona snapshot builds.
-            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            // Build both arches so arm64 runners can pull local test images without manifest mismatch.
+            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64,linux/arm64' }}",
             // Avoid builder -> runner --load transfer: save image to Depot Registry first.
             SANDBOX_USE_DEPOT_REGISTRY: "true",
             SANDBOX_DEPOT_SAVE_TAG:
@@ -146,7 +146,9 @@ export default workflow({
             '  echo "Missing Depot registry metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
-            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            'host_platform="linux/amd64"',
+            'if [ "$(uname -m)" = "aarch64" ]; then host_platform="linux/arm64"; fi',
+            'time depot pull --platform "$host_platform" --project "$depot_project_id" "$depot_save_tag"',
             'docker image inspect "$image_ref" > /dev/null',
             'docker tag "$image_ref" "$IMAGE_NAME"',
             "echo 'Pulled image: $image_ref'",

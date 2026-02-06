@@ -176,7 +176,8 @@ export default workflow({
             '  echo "Missing Depot registry metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
-            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            // Daytona snapshots must always be AMD64.
+            'time depot pull --platform "linux/amd64" --project "$depot_project_id" "$depot_save_tag"',
             'docker image inspect "$image_ref" > /dev/null',
             'docker tag "$image_ref" "$IMAGE_NAME"',
             "echo 'Pulled image: $image_ref'",
