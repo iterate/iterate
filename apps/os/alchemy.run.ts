@@ -66,6 +66,60 @@ function getDevTunnelConfig() {
   return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
 }
 
+function parseComposePublishedPort(
+  rawOutput: string,
+  service: string,
+  containerPort: number,
+): string {
+  const line = rawOutput
+    .trim()
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .at(-1);
+  const match = line?.match(/:(\d+)$/);
+  if (!match) {
+    throw new Error(
+      `Could not parse published port for ${service}:${containerPort}. Output was: ${rawOutput}`,
+    );
+  }
+  return match[1];
+}
+
+async function getComposePublishedPort(
+  service: string,
+  containerPort: number,
+  maxWaitMs = 30_000,
+): Promise<string> {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const output = execSync(`tsx ./scripts/docker-compose.ts port ${service} ${containerPort}`, {
+        cwd: repoRoot,
+        encoding: "utf-8",
+      });
+      return parseComposePublishedPort(output, service, containerPort);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  throw new Error(`Could not resolve published port for ${service}:${containerPort}`, {
+    cause: lastError instanceof Error ? lastError : undefined,
+  });
+}
+
+async function resolveLocalDockerRuntimePorts() {
+  const postgresPort = await getComposePublishedPort("postgres", 5432);
+  const neonProxyPort = await getComposePublishedPort("neon-proxy", 4444);
+  process.env.LOCAL_DOCKER_POSTGRES_PORT = postgresPort;
+  process.env.LOCAL_DOCKER_NEON_PROXY_PORT = neonProxyPort;
+  return { postgresPort, neonProxyPort };
+}
+
 /**
  * Wait for vite dev server to be ready by polling localhost
  */
@@ -242,6 +296,10 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URL: Optional,
   SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
+  // DANGEROUS: When enabled, returns raw decrypted secrets instead of magic strings.
+  // This bypasses the egress proxy and exposes secrets directly in env vars.
+  // Only enable this for local development or trusted environments.
+  DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
@@ -305,7 +363,8 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    const origin = "postgres://postgres:postgres@localhost:5432/os";
+    const localDockerPostgresPort = process.env.LOCAL_DOCKER_POSTGRES_PORT ?? "5432";
+    const origin = `postgres://postgres:postgres@localhost:${localDockerPostgresPort}/os`;
     await migrate(origin);
     await seedGlobalSecrets(origin);
     return {
@@ -338,8 +397,8 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -362,8 +421,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -386,8 +445,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -417,6 +476,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
         ...getLocalDockerEnvVars(repoRoot),
         ...envVarsFrom([
           "LOCAL_DOCKER_COMPOSE_PROJECT_NAME",
+          "LOCAL_DOCKER_POSTGRES_PORT",
+          "LOCAL_DOCKER_NEON_PROXY_PORT",
           "LOCAL_DOCKER_GIT_COMMON_DIR",
           "LOCAL_DOCKER_GIT_GITDIR",
           "LOCAL_DOCKER_GIT_COMMIT",
@@ -431,6 +492,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const localDockerBindings = {
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
+    LOCAL_DOCKER_POSTGRES_PORT: "",
+    LOCAL_DOCKER_NEON_PROXY_PORT: "",
     LOCAL_DOCKER_GIT_COMMON_DIR: "",
     LOCAL_DOCKER_GIT_GITDIR: "",
     LOCAL_DOCKER_GIT_COMMIT: "",
@@ -442,8 +505,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   };
   if (isDevelopment) {
     Object.assign(localDockerBindings, {
-      LOCAL_DOCKER_IMAGE_NAME:
-        process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+      LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local",
       ...localDockerEnvVars,
     });
   }
@@ -547,13 +609,17 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 
   // Start Docker containers (postgres, neon-proxy) before migrations
-  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars
-  // --wait flag ensures postgres healthcheck passes before returning
+  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars.
+  // Host ports are dynamic and resolved immediately after startup.
   console.log("Starting Docker containers...");
   execSync("pnpm docker:up", {
     cwd: repoRoot,
     stdio: "inherit",
   });
+  const ports = await resolveLocalDockerRuntimePorts();
+  console.log(
+    `Resolved local Docker ports: postgres=${ports.postgresPort}, neon-proxy=${ports.neonProxyPort}`,
+  );
 
   ensureIteratePnpmStoreVolume(repoRoot);
 }

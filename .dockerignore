@@ -1,14 +1,12 @@
-# Copied from .gitignore 
-# Crucially, doesn't include .git, because we WANT to copy the .git folder into the image 
-# Though we should be mindful that if .git in our build context is a file (as is the case for git worktrees),
-# the git repo won't work (because the .git file points at a folder that only exists on the host)
-# In practice this is fine because in local development with docker, we rsync a copy of the 
-# host machine checkout and .git folder (with git worktree redirect followed) on top of the image-provided version
-# And in CI we don't use worktrees when building the images
-# 
+# Exclude .git - we use a synthetic deterministic .git via --build-context instead
+# This ensures 100% cache hits when the commit SHA hasn't changed
+.git
+
 .DS_Store
 node_modules
+**/node_modules
 .pnpm-store
+**/.pnpm-store
 *.tsbuildinfo
 
 # React Router

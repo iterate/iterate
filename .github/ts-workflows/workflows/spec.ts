@@ -13,7 +13,7 @@ export default workflow({
   },
   jobs: {
     specs: {
-      ...utils.runsOn,
+      ...utils.runsOnDepotUbuntuForContainerThings,
       steps: [
         { uses: "actions/checkout@v4" },
         { uses: "pnpm/action-setup@v4" },

@@ -11,7 +11,7 @@ export default workflow({
   },
   jobs: {
     "lint-typecheck": {
-      ...utils.runsOn,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         {
           name: "Checkout code",

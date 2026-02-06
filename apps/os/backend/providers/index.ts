@@ -55,7 +55,7 @@ export async function createMachineProvider(
       }
       const { createLocalDockerProvider } = await import("./local-docker.ts");
       return createLocalDockerProvider({
-        imageName: env.LOCAL_DOCKER_IMAGE_NAME || "ghcr.io/iterate/sandbox:local",
+        imageName: env.LOCAL_DOCKER_IMAGE_NAME || "iterate-sandbox:local",
         externalId,
         metadata,
         composeProjectName: env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME || undefined,
