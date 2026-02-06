@@ -10,7 +10,14 @@ import {
   type Session,
   type Event as OpencodeRuntimeEvent,
 } from "@opencode-ai/sdk/v2";
-import { SpanStatusCode, context, trace, type Context, type Span } from "@opentelemetry/api";
+import {
+  SpanStatusCode,
+  context,
+  trace,
+  type Context,
+  type Span,
+  type SpanStatus,
+} from "@opentelemetry/api";
 import { getConfig } from "../config-loader.ts";
 import { withSpan } from "../utils/otel.ts";
 import type {
@@ -216,12 +223,16 @@ function setTrackedSessionParentContext(sessionId: string, parentContext: Contex
   tracking.parentContext = parentContext;
 }
 
-function endActivePhase(tracking: SessionTracking, reason: string): void {
+function endActivePhase(
+  tracking: SessionTracking,
+  reason: string,
+  status: SpanStatus = { code: SpanStatusCode.OK },
+): void {
   if (!tracking.activePhase) return;
   const elapsedMs = Date.now() - tracking.activePhase.startedAtMs;
   tracking.activePhase.span.setAttribute("phase.elapsed_ms", elapsedMs);
   tracking.activePhase.span.setAttribute("phase.end_reason", reason);
-  tracking.activePhase.span.setStatus({ code: SpanStatusCode.OK });
+  tracking.activePhase.span.setStatus(status);
   tracking.activePhase.span.end();
   tracking.activePhase = undefined;
 }
@@ -374,8 +385,10 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
       error: event.properties.error,
     });
     if (tracking?.activePhase) {
-      tracking.activePhase.span.setStatus({ code: SpanStatusCode.ERROR, message: "session.error" });
-      endActivePhase(tracking, "session_error");
+      endActivePhase(tracking, "session_error", {
+        code: SpanStatusCode.ERROR,
+        message: "session.error",
+      });
     }
     if (sessionId) {
       void stopTracking(sessionId);
