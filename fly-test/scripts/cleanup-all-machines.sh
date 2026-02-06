@@ -33,7 +33,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     *)
       echo "Unknown arg: $1" >&2
-      echo "Usage: bash fly-test/cleanup-all-machines.sh [--dry-run] [--org <slug>]" >&2
+      echo "Usage: bash fly-test/scripts/cleanup-all-machines.sh [--dry-run] [--org <slug>]" >&2
       exit 1
       ;;
   esac

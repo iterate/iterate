@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "e2e": "tsx ./e2e-node-egress-observability.ts",
+    "e2e": "tsx ./e2e/run-observability.ts",
     "typecheck": "tsc --noEmit -p ./tsconfig.json",
     "test": "vitest run",
-    "cleanup:all-machines": "bash ./cleanup-all-machines.sh",
-    "tail:egress-log": "bash ./tail-egress-log.sh"
+    "cleanup:all-machines": "bash ./scripts/cleanup-all-machines.sh",
+    "tail:egress-log": "bash ./scripts/tail-egress-log.sh"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

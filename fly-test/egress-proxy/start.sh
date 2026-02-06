@@ -52,7 +52,7 @@ install_cloudflared
 node --version >>"$INIT_LOG" 2>&1
 cloudflared --version >>"$INIT_LOG" 2>&1
 
-node /proof/egress-proxy-and-viewer.mjs >>"$INIT_LOG" 2>&1 &
+node /proof/egress-proxy/app.mjs >>"$INIT_LOG" 2>&1 &
 NODE_PID="$!"
 log "node_pid=$NODE_PID"
 

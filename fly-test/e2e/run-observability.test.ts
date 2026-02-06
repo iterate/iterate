@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hostFromUrl,
-  proxyHostForIp,
-  urlEncodedForm,
-} from "./e2e-node-egress-observability-lib.ts";
+import { hostFromUrl, proxyHostForIp, urlEncodedForm } from "./run-observability-lib.ts";
 
 describe("e2e helpers", () => {
   it("wraps ipv6 for proxy host", () => {

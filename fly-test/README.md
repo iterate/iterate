@@ -1,108 +1,73 @@
 # fly-test
 
-Super minimal Fly Machines topology runner.
+Minimal Fly Machines playground for sandbox-egress observability.
 
-## Files
+## Layout
 
-- `fly-test/topology.json`: Desired topology (app + machine regions)
-- `fly-test/apply-topology.ts`: Create app (if missing) + create missing machines
+- `fly-test/e2e/run-observability.ts`: single canonical e2e runner
+- `fly-test/e2e/run-observability-lib.ts`: small pure helpers
+- `fly-test/e2e/run-observability.test.ts`: unit tests for helpers
+- `fly-test/sandbox/app.mjs`: sandbox UI (form triggers outbound fetch)
+- `fly-test/sandbox/start.sh`: machine init + cloudflared tunnel for sandbox
+- `fly-test/egress-proxy/app.mjs`: HTTP proxy + browser log viewer
+- `fly-test/egress-proxy/start.sh`: machine init + cloudflared tunnel for viewer
+- `fly-test/scripts/tail-egress-log.sh`: tail proxy log from terminal
+- `fly-test/scripts/cleanup-all-machines.sh`: delete all machines in account/org
 
-## Usage
-
-Dry run:
-
-```bash
-doppler run --config dev -- pnpm tsx fly-test/apply-topology.ts --config fly-test/topology.json --dry-run
-```
-
-Apply:
-
-```bash
-doppler run --config dev -- pnpm tsx fly-test/apply-topology.ts --config fly-test/topology.json
-```
-
-If app is new, allocate public IPv4 once:
-
-```bash
-fly ips allocate-v4 -a iterate-fly-test
-```
-
-## Notes
-
-- Expects `FLY_API_KEY` in env (you said this already exists in Doppler).
-- Script is additive only: it creates missing app/machines and skips existing ones.
-- Edit `topology.json` only; no code change needed for regions/names/image.
-- If you need a specific Fly private network, add `"network": "<network-name>"` to `topology.json`.
-
-## Cloudflared E2E
-
-This verifies end-to-end:
-
-- install `cloudflared` inside a Fly machine
-- run `python3 -m http.server` inside that machine
-- create `trycloudflare.com` tunnel to `127.0.0.1:8080`
-- fetch tunnel URL from host and assert marker response
-
-Run:
-
-```bash
-doppler run --config dev -- bash fly-test/e2e-cloudflared.sh
-```
-
-Artifacts are written under:
-
-```bash
-fly-test/proof-logs/iterate-cloudflared-e2e-*/
-```
-
-Key files:
-
-- `summary.txt`
-- `machine.log`
-- `tunnel.log`
-- `tunnel-url-from-host.txt`
-- `local-response.txt`
-
-## Node Egress Observability E2E
-
-Two `node:24` machines:
-
-- sandbox UI with URL form (`sandbox-ui.mjs`)
-- egress proxy + live log viewer (`egress-proxy-and-viewer.mjs`)
-
-Run:
+## Quick Run
 
 ```bash
 doppler run --config dev -- pnpm --filter fly-test e2e
 ```
 
-The script outputs:
+This prints:
 
-- sandbox URL (open in browser)
-- egress viewer URL (open in browser, live logs via polling `/tail`)
-- terminal tail command:
+- sandbox URL (use form to trigger outbound traffic)
+- egress viewer URL (live polling log page)
+- tail command
+- destroy command
+
+## Proving It Works
+
+The e2e runner does this automatically:
+
+1. Creates Fly app + 2 machines (`node:24`)
+2. Starts sandbox + egress-proxy services
+3. Gets both Cloudflare tunnel URLs
+4. Calls sandbox form endpoint to trigger outbound fetch via proxy
+5. Pulls machine logs and asserts:
+   - sandbox log has `FETCH_OK` or `FETCH_ERROR`
+   - egress log has proxy traffic (`HTTP` / `CONNECT_*`)
+
+Artifacts land in:
 
 ```bash
-doppler run --config dev -- bash fly-test/tail-egress-log.sh <app-name> egress-proxy
+fly-test/proof-logs/<app-name>/
 ```
 
-Package checks:
+## Useful Commands
+
+Typecheck + unit tests:
 
 ```bash
 pnpm --filter fly-test typecheck
 pnpm --filter fly-test test
 ```
 
-## Cleanup
-
-Delete all machines in all apps visible to this token:
+Tail egress log:
 
 ```bash
-doppler run --config dev -- bash fly-test/cleanup-all-machines.sh
+doppler run --config dev -- pnpm --filter fly-test tail:egress-log <app-name> egress-proxy
+```
+
+Cleanup all machines:
+
+```bash
+doppler run --config dev -- pnpm --filter fly-test cleanup:all-machines
 ```
 
 Dry run:
 
 ```bash
-doppler run --config dev -- bash fly-test/cleanup-all-machines.sh --dry-run
+doppler run --config dev -- pnpm --filter fly-test cleanup:all-machines -- --dry-run
 ```

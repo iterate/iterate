@@ -58,7 +58,7 @@ node --version >>"$INIT_LOG" 2>&1
 cloudflared --version >>"$INIT_LOG" 2>&1
 curl --version >>"$INIT_LOG" 2>&1
 
-node /proof/sandbox-ui.mjs >>"$INIT_LOG" 2>&1 &
+node /proof/sandbox/app.mjs >>"$INIT_LOG" 2>&1 &
 NODE_PID="$!"
 log "node_pid=$NODE_PID"
 
