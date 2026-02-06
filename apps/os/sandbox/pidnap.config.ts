@@ -9,7 +9,6 @@ const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
-const githubMagicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
 
 const bash = (command: string) => ({
   command: "bash",
@@ -42,8 +41,8 @@ export default defineConfig({
     CURL_CA_BUNDLE: caCert,
     NODE_EXTRA_CA_CERTS: caCert,
     GIT_SSL_CAINFO: caCert,
-    // Github Stuff
-    GITHUB_MAGIC_TOKEN: githubMagicToken,
+    // Github Stuff (magic token available as env var for non-git use cases)
+    GITHUB_MAGIC_TOKEN: encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})"),
   },
   processes: [
     // Init tasks (run once, sequential)
@@ -51,8 +50,15 @@ export default defineConfig({
       name: "task-git-config",
       definition: bash(
         `
-          git config --global "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "https://github.com/"
-          git config --global --add "url.https://x-access-token:${githubMagicToken}@github.com/.insteadOf" "git@github.com:"
+          # Use credential helper instead of insteadOf URL credentials.
+          # The insteadOf approach embeds magic strings in the URL, which causes git to use
+          # a 401-challenge flow (two requests) that breaks through the mitmproxy proxy chain.
+          # A credential helper provides credentials directly, avoiding this issue.
+          # The helper script lives in home-skeleton/.git-credential-helper.sh
+          chmod +x ~/.git-credential-helper.sh
+          git config --global credential.helper '!~/.git-credential-helper.sh'
+          # Rewrite git@github.com: SSH URLs to HTTPS so they go through the proxy
+          git config --global "url.https://github.com/.insteadOf" "git@github.com:"
         `,
       ),
       options: { restartPolicy: "never" },

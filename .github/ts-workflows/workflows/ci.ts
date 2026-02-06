@@ -6,6 +6,7 @@ export default {
   permissions: {
     contents: "read",
     deployments: "write",
+    "id-token": "write", // Required for Depot OIDC auth in called workflows
   },
   on: {
     push: {
@@ -37,7 +38,7 @@ export default {
      * and then pass those values as inputs to the reusable workflow.
      */
     variables: {
-      ...utils.runsOnUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         {
           id: "get_env",
@@ -51,10 +52,10 @@ export default {
         stage: "${{ steps.get_env.outputs.stage }}",
       },
     },
-    "build-snapshot": {
+    "build-daytona-snapshot": {
       needs: ["variables"],
       if: "needs.variables.outputs.stage == 'prd'",
-      uses: "./.github/workflows/build-snapshot.yml",
+      uses: "./.github/workflows/build-daytona-snapshot.yml",
       // @ts-expect-error - secrets inherit
       secrets: "inherit",
       with: {
@@ -63,18 +64,20 @@ export default {
     },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: ["variables", "build-snapshot"],
+      needs: ["variables", "build-daytona-snapshot"],
+      // Explicit condition (defensive - don't rely only on build-daytona-snapshot being skipped)
+      if: "needs.variables.outputs.stage == 'prd'",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
-        daytona_snapshot_name: "${{ needs.build-snapshot.outputs.snapshot_name }}",
+        daytona_snapshot_name: "${{ needs.build-daytona-snapshot.outputs.snapshot_name }}",
       },
     },
     slack_failure: {
-      needs: ["variables", "build-snapshot", "deploy"],
+      needs: ["variables", "build-daytona-snapshot", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
-      "runs-on": "ubuntu-latest",
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,

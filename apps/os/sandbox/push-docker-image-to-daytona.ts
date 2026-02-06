@@ -3,7 +3,8 @@
  *
  * Usage: pnpm os daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
- * By default, uses the most recently built :local image.
+ * This script expects the image to already be built with `pnpm os docker:build`,
+ * which loads the image into local Docker daemon. By default, uses the most recently built :local image.
  *
  * Resource limits can be set via env vars (DAYTONA_DEFAULT_SNAPSHOT_CPU, DAYTONA_DEFAULT_SNAPSHOT_MEMORY, DAYTONA_DEFAULT_SNAPSHOT_DISK)
  * or CLI args. CLI args override env vars. Defaults: cpu=2, memory=4, disk=10.
@@ -12,9 +13,9 @@
  * features (buildx) and Daytona's Dockerfile builder does not support them.
  */
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 
 // Daytona CLI doesn't respect Docker contexts, so we need to set DOCKER_HOST explicitly.
@@ -67,60 +68,69 @@ if (daytonaApiKey) {
   });
 }
 
-const baseImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox";
-const localImageRef = `${baseImageName}:local`;
+// Read Depot build info to get local image name and git sha
+const depotBuildInfoPath = join(repoRoot, ".cache", "depot-build-info.json");
+let depotBuildInfo: {
+  localImageName?: string;
+  gitSha?: string;
+} = {};
 
-// Find the image to push - prefer explicit --image, then :local
-const imageRef = values.image ?? localImageRef;
-if (values.image) {
-  console.log(`Using image from --image: ${imageRef}`);
-} else {
-  console.log(`Using default image tag: ${imageRef}`);
+if (existsSync(depotBuildInfoPath)) {
+  try {
+    depotBuildInfo = JSON.parse(readFileSync(depotBuildInfoPath, "utf-8"));
+  } catch {
+    console.warn("Warning: Could not parse depot-build-info.json");
+  }
 }
 
-// Verify image exists
+// Get the local image name (loaded by depot build --load)
+// CLI --image flag takes precedence, then depot-build-info.json, then default
+const localImageName = values.image ?? depotBuildInfo.localImageName ?? "iterate-sandbox:local";
+
+// Verify local image exists
 try {
-  execSync(`docker image inspect ${imageRef}`, {
-    cwd: repoRoot,
-    stdio: "pipe",
-    encoding: "utf-8",
-  });
+  execSync(`docker image inspect ${localImageName}`, { stdio: "ignore" });
 } catch {
-  console.error(`Error: Image not found: ${imageRef}`);
-  console.error(`\nBuild it first with: pnpm os docker:build`);
+  console.error(`Error: Local image '${localImageName}' not found.`);
+  console.error("Build the image first with: pnpm os docker:build");
   process.exit(1);
 }
+console.log(`Local image: ${localImageName}`);
 
-// Get image creation time and ID for naming
-const imageInfo = JSON.parse(
-  execSync(`docker image inspect ${imageRef} --format '{{json .}}'`, {
-    cwd: repoRoot,
-    encoding: "utf-8",
-  }),
-);
-const imageId = (imageInfo.Id as string).replace("sha256:", "").slice(0, 12);
-const createdAt = new Date(imageInfo.Created as string);
-const dateStr = createdAt.toISOString().slice(0, 10).replace(/-/g, "");
+// Generate snapshot name: iterate-sandbox-{sha} with optional -{user}-dirty suffix
+const gitSha = depotBuildInfo.gitSha ?? "unknown";
 
-// Default snapshot name includes image ID so it's clear what we're uploading
-const defaultName = `iterate-sandbox-${dateStr}-${imageId}-${builtBy}`;
+// Check if repo has uncommitted changes
+const isDirty = (() => {
+  try {
+    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
+    return status.trim().length > 0;
+  } catch {
+    return false;
+  }
+})();
+
+// Format: iterate-sandbox-{sha}[-{user}][-dirty]
+let defaultName = `iterate-sandbox-${gitSha}`;
+if (builtBy !== "unknown") {
+  defaultName += `-${builtBy}`;
+}
+if (isDirty) {
+  defaultName += "-dirty";
+}
 const snapshotName = values.name ?? defaultName;
+
 if (values.name) {
   console.log(`Using snapshot name from --name: ${snapshotName}`);
 } else {
-  console.log(
-    [
-      "Inferring snapshot name from image metadata",
-      "(created date + image id) and ITERATE_USER:",
-      snapshotName,
-    ].join(" "),
-  );
+  console.log(`Generated snapshot name: ${snapshotName}`);
 }
 
 console.log(`Pushing Daytona snapshot: ${snapshotName}`);
-console.log(`  image=${imageRef}`);
+console.log(`  image=${localImageName}`);
 console.log(`  cpu=${values.cpu}, memory=${values.memory}, disk=${values.disk}`);
 
+// Check if snapshot already exists
 const snapshotAlreadyExists = (() => {
   try {
     const pageLimit = 100;
@@ -161,12 +171,13 @@ const snapshotAlreadyExists = (() => {
 if (snapshotAlreadyExists) {
   console.log("Snapshot already exists (matched by name). Skipping upload.");
 } else {
+  // Push local image to Daytona
   execSync(
     [
       "daytona",
       "snapshot",
       "push",
-      imageRef,
+      localImageName,
       "--name",
       snapshotName,
       "--cpu",
