@@ -41,7 +41,7 @@ export default {
   },
   jobs: {
     release: {
-      ...utils.runsOnFastStartingUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         {
           name: "Checkout code",

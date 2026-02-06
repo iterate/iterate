@@ -37,7 +37,7 @@ on:
         value: ${{ jobs.build.outputs.git_sha }}
 jobs:
   build:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
       snapshot_name: ${{ steps.push.outputs.snapshot_name }}
       git_sha: ${{ steps.push.outputs.git_sha }}

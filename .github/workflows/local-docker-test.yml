@@ -49,7 +49,7 @@ on:
         value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
       test_result: ${{ steps.test.outcome }}
     steps:

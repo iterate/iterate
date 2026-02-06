@@ -11,7 +11,7 @@ export default workflow({
   },
   jobs: {
     test: {
-      ...utils.runsOnFastStartingUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
