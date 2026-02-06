@@ -23,15 +23,24 @@ Place this in HTTP headers or the path. The egress proxy intercepts outbound req
 
 ## Git Authentication
 
-Git auth uses URL rewriting via git config (set in `apps/os/sandbox/entry.sh`):
+Git auth uses a credential helper that returns the magic string (set in `apps/os/sandbox/pidnap.config.ts`):
 
 ```bash
-GITHUB_MAGIC_TOKEN='getIterateSecret%28%7BsecretKey%3A%20%22github.access_token%22%7D%29'
-git config --global --add "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "https://github.com/"
-git config --global --add "url.https://x-access-token:${GITHUB_MAGIC_TOKEN}@github.com/.insteadOf" "git@github.com:"
+# ~/.git-credential-helper.sh
+#!/bin/bash
+echo "username=x-access-token"
+echo "password=getIterateSecret({secretKey: 'github.access_token'})"
+
+# ~/.gitconfig
+[credential]
+    helper = !~/.git-credential-helper.sh
+[url "https://github.com/"]
+    insteadOf = git@github.com:
 ```
 
-Note: Magic string is URL-encoded in git config; egress proxy decodes before processing.
+The credential helper provides the magic string as the password. The egress proxy intercepts the request and replaces it with the real GitHub token.
+
+**Why not URL credentials?** The old approach (`url.https://x-access-token:TOKEN@github.com/.insteadOf`) caused git to use a 401-challenge flow (two requests) that broke through the mitmproxy → egress proxy chain. The credential helper avoids this by providing credentials directly.
 
 ## Secret Scopes
 
