@@ -1,5 +1,16 @@
 Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
+## TOC
+
+- Quick reference
+- Environment variables (Doppler)
+- Critical rules
+- Trace debugging (Jaeger)
+- Frontend react guide
+- TypeScript (repo-wide)
+- Task system
+- Pointers
+
 ## Meta: writing AGENTS.md
 
 - CLAUDE.md must be a symlink to AGENTS.md
@@ -33,6 +44,17 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - No `console` in backend — use `apps/os/backend/tag-logger.ts`
 - No `useEffect` for data fetching — use `useSuspenseQuery`
 - No inline error/success messages — use toast notifications
+
+## Trace debugging (Jaeger)
+
+- Local-docker sandbox exposes Jaeger UI on daemon port `16686` (mapped host port varies)
+- OTLP default in sandbox: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces`
+- Agent workflow hints:
+  - first discover ports from container mapping; do not hardcode host ports
+  - check `/api/observability` to confirm OTEL is enabled before debugging traces
+  - fetch `services` -> `operations` -> `traces` from Jaeger API; narrow by lookback + service
+  - rank spans by duration, then compare parent span vs child spans to find bottleneck stage
+  - validate conclusions against process logs (`daemon-backend.log`, `opencode.log`)
 
 ## Frontend react guide
 

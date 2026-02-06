@@ -124,6 +124,7 @@ export const opencodeHarness: AgentHarness = {
         attributes: {
           "opencode.session_id": harnessSessionId,
           "agent.event_type": event.type,
+          "agent.message_length": event.content.length,
         },
       },
       async () => {
@@ -131,15 +132,33 @@ export const opencodeHarness: AgentHarness = {
         const config = getConfig();
 
         // Track session for acknowledgment lifecycle
-        await trackSession(harnessSessionId, params);
+        await withSpan(
+          "daemon.opencode.track_session",
+          {
+            attributes: {
+              "opencode.session_id": harnessSessionId,
+            },
+          },
+          async () => trackSession(harnessSessionId, params),
+        );
 
         // Send message via SDK using session.prompt()
-        await client.session.prompt({
-          sessionID: harnessSessionId,
-          parts: [{ type: "text", text: event.content }],
-          // Use default model from config if available
-          ...(config.defaultModel && { model: config.defaultModel }),
-        });
+        await withSpan(
+          "daemon.opencode.prompt",
+          {
+            attributes: {
+              "opencode.session_id": harnessSessionId,
+              ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
+            },
+          },
+          async () =>
+            client.session.prompt({
+              sessionID: harnessSessionId,
+              parts: [{ type: "text", text: event.content }],
+              // Use default model from config if available
+              ...(config.defaultModel && { model: config.defaultModel }),
+            }),
+        );
       },
     );
   },
@@ -164,6 +183,7 @@ interface SessionTracking {
   sessionId: string;
   unacknowledge: () => Promise<void>;
   workingDirectory: string;
+  startedAtMs: number;
 }
 
 // Track active sessions and their callbacks
@@ -171,6 +191,29 @@ const trackedSessions = new Map<string, SessionTracking>();
 
 // Event subscription state
 let subscriptionActive = false;
+
+function summarizeEvent(event: unknown): Record<string, unknown> {
+  if (!event || typeof event !== "object") return { rawType: typeof event };
+
+  const evt = event as { type?: unknown; properties?: unknown };
+  const props =
+    evt.properties && typeof evt.properties === "object"
+      ? (evt.properties as Record<string, unknown>)
+      : undefined;
+
+  return {
+    type: typeof evt.type === "string" ? evt.type : "unknown",
+    sessionId:
+      (typeof props?.sessionID === "string" && props.sessionID) ||
+      (typeof props?.sessionId === "string" && props.sessionId) ||
+      null,
+    status:
+      props?.status && typeof props.status === "object"
+        ? ((props.status as { type?: unknown }).type ?? null)
+        : null,
+    propertyKeys: props ? Object.keys(props).slice(0, 10) : [],
+  };
+}
 
 /**
  * Stop tracking a session and call its unacknowledge callback.
@@ -181,7 +224,11 @@ async function stopTracking(sessionId: string): Promise<void> {
 
   // Delete first to prevent duplicate calls (both session.idle and session.status fire)
   trackedSessions.delete(sessionId);
-  logger.log(`[opencode] Stopped tracking session ${sessionId}`);
+  const elapsedMs = Date.now() - tracking.startedAtMs;
+  logger.log(`[opencode] Stopped tracking session ${sessionId}`, {
+    elapsedMs,
+    trackedSessionCount: trackedSessions.size,
+  });
 
   try {
     await tracking.unacknowledge();
@@ -233,6 +280,7 @@ async function processEvents(stream: AsyncGenerator<unknown>): Promise<void> {
 
   for await (const event of stream) {
     try {
+      logger.log("[opencode] Event emitted", summarizeEvent(event));
       handleEvent(event);
     } catch (error) {
       logger.error(`[opencode] Error handling event:`, error);
@@ -284,6 +332,7 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     sessionId,
     unacknowledge: params.unacknowledge,
     workingDirectory: params.workingDirectory,
+    startedAtMs: Date.now(),
   });
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
