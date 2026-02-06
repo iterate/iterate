@@ -457,7 +457,13 @@ export const machineRouter = router({
     }> = [];
 
     if (enabledProviders.has("docker")) {
-      types.push({ type: "docker", label: "Docker" });
+      types.push({
+        type: "docker",
+        label: "Docker",
+        disabledReason: import.meta.env.DEV
+          ? undefined
+          : "Docker provider only available in development",
+      });
     }
 
     if (enabledProviders.has("daytona")) {

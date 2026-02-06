@@ -52,7 +52,11 @@ export const RestartingProcessState = v.picklist([
 ]);
 export type RestartingProcessState = v.InferOutput<typeof RestartingProcessState>;
 
-const DEFAULT_BACKOFF: BackoffStrategy = { type: "fixed", delayMs: 1000 };
+const DEFAULT_BACKOFF: BackoffStrategy = {
+  type: "exponential",
+  initialDelayMs: 1000,
+  maxDelayMs: 10000,
+};
 const DEFAULT_CRASH_LOOP: CrashLoopConfig = { maxRestarts: 5, windowMs: 60000, backoffMs: 60000 };
 
 export type StateChangeListener = (newState: RestartingProcessState) => void;

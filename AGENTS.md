@@ -16,6 +16,7 @@ Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && p
 - Prefer pushing before long local validation so GitHub checks + review agents start early
 - After push, keep validating locally and follow up with more commits
 - Avoid large unpushed change sets
+- PR descriptions: only add `Testing`/`Validation` when non-standard human/manual steps were done/are needed. Skip trivial stuff (e.g. `pnpm test`).
 
 ## Environment variables (Doppler)
 

@@ -498,7 +498,8 @@ function ProjectMachinesPage() {
           <div>
             <h2 className="text-sm font-medium">Previous Machines</h2>
             <p className="text-xs text-muted-foreground">
-              Starting or archived machines. A new machine becomes active once it reports ready.
+              Starting, detached, or archived machines. A new machine becomes active once it reports
+              ready.
             </p>
           </div>
           <MachineTable
