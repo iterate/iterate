@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  PromptEventSchema,
-  IterateEventSchema,
+  PromptEvent,
+  IterateEvent,
   isPromptEvent,
   isIterateEvent,
   extractIterateEvents,
@@ -10,13 +10,13 @@ import {
 describe("events schema", () => {
   it("accepts prompt events in both schemas", () => {
     const input = { type: "prompt", message: "hello" };
-    expect(PromptEventSchema.parse(input)).toEqual(input);
-    expect(IterateEventSchema.parse(input)).toEqual(input);
+    expect(PromptEvent.parse(input)).toEqual(input);
+    expect(IterateEvent.parse(input)).toEqual(input);
   });
 
   it("rejects non-prompt events", () => {
-    expect(PromptEventSchema.safeParse({ type: "other", message: "x" }).success).toBe(false);
-    expect(IterateEventSchema.safeParse({ type: "other", message: "x" }).success).toBe(false);
+    expect(PromptEvent.safeParse({ type: "other", message: "x" }).success).toBe(false);
+    expect(IterateEvent.safeParse({ type: "other", message: "x" }).success).toBe(false);
   });
 
   it("provides runtime type guards", () => {

@@ -5,7 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentRoute } from "../db/schema.ts";
-import { IterateEventSchema } from "../types/events.ts";
+import { IterateEvent } from "../types/events.ts";
 import { validateAgentPath } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
@@ -155,7 +155,7 @@ export const trpcRouter = createTRPCRouter({
     .input(
       z.object({
         agentPath: z.string(),
-        createWithEvents: z.array(IterateEventSchema).default([]),
+        createWithEvents: z.array(IterateEvent).default([]),
         // Internal override mostly for tests; prefer daemon-local provider paths.
         newAgentPath: z.string().default("/opencode/new"),
       }),
