@@ -33,10 +33,11 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64)",
+          description:
+            "Build platform (linux/amd64 or linux/arm64). Auto-detects from runner if empty.",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "",
         },
         image_name: {
           description: "Docker image name/tag to use",
@@ -56,10 +57,11 @@ export default workflow({
           default: "",
         },
         docker_platform: {
-          description: "Build platform (linux/amd64 or linux/arm64). Defaults to linux/amd64.",
+          description:
+            "Build platform (linux/amd64 or linux/arm64). Auto-detects from runner if empty.",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "",
         },
         image_name: {
           description: "Docker image name/tag to use",
@@ -117,7 +119,8 @@ export default workflow({
           name: "Build Docker image",
           env: {
             LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            SANDBOX_BUILD_PLATFORM:
+              "${{ inputs.docker_platform || (runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64') }}",
             // Avoid builder -> runner --load transfer: save image to Depot Registry first.
             SANDBOX_USE_DEPOT_REGISTRY: "true",
             SANDBOX_DEPOT_SAVE_TAG:
@@ -134,7 +137,8 @@ export default workflow({
           name: "Pull Docker image from Depot Registry",
           env: {
             IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:test' }}",
-            PULL_PLATFORM: "${{ inputs.docker_platform || 'linux/amd64' }}",
+            PULL_PLATFORM:
+              "${{ inputs.docker_platform || (runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64') }}",
           },
           run: [
             "echo '::group::Pull timing'",
