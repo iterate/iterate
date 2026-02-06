@@ -10,6 +10,7 @@ import {
   type Session,
   type Event as OpencodeRuntimeEvent,
 } from "@opencode-ai/sdk/v2";
+import { SpanStatusCode, context, trace, type Context, type Span } from "@opentelemetry/api";
 import { getConfig } from "../config-loader.ts";
 import { withSpan } from "../utils/otel.ts";
 import type {
@@ -34,6 +35,7 @@ const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 const READINESS_POLL_INTERVAL_MS = 200;
 const READINESS_TIMEOUT_MS = 10000;
 const IDLE_WAIT_TIMEOUT_MS = 60000;
+const eventTracer = trace.getTracer("iterate.daemon.opencode.events");
 
 function createClient(params: { directory: string }): OpencodeClient {
   return createOpencodeClient({
@@ -153,13 +155,15 @@ export const opencodeHarness: AgentHarness = {
               ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
             },
           },
-          async () =>
-            client.session.prompt({
+          async () => {
+            setTrackedSessionParentContext(harnessSessionId, context.active());
+            await client.session.prompt({
               sessionID: harnessSessionId,
               parts: [{ type: "text", text: event.content }],
               // Use default model from config if available
               ...(config.defaultModel && { model: config.defaultModel }),
-            }),
+            });
+          },
         );
 
         await withSpan(
@@ -201,6 +205,12 @@ interface SessionTracking {
   firstPartAtMs?: number;
   idlePromise: Promise<void>;
   resolveIdle: () => void;
+  activePhase?: {
+    kind: string;
+    startedAtMs: number;
+    span: Span;
+  };
+  parentContext: Context;
 }
 
 // Track active sessions and their callbacks
@@ -233,6 +243,12 @@ function getIdlePromise(sessionId: string): Promise<void> | undefined {
   return getTrackedSession(sessionId)?.idlePromise;
 }
 
+function setTrackedSessionParentContext(sessionId: string, parentContext: Context): void {
+  const tracking = getTrackedSession(sessionId);
+  if (!tracking) return;
+  tracking.parentContext = parentContext;
+}
+
 async function waitForSessionIdle(
   sessionId: string,
   timeoutMs = IDLE_WAIT_TIMEOUT_MS,
@@ -240,15 +256,65 @@ async function waitForSessionIdle(
   const idlePromise = getIdlePromise(sessionId);
   if (!idlePromise) return;
 
-  await Promise.race([
-    idlePromise,
-    new Promise<void>((resolve) => {
-      setTimeout(() => {
-        logger.warn("[opencode] Timed out waiting for session idle", { sessionId, timeoutMs });
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      logger.warn("[opencode] Timed out waiting for session idle", { sessionId, timeoutMs });
+      resolve();
+    }, timeoutMs);
+
+    idlePromise
+      .then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
         resolve();
-      }, timeoutMs);
-    }),
-  ]);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve();
+      });
+  });
+}
+
+function endActivePhase(tracking: SessionTracking, reason: string): void {
+  if (!tracking.activePhase) return;
+  const elapsedMs = Date.now() - tracking.activePhase.startedAtMs;
+  tracking.activePhase.span.setAttribute("phase.elapsed_ms", elapsedMs);
+  tracking.activePhase.span.setAttribute("phase.end_reason", reason);
+  tracking.activePhase.span.setStatus({ code: SpanStatusCode.OK });
+  tracking.activePhase.span.end();
+  tracking.activePhase = undefined;
+}
+
+function setActivePhase(
+  tracking: SessionTracking,
+  params: { sessionId: string; phase: string; messageId?: string; partId?: string },
+): void {
+  if (tracking.activePhase?.kind === params.phase) return;
+  endActivePhase(tracking, `switch:${params.phase}`);
+  const phaseName = params.phase.replaceAll(":", ".");
+  const span = eventTracer.startSpan(
+    `daemon.opencode.phase.${phaseName}`,
+    {
+      attributes: {
+        "opencode.session_id": params.sessionId,
+        "opencode.phase": params.phase,
+        ...(params.messageId ? { "opencode.message_id": params.messageId } : {}),
+        ...(params.partId ? { "opencode.part_id": params.partId } : {}),
+      },
+    },
+    tracking.parentContext,
+  );
+  tracking.activePhase = {
+    kind: params.phase,
+    startedAtMs: Date.now(),
+    span,
+  };
 }
 
 function getSessionIdFromEvent(event: OpencodeRuntimeEvent): string | undefined {
@@ -281,6 +347,7 @@ async function stopTracking(sessionId: string): Promise<void> {
     elapsedMs,
     trackedSessionCount: trackedSessions.size,
   });
+  endActivePhase(tracking, "session_stopped");
   tracking.resolveIdle();
 
   try {
@@ -300,6 +367,12 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
 
   if (event.type === "session.status" && tracking) {
     const statusType = event.properties.status.type;
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: `status:${statusType}`,
+      });
+    }
     if (statusType === "busy" && !tracking.firstBusyAtMs) {
       tracking.firstBusyAtMs = Date.now();
       logger.log("[opencode] First busy status", {
@@ -324,6 +397,13 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
   }
 
   if (event.type === "message.updated" && tracking && event.properties.info.role === "assistant") {
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: "message:assistant",
+        messageId: event.properties.info.id,
+      });
+    }
     if (!tracking.firstAssistantMessageAtMs) {
       tracking.firstAssistantMessageAtMs = Date.now();
       logger.log("[opencode] First assistant message", {
@@ -334,6 +414,14 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
   }
 
   if (event.type === "message.part.updated" && tracking) {
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: `part:${event.properties.part.type}`,
+        messageId: event.properties.part.messageID,
+        partId: event.properties.part.id,
+      });
+    }
     if (!tracking.firstPartAtMs) {
       tracking.firstPartAtMs = Date.now();
       logger.log("[opencode] First message part", {
@@ -349,6 +437,10 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
       sessionId: event.properties.sessionID ?? null,
       error: event.properties.error,
     });
+    if (tracking?.activePhase) {
+      tracking.activePhase.span.setStatus({ code: SpanStatusCode.ERROR, message: "session.error" });
+      endActivePhase(tracking, "session_error");
+    }
   }
 
   if (event.type === "session.idle" && tracking && sessionId) {
@@ -425,6 +517,7 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     startedAtMs: Date.now(),
     idlePromise,
     resolveIdle,
+    parentContext: context.active(),
   });
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
