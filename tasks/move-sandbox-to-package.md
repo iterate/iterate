@@ -1,5 +1,5 @@
 ---
-state: pending
+state: todo
 priority: high
 size: large
 ---
@@ -25,35 +25,31 @@ These are used by ALL providers (the container image is shared):
 
 ### Docker provider → `sandbox/providers/docker/`
 
-| Current                                               | New                                               |
-| ----------------------------------------------------- | ------------------------------------------------- |
-| `apps/os/sandbox/build-docker-image.ts`               | `sandbox/providers/docker/build-image.ts`         |
-| `apps/os/sandbox/local-docker-shell.ts`               | `sandbox/providers/docker/shell.ts`               |
-| `apps/os/sandbox/sync-repo-from-host.sh`              | `sandbox/providers/docker/sync-repo-from-host.sh` |
-| `apps/os/sandbox/tests/providers/local-docker.ts`     | `sandbox/providers/docker/provider.ts`            |
-| `apps/os/sandbox/tests/helpers/local-docker-utils.ts` | `sandbox/providers/docker/utils.ts`               |
-| `apps/os/backend/providers/local-docker.ts`           | Merged into above                                 |
+| Current                                     | New                                               |
+| ------------------------------------------- | ------------------------------------------------- |
+| `apps/os/sandbox/build-docker-image.ts`     | `sandbox/providers/docker/build-image.ts`         |
+| `apps/os/sandbox/local-docker-shell.ts`     | `sandbox/providers/docker/shell.ts`               |
+| `apps/os/sandbox/sync-repo-from-host.sh`    | `sandbox/providers/docker/sync-repo-from-host.sh` |
+| `apps/os/sandbox/providers/local-docker.ts` | `sandbox/providers/docker/provider.ts`            |
+| `apps/os/sandbox/providers/types.ts`        | `sandbox/providers/types.ts`                      |
+| `apps/os/backend/providers/local-docker.ts` | Merged into above                                 |
 
 ### Daytona provider → `sandbox/providers/daytona/`
 
-| Current                                           | New                                           |
-| ------------------------------------------------- | --------------------------------------------- |
-| `apps/os/sandbox/push-docker-image-to-daytona.ts` | `sandbox/providers/daytona/push-snapshot.ts`  |
-| `apps/os/sandbox/build-daytona-snapshot.ts`       | `sandbox/providers/daytona/build-snapshot.ts` |
-| `apps/os/sandbox/tests/providers/daytona.ts`      | `sandbox/providers/daytona/provider.ts`       |
-| `apps/os/backend/providers/daytona.ts`            | Merged into above                             |
+| Current                                           | New                                          |
+| ------------------------------------------------- | -------------------------------------------- |
+| `apps/os/sandbox/push-docker-image-to-daytona.ts` | `sandbox/providers/daytona/push-snapshot.ts` |
+| `apps/os/backend/providers/daytona.ts`            | `sandbox/providers/daytona/provider.ts`      |
 
 ### Tests → `sandbox/test/`
 
-| Current                                       | New                                  |
-| --------------------------------------------- | ------------------------------------ |
-| `apps/os/sandbox/local-docker.test.ts`        | `sandbox/test/provider.test.ts`      |
-| `apps/os/sandbox/test-egress-proxy.sh`        | `sandbox/test/test-egress-proxy.sh`  |
-| `apps/os/sandbox/tests/fixtures.ts`           | `sandbox/test/fixtures.ts`           |
-| `apps/os/sandbox/tests/helpers/*`             | `sandbox/test/helpers/*`             |
-| `apps/os/sandbox/tests/integration/*`         | `sandbox/test/integration/*`         |
-| `apps/os/sandbox/tests/local/*`               | `sandbox/test/local/*`               |
-| `apps/os/sandbox/tests/mock-iterate-os-api/*` | `sandbox/test/mock-iterate-os-api/*` |
+| Current                                               | New                                      |
+| ----------------------------------------------------- | ---------------------------------------- |
+| `apps/os/sandbox/test/daemon-in-sandbox.test.ts`      | `sandbox/test/daemon.test.ts`            |
+| `apps/os/sandbox/test/sandbox-without-daemon.test.ts` | `sandbox/test/container.test.ts`         |
+| `apps/os/sandbox/test/deterministic-git.test.ts`      | `sandbox/test/deterministic-git.test.ts` |
+| `apps/os/sandbox/test/helpers.ts`                     | `sandbox/test/helpers.ts`                |
+| `apps/os/sandbox/test-egress-proxy.sh`                | `sandbox/test/test-egress-proxy.sh`      |
 
 ---
 
@@ -96,13 +92,11 @@ sandbox/
 │       └── build-snapshot.ts       # Script: build snapshot on Daytona
 │
 └── test/
-    ├── provider.test.ts            # Parameterized tests (all providers)
-    ├── fixtures.ts
-    ├── test-egress-proxy.sh
-    ├── helpers/
-    ├── integration/
-    ├── local/
-    └── mock-iterate-os-api/
+    ├── daemon.test.ts              # Daemon-in-sandbox tests
+    ├── container.test.ts           # Container-only tests
+    ├── deterministic-git.test.ts   # Git determinism tests
+    ├── helpers.ts                  # Test helpers
+    └── test-egress-proxy.sh        # Egress proxy test script
 ```
 
 ---
