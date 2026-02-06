@@ -22,6 +22,8 @@ import { describe } from "vitest";
 import type { Sandbox } from "../providers/types.ts";
 import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
 
+class TerminalProcessStateError extends Error {}
+
 /**
  * Wait for a process to become healthy using pidnap client.
  *
@@ -50,11 +52,12 @@ async function waitForServiceHealthy(
 
       if (status.state === "running") return;
       if (status.state === "stopped" || status.state === "max-restarts-reached") {
-        throw new Error(
+        throw new TerminalProcessStateError(
           `Process ${process} failed while starting. Final state=${status.state}. Logs:\n${status.logs ?? "(none)"}`,
         );
       }
     } catch (error) {
+      if (error instanceof TerminalProcessStateError) throw error;
       lastError = error;
     }
     await new Promise((r) => setTimeout(r, 500));

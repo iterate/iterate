@@ -161,9 +161,13 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
     },
   );
 
+  const execId = execCreateResponse.Id;
+
   // Start exec and capture output
   const config = parseDockerHost();
-  const url = `${config.url}/exec/${execCreateResponse.Id}/start`;
+  const url = `${config.url}/exec/${execId}/start`;
+
+  let output: string;
 
   if (config.socketPath) {
     const { request } = await import("undici");
@@ -175,18 +179,46 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
       dispatcher: dispatcher as import("undici").Dispatcher,
     });
 
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(
+        `Docker exec start failed: status=${response.statusCode}, container=${containerId}, cmd=${cmd.join(" ")}`,
+      );
+    }
+
     const buffer = await response.body.arrayBuffer();
-    return stripDockerExecHeaders(new Uint8Array(buffer));
+    output = stripDockerExecHeaders(new Uint8Array(buffer));
+  } else {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ Detach: false }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Docker exec start failed: status=${response.status}, container=${containerId}, cmd=${cmd.join(" ")}`,
+      );
+    }
+
+    const buffer = await response.arrayBuffer();
+    output = stripDockerExecHeaders(new Uint8Array(buffer));
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ Detach: false }),
-  });
+  const execState = await dockerApi<{ ExitCode?: number | null }>("GET", `/exec/${execId}/json`);
 
-  const buffer = await response.arrayBuffer();
-  return stripDockerExecHeaders(new Uint8Array(buffer));
+  if (execState.ExitCode != null && execState.ExitCode !== 0) {
+    const formattedOutput = output.trim();
+    throw new Error(
+      [
+        `Docker exec failed: exit=${execState.ExitCode}, container=${containerId}, cmd=${cmd.join(" ")}`,
+        formattedOutput.length > 0 ? `output=${formattedOutput}` : undefined,
+      ]
+        .filter((value): value is string => value != null)
+        .join(", "),
+    );
+  }
+
+  return output;
 }
 
 /**
