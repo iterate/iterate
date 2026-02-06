@@ -69,7 +69,13 @@ const STRIP_REQUEST_HEADERS = [
 const STRIP_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
 
 // Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "...", userEmail?: "..."})
-export const MAGIC_STRING_PATTERN = /getIterateSecret\(\s*\{([^}]+)\}\s*\)/g;
+const MAGIC_STRING_PATTERN_SOURCE = String.raw`getIterateSecret\(\s*\{([^}]+)\}\s*\)`;
+export const MAGIC_STRING_PATTERN = new RegExp(MAGIC_STRING_PATTERN_SOURCE, "g");
+
+function createMagicStringPattern(): RegExp {
+  // Avoid shared lastIndex state from the exported global regex.
+  return new RegExp(MAGIC_STRING_PATTERN_SOURCE, "g");
+}
 
 // Error types for secret resolution
 export type SecretError = {
@@ -405,7 +411,7 @@ async function replaceMagicStrings(
   context: EgressContext,
   cache?: RequestSecretCache,
 ): Promise<ReplaceMagicStringsResult> {
-  const matches = [...input.matchAll(MAGIC_STRING_PATTERN)];
+  const matches = [...input.matchAll(createMagicStringPattern())];
   if (matches.length === 0) {
     return { ok: true, result: input, usedSecrets: [] };
   }
@@ -483,9 +489,7 @@ async function processHeaderValue(
       // Not URL-encoded, continue with raw decoded value
     }
 
-    const hasMagic = MAGIC_STRING_PATTERN.test(decoded);
-    // Reset regex lastIndex since we used .test()
-    MAGIC_STRING_PATTERN.lastIndex = 0;
+    const hasMagic = createMagicStringPattern().test(decoded);
 
     // Check if decoded value contains magic strings
     if (!hasMagic) {
