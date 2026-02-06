@@ -42,10 +42,7 @@ async function agentExists(agentPath: string): Promise<boolean> {
   return Boolean(existing[0]);
 }
 
-async function sendToAgentGateway(
-  agentPath: string,
-  event: IterateEvent,
-): Promise<{ wasCreated: boolean; route?: string | null }> {
+async function sendToAgentGateway(agentPath: string, event: IterateEvent): Promise<void> {
   const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -58,17 +55,6 @@ async function sendToAgentGateway(
       `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
     );
   }
-
-  const body = (await response.json().catch(() => ({}))) as {
-    wasCreated?: boolean;
-    route?: string | null;
-  };
-
-  if (typeof body !== "object" || body === null) {
-    return { wasCreated: false, route: null };
-  }
-
-  return { wasCreated: body.wasCreated ?? false, route: body.route ?? null };
 }
 
 /**
@@ -225,12 +211,12 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    const { wasCreated } = await sendToAgentGateway(agentPath, { type: "prompt", message });
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
 
     return c.json({
       success: true,
       agentPath,
-      created: wasCreated,
+      created: true,
       case: "new_email",
       eventId,
     });

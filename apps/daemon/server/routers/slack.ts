@@ -49,10 +49,7 @@ async function agentExists(agentPath: string): Promise<boolean> {
   return Boolean(existing[0]);
 }
 
-async function sendToAgentGateway(
-  agentPath: string,
-  event: IterateEvent,
-): Promise<{ wasCreated: boolean; route?: string | null }> {
+async function sendToAgentGateway(agentPath: string, event: IterateEvent): Promise<void> {
   const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -65,17 +62,6 @@ async function sendToAgentGateway(
       `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
     );
   }
-
-  const body = (await response.json().catch(() => ({}))) as {
-    wasCreated?: boolean;
-    route?: string | null;
-  };
-
-  if (typeof body !== "object" || body === null) {
-    return { wasCreated: false, route: null };
-  }
-
-  return { wasCreated: body.wasCreated ?? false, route: body.route ?? null };
 }
 
 // Slack webhook envelope structure
@@ -183,22 +169,22 @@ slackRouter.post("/webhook", async (c) => {
       if (hasAgent) {
         // Rare: agent already exists for what we think is a new thread
         const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-        const { wasCreated } = await sendToAgentGateway(agentPath, { type: "prompt", message });
+        await sendToAgentGateway(agentPath, { type: "prompt", message });
         return c.json({
           success: true,
           agentPath,
-          created: wasCreated,
+          created: false,
           case: "mid_thread_mention",
           eventId,
         });
       }
 
       const message = formatNewThreadMentionMessage(event, threadTs, eventId);
-      const { wasCreated } = await sendToAgentGateway(agentPath, { type: "prompt", message });
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
         agentPath,
-        created: wasCreated,
+        created: true,
         case: "new_thread_mention",
         eventId,
       });
@@ -207,11 +193,11 @@ slackRouter.post("/webhook", async (c) => {
     // Case 2: Mid-thread @mention - create agent if needed, join existing conversation
     if (parsed.case === "mid_thread_mention") {
       const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-      const { wasCreated } = await sendToAgentGateway(agentPath, { type: "prompt", message });
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
         agentPath,
-        created: wasCreated,
+        created: !hasAgent,
         case: "mid_thread_mention",
         eventId,
       });
@@ -228,11 +214,11 @@ slackRouter.post("/webhook", async (c) => {
       }
 
       const message = formatFyiMessage(event, threadTs, eventId);
-      const { wasCreated } = await sendToAgentGateway(agentPath, { type: "prompt", message });
+      await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
         success: true,
         agentPath,
-        created: wasCreated,
+        created: false,
         case: "fyi_message",
         eventId,
       });
