@@ -67,7 +67,7 @@ test.describe("naming defaults", () => {
     await page.locator(`[data-project="${uniqueOrgName.toLowerCase()}"]`).waitFor();
   });
 
-  test("second project gets suffixed slug when using same name", async ({ page }) => {
+  test("second project gets suffixed slug when base slug conflicts", async ({ page }) => {
     const uniqueOrgName = `unique-org-${Date.now()}`;
     const testEmail = `naming-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
@@ -75,10 +75,10 @@ test.describe("naming defaults", () => {
     // First project gets org slug
     await createProject(page, uniqueOrgName);
 
-    // Create second project with same name - should get auto-suffixed slug
+    // Create second project with a different name that slugifies to the same base slug
     await page.locator("[data-group='organization']").getByText("Settings").click();
     await page.getByText("New project").click();
-    await page.getByLabel("Project name").fill(uniqueOrgName);
+    await page.getByLabel("Project name").fill(`${uniqueOrgName}!`);
     await page.getByRole("button", { name: "Create project" }).click();
 
     // Second project should have a suffixed slug (contains random chars)
