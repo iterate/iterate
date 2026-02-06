@@ -56,9 +56,9 @@ The run provisions two machines and proves interception end-to-end:
 2. Egress machine generates app CA (`openssl`, ECDSA P-256).
 3. Sandbox installs and trusts that CA.
 4. Sandbox outbound HTTPS uses `HTTP_PROXY`/`HTTPS_PROXY` -> egress MITM.
-5. Go MITM decrypts request, calls local TS `/transform`.
-6. TS fetches upstream and prepends proof bytes to response body.
-7. Sandbox receives modified body and e2e asserts proof marker exists.
+5. Go MITM decrypts request, streams request to local TS `/transform`.
+6. TS streams upstream response back and adds `x-iterate-mitm-proof: 1`.
+7. Sandbox receives modified response header and e2e asserts proof marker exists.
 8. Egress logs include decrypted request + transform events.
 
 Artifacts land in:

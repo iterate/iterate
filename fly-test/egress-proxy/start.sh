@@ -93,8 +93,7 @@ log "viewer_pid=$VIEWER_PID"
   --transform-url "$TRANSFORM_URL" \
   --ca-cert "$MITM_DIR/ca.crt" \
   --ca-key "$MITM_DIR/ca.key" \
-  --log "$MITM_LOG" \
-  --request-preview-bytes "${REQUEST_PREVIEW_BYTES:-512}" >>"$INIT_LOG" 2>&1 &
+  --log "$MITM_LOG" >>"$INIT_LOG" 2>&1 &
 MITM_PID="$!"
 log "mitm_pid=$MITM_PID"
 
