@@ -7,7 +7,7 @@ TUNNEL_URL_FILE="/tmp/sandbox-tunnel-url.txt"
 SANDBOX_PORT="${SANDBOX_PORT:-8080}"
 EGRESS_MITM_PORT="${EGRESS_MITM_PORT:-18080}"
 EGRESS_VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
-APP_DIR="/opt/sandbox-app"
+APP_DIR="/proof/sandbox"
 
 log() {
   printf "%s %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$INIT_LOG"
@@ -30,31 +30,6 @@ retry() {
     delay=$((delay * 2))
     if [ "$delay" -gt 20 ]; then delay=20; fi
   done
-}
-
-install_cloudflared() {
-  local arch
-  local asset
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64) asset="cloudflared-linux-amd64" ;;
-    aarch64 | arm64) asset="cloudflared-linux-arm64" ;;
-    *)
-      log "ERROR unsupported_arch=$arch"
-      return 1
-      ;;
-  esac
-  retry 8 curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/${asset}" -o /usr/local/bin/cloudflared >>"$INIT_LOG" 2>&1
-  chmod +x /usr/local/bin/cloudflared
-}
-
-install_bun() {
-  export BUN_INSTALL="/root/.bun"
-  if [ ! -x "$BUN_INSTALL/bin/bun" ]; then
-    retry 8 curl -fsSL https://bun.sh/install -o /tmp/bun-install.sh >>"$INIT_LOG" 2>&1
-    BUN_INSTALL="$BUN_INSTALL" bash /tmp/bun-install.sh >>"$INIT_LOG" 2>&1
-  fi
-  export PATH="$BUN_INSTALL/bin:$PATH"
 }
 
 wait_for_tunnel_url() {
@@ -84,14 +59,21 @@ fi
 EGRESS_CA_URL="${EGRESS_CA_URL:-http://${EGRESS_PROXY_HOST}:${EGRESS_VIEWER_PORT}/ca.crt}"
 EGRESS_PROXY_URL="http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}"
 
-export DEBIAN_FRONTEND=noninteractive
-retry 5 apt-get update >>"$INIT_LOG" 2>&1
-retry 5 apt-get install -y --no-install-recommends ca-certificates curl unzip >>"$INIT_LOG" 2>&1
-install_cloudflared
-install_bun
-bun --version >>"$INIT_LOG" 2>&1
-cloudflared --version >>"$INIT_LOG" 2>&1
-curl --version >>"$INIT_LOG" 2>&1
+if ! command -v bun >/dev/null 2>&1; then
+  log "ERROR bun_not_found"
+  tail -f /dev/null
+fi
+if ! command -v cloudflared >/dev/null 2>&1; then
+  log "ERROR cloudflared_not_found"
+  tail -f /dev/null
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  log "ERROR curl_not_found"
+  tail -f /dev/null
+fi
+bun --version >>"$INIT_LOG" 2>&1 || true
+cloudflared --version >>"$INIT_LOG" 2>&1 || true
+curl --version >>"$INIT_LOG" 2>&1 || true
 
 retry 15 curl -fsSL "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate-fly-test-ca.crt >>"$INIT_LOG" 2>&1
 update-ca-certificates >>"$INIT_LOG" 2>&1
@@ -110,15 +92,11 @@ export GIT_SSL_CAINFO="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 
 log "proxy_env=\"${EGRESS_PROXY_URL}\""
 
-mkdir -p "$APP_DIR"
-cp /proof/sandbox/server.ts "$APP_DIR/server.ts"
-cp /proof/sandbox/client.tsx "$APP_DIR/client.tsx"
-cp /proof/sandbox/index.html "$APP_DIR/index.html"
-cp /proof/sandbox/package.json "$APP_DIR/package.json"
-cp /proof/sandbox/tsconfig.json "$APP_DIR/tsconfig.json"
 cd "$APP_DIR"
-
-retry 5 bun install >>"$INIT_LOG" 2>&1
+if [ ! -d "$APP_DIR/node_modules" ]; then
+  log "ERROR missing_node_modules path=$APP_DIR/node_modules"
+  tail -f /dev/null
+fi
 
 SANDBOX_PORT="$SANDBOX_PORT" \
 PROOF_PREFIX="${PROOF_PREFIX:-__ITERATE_MITM_PROOF__\\n}" \

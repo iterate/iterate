@@ -59,3 +59,5 @@ pr-videos/
 
 # fly-test generated artifacts
 fly-test/proof-logs/
+fly-test/egress-proxy/go-mitm/fly-mitm-linux-amd64
+fly-test/.cache/
