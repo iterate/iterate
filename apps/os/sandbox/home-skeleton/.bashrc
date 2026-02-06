@@ -11,4 +11,4 @@ if [ -f ~/.iterate/.env ]; then
 fi
 
 # Prompt: grey pwd path + lightning
-PS1='\u@\h:\[\033[90m\]\w\[\033[0m\] ⚡️ $ '
+PS1='\[\033[90m\]\w\[\033[0m\] ⚡️ '
