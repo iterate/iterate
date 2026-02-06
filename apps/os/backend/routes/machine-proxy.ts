@@ -9,6 +9,7 @@
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
@@ -16,7 +17,6 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { createMachineRuntime } from "../machine-runtime.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 

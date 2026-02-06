@@ -21,12 +21,12 @@
  */
 import { Hono } from "hono";
 import { Resend } from "resend";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import { createMachineRuntime } from "../../machine-runtime.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 

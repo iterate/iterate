@@ -1,10 +1,7 @@
-import { DaytonaProvider } from "@iterate-com/sandbox/providers/daytona";
-import { DockerProvider } from "@iterate-com/sandbox/providers/docker";
-import { FlyProvider, decodeFlyProviderId } from "@iterate-com/sandbox/providers/fly";
-import type { ProviderState } from "@iterate-com/sandbox/providers/types";
-import type { CloudflareEnv } from "../env.ts";
-import * as schema from "./db/schema.ts";
-import { DAEMON_DEFINITIONS } from "./daemons.ts";
+import { DaytonaProvider } from "./daytona/provider.ts";
+import { DockerProvider } from "./docker/provider.ts";
+import { FlyProvider, decodeFlyProviderId } from "./fly/provider.ts";
+import type { MachineType, ProviderState, Sandbox } from "./types.ts";
 
 export interface CreateMachineConfig {
   machineId: string;
@@ -22,7 +19,7 @@ export interface MachineDisplayInfo {
 }
 
 export interface MachineRuntime {
-  readonly type: (typeof schema.MachineType)[number];
+  readonly type: MachineType;
   create(config: CreateMachineConfig): Promise<MachineRuntimeResult>;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -35,8 +32,8 @@ export interface MachineRuntime {
 }
 
 export interface CreateMachineRuntimeOptions {
-  type: (typeof schema.MachineType)[number];
-  env: CloudflareEnv;
+  type: MachineType;
+  env: Record<string, unknown>;
   externalId: string;
   metadata: Record<string, unknown>;
 }
@@ -63,22 +60,27 @@ type FlyMetadata = {
   providerSnapshotId?: string;
 };
 
+type DaytonaMetadata = {
+  snapshotName?: string;
+};
+
+type SandboxHandleProvider<TSandbox extends Sandbox> = {
+  get(providerId: string): TSandbox | null;
+};
+
+const LOCAL_SERVICE_KEY_BY_PORT: Record<number, string> = {
+  3000: "iterate-daemon",
+  3001: "iterate-daemon-server",
+  4096: "opencode",
+  9876: "pidnap",
+};
+
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
-}
-
-function toRawEnv(
-  env: CloudflareEnv,
-  overrides?: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  return {
-    ...(env as unknown as Record<string, string | undefined>),
-    ...(overrides ?? {}),
-  };
 }
 
 function parsePortFromUrl(url: string): number {
@@ -91,23 +93,46 @@ function parsePortFromUrl(url: string): number {
   throw new Error(`Could not parse port from URL: ${url}`);
 }
 
-function createLocalRuntime(
-  metadata: Record<string, unknown>,
-  _externalId: string,
-): MachineRuntime {
+function toRawEnv(
+  env: Record<string, unknown>,
+  overrides?: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const entries = Object.entries(env).map(([key, value]) => [
+    key,
+    typeof value === "string" ? value : undefined,
+  ]);
+
+  return {
+    ...Object.fromEntries(entries),
+    ...(overrides ?? {}),
+  };
+}
+
+function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
   const typedMetadata = metadata as LocalMetadata;
   const host = typedMetadata.host ?? "localhost";
   const ports = typedMetadata.ports ?? {};
   const displayPort = ports["iterate-daemon"] ?? typedMetadata.port ?? 3000;
 
   const getPreviewUrl = async (port: number): Promise<string> => {
-    const daemon = DAEMON_DEFINITIONS.find((definition) => definition.internalPort === port);
-    if (daemon && ports[daemon.id]) {
-      return `http://${host}:${ports[daemon.id]}`;
+    const serviceKey = LOCAL_SERVICE_KEY_BY_PORT[port];
+    if (serviceKey && ports[serviceKey]) {
+      return `http://${host}:${ports[serviceKey]}`;
     }
+
+    const explicitPort = ports[String(port)];
+    if (explicitPort) {
+      return `http://${host}:${explicitPort}`;
+    }
+
+    if (port === 3000 && typedMetadata.port) {
+      return `http://${host}:${typedMetadata.port}`;
+    }
+
     if (ports["iterate-daemon"]) {
       return `http://${host}:${ports["iterate-daemon"]}`;
     }
+
     return `http://${host}:${port}`;
   };
 
@@ -136,12 +161,57 @@ function createLocalRuntime(
   };
 }
 
-async function createDockerRuntime(options: CreateMachineRuntimeOptions): Promise<MachineRuntime> {
-  const { env, externalId, metadata } = options;
-  if (!import.meta.env.DEV) {
-    throw new Error("docker provider only available in development");
-  }
+function createSandboxRuntime<TSandbox extends Sandbox>(options: {
+  type: Exclude<MachineType, "local">;
+  externalId: string;
+  provider: SandboxHandleProvider<TSandbox>;
+  createSandbox(config: CreateMachineConfig): Promise<TSandbox>;
+  createResult(config: CreateMachineConfig, sandbox: TSandbox): Promise<MachineRuntimeResult>;
+  displayInfo: MachineDisplayInfo;
+}): MachineRuntime {
+  const { type, externalId, provider, createSandbox, createResult, displayInfo } = options;
 
+  const getSandbox = (providerId: string): TSandbox => {
+    const sandbox = provider.get(providerId);
+    if (!sandbox) {
+      throw new Error(`Invalid ${type} provider id: ${providerId}`);
+    }
+    return sandbox;
+  };
+
+  return {
+    type,
+    async create(config: CreateMachineConfig): Promise<MachineRuntimeResult> {
+      const sandbox = await createSandbox(config);
+      return createResult(config, sandbox);
+    },
+    async start(): Promise<void> {
+      await getSandbox(externalId).start();
+    },
+    async stop(): Promise<void> {
+      await getSandbox(externalId).stop();
+    },
+    async restart(): Promise<void> {
+      await getSandbox(externalId).restart();
+    },
+    async archive(): Promise<void> {
+      await getSandbox(externalId).stop();
+    },
+    async delete(): Promise<void> {
+      await getSandbox(externalId).delete();
+    },
+    async getPreviewUrl(port: number): Promise<string> {
+      return getSandbox(externalId).getPreviewUrl({ port });
+    },
+    displayInfo,
+    async getProviderState(): Promise<ProviderState> {
+      return getSandbox(externalId).getState();
+    },
+  };
+}
+
+function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
+  const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
   const localDockerConfig = typedMetadata.localDocker ?? {};
   const imageName = asString(localDockerConfig.imageName);
@@ -156,32 +226,30 @@ async function createDockerRuntime(options: CreateMachineRuntimeOptions): Promis
     }),
   );
 
-  const getSandbox = (providerId: string) => {
-    const sandbox = provider.get(providerId);
-    if (!sandbox) {
-      throw new Error(`Invalid docker provider id: ${providerId}`);
-    }
-    return sandbox;
-  };
-
   const previewPort = typedMetadata.ports?.["iterate-daemon"] ?? typedMetadata.port;
 
-  return {
+  return createSandboxRuntime({
     type: "docker",
-    async create(machineConfig: CreateMachineConfig): Promise<MachineRuntimeResult> {
-      const sandbox = await provider.create({
-        id: machineConfig.machineId,
-        name: machineConfig.name,
-        envVars: machineConfig.envVars,
+    externalId,
+    provider,
+    async createSandbox(config: CreateMachineConfig) {
+      return provider.create({
+        id: config.machineId,
+        name: config.name,
+        envVars: config.envVars,
         ...(imageName ? { providerSnapshotId: imageName } : {}),
       });
-
+    },
+    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
       const daemonPortPairs = await Promise.all(
-        DAEMON_DEFINITIONS.map(async (daemon) => {
-          const url = await sandbox.getPreviewUrl({ port: daemon.internalPort });
-          return [daemon.id, parsePortFromUrl(url)] as const;
-        }),
+        Object.entries(LOCAL_SERVICE_KEY_BY_PORT)
+          .filter(([port]) => Number(port) !== 9876)
+          .map(async ([port, serviceKey]) => {
+            const url = await sandbox.getPreviewUrl({ port: Number(port) });
+            return [serviceKey, parsePortFromUrl(url)] as const;
+          }),
       );
+
       const pidnapUrl = await sandbox.getPreviewUrl({ port: 9876 });
       const ports = Object.fromEntries([
         ...daemonPortPairs,
@@ -205,56 +273,31 @@ async function createDockerRuntime(options: CreateMachineRuntimeOptions): Promis
         },
       };
     },
-    async start(): Promise<void> {
-      await getSandbox(externalId).start();
-    },
-    async stop(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async restart(): Promise<void> {
-      await getSandbox(externalId).restart();
-    },
-    async archive(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async delete(): Promise<void> {
-      await getSandbox(externalId).delete();
-    },
-    async getPreviewUrl(port: number): Promise<string> {
-      return getSandbox(externalId).getPreviewUrl({ port });
-    },
     displayInfo: {
       label: `Local Docker :${previewPort ?? "?"}`,
     },
-    async getProviderState(): Promise<ProviderState> {
-      return getSandbox(externalId).getState();
-    },
-  };
+  });
 }
 
 function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
   const { env, externalId, metadata } = options;
   const provider = new DaytonaProvider(toRawEnv(env));
-  const typedMetadata = metadata as { snapshotName?: string };
+  const typedMetadata = metadata as DaytonaMetadata;
+  const snapshotName = typedMetadata.snapshotName;
 
-  const getSandbox = (providerId: string) => {
-    const sandbox = provider.get(providerId);
-    if (!sandbox) {
-      throw new Error(`Invalid daytona provider id: ${providerId}`);
-    }
-    return sandbox;
-  };
-
-  return {
+  return createSandboxRuntime({
     type: "daytona",
-    async create(machineConfig: CreateMachineConfig): Promise<MachineRuntimeResult> {
-      const snapshotName = typedMetadata.snapshotName;
-      const sandbox = await provider.create({
-        id: machineConfig.machineId,
-        name: machineConfig.name,
-        envVars: machineConfig.envVars,
+    externalId,
+    provider,
+    async createSandbox(config: CreateMachineConfig) {
+      return provider.create({
+        id: config.machineId,
+        name: config.name,
+        envVars: config.envVars,
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
+    },
+    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {
@@ -263,31 +306,10 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
         },
       };
     },
-    async start(): Promise<void> {
-      await getSandbox(externalId).start();
-    },
-    async stop(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async restart(): Promise<void> {
-      await getSandbox(externalId).restart();
-    },
-    async archive(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async delete(): Promise<void> {
-      await getSandbox(externalId).delete();
-    },
-    async getPreviewUrl(port: number): Promise<string> {
-      return getSandbox(externalId).getPreviewUrl({ port });
-    },
     displayInfo: {
       label: "Daytona",
     },
-    async getProviderState(): Promise<ProviderState> {
-      return getSandbox(externalId).getState();
-    },
-  };
+  });
 }
 
 function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
@@ -296,25 +318,21 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
   const typedMetadata = metadata as FlyMetadata;
   const parsedProviderId = decodeFlyProviderId(externalId);
   const appNameFromId = parsedProviderId?.appName ?? typedMetadata.flyAppName;
+  const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
 
-  const getSandbox = (providerId: string) => {
-    const sandbox = provider.get(providerId);
-    if (!sandbox) {
-      throw new Error(`Invalid fly provider id: ${providerId}`);
-    }
-    return sandbox;
-  };
-
-  return {
+  return createSandboxRuntime({
     type: "fly",
-    async create(machineConfig: CreateMachineConfig): Promise<MachineRuntimeResult> {
-      const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
-      const sandbox = await provider.create({
-        id: machineConfig.machineId,
-        name: machineConfig.name,
-        envVars: machineConfig.envVars,
+    externalId,
+    provider,
+    async createSandbox(config: CreateMachineConfig) {
+      return provider.create({
+        id: config.machineId,
+        name: config.name,
+        envVars: config.envVars,
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
+    },
+    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {
@@ -324,41 +342,20 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
         },
       };
     },
-    async start(): Promise<void> {
-      await getSandbox(externalId).start();
-    },
-    async stop(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async restart(): Promise<void> {
-      await getSandbox(externalId).restart();
-    },
-    async archive(): Promise<void> {
-      await getSandbox(externalId).stop();
-    },
-    async delete(): Promise<void> {
-      await getSandbox(externalId).delete();
-    },
-    async getPreviewUrl(port: number): Promise<string> {
-      return getSandbox(externalId).getPreviewUrl({ port });
-    },
     displayInfo: {
       label: appNameFromId ? `Fly.io ${appNameFromId}` : "Fly.io",
     },
-    async getProviderState(): Promise<ProviderState> {
-      return getSandbox(externalId).getState();
-    },
-  };
+  });
 }
 
 export async function createMachineRuntime(
   options: CreateMachineRuntimeOptions,
 ): Promise<MachineRuntime> {
-  const { type, externalId, metadata } = options;
+  const { type, metadata } = options;
 
   switch (type) {
     case "local":
-      return createLocalRuntime(metadata, externalId);
+      return createLocalRuntime(metadata);
     case "docker":
       return createDockerRuntime(options);
     case "daytona":

@@ -20,7 +20,7 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "apps/os/backend/machine-runtime.ts",
+        "sandbox/providers/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],
@@ -29,7 +29,7 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "apps/os/backend/machine-runtime.ts",
+        "sandbox/providers/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],
@@ -52,15 +52,13 @@ export default workflow({
     },
   },
   jobs: {
-    "build-amd64-image": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}",
+    "build-image": {
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         image_name: "${{ steps.metadata.outputs.image_name }}",
         git_sha: "${{ steps.metadata.outputs.git_sha }}",
-        depot_project_id: "${{ steps.metadata.outputs.depot_project_id }}",
-        depot_save_tag: "${{ steps.metadata.outputs.depot_save_tag }}",
-        depot_registry_image_name: "${{ steps.metadata.outputs.depot_registry_image_name }}",
+        registry_image_name: "${{ steps.metadata.outputs.registry_image_name }}",
+        fly_registry_image_name: "${{ steps.metadata.outputs.fly_registry_image_name }}",
       },
       steps: [
         {
@@ -88,58 +86,57 @@ export default workflow({
         ...utils.setupDoppler({ config: "dev" }),
         ...utils.setupDepot,
         {
-          name: "Build AMD64 Docker image with Depot",
-          env: {
-            LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name || 'iterate-sandbox:ci' }}",
-            SANDBOX_BUILD_PLATFORM: "linux/amd64",
-            SANDBOX_USE_DEPOT_REGISTRY: "true",
-            SANDBOX_DEPOT_SAVE_TAG:
-              "iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}",
-          },
-          run: "pnpm docker:build",
+          name: "Build multi-platform Docker image with Depot",
+          run: [
+            "set -euo pipefail",
+            "depot_project_id=\"$(jq -r '.id' depot.json)\"",
+            'if [ "$depot_project_id" = "null" ] || [ -z "$depot_project_id" ]; then',
+            '  echo "Missing depot project id in depot.json" >&2',
+            "  exit 1",
+            "fi",
+            `export REGISTRY_IMAGE_NAME="registry.depot.dev/$depot_project_id:iterate-sandbox-test-\${{ github.run_id }}-\${{ github.run_attempt }}"`,
+            "export SANDBOX_BUILD_PLATFORM=linux/amd64,linux/arm64",
+            "export SANDBOX_PUSH_FLY_REGISTRY=true",
+            "export SANDBOX_FLY_REGISTRY_APP=iterate-sandbox-image",
+            "pnpm docker:build",
+          ].join("\n"),
         },
         {
           id: "metadata",
           name: "Export build metadata",
           run: [
             'build_info_path=".cache/depot-build-info.json"',
-            'depot_project_id="$(jq -r ".depotProjectId" "$build_info_path")"',
-            'depot_save_tag="$(jq -r ".depotSaveTag" "$build_info_path")"',
-            'depot_registry_image_name="$(jq -r ".depotRegistryImageName" "$build_info_path")"',
+            'registry_image_name="$(jq -r ".registryImageName" "$build_info_path")"',
+            'fly_registry_image_name="$(jq -r ".flyRegistryImageNames[0] // empty" "$build_info_path")"',
             'git_sha="$(jq -r ".gitSha" "$build_info_path")"',
-            'if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$depot_registry_image_name" = "null" ] || [ "$git_sha" = "null" ]; then',
+            'if [ "$registry_image_name" = "null" ] || [ -z "$registry_image_name" ] || [ -z "$fly_registry_image_name" ] || [ "$git_sha" = "null" ]; then',
             '  echo "Missing Depot build metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
             'echo "image_name=${{ inputs.image_name || "iterate-sandbox:ci" }}" >> "$GITHUB_OUTPUT"',
             'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
-            'echo "depot_project_id=$depot_project_id" >> "$GITHUB_OUTPUT"',
-            'echo "depot_save_tag=$depot_save_tag" >> "$GITHUB_OUTPUT"',
-            'echo "depot_registry_image_name=$depot_registry_image_name" >> "$GITHUB_OUTPUT"',
+            'echo "registry_image_name=$registry_image_name" >> "$GITHUB_OUTPUT"',
+            'echo "fly_registry_image_name=$fly_registry_image_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
       ],
     },
 
     "docker-provider-tests": {
-      needs: ["build-amd64-image"],
-      "runs-on": "ubuntu-24.04",
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupDepot,
         {
-          name: "Pull built image from Depot Registry",
+          name: "Pull built image from registry",
           env: {
-            IMAGE_NAME: "${{ needs.build-amd64-image.outputs.image_name }}",
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
+            REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
           },
           run: [
-            'depot_project_id="${{ needs.build-amd64-image.outputs.depot_project_id }}"',
-            'depot_save_tag="${{ needs.build-amd64-image.outputs.depot_save_tag }}"',
-            'depot_registry_image_name="${{ needs.build-amd64-image.outputs.depot_registry_image_name }}"',
-            'depot pull --project "$depot_project_id" "$depot_save_tag"',
-            'docker image inspect "$depot_registry_image_name" > /dev/null',
-            'docker tag "$depot_registry_image_name" "$IMAGE_NAME"',
+            'docker pull "$REGISTRY_IMAGE_NAME"',
+            'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
           ].join("\n"),
         },
         {
@@ -147,8 +144,8 @@ export default workflow({
           env: {
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "docker",
-            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-amd64-image.outputs.image_name }}",
-            SANDBOX_TEST_BASE_DOCKER_IMAGE: "${{ needs.build-amd64-image.outputs.image_name }}",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-image.outputs.image_name }}",
+            SANDBOX_TEST_BASE_DOCKER_IMAGE: "${{ needs.build-image.outputs.image_name }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DOCKER_HOST: "unix:///var/run/docker.sock",
           },
@@ -167,7 +164,8 @@ export default workflow({
     },
 
     "fly-provider-tests": {
-      "runs-on": "ubuntu-24.04",
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
@@ -176,6 +174,8 @@ export default workflow({
           env: {
             RUN_SANDBOX_TESTS: "true",
             SANDBOX_TEST_PROVIDER: "fly",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-image.outputs.fly_registry_image_name }}",
+            SANDBOX_TEST_BASE_FLY_IMAGE: "${{ needs.build-image.outputs.fly_registry_image_name }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: "pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
@@ -193,27 +193,23 @@ export default workflow({
     },
 
     "upload-daytona-snapshot": {
-      needs: ["build-amd64-image"],
-      "runs-on": "ubuntu-24.04",
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         snapshot_name: "${{ steps.push.outputs.snapshot_name }}",
       },
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),
-        ...utils.setupDepot,
         {
-          name: "Pull built image from Depot Registry",
+          name: "Pull built image from registry",
           env: {
-            IMAGE_NAME: "${{ needs.build-amd64-image.outputs.image_name }}",
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
+            REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
           },
           run: [
-            'depot_project_id="${{ needs.build-amd64-image.outputs.depot_project_id }}"',
-            'depot_save_tag="${{ needs.build-amd64-image.outputs.depot_save_tag }}"',
-            'depot_registry_image_name="${{ needs.build-amd64-image.outputs.depot_registry_image_name }}"',
-            'depot pull --project "$depot_project_id" "$depot_save_tag"',
-            'docker image inspect "$depot_registry_image_name" > /dev/null',
-            'docker tag "$depot_registry_image_name" "$IMAGE_NAME"',
+            'docker pull "$REGISTRY_IMAGE_NAME"',
+            'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
           ].join("\n"),
         },
         {
@@ -239,12 +235,12 @@ export default workflow({
           id: "push",
           name: "Upload snapshot to Daytona",
           env: {
-            IMAGE_NAME: "${{ needs.build-amd64-image.outputs.image_name }}",
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
             CI: "true",
           },
           run: [
             "set -euo pipefail",
-            'snapshot_name="iterate-sandbox-${{ needs.build-amd64-image.outputs.git_sha }}"',
+            'snapshot_name="iterate-sandbox-${{ needs.build-image.outputs.git_sha }}"',
             "output_file=$(mktemp)",
             'pnpm daytona:build --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"',
             'snapshot_name=$(grep -m 1 "^snapshot_name=" "$output_file" | sed "s/^snapshot_name=//")',
@@ -257,7 +253,7 @@ export default workflow({
     "daytona-provider-tests": {
       needs: ["upload-daytona-snapshot"],
       if: "${{ needs.upload-daytona-snapshot.result == 'success' }}",
-      "runs-on": "ubuntu-24.04",
+      ...utils.runsOnDepotUbuntuForContainerThings,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "dev" }),

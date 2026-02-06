@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and, lt } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineRuntime } from "../machine-runtime.ts";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
