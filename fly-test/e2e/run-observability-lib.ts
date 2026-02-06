@@ -17,6 +17,12 @@ export function hostFromUrl(url: string): string {
   return parsed.host;
 }
 
+function hostnameAndPortFromUrl(url: string): { hostname: string; port: string } {
+  const parsed = new URL(url);
+  const port = parsed.port.length > 0 ? parsed.port : parsed.protocol === "http:" ? "80" : "443";
+  return { hostname: parsed.hostname, port };
+}
+
 export function urlEncodedForm(data: Record<string, string>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(data)) params.set(key, value);
@@ -82,18 +88,18 @@ export async function fetchWithDnsFallback(
     await sleep(1000);
   }
 
-  const host = hostFromUrl(url).split(":")[0];
-  const dns = run("dig", ["+short", host, "@1.1.1.1"], { allowFailure: true });
+  const { hostname, port } = hostnameAndPortFromUrl(url);
+  const dns = run("dig", ["+short", hostname, "@1.1.1.1"], { allowFailure: true });
   const ip = dns.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.length > 0);
-  if (!ip) throw new Error(`DNS lookup failed for ${host}`);
+  if (!ip) throw new Error(`DNS lookup failed for ${hostname}`);
 
   for (let attempt = 1; attempt <= 20; attempt += 1) {
     const result = run(
       "curl",
-      ["-fsS", "--max-time", "25", "--resolve", `${host}:443:${ip}`, url],
+      ["-fsS", "--max-time", "25", "--resolve", `${hostname}:${port}:${ip}`, url],
       { allowFailure: true },
     );
     if (result.status === 0) {
@@ -129,18 +135,18 @@ export async function postFormWithDnsFallback(
     await sleep(1000);
   }
 
-  const host = hostFromUrl(url).split(":")[0];
-  const dns = run("dig", ["+short", host, "@1.1.1.1"], { allowFailure: true });
+  const { hostname, port } = hostnameAndPortFromUrl(url);
+  const dns = run("dig", ["+short", hostname, "@1.1.1.1"], { allowFailure: true });
   const ip = dns.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.length > 0);
-  if (!ip) throw new Error(`DNS lookup failed for ${host}`);
+  if (!ip) throw new Error(`DNS lookup failed for ${hostname}`);
 
   for (let attempt = 1; attempt <= 20; attempt += 1) {
     const result = run(
       "curl",
-      ["-sS", "--max-time", "75", "--resolve", `${host}:443:${ip}`, "--data", body, url],
+      ["-sS", "--max-time", "75", "--resolve", `${hostname}:${port}:${ip}`, "--data", body, url],
       { allowFailure: true },
     );
     if (result.status === 0) {
