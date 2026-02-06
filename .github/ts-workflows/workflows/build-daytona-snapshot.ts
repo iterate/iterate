@@ -81,10 +81,9 @@ export default workflow({
   },
   jobs: {
     build: {
-      // Must use AMD64 runner - Daytona requires AMD64 images and QEMU emulation segfaults
-      // Use Depot runner for same-network image transfer (no 2GB download!)
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}",
+      // Daytona requires AMD64 images; build target is enforced in SANDBOX_BUILD_PLATFORM.
+      // Use Depot runner for same-network image transfer (no 2GB download!).
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         snapshot_name: "${{ steps.push.outputs.snapshot_name }}",
         git_sha: "${{ steps.push.outputs.git_sha }}",
@@ -177,7 +176,8 @@ export default workflow({
             '  echo "Missing Depot registry metadata in $build_info_path" >&2',
             "  exit 1",
             "fi",
-            'time depot pull --project "$depot_project_id" "$depot_save_tag"',
+            // Daytona snapshots must always be AMD64.
+            'time depot pull --platform "linux/amd64" --project "$depot_project_id" "$depot_save_tag"',
             'docker image inspect "$image_ref" > /dev/null',
             'docker tag "$image_ref" "$IMAGE_NAME"',
             "echo 'Pulled image: $image_ref'",
