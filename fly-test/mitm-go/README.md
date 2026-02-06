@@ -13,10 +13,9 @@ Go-based MITM path (current implementation).
 Required env:
 
 - `MITM_PORT` (default `18080`)
-- `TRANSFORM_URL` (default `http://127.0.0.1:18081/transform`)
+- `TRANSFORM_URL` (default `http://127.0.0.1:18081`)
 - `MITM_CA_CERT` (default `/data/mitm/ca.crt`)
 - `MITM_CA_KEY` (default `/data/mitm/ca.key`)
-- `MITM_LOG` (default `/tmp/egress-proxy.log`)
 
 Run:
 

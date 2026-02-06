@@ -77,7 +77,11 @@ export class DockerProvider implements ObservabilityProvider {
           "-fsS",
           "--max-time",
           "2",
-          "http://127.0.0.1:18080/healthz",
+          "--noproxy",
+          "",
+          "--proxy",
+          "http://127.0.0.1:18080",
+          "http://127.0.0.1:18081/healthz",
         ],
         { env: this.env, allowFailure: true },
       );
