@@ -1,5 +1,5 @@
 import { DaytonaProvider } from "./daytona/provider.ts";
-import { DockerProvider } from "./docker/provider.ts";
+import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox } from "./types.ts";
 
@@ -76,6 +76,10 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function parsePortFromUrl(url: string): number {
   const parsed = new URL(url);
   if (parsed.port) {
@@ -86,10 +90,11 @@ function parsePortFromUrl(url: string): number {
   throw new Error(`Could not parse port from URL: ${url}`);
 }
 
-function toRawEnv(
-  env: Record<string, unknown>,
-  overrides?: Record<string, string | undefined>,
-): Record<string, string | undefined> {
+function toRawEnv(params: {
+  env: Record<string, unknown>;
+  overrides?: Record<string, string | undefined>;
+}): Record<string, string | undefined> {
+  const { env, overrides } = params;
   const entries = Object.entries(env).map(([key, value]) => [
     key,
     typeof value === "string" ? value : undefined,
@@ -155,46 +160,80 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
   externalId: string;
   provider: SandboxHandleProvider<TSandbox>;
   createSandbox(config: CreateMachineConfig): Promise<TSandbox>;
-  createResult(config: CreateMachineConfig, sandbox: TSandbox): Promise<MachineRuntimeResult>;
+  createResult(params: {
+    config: CreateMachineConfig;
+    sandbox: TSandbox;
+  }): Promise<MachineRuntimeResult>;
+  archiveSandbox?: (sandbox: TSandbox) => Promise<void>;
 }): MachineRuntime {
-  const { type, externalId, provider, createSandbox, createResult } = options;
+  const { type, externalId, provider, createSandbox, createResult, archiveSandbox } = options;
+  let sandboxHandle: TSandbox | null = null;
 
-  const getSandbox = (providerId: string): TSandbox => {
-    const sandbox = provider.get(providerId);
+  const getSandbox = (): TSandbox => {
+    if (sandboxHandle) return sandboxHandle;
+    const sandbox = provider.get(externalId);
     if (!sandbox) {
-      throw new Error(`Invalid ${type} provider id: ${providerId}`);
+      throw new Error(`Invalid ${type} provider id: ${externalId}`);
     }
-    return sandbox;
+    sandboxHandle = sandbox;
+    return sandboxHandle;
   };
 
   return {
     type,
     async create(config: CreateMachineConfig): Promise<MachineRuntimeResult> {
       const sandbox = await createSandbox(config);
-      return createResult(config, sandbox);
+      sandboxHandle = sandbox;
+      return createResult({ config, sandbox });
     },
     async start(): Promise<void> {
-      await getSandbox(externalId).start();
+      await getSandbox().start();
     },
     async stop(): Promise<void> {
-      await getSandbox(externalId).stop();
+      await getSandbox().stop();
     },
     async restart(): Promise<void> {
-      await getSandbox(externalId).restart();
+      await getSandbox().restart();
     },
     async archive(): Promise<void> {
-      await getSandbox(externalId).stop();
+      const sandbox = getSandbox();
+      if (archiveSandbox) {
+        await archiveSandbox(sandbox);
+        return;
+      }
+      await sandbox.stop();
     },
     async delete(): Promise<void> {
-      await getSandbox(externalId).delete();
+      await getSandbox().delete();
     },
     async getPreviewUrl(port: number): Promise<string> {
-      return getSandbox(externalId).getPreviewUrl({ port });
+      return getSandbox().getPreviewUrl({ port });
     },
     async getProviderState(): Promise<ProviderState> {
-      return getSandbox(externalId).getState();
+      return getSandbox().getState();
     },
   };
+}
+
+function resolveDockerPortsFromMetadata(metadata: DockerMetadata): Record<number, number> {
+  const metadataPorts = metadata.ports ?? {};
+  const mappedPorts: Record<number, number> = {};
+
+  for (const [internalPort, serviceKey] of Object.entries(LOCAL_SERVICE_KEY_BY_PORT)) {
+    const hostPort = asNumber(metadataPorts[serviceKey]);
+    if (!hostPort || hostPort <= 0) continue;
+    mappedPorts[Number(internalPort)] = hostPort;
+  }
+
+  for (const [internalPort, hostPortRaw] of Object.entries(metadataPorts)) {
+    const hostPort = asNumber(hostPortRaw);
+    const internalPortNumber = Number(internalPort);
+    if (!hostPort || hostPort <= 0) continue;
+    if (!Number.isInteger(internalPortNumber) || internalPortNumber <= 0) continue;
+    mappedPorts[internalPortNumber] = hostPort;
+  }
+
+  return mappedPorts;
 }
 
 function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
@@ -205,18 +244,27 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
   const syncRepo = asBoolean(localDockerConfig.syncRepo);
 
   const provider = new DockerProvider(
-    toRawEnv(env, {
-      ...(imageName ? { DOCKER_IMAGE_NAME: imageName } : {}),
-      ...(syncRepo === undefined
-        ? {}
-        : { DOCKER_SYNC_FROM_HOST_REPO: syncRepo ? "true" : "false" }),
+    toRawEnv({
+      env,
+      overrides: {
+        ...(imageName ? { DOCKER_IMAGE_NAME: imageName } : {}),
+        ...(syncRepo === undefined
+          ? {}
+          : { DOCKER_SYNC_FROM_HOST_REPO: syncRepo ? "true" : "false" }),
+      },
     }),
   );
+  const knownPorts = resolveDockerPortsFromMetadata(typedMetadata);
+  const providerHandle: SandboxHandleProvider<DockerSandbox> = {
+    get(providerId) {
+      return provider.getWithPorts({ providerId, knownPorts: { ...knownPorts } });
+    },
+  };
 
   return createSandboxRuntime({
     type: "docker",
     externalId,
-    provider,
+    provider: providerHandle,
     async createSandbox(config: CreateMachineConfig) {
       return provider.create({
         id: config.machineId,
@@ -225,7 +273,7 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
         ...(imageName ? { providerSnapshotId: imageName } : {}),
       });
     },
-    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
       const daemonPortPairs = await Promise.all(
         Object.entries(LOCAL_SERVICE_KEY_BY_PORT)
           .filter(([port]) => Number(port) !== 9876)
@@ -261,7 +309,7 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
 
 function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
   const { env, externalId, metadata } = options;
-  const provider = new DaytonaProvider(toRawEnv(env));
+  const provider = new DaytonaProvider(toRawEnv({ env }));
   const typedMetadata = metadata as DaytonaMetadata;
   const snapshotName = typedMetadata.snapshotName;
 
@@ -277,7 +325,7 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {
@@ -285,12 +333,15 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
         },
       };
     },
+    async archiveSandbox(sandbox) {
+      await sandbox.archive();
+    },
   });
 }
 
 function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
   const { env, externalId, metadata } = options;
-  const provider = new FlyProvider(toRawEnv(env));
+  const provider = new FlyProvider(toRawEnv({ env }));
   const typedMetadata = metadata as FlyMetadata;
   const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
 
@@ -306,7 +357,7 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult(_config: CreateMachineConfig, sandbox): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {

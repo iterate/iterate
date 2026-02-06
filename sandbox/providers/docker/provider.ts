@@ -87,9 +87,12 @@ export class DockerSandbox extends Sandbox {
   }
 
   private async ensurePortsResolved(): Promise<void> {
-    if (Object.keys(this.ports).length === 0) {
-      this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
-    }
+    const hasAllPorts = this.internalPorts.every((internalPort) => this.ports[internalPort]);
+    if (hasAllPorts) return;
+    this.ports = await resolveHostPorts({
+      containerId: this.providerId,
+      internalPorts: this.internalPorts,
+    });
   }
 
   private async getCloudflarePreviewUrl(port: number): Promise<string> {
@@ -97,10 +100,12 @@ export class DockerSandbox extends Sandbox {
     while (Date.now() - start < TUNNEL_URL_TIMEOUT_MS) {
       try {
         const urlOrMarker = (
-          await execInContainer(this.providerId, [
-            "sh",
-            "-c",
-            `set -eu
+          await execInContainer({
+            containerId: this.providerId,
+            cmd: [
+              "sh",
+              "-c",
+              `set -eu
               log_file="/var/log/pidnap/cloudflared-${port}.log"
               url="$(cat /tmp/cloudflare-tunnels/${port}.url 2>/dev/null || true)"
               if [ -z "$url" ]; then
@@ -111,14 +116,18 @@ export class DockerSandbox extends Sandbox {
               else
                 printf '%s' "$url"
               fi`,
-          ])
+            ],
+          })
         ).trim();
         if (urlOrMarker === TUNNEL_RATE_LIMIT_MARKER) {
-          const logTail = await execInContainer(this.providerId, [
-            "sh",
-            "-c",
-            `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`,
-          ]).catch(() => "");
+          const logTail = await execInContainer({
+            containerId: this.providerId,
+            cmd: [
+              "sh",
+              "-c",
+              `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`,
+            ],
+          }).catch(() => "");
           throw new Error(`Cloudflare quick tunnel rate-limited for port ${port}.\n${logTail}`);
         }
 
@@ -134,11 +143,10 @@ export class DockerSandbox extends Sandbox {
       }
       await new Promise((r) => setTimeout(r, 500));
     }
-    const logTail = await execInContainer(this.providerId, [
-      "sh",
-      "-c",
-      `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`,
-    ]).catch(() => "");
+    const logTail = await execInContainer({
+      containerId: this.providerId,
+      cmd: ["sh", "-c", `tail -n 80 /var/log/pidnap/cloudflared-${port}.log 2>/dev/null || true`],
+    }).catch(() => "");
     throw new Error(
       `Timeout waiting for Cloudflare tunnel URL for port ${port}. cloudflared log:\n${logTail}`,
     );
@@ -159,12 +167,15 @@ export class DockerSandbox extends Sandbox {
   // === Lifecycle ===
 
   async exec(cmd: string[]): Promise<string> {
-    return execInContainer(this.providerId, cmd);
+    return execInContainer({ containerId: this.providerId, cmd });
   }
 
   async getState(): Promise<ProviderState> {
     try {
-      const inspect = await dockerApi<DockerInspect>("GET", `/containers/${this.providerId}/json`);
+      const inspect = await dockerApi<DockerInspect>({
+        method: "GET",
+        endpoint: `/containers/${this.providerId}/json`,
+      });
       return {
         state: inspect.State?.Status ?? "unknown",
         errorReason: inspect.State?.Error,
@@ -178,34 +189,55 @@ export class DockerSandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    await withTimeout(
-      dockerApi("POST", `/containers/${this.providerId}/start`, {}),
-      LIFECYCLE_TIMEOUT_MS,
-      "start",
-    );
-    this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
+    await withTimeout({
+      promise: dockerApi({
+        method: "POST",
+        endpoint: `/containers/${this.providerId}/start`,
+        body: {},
+      }),
+      timeoutMs: LIFECYCLE_TIMEOUT_MS,
+      operation: "start",
+    });
+    this.ports = await resolveHostPorts({
+      containerId: this.providerId,
+      internalPorts: this.internalPorts,
+    });
   }
 
   async stop(): Promise<void> {
     try {
-      await dockerApi("POST", `/containers/${this.providerId}/stop`, {});
+      await dockerApi({
+        method: "POST",
+        endpoint: `/containers/${this.providerId}/stop`,
+        body: {},
+      });
     } catch {
       // Container might already be stopped
     }
   }
 
   async restart(): Promise<void> {
-    await withTimeout(
-      dockerApi("POST", `/containers/${this.providerId}/restart`, {}),
-      LIFECYCLE_TIMEOUT_MS,
-      "restart",
-    );
-    this.ports = await resolveHostPorts(this.providerId, this.internalPorts);
+    await withTimeout({
+      promise: dockerApi({
+        method: "POST",
+        endpoint: `/containers/${this.providerId}/restart`,
+        body: {},
+      }),
+      timeoutMs: LIFECYCLE_TIMEOUT_MS,
+      operation: "restart",
+    });
+    this.ports = await resolveHostPorts({
+      containerId: this.providerId,
+      internalPorts: this.internalPorts,
+    });
   }
 
   async delete(): Promise<void> {
     try {
-      await dockerApi("DELETE", `/containers/${this.providerId}?force=true`, undefined);
+      await dockerApi({
+        method: "DELETE",
+        endpoint: `/containers/${this.providerId}?force=true`,
+      });
     } catch {
       // Best effort cleanup
     }
@@ -242,14 +274,14 @@ export class DockerProvider extends SandboxProvider {
   }
 
   get defaultSnapshotId(): string {
-    return resolveBaseImage(this.repoRoot, this.env.DOCKER_IMAGE_NAME);
+    return resolveBaseImage({ repoRoot: this.repoRoot, imageName: this.env.DOCKER_IMAGE_NAME });
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
-    const imageName = resolveBaseImage(
-      this.repoRoot,
-      opts.providerSnapshotId ?? this.defaultSnapshotId,
-    );
+    const imageName = resolveBaseImage({
+      repoRoot: this.repoRoot,
+      imageName: opts.providerSnapshotId ?? this.defaultSnapshotId,
+    });
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
 
@@ -313,10 +345,10 @@ export class DockerProvider extends SandboxProvider {
       ExtraHosts: ["host.docker.internal:host-gateway"],
     };
 
-    const createResponse = await dockerApi<{ Id: string }>(
-      "POST",
-      `/containers/create?name=${encodeURIComponent(containerName)}`,
-      {
+    const createResponse = await dockerApi<{ Id: string }>({
+      method: "POST",
+      endpoint: `/containers/create?name=${encodeURIComponent(containerName)}`,
+      body: {
         Image: imageName,
         ...(hasEntrypointArguments ? { Cmd: entrypointArguments } : {}),
         Env: envArray,
@@ -324,13 +356,13 @@ export class DockerProvider extends SandboxProvider {
         HostConfig: hostConfig,
         Labels: labels,
       },
-    );
+    });
 
     const containerId = createResponse.Id;
-    await dockerApi("POST", `/containers/${containerId}/start`, {});
+    await dockerApi({ method: "POST", endpoint: `/containers/${containerId}/start`, body: {} });
 
     const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
-    const ports = await resolveHostPorts(containerId, internalPorts);
+    const ports = await resolveHostPorts({ containerId, internalPorts });
     const sandbox = new DockerSandbox(
       containerId,
       ports,
@@ -350,7 +382,7 @@ export class DockerProvider extends SandboxProvider {
         }
       }
 
-      await waitForEntrypointSignal(sandbox, maxWaitMs);
+      await waitForEntrypointSignal({ sandbox, timeoutMs: maxWaitMs });
 
       if (this.gitInfo?.commit) {
         // Worktree sync is occasionally still settling immediately after the signal.
@@ -371,7 +403,7 @@ export class DockerProvider extends SandboxProvider {
           }
         }
 
-        await waitForEntrypointSignal(sandbox, maxWaitMs);
+        await waitForEntrypointSignal({ sandbox, timeoutMs: maxWaitMs });
 
         const syncStart = Date.now();
         while (Date.now() - syncStart < maxWaitMs) {
@@ -396,11 +428,23 @@ export class DockerProvider extends SandboxProvider {
   }
 
   get(providerId: string): DockerSandbox | null {
+    return this.getWithPorts({ providerId });
+  }
+
+  getWithPorts(params: {
+    providerId: string;
+    knownPorts?: Record<number, number>;
+  }): DockerSandbox | null {
+    const { providerId, knownPorts } = params;
     // For Docker, we can't easily check if container exists without API call
     // Return a handle and let operations fail if container doesn't exist
     const internalPorts = [...DAEMON_PORTS.map((d) => d.internalPort), PIDNAP_PORT];
-    // Ports will be resolved lazily or on start/restart
-    return new DockerSandbox(providerId, {}, internalPorts, this.env.DOCKER_SERVICE_TRANSPORT);
+    return new DockerSandbox(
+      providerId,
+      knownPorts ?? {},
+      internalPorts,
+      this.env.DOCKER_SERVICE_TRANSPORT,
+    );
   }
 
   async listSandboxes(): Promise<SandboxInfo[]> {
@@ -411,10 +455,10 @@ export class DockerProvider extends SandboxProvider {
         State: string;
         Labels: Record<string, string>;
       }>
-    >(
-      "GET",
-      `/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["com.iterate.sandbox=true"] }))}`,
-    );
+    >({
+      method: "GET",
+      endpoint: `/containers/json?all=true&filters=${encodeURIComponent(JSON.stringify({ label: ["com.iterate.sandbox=true"] }))}`,
+    });
 
     return containers.map((c) => ({
       type: "docker" as const,
@@ -432,7 +476,7 @@ export class DockerProvider extends SandboxProvider {
         Created: number;
         Labels: Record<string, string>;
       }>
-    >("GET", `/images/json`);
+    >({ method: "GET", endpoint: `/images/json` });
 
     // Filter to sandbox-related images
     return images
@@ -452,11 +496,15 @@ export class DockerProvider extends SandboxProvider {
 // Helper functions
 // =============================================================================
 
-async function resolveHostPorts(
-  containerId: string,
-  internalPorts: number[],
-): Promise<Record<number, number>> {
-  const inspect = await dockerApi<DockerInspect>("GET", `/containers/${containerId}/json`);
+async function resolveHostPorts(params: {
+  containerId: string;
+  internalPorts: number[];
+}): Promise<Record<number, number>> {
+  const { containerId, internalPorts } = params;
+  const inspect = await dockerApi<DockerInspect>({
+    method: "GET",
+    endpoint: `/containers/${containerId}/json`,
+  });
   const ports = inspect.NetworkSettings?.Ports ?? {};
   const resolved: Record<number, number> = {};
   for (const internalPort of internalPorts) {
@@ -475,7 +523,11 @@ async function resolveHostPorts(
   return resolved;
 }
 
-async function waitForEntrypointSignal(sandbox: Sandbox, timeoutMs: number): Promise<void> {
+async function waitForEntrypointSignal(params: {
+  sandbox: Sandbox;
+  timeoutMs: number;
+}): Promise<void> {
+  const { sandbox, timeoutMs } = params;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -488,11 +540,12 @@ async function waitForEntrypointSignal(sandbox: Sandbox, timeoutMs: number): Pro
   throw new Error("Timeout waiting for /tmp/reached-entrypoint");
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  operation: string,
-): Promise<T> {
+async function withTimeout<T>(params: {
+  promise: Promise<T>;
+  timeoutMs: number;
+  operation: string;
+}): Promise<T> {
+  const { promise, timeoutMs, operation } = params;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([

@@ -112,7 +112,8 @@ export function getDockerEnvVars(repoRoot: string): Record<string, string> {
  * Resolve the base image for Docker containers.
  * Prefers local tags, then baked main tags, then compose-derived fallback.
  */
-export function resolveBaseImage(repoRoot: string, imageName?: string): string {
+export function resolveBaseImage(params: { repoRoot: string; imageName?: string }): string {
+  const { repoRoot, imageName } = params;
   if (imageName) {
     return imageName;
   }

@@ -20,7 +20,6 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "sandbox/providers/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],
@@ -29,7 +28,6 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "sandbox/providers/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],

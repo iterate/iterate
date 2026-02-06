@@ -38,7 +38,8 @@ const localImageName =
 // Registry image name for multi-platform builds (can't --load multiple platforms)
 const registryImageName = process.env.REGISTRY_IMAGE_NAME;
 
-function runFlyctl(command: string[], token: string): void {
+function runFlyctl(params: { command: string[]; token: string }): void {
+  const { command, token } = params;
   execFileSync("flyctl", command, {
     cwd: repoRoot,
     stdio: "inherit",
@@ -66,12 +67,12 @@ function ensureFlyRegistryApp(token: string): void {
   if (flyRegistryAppExists(token)) {
     return;
   }
-  runFlyctl(["apps", "create", flyRegistryApp, "-o", flyOrg, "-y"], token);
+  runFlyctl({ command: ["apps", "create", flyRegistryApp, "-o", flyOrg, "-y"], token });
 }
 
 function ensureFlyDockerAuth(token: string): void {
   try {
-    runFlyctl(["auth", "docker", "-t", token], token);
+    runFlyctl({ command: ["auth", "docker", "-t", token], token });
   } catch {
     execFileSync("docker", ["login", "registry.fly.io", "-u", "x", "--password-stdin"], {
       cwd: repoRoot,

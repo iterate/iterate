@@ -51,12 +51,13 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-async function flyApi<T = unknown>(
-  env: FlyEnv,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
+async function flyApi<T = unknown>(params: {
+  env: FlyEnv;
+  method: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const { env, method, path, body } = params;
   const response = await fetch(`${FLY_API_BASE}${path}`, {
     method,
     headers: {
@@ -79,13 +80,14 @@ async function flyApi<T = unknown>(
   }
 }
 
-async function waitForState(
-  env: FlyEnv,
-  appName: string,
-  machineId: string,
-  state: string,
-  timeoutSeconds = WAIT_TIMEOUT_SECONDS,
-): Promise<void> {
+async function waitForState(params: {
+  env: FlyEnv;
+  appName: string;
+  machineId: string;
+  state: string;
+  timeoutSeconds?: number;
+}): Promise<void> {
+  const { env, appName, machineId, state, timeoutSeconds = WAIT_TIMEOUT_SECONDS } = params;
   const startedAt = Date.now();
   while (true) {
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
@@ -96,11 +98,11 @@ async function waitForState(
 
     const stepTimeoutSeconds = Math.max(1, Math.min(remainingSeconds, MAX_WAIT_TIMEOUT_SECONDS));
     try {
-      await flyApi(
+      await flyApi({
         env,
-        "GET",
-        `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?state=${encodeURIComponent(state)}&timeout=${stepTimeoutSeconds}`,
-      );
+        method: "GET",
+        path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?state=${encodeURIComponent(state)}&timeout=${stepTimeoutSeconds}`,
+      });
       return;
     } catch (error) {
       const message = String(error).toLowerCase();
@@ -111,7 +113,8 @@ async function waitForState(
   }
 }
 
-function buildPreviewUrl(baseDomain: string, appName: string, port: number): string {
+function buildPreviewUrl(params: { baseDomain: string; appName: string; port: number }): string {
+  const { baseDomain, appName, port } = params;
   if (port === 443) return `https://${appName}.${baseDomain}`;
   if (port === 80) return `http://${appName}.${baseDomain}`;
   return `http://${appName}.${baseDomain}:${port}`;
@@ -145,10 +148,15 @@ function isNotFoundError(error: unknown): boolean {
 
 async function ensureFlyAppExists(env: FlyEnv): Promise<void> {
   try {
-    await flyApi(env, "POST", "/v1/apps", {
-      app_name: env.SANDBOX_FLY_APP_NAME,
-      org_slug: env.FLY_ORG,
-      ...(env.FLY_NETWORK ? { network: env.FLY_NETWORK } : {}),
+    await flyApi({
+      env,
+      method: "POST",
+      path: "/v1/apps",
+      body: {
+        app_name: env.SANDBOX_FLY_APP_NAME,
+        org_slug: env.FLY_ORG,
+        ...(env.FLY_NETWORK ? { network: env.FLY_NETWORK } : {}),
+      },
     });
   } catch (error) {
     if (!isAlreadyExistsError(error)) {
@@ -191,7 +199,11 @@ export class FlySandbox extends Sandbox {
   }
 
   async getPreviewUrl(opts: { port: number }): Promise<string> {
-    return buildPreviewUrl(this.env.FLY_BASE_DOMAIN, this.appName, opts.port);
+    return buildPreviewUrl({
+      baseDomain: this.env.FLY_BASE_DOMAIN,
+      appName: this.appName,
+      port: opts.port,
+    });
   }
 
   async exec(cmd: string[]): Promise<string> {
@@ -201,15 +213,15 @@ export class FlySandbox extends Sandbox {
     let payload: unknown;
     for (let attempt = 1; attempt <= EXEC_RETRY_LIMIT; attempt += 1) {
       try {
-        payload = await flyApi<unknown>(
-          this.env,
-          "POST",
-          `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/exec`,
-          {
+        payload = await flyApi<unknown>({
+          env: this.env,
+          method: "POST",
+          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/exec`,
+          body: {
             command: cmd,
             timeout: 60,
           },
-        );
+        });
         break;
       } catch (error) {
         if (attempt >= EXEC_RETRY_LIMIT || !isTransientFlyError(error)) {
@@ -236,11 +248,11 @@ export class FlySandbox extends Sandbox {
 
   async getState(): Promise<ProviderState> {
     try {
-      const payload = await flyApi<unknown>(
-        this.env,
-        "GET",
-        `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}`,
-      );
+      const payload = await flyApi<unknown>({
+        env: this.env,
+        method: "GET",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}`,
+      });
       return resolveState(payload);
     } catch (error) {
       return {
@@ -251,24 +263,34 @@ export class FlySandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    await flyApi(
-      this.env,
-      "POST",
-      `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
-      {},
-    );
-    await waitForState(this.env, this.appName, this.machineId, "started");
+    await flyApi({
+      env: this.env,
+      method: "POST",
+      path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
+      body: {},
+    });
+    await waitForState({
+      env: this.env,
+      appName: this.appName,
+      machineId: this.machineId,
+      state: "started",
+    });
   }
 
   async stop(): Promise<void> {
     try {
-      await flyApi(
-        this.env,
-        "POST",
-        `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/stop`,
-        {},
-      );
-      await waitForState(this.env, this.appName, this.machineId, "stopped");
+      await flyApi({
+        env: this.env,
+        method: "POST",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/stop`,
+        body: {},
+      });
+      await waitForState({
+        env: this.env,
+        appName: this.appName,
+        machineId: this.machineId,
+        state: "stopped",
+      });
     } catch {
       // best effort
     }
@@ -276,27 +298,32 @@ export class FlySandbox extends Sandbox {
 
   async restart(): Promise<void> {
     try {
-      await flyApi(
-        this.env,
-        "POST",
-        `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/restart`,
-        {},
-      );
+      await flyApi({
+        env: this.env,
+        method: "POST",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/restart`,
+        body: {},
+      });
     } catch {
       await this.stop();
       await this.start();
       return;
     }
-    await waitForState(this.env, this.appName, this.machineId, "started");
+    await waitForState({
+      env: this.env,
+      appName: this.appName,
+      machineId: this.machineId,
+      state: "started",
+    });
   }
 
   async delete(): Promise<void> {
     try {
-      await flyApi(
-        this.env,
-        "DELETE",
-        `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}?force=true`,
-      );
+      await flyApi({
+        env: this.env,
+        method: "DELETE",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}?force=true`,
+      });
     } catch {
       // best effort cleanup
     }
@@ -326,11 +353,11 @@ export class FlyProvider extends SandboxProvider {
     const appName = this.env.SANDBOX_FLY_APP_NAME;
     await ensureFlyAppExists(this.env);
 
-    const createPayload = await flyApi<unknown>(
-      this.env,
-      "POST",
-      `/v1/apps/${encodeURIComponent(appName)}/machines`,
-      {
+    const createPayload = await flyApi<unknown>({
+      env: this.env,
+      method: "POST",
+      path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
+      body: {
         name: `sandbox-${base}-${suffix}`.slice(0, 63),
         region: this.env.FLY_REGION,
         skip_launch: false,
@@ -347,10 +374,10 @@ export class FlyProvider extends SandboxProvider {
           ...(hasEntrypointArguments ? { init: { exec: entrypointArguments } } : {}),
         },
       },
-    );
+    });
 
     const machineId = resolveMachineId(createPayload);
-    await waitForState(this.env, appName, machineId, "started");
+    await waitForState({ env: this.env, appName, machineId, state: "started" });
 
     return new FlySandbox(this.env, machineId);
   }
@@ -362,11 +389,11 @@ export class FlyProvider extends SandboxProvider {
 
   async listSandboxes(): Promise<SandboxInfo[]> {
     try {
-      const machinesPayload = await flyApi<unknown>(
-        this.env,
-        "GET",
-        `/v1/apps/${encodeURIComponent(this.env.SANDBOX_FLY_APP_NAME)}/machines`,
-      );
+      const machinesPayload = await flyApi<unknown>({
+        env: this.env,
+        method: "GET",
+        path: `/v1/apps/${encodeURIComponent(this.env.SANDBOX_FLY_APP_NAME)}/machines`,
+      });
       const machineList = Array.isArray(machinesPayload) ? machinesPayload : [];
       const sandboxes: SandboxInfo[] = [];
       for (const machine of machineList) {

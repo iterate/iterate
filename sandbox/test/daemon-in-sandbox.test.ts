@@ -32,11 +32,12 @@ class TerminalProcessStateError extends Error {}
  * NOTE: Currently failing on Daytona due to oRPC routing issue.
  * See tasks/daytona-provider-testing.md for details.
  */
-async function waitForServiceHealthy(
-  sandbox: Sandbox,
-  process: string,
-  timeoutMs = 60_000,
-): Promise<void> {
+async function waitForServiceHealthy(params: {
+  sandbox: Sandbox;
+  process: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const { sandbox, process, timeoutMs = 60_000 } = params;
   const start = Date.now();
   let lastError: unknown;
 
@@ -73,7 +74,7 @@ async function waitForServiceHealthy(
 describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
-      await waitForServiceHealthy(sandbox, "daemon-backend", 30000);
+      await waitForServiceHealthy({ sandbox, process: "daemon-backend", timeoutMs: 30000 });
       const client = await getPidnapClientForSandbox(sandbox);
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
@@ -105,7 +106,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
 
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
-      await waitForServiceHealthy(sandbox, "daemon-backend");
+      await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
       const client = await getPidnapClientForSandbox(sandbox);
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
@@ -128,7 +129,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   });
 
   test("daemon accessible", async ({ sandbox, expect }) => {
-    await waitForServiceHealthy(sandbox, "daemon-backend");
+    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
     const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
 
     // Verify health endpoint from host
@@ -147,8 +148,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
 
   test("PTY endpoint works", async ({ sandbox, expect }) => {
     // Wait for both backend (has the PTY endpoint) and frontend (Vite proxy for WebSocket)
-    await waitForServiceHealthy(sandbox, "daemon-backend");
-    await waitForServiceHealthy(sandbox, "daemon-frontend");
+    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
+    await waitForServiceHealthy({ sandbox, process: "daemon-frontend" });
 
     const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
 
@@ -186,7 +187,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   }, 90000);
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
-    await waitForServiceHealthy(sandbox, "daemon-backend");
+    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
     const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
     const trpc = await getDaemonClientForSandbox<TRPCRouter>(sandbox);
 
@@ -264,13 +265,13 @@ describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
 
-    await waitForServiceHealthy(sandbox, "daemon-backend");
+    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
 
     await sandbox.exec(["sh", "-c", `printf '%s' '${fileContents}' > ${filePath}`]);
 
     await sandbox.restart();
 
-    await waitForServiceHealthy(sandbox, "daemon-backend");
+    await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
 
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);

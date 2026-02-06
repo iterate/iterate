@@ -11,14 +11,12 @@ on:
     paths:
       - sandbox/**
       - apps/daemon/**
-      - sandbox/providers/machine-runtime.ts
       - packages/pidnap/**
       - .github/workflows/sandbox-test.yml
   pull_request:
     paths:
       - sandbox/**
       - apps/daemon/**
-      - sandbox/providers/machine-runtime.ts
       - packages/pidnap/**
       - .github/workflows/sandbox-test.yml
   workflow_dispatch:

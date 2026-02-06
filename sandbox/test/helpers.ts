@@ -185,11 +185,12 @@ export async function getContainerLogs(containerId: string): Promise<string> {
   return decodeDockerLogs(new Uint8Array(buffer));
 }
 
-export async function waitForLogPattern(
-  containerId: string,
-  pattern: RegExp,
-  timeoutMs = 60000,
-): Promise<string> {
+export async function waitForLogPattern(params: {
+  containerId: string;
+  pattern: RegExp;
+  timeoutMs?: number;
+}): Promise<string> {
+  const { containerId, pattern, timeoutMs = 60000 } = params;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const logs = await getContainerLogs(containerId);
@@ -199,20 +200,25 @@ export async function waitForLogPattern(
   throw new Error(`Timeout waiting for log pattern: ${pattern}`);
 }
 
-export async function getServiceFileLogs(containerId: string, logPath: string): Promise<string> {
-  return execInContainer(containerId, ["cat", logPath]);
+export async function getServiceFileLogs(params: {
+  containerId: string;
+  logPath: string;
+}): Promise<string> {
+  const { containerId, logPath } = params;
+  return execInContainer({ containerId, cmd: ["cat", logPath] });
 }
 
-export async function waitForFileLogPattern(
-  containerId: string,
-  logPath: string,
-  pattern: RegExp,
-  timeoutMs = 60000,
-): Promise<string> {
+export async function waitForFileLogPattern(params: {
+  containerId: string;
+  logPath: string;
+  pattern: RegExp;
+  timeoutMs?: number;
+}): Promise<string> {
+  const { containerId, logPath, pattern, timeoutMs = 60000 } = params;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const logs = await execInContainer(containerId, ["cat", logPath]);
+      const logs = await execInContainer({ containerId, cmd: ["cat", logPath] });
       if (pattern.test(logs)) return logs;
     } catch {
       // File might not exist yet
@@ -240,10 +246,11 @@ export function dumpContainerLogs(containerId: string): void {
 }
 
 /** Creates a temp directory and cleans it up after the callback completes. */
-export async function withTempDir<T>(
-  prefix: string,
-  fn: (tempDir: string) => Promise<T>,
-): Promise<T> {
+export async function withTempDir<T>(params: {
+  prefix: string;
+  fn: (tempDir: string) => Promise<T>;
+}): Promise<T> {
+  const { prefix, fn } = params;
   const tempDir = mkdtempSync(join(tmpdir(), prefix));
   try {
     return await fn(tempDir);
@@ -258,10 +265,11 @@ export interface WorktreeInfo {
 }
 
 /** Creates a git worktree and cleans it up after the callback completes. */
-export async function withWorktree<T>(
-  repoRoot: string,
-  fn: (worktree: WorktreeInfo) => Promise<T>,
-): Promise<T> {
+export async function withWorktree<T>(params: {
+  repoRoot: string;
+  fn: (worktree: WorktreeInfo) => Promise<T>;
+}): Promise<T> {
+  const { repoRoot, fn } = params;
   const path = mkdtempSync(join(tmpdir(), "git-worktree-"));
   const branch = `test-worktree-${Date.now()}`;
   const keepWorktree = process.env.KEEP_WORKTREE === "true";
@@ -329,11 +337,12 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
  * Sandbox lifecycle helper: logs sandbox id, dumps logs on error, cleans up.
  * Works with both Docker and Daytona providers.
  */
-export async function withSandbox<T>(
-  envOverrides: Record<string, string | undefined> | undefined,
-  sandboxOptions: CreateSandboxOptions | undefined,
-  fn: (sandbox: Sandbox) => Promise<T>,
-): Promise<T> {
+export async function withSandbox<T>(params: {
+  envOverrides?: Record<string, string | undefined>;
+  sandboxOptions?: CreateSandboxOptions;
+  fn: (sandbox: Sandbox) => Promise<T>;
+}): Promise<T> {
+  const { envOverrides, sandboxOptions, fn } = params;
   const provider = createTestProvider(envOverrides as Record<string, string> | undefined);
 
   // Use default options if none provided
@@ -378,6 +387,6 @@ export const test = baseTest.extend<{
   envOverrides: {},
   sandboxOptions: undefined,
   sandbox: async ({ envOverrides, sandboxOptions }, use) => {
-    await withSandbox(envOverrides, sandboxOptions, use);
+    await withSandbox({ envOverrides, sandboxOptions, fn: use });
   },
 });

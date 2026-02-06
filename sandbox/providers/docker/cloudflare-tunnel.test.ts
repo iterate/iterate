@@ -49,7 +49,7 @@ describe.runIf(RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS)("Docker Cloudflare Tunnel", (
     expect(previewUrl).toContain(".trycloudflare.com");
 
     await expect
-      .poll(async () => fetchTunnelText(previewUrl, "/tunnel-ok.txt"), {
+      .poll(async () => fetchTunnelText({ baseUrl: previewUrl, pathname: "/tunnel-ok.txt" }), {
         timeout: 90_000,
         interval: 1_000,
       })
@@ -59,7 +59,8 @@ describe.runIf(RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS)("Docker Cloudflare Tunnel", (
 
 const CLOUDFLARE_DNS_SERVERS = ["1.1.1.1", "1.0.0.1"] as const;
 
-async function fetchTunnelText(baseUrl: string, pathname: string): Promise<string> {
+async function fetchTunnelText(params: { baseUrl: string; pathname: string }): Promise<string> {
+  const { baseUrl, pathname } = params;
   const url = new URL(pathname, baseUrl);
 
   const directResponse = await fetch(url).catch(() => null);

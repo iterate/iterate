@@ -42,16 +42,17 @@ async function getUndiciDispatcher(socketPath: string): Promise<unknown> {
 /**
  * Make a Docker API request.
  *
- * @param method - HTTP method (GET, POST, DELETE)
- * @param endpoint - API endpoint (e.g., /containers/json)
- * @param body - Optional request body
+ * @param params.method - HTTP method (GET, POST, DELETE)
+ * @param params.endpoint - API endpoint (e.g., /containers/json)
+ * @param params.body - Optional request body
  * @returns Parsed JSON response
  */
-export async function dockerApi<T>(
-  method: string,
-  endpoint: string,
-  body?: Record<string, unknown>,
-): Promise<T> {
+export async function dockerApi<T>(params: {
+  method: string;
+  endpoint: string;
+  body?: unknown;
+}): Promise<T> {
+  const { method, endpoint, body } = params;
   const config = parseDockerHost();
   const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
   const url = `${config.url}${endpoint}`;
@@ -145,21 +146,25 @@ function parseDockerResponse<T>(text: string): T {
 /**
  * Execute a command in a container and return stdout.
  *
- * @param containerId - Container ID or name
- * @param cmd - Command and arguments
+ * @param params.containerId - Container ID or name
+ * @param params.cmd - Command and arguments
  * @returns Command stdout
  */
-export async function execInContainer(containerId: string, cmd: string[]): Promise<string> {
+export async function execInContainer(params: {
+  containerId: string;
+  cmd: string[];
+}): Promise<string> {
+  const { containerId, cmd } = params;
   // Create exec instance
-  const execCreateResponse = await dockerApi<{ Id: string }>(
-    "POST",
-    `/containers/${containerId}/exec`,
-    {
+  const execCreateResponse = await dockerApi<{ Id: string }>({
+    method: "POST",
+    endpoint: `/containers/${containerId}/exec`,
+    body: {
       AttachStdout: true,
       AttachStderr: true,
       Cmd: cmd,
     },
-  );
+  });
 
   const execId = execCreateResponse.Id;
 
@@ -204,7 +209,10 @@ export async function execInContainer(containerId: string, cmd: string[]): Promi
     output = stripDockerExecHeaders(new Uint8Array(buffer));
   }
 
-  const execState = await dockerApi<{ ExitCode?: number | null }>("GET", `/exec/${execId}/json`);
+  const execState = await dockerApi<{ ExitCode?: number | null }>({
+    method: "GET",
+    endpoint: `/exec/${execId}/json`,
+  });
 
   if (execState.ExitCode != null && execState.ExitCode !== 0) {
     const formattedOutput = output.trim();

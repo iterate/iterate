@@ -111,6 +111,14 @@ export class DaytonaSandbox extends Sandbox {
     await sandbox.start();
   }
 
+  async archive(): Promise<void> {
+    const sandbox = await this.getSdkSandbox();
+    if (sandbox.state === "started") {
+      await sandbox.stop();
+    }
+    await sandbox.archive();
+  }
+
   async delete(): Promise<void> {
     const sandbox = await this.getSdkSandbox();
     if (sandbox.state === "started") {
