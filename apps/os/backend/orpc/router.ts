@@ -183,6 +183,8 @@ export const reportStatus = os.machines.reportStatus
 
       // Cleanup old detached machines (older than 48h) after handoff.
       // Run this opportunistically here to keep flow simple for now.
+      // TODO: Add scheduled/outbox cleanup across projects so detached machines
+      // from inactive projects also get archived.
       const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
       const staleDetachedMachines = await db.query.machine.findMany({
         where: and(
@@ -200,12 +202,7 @@ export const reportStatus = os.machines.reportStatus
           metadata: (detachedMachine.metadata as Record<string, unknown>) ?? {},
           buildProxyUrl: () => "",
         });
-        await provider.archive().catch((err) => {
-          logger.error("Failed to archive stale detached machine via provider", {
-            machineId: detachedMachine.id,
-            err,
-          });
-        });
+        await provider.archive();
 
         await db
           .update(schema.machine)
