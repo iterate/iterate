@@ -9,6 +9,7 @@ import {
   Tunnel,
   WorkerLoader,
   Worker,
+  Self,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -556,6 +557,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       ...dbConfig,
       ...envSecrets,
+      SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,

@@ -25,6 +25,7 @@ const bash = (command: string) => ({
 
 // Proxy and CA env vars for pidnap-managed processes.
 // When skipProxy is true, these are omitted so traffic goes direct.
+// The user's interactive shell gets these from ~/.iterate/.env instead (managed by daemon).
 const proxyEnv: Record<string, string> = skipProxy
   ? {}
   : {

@@ -96,20 +96,22 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("[Agent: slack-1234567890-123456] New Slack thread started"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
-      expect(mockedAppendToAgent).toHaveBeenCalledWith(agent, expect.stringContaining("channel="), {
-        workingDirectory: "/home/iterate/src/github.com/customer/repo",
-      });
+      expect(mockedAppendToAgent).toHaveBeenCalledWith(
+        agent,
+        expect.stringContaining("channel="),
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
+      );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("thread_ts="),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
     });
 
@@ -187,12 +189,12 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("You've been @mentioned in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
     });
 
@@ -232,12 +234,12 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("You've been @mentioned in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("Refer to SLACK.md"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
     });
   });
@@ -278,12 +280,12 @@ describe("slack router", () => {
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("Another message in thread"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
       expect(mockedAppendToAgent).toHaveBeenCalledWith(
         agent,
         expect.stringContaining("(FYI, no @mention)"),
-        { workingDirectory: "/home/iterate/src/github.com/customer/repo" },
+        expect.objectContaining({ workingDirectory: "/home/iterate/src/github.com/customer/repo" }),
       );
     });
 
