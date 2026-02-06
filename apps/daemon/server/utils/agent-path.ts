@@ -3,7 +3,6 @@ const SEGMENT_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 export interface PathValidationResult {
   valid: boolean;
   error?: string;
-  normalizedPath?: string;
 }
 
 export function validateAgentPath(path: string): PathValidationResult {
@@ -29,7 +28,7 @@ export function validateAgentPath(path: string): PathValidationResult {
     }
   }
 
-  return { valid: true, normalizedPath: path };
+  return { valid: true };
 }
 
 export function extractAgentPathFromUrl(url: string, prefix: string): string | null {
