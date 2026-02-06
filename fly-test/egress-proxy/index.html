@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Egress Proxy Logs</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f6f8fc;
+        color: #0f172a;
+      }
+      main {
+        max-width: 1100px;
+        margin: 24px auto;
+        padding: 0 16px 24px;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #d8dfeb;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: #334155;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+      }
+      select,
+      button {
+        font: inherit;
+        border: 1px solid #c6d2e2;
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #eef4ff;
+      }
+      button {
+        cursor: pointer;
+      }
+      #status {
+        font-size: 13px;
+        color: #334155;
+      }
+      pre {
+        margin: 12px 0 0;
+        background: #0a1020;
+        color: #dbe7ff;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 12px;
+        max-height: 72vh;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>Egress Proxy Log Tail</h1>
+        <p>Polling <code>/api/tail</code> every second.</p>
+        <div class="row">
+          <label for="lines">Lines</label>
+          <select id="lines">
+            <option value="100">100</option>
+            <option value="300" selected>300</option>
+            <option value="600">600</option>
+            <option value="1000">1000</option>
+          </select>
+          <button id="refresh">Refresh</button>
+          <button id="pause">Pause</button>
+          <div id="status">Starting...</div>
+        </div>
+        <pre id="output">Loading...</pre>
+      </section>
+    </main>
+    <script>
+      const linesInput = document.getElementById("lines");
+      const output = document.getElementById("output");
+      const statusEl = document.getElementById("status");
+      const pauseBtn = document.getElementById("pause");
+      let paused = false;
+      let timer = null;
+
+      async function loadLogs() {
+        if (paused) return;
+        const lines = linesInput.value;
+        try {
+          const response = await fetch(
+            `/api/tail?lines=${encodeURIComponent(lines)}&t=${Date.now()}`,
+            {
+              cache: "no-store",
+            },
+          );
+          if (!response.ok) throw new Error(`status=${response.status}`);
+          output.textContent = await response.text();
+          statusEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        } catch (error) {
+          statusEl.textContent = `Error: ${String(error)}`;
+        }
+      }
+
+      function restartPolling() {
+        if (timer) clearInterval(timer);
+        timer = setInterval(() => {
+          void loadLogs();
+        }, 1000);
+      }
+
+      document.getElementById("refresh").addEventListener("click", () => {
+        void loadLogs();
+      });
+      linesInput.addEventListener("change", () => {
+        void loadLogs();
+      });
+      pauseBtn.addEventListener("click", () => {
+        paused = !paused;
+        pauseBtn.textContent = paused ? "Resume" : "Pause";
+        statusEl.textContent = paused ? "Paused" : "Running";
+      });
+
+      restartPolling();
+      void loadLogs();
+    </script>
+  </body>
+</html>

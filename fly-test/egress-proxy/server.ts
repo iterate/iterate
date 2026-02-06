@@ -5,6 +5,7 @@ const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
 const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
 const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
 const TRANSFORM_TIMEOUT_MS = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
+const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -39,7 +40,11 @@ function sanitizeInboundHeaders(input: Headers): Headers {
     if (HOP_BY_HOP.has(lower)) continue;
     if (lower === "host") continue;
     if (lower === "content-length") continue;
-    if (lower.startsWith("x-iterate-")) continue;
+    if (lower === "forwarded") continue;
+    if (lower === "x-forwarded-for") continue;
+    if (lower === "x-forwarded-host") continue;
+    if (lower === "x-forwarded-proto") continue;
+    if (lower === "x-forwarded-port") continue;
     headers.append(key, value);
   }
   headers.set("accept-encoding", "identity");
@@ -76,11 +81,21 @@ function getTail(maxLines: number): string {
   return `${lines.slice(-maxLines).join("\n")}\n`;
 }
 
-async function handleTransform(request: Request): Promise<Response> {
-  const method = request.method.toUpperCase();
-  const target = (request.headers.get("x-iterate-target-url") ?? "").trim();
-  if (target.length === 0) return json({ error: "missing url" }, 400);
+function deriveTarget(request: Request, url: URL): string | null {
+  const host = (request.headers.get("x-forwarded-host") ?? "").trim();
+  const proto = (request.headers.get("x-forwarded-proto") ?? "").trim().toLowerCase();
+  if (host.length === 0 || proto.length === 0) return null;
+  if (proto !== "http" && proto !== "https") return null;
 
+  try {
+    return new URL(`${proto}://${host}${url.pathname}${url.search}`).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function handleTransform(request: Request, target: string): Promise<Response> {
+  const method = request.method.toUpperCase();
   let parsed: URL;
   try {
     parsed = new URL(target);
@@ -155,10 +170,17 @@ Bun.serve({
   hostname: "::",
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const target = deriveTarget(request, url);
+    if (target !== null) {
+      return handleTransform(request, target);
+    }
 
     if (url.pathname === "/") {
-      return new Response("egress proxy\n", {
-        headers: { "content-type": "text/plain; charset=utf-8" },
+      return new Response(INDEX_HTML, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        },
       });
     }
 
@@ -192,10 +214,6 @@ Bun.serve({
           "cache-control": "no-store",
         },
       });
-    }
-
-    if (url.pathname === "/transform") {
-      return handleTransform(request);
     }
 
     return new Response("not found\n", {

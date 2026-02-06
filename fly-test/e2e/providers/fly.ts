@@ -212,7 +212,7 @@ export class FlyProvider implements ObservabilityProvider {
     await waitForHealth(
       this.app,
       this.egressMachineId,
-      "curl -fsS --max-time 2 http://127.0.0.1:18080/healthz",
+      "curl -fsS --max-time 2 --noproxy '' --proxy http://127.0.0.1:18080 http://127.0.0.1:18081/healthz",
       this.env,
     );
     await waitForHealth(

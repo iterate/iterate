@@ -6,6 +6,7 @@ const LOG_PATH = process.env.SANDBOX_LOG_PATH ?? "/tmp/sandbox-ui.log";
 const DEFAULT_TARGET_URL = process.env.DEFAULT_TARGET_URL ?? "https://example.com/";
 const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));
 
 type FetchInput = {
   url: string;
@@ -128,8 +129,11 @@ Bun.serve({
     const url = new URL(request.url);
 
     if (url.pathname === "/") {
-      return new Response("sandbox ui\n", {
-        headers: { "content-type": "text/plain; charset=utf-8" },
+      return new Response(INDEX_HTML, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        },
       });
     }
 

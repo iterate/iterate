@@ -5,7 +5,7 @@ INIT_LOG="/tmp/egress-init.log"
 MITM_LOG="${EGRESS_LOG_PATH:-/tmp/egress-proxy.log}"
 MITM_PORT="${EGRESS_MITM_PORT:-18080}"
 VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
-TRANSFORM_URL="${TRANSFORM_URL:-http://127.0.0.1:${VIEWER_PORT}/transform}"
+TRANSFORM_URL="${TRANSFORM_URL:-http://127.0.0.1:${VIEWER_PORT}}"
 MITM_DIR="${MITM_DIR:-/data/mitm}"
 
 log() {
@@ -46,7 +46,6 @@ MITM_PORT="$MITM_PORT" \
 TRANSFORM_URL="$TRANSFORM_URL" \
 MITM_CA_CERT="$MITM_DIR/ca.crt" \
 MITM_CA_KEY="$MITM_DIR/ca.key" \
-MITM_LOG="$MITM_LOG" \
 bash /proof/mitm-go/start.sh >>"$INIT_LOG" 2>&1 &
 MITM_PID="$!"
 log "mitm_pid=$MITM_PID"
@@ -54,7 +53,7 @@ log "mitm_pid=$MITM_PID"
 for attempt in $(seq 1 60); do
   if \
     curl -fsS --max-time 2 "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1 \
-    && curl -fsS --max-time 2 "http://127.0.0.1:${MITM_PORT}/healthz" >/dev/null 2>&1; then
+    && curl -fsS --max-time 2 --noproxy "" --proxy "http://127.0.0.1:${MITM_PORT}" "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1; then
     log "services_health=ok"
     log "READY mitm_port=${MITM_PORT} viewer_port=${VIEWER_PORT}"
     tail -f /dev/null

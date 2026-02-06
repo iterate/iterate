@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox Outbound Fetch</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f5f7fb;
+        color: #0f172a;
+      }
+      main {
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 0 16px 24px;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #d7deea;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: #334155;
+      }
+      label {
+        display: block;
+        margin-top: 12px;
+        font-size: 13px;
+        color: #1e293b;
+      }
+      input,
+      button {
+        font: inherit;
+      }
+      input {
+        margin-top: 6px;
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #c9d4e5;
+        border-radius: 8px;
+        box-sizing: border-box;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid #c9d4e5;
+        border-radius: 8px;
+        background: #eff5ff;
+        color: #0f172a;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #0f172a;
+        color: #fff;
+        border-color: #0f172a;
+      }
+      pre {
+        margin: 12px 0 0;
+        background: #0b1220;
+        color: #dbe7ff;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 12px;
+        max-height: 420px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      #status {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #334155;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>Sandbox Outbound Fetch</h1>
+        <p>Run outbound requests from sandbox through egress MITM.</p>
+        <label for="target">Target URL</label>
+        <input id="target" type="url" />
+        <div class="row">
+          <button id="btn-example">Example.com</button>
+          <button id="btn-blocked">Blocked iterate.com</button>
+          <button id="btn-run" class="primary">Fetch</button>
+        </div>
+        <div id="status">Ready.</div>
+        <pre id="output">No request yet.</pre>
+      </section>
+    </main>
+    <script>
+      const targetInput = document.getElementById("target");
+      const output = document.getElementById("output");
+      const statusEl = document.getElementById("status");
+
+      async function loadConfig() {
+        try {
+          const response = await fetch("/api/config", { cache: "no-store" });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (typeof data.defaultTargetUrl === "string" && data.defaultTargetUrl.length > 0) {
+            targetInput.value = data.defaultTargetUrl;
+          }
+        } catch {}
+      }
+
+      async function runFetch(url) {
+        statusEl.textContent = "Fetching...";
+        output.textContent = "Running...";
+        try {
+          const response = await fetch("/api/fetch", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ url, method: "GET", body: "" }),
+          });
+          const data = await response.json();
+          statusEl.textContent = `Done. http=${response.status} ok=${Boolean(data.ok)}`;
+          output.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          statusEl.textContent = "Request failed.";
+          output.textContent = String(error);
+        }
+      }
+
+      document.getElementById("btn-example").addEventListener("click", () => {
+        targetInput.value = "https://example.com/";
+      });
+      document.getElementById("btn-blocked").addEventListener("click", () => {
+        targetInput.value = "https://iterate.com/";
+      });
+      document.getElementById("btn-run").addEventListener("click", () => {
+        const value = targetInput.value.trim();
+        if (!value) {
+          statusEl.textContent = "Enter a URL first.";
+          return;
+        }
+        void runFetch(value);
+      });
+
+      void loadConfig();
+    </script>
+  </body>
+</html>
