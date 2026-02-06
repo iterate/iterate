@@ -11,14 +11,17 @@ import {
 import { slugify } from "../utils.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
-const WAIT_TIMEOUT_SECONDS = 90;
+const WAIT_TIMEOUT_SECONDS = 300;
+const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const DEFAULT_SERVICE_PORTS = [3000, 3001, 4096, 7777, 9876];
+const DEFAULT_FLY_ORG = "iterate";
+const DEFAULT_FLY_IMAGE = "registry.fly.io/iterate-sandbox-image:main";
 
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
-  FLY_ORG: z.string().default("personal"),
+  FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
   FLY_REGION: z.string().default("ord"),
-  FLY_IMAGE: z.string().default("ghcr.io/iterate/sandbox:main"),
+  FLY_IMAGE: z.string().default(DEFAULT_FLY_IMAGE),
   FLY_APP_PREFIX: z.string().default("iterate-sandbox"),
   FLY_NETWORK: z.string().optional(),
   FLY_BASE_DOMAIN: z.string().default("fly.dev"),
@@ -26,6 +29,16 @@ const FlyEnv = z.object({
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;
+
+function withFlyToken(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  if (env.FLY_API_TOKEN || !env.FLY_API_KEY) {
+    return env;
+  }
+  return {
+    ...env,
+    FLY_API_TOKEN: env.FLY_API_KEY,
+  };
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -95,11 +108,29 @@ async function waitForState(
   state: string,
   timeoutSeconds = WAIT_TIMEOUT_SECONDS,
 ): Promise<void> {
-  await flyApi(
-    env,
-    "GET",
-    `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?state=${encodeURIComponent(state)}&timeout=${timeoutSeconds}`,
-  );
+  const startedAt = Date.now();
+  while (true) {
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    const remainingSeconds = timeoutSeconds - elapsedSeconds;
+    if (remainingSeconds <= 0) {
+      throw new Error(`Timed out waiting for Fly machine ${machineId} to reach '${state}'`);
+    }
+
+    const stepTimeoutSeconds = Math.max(1, Math.min(remainingSeconds, MAX_WAIT_TIMEOUT_SECONDS));
+    try {
+      await flyApi(
+        env,
+        "GET",
+        `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/wait?state=${encodeURIComponent(state)}&timeout=${stepTimeoutSeconds}`,
+      );
+      return;
+    } catch (error) {
+      const message = String(error).toLowerCase();
+      if (!message.includes("deadline_exceeded") && !message.includes("(408)")) {
+        throw error;
+      }
+    }
+  }
 }
 
 function buildPreviewUrl(baseDomain: string, appName: string, port: number): string {
@@ -159,12 +190,16 @@ export class FlySandbox extends Sandbox {
   }
 
   async exec(cmd: string[]): Promise<string> {
+    if (cmd.length === 0) {
+      throw new Error("Fly exec requires at least one command token");
+    }
     const payload = await flyApi<unknown>(
       this.env,
       "POST",
       `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/exec`,
       {
-        cmd,
+        cmd: cmd[0],
+        args: cmd.slice(1),
         timeout: 60,
       },
     );
@@ -258,7 +293,7 @@ export class FlyProvider extends SandboxProvider {
 
   constructor(rawEnv: Record<string, string | undefined>) {
     super(rawEnv);
-    this.parseEnv(rawEnv);
+    this.parseEnv(withFlyToken(rawEnv));
   }
 
   get defaultSnapshotId(): string {
@@ -291,6 +326,7 @@ export class FlyProvider extends SandboxProvider {
       {
         name: `sandbox-${base}`.slice(0, 63),
         region: this.env.FLY_REGION,
+        skip_launch: false,
         config: {
           image: opts.providerSnapshotId ?? this.defaultSnapshotId,
           env: opts.envVars,

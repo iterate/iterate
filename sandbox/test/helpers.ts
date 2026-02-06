@@ -42,7 +42,7 @@
  *   RUN_SANDBOX_TESTS=true pnpm sandbox test
  *
  * Run Docker tests with specific image:
- *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_SNAPSHOT_ID=ghcr.io/iterate/sandbox:sha-abc123 pnpm sandbox test
+ *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:sha-abc123 pnpm sandbox test
  *
  * Run Daytona tests:
  *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona doppler run -- pnpm sandbox test
@@ -106,7 +106,7 @@ export const TEST_CONFIG = {
 const TEST_BASE_SNAPSHOTS = {
   docker: process.env.SANDBOX_TEST_BASE_DOCKER_IMAGE ?? "iterate-sandbox:local",
   daytona: process.env.SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT ?? "daytona-small",
-  fly: process.env.SANDBOX_TEST_BASE_FLY_IMAGE ?? "ghcr.io/iterate/sandbox:main",
+  fly: process.env.SANDBOX_TEST_BASE_FLY_IMAGE ?? "registry.fly.io/iterate-sandbox-image:main",
 } as const;
 
 export const TEST_BASE_SNAPSHOT_ID = TEST_BASE_SNAPSHOTS[TEST_CONFIG.provider];

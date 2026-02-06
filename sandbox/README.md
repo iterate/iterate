@@ -1,10 +1,10 @@
 # Sandbox
 
-Minimal, single-image setup. GHCR-backed. Host sync uses rsync into the baked repo path.
+Minimal, single-image setup. Depot/Fly-registry-backed. Host sync uses rsync into the baked repo path.
 
 ## TL;DR
 
-- Image: `ghcr.io/iterate/sandbox`
+- Image: `iterate-sandbox` (local) and `registry.fly.io/iterate-sandbox-image` (remote)
 - Tags: `main`, `sha-<sha>`, `local`
 - Repo path in container: `/home/iterate/src/github.com/iterate/iterate`
 - pnpm store: `/home/iterate/.pnpm-store` (volume `iterate-pnpm-store`)
@@ -30,10 +30,13 @@ pnpm os docker:build
 
 Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
 
-Push to GHCR (updates shared build cache):
+Push to Fly registry via Depot build:
 
 ```bash
-PUSH=1 pnpm os docker:build
+SANDBOX_USE_DEPOT_REGISTRY=true \
+SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-local-$(date +%s) \
+SANDBOX_PUSH_FLY_REGISTRY=true \
+pnpm os docker:build
 ```
 
 Direct Docker build:
@@ -62,6 +65,8 @@ If dependencies change, run `pnpm install` inside the container.
 - `DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
 - `DOCKER_SERVICE_TRANSPORT` (`port-map` or `cloudflare-tunnel`; default `port-map`)
 - `DOCKER_CLOUDFLARE_TUNNEL_PORTS` (optional CSV, default `3000,3001,4096,9876`)
+- `CLOUDFLARE_TUNNEL_HOSTNAME` (optional; if set, pidnap runs a `cloudflared` tunnel process)
+- `CLOUDFLARE_TUNNEL_URL` (optional; defaults to `http://127.0.0.1:3000`)
 
 These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
 
@@ -91,16 +96,14 @@ Requires `daytona` CLI (`daytona login`).
 ## Push from local
 
 ```bash
-gh auth login
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+FLY_TOKEN="${FLY_API_TOKEN:-${FLY_API_KEY:-}}"
+flyctl apps create iterate-sandbox-image -o "$FLY_ORG" -y
+flyctl auth docker -t "$FLY_TOKEN"
 
-docker buildx build --push -f sandbox/Dockerfile \\
-  -t ghcr.io/iterate/sandbox:main \\
-  -t ghcr.io/iterate/sandbox:sha-$(git rev-parse HEAD) \\
-  --build-arg GIT_SHA=$(git rev-parse HEAD) \\
-  --cache-from type=registry,ref=ghcr.io/iterate/sandbox:buildcache \\
-  --cache-to type=registry,ref=ghcr.io/iterate/sandbox:buildcache,mode=max \\
-  .
+depot build --platform linux/amd64 --progress=plain --push \
+  -t registry.fly.io/iterate-sandbox-image:main \
+  -t registry.fly.io/iterate-sandbox-image:sha-$(git rev-parse HEAD) \
+  -f sandbox/Dockerfile .
 ```
 
 ## Testing
@@ -118,7 +121,7 @@ Sandbox integration tests verify both Docker and Daytona providers work correctl
 
 Default snapshot IDs:
 
-- Docker: `iterate-sandbox:local` (fallbacks to `ghcr.io/iterate/sandbox:local`, then `ghcr.io/iterate/sandbox:main`)
+- Docker: `iterate-sandbox:local` (fallbacks to `iterate-sandbox:main`, then `registry.fly.io/iterate-sandbox-image:main`)
 - Daytona: reads from `DAYTONA_SNAPSHOT_NAME` in Doppler
 
 ### Run Locally
@@ -140,7 +143,7 @@ doppler run -- pnpm sandbox test:daytona
 
 # With specific snapshot
 RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
-  SANDBOX_TEST_SNAPSHOT_ID=ghcr.io/iterate/sandbox:sha-abc123 \
+  SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:sha-abc123 \
   pnpm sandbox test
 
 # Keep containers for debugging

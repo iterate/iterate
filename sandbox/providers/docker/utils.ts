@@ -122,7 +122,7 @@ export function resolveBaseImage(repoRoot: string, imageName?: string): string {
     return envImage;
   }
 
-  const localDefaults = ["iterate-sandbox:local", "ghcr.io/iterate/sandbox:local"];
+  const localDefaults = ["iterate-sandbox:local"];
   for (const localDefault of localDefaults) {
     try {
       execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
@@ -132,7 +132,7 @@ export function resolveBaseImage(repoRoot: string, imageName?: string): string {
     }
   }
 
-  const bakedDefaults = ["ghcr.io/iterate/sandbox:main", "iterate-sandbox:main"];
+  const bakedDefaults = ["iterate-sandbox:main", "registry.fly.io/iterate-sandbox-image:main"];
   for (const bakedDefault of bakedDefaults) {
     try {
       execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });

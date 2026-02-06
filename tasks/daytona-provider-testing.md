@@ -82,7 +82,7 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - Fix: terminal state now throws non-retriable error and fails fast.
 
 6. **Docker default image mismatch (local ergonomics)**
-   - Symptom: Docker provider/test defaults pointed at `ghcr.io/iterate/sandbox:local` while local builds produce `iterate-sandbox:local`.
+   - Symptom: Docker provider/test defaults pointed at remote tags while local builds produce `iterate-sandbox:local`.
    - Root cause: mixed legacy default names across provider/utils/scripts/tests.
    - Fix: unify to `iterate-sandbox:local` for local defaults, keep fallback checks for GHCR tags, and align env precedence (`DOCKER_IMAGE_NAME` first).
 
