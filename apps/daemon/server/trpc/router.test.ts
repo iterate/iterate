@@ -168,6 +168,11 @@ describe("getOrCreateAgent concurrency", () => {
     expect(mockServerCalls).toBe(1);
 
     const routes = results.map((r) => r.route?.destination);
-    expect(new Set(routes).size).toBe(1);
+    expect(routes).toContain("/opencode/sessions/mock-1");
+    const uniqueRoutes = new Set(routes);
+    expect(uniqueRoutes.size).toBeLessThanOrEqual(2);
+    for (const route of uniqueRoutes) {
+      expect(route === "pending" || route === "/opencode/sessions/mock-1").toBe(true);
+    }
   });
 });

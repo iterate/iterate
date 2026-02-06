@@ -42,28 +42,6 @@ function serializeAgent(agent: Agent, route: AgentRoute | null): SerializedAgent
   };
 }
 
-async function waitForActiveRoute(agentPath: string): Promise<AgentRoute | null> {
-  const maxAttempts = 400;
-  const delayMs = 25;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const route = db
-      .select()
-      .from(schema.agentRoutes)
-      .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
-      .limit(1)
-      .get();
-
-    if (route && route.destination !== "pending") {
-      return route;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  return null;
-}
-
 export const trpcRouter = createTRPCRouter({
   platform: platformRouter,
   hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
@@ -281,17 +259,6 @@ export const trpcRouter = createTRPCRouter({
       });
 
       if (!result.wasCreated) {
-        if (result.route?.destination === "pending") {
-          const refreshedRoute = await waitForActiveRoute(agentPath);
-          const finalRoute = refreshedRoute ?? result.route;
-
-          return {
-            agent: serializeAgent(result.agent, finalRoute),
-            route: finalRoute ? serializeAgentRoute(finalRoute) : null,
-            wasCreated: false,
-          };
-        }
-
         return {
           agent: serializeAgent(result.agent, result.route),
           route: result.route ? serializeAgentRoute(result.route) : null,
