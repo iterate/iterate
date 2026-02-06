@@ -207,16 +207,17 @@ export function getLocalDockerComposeProjectName(repoRoot: string): string {
 }
 
 export function getLocalDockerEnvVars(repoRoot: string): Record<string, string> {
-  const gitInfo = getLocalDockerGitInfo(repoRoot);
-  if (!gitInfo) return {};
-
   const envVars: Record<string, string> = {
-    LOCAL_DOCKER_COMPOSE_PROJECT_NAME: getLocalDockerComposeProjectName(gitInfo.repoRoot),
-    LOCAL_DOCKER_GIT_COMMON_DIR: gitInfo.commonDir,
-    LOCAL_DOCKER_GIT_GITDIR: gitInfo.gitDir,
-    LOCAL_DOCKER_GIT_COMMIT: gitInfo.commit,
-    LOCAL_DOCKER_GIT_REPO_ROOT: gitInfo.repoRoot,
+    LOCAL_DOCKER_COMPOSE_PROJECT_NAME: getLocalDockerComposeProjectName(repoRoot),
   };
+
+  const gitInfo = getLocalDockerGitInfo(repoRoot);
+  if (!gitInfo) return envVars;
+
+  envVars.LOCAL_DOCKER_GIT_COMMON_DIR = gitInfo.commonDir;
+  envVars.LOCAL_DOCKER_GIT_GITDIR = gitInfo.gitDir;
+  envVars.LOCAL_DOCKER_GIT_COMMIT = gitInfo.commit;
+  envVars.LOCAL_DOCKER_GIT_REPO_ROOT = gitInfo.repoRoot;
 
   if (gitInfo.branch) {
     envVars.LOCAL_DOCKER_GIT_BRANCH = gitInfo.branch;

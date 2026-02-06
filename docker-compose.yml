@@ -15,7 +15,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: os
     ports:
-      - "5432:5432"
+      - "5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
     environment:
       - PG_CONNECTION_STRING=postgres://postgres:postgres@postgres:5432/os
     ports:
-      - "4444:4444"
+      - "4444"
     depends_on:
       postgres:
         condition: service_healthy

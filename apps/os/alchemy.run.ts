@@ -65,6 +65,60 @@ function getDevTunnelConfig() {
   return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
 }
 
+function parseComposePublishedPort(
+  rawOutput: string,
+  service: string,
+  containerPort: number,
+): string {
+  const line = rawOutput
+    .trim()
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .at(-1);
+  const match = line?.match(/:(\d+)$/);
+  if (!match) {
+    throw new Error(
+      `Could not parse published port for ${service}:${containerPort}. Output was: ${rawOutput}`,
+    );
+  }
+  return match[1];
+}
+
+async function getComposePublishedPort(
+  service: string,
+  containerPort: number,
+  maxWaitMs = 30_000,
+): Promise<string> {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const output = execSync(`tsx ./scripts/docker-compose.ts port ${service} ${containerPort}`, {
+        cwd: repoRoot,
+        encoding: "utf-8",
+      });
+      return parseComposePublishedPort(output, service, containerPort);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  throw new Error(`Could not resolve published port for ${service}:${containerPort}`, {
+    cause: lastError instanceof Error ? lastError : undefined,
+  });
+}
+
+async function resolveLocalDockerRuntimePorts() {
+  const postgresPort = await getComposePublishedPort("postgres", 5432);
+  const neonProxyPort = await getComposePublishedPort("neon-proxy", 4444);
+  process.env.LOCAL_DOCKER_POSTGRES_PORT = postgresPort;
+  process.env.LOCAL_DOCKER_NEON_PROXY_PORT = neonProxyPort;
+  return { postgresPort, neonProxyPort };
+}
+
 /**
  * Wait for vite dev server to be ready by polling localhost
  */
@@ -304,7 +358,8 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    const origin = "postgres://postgres:postgres@localhost:5432/os";
+    const localDockerPostgresPort = process.env.LOCAL_DOCKER_POSTGRES_PORT ?? "5432";
+    const origin = `postgres://postgres:postgres@localhost:${localDockerPostgresPort}/os`;
     await migrate(origin);
     await seedGlobalSecrets(origin);
     return {
@@ -416,6 +471,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
         ...getLocalDockerEnvVars(repoRoot),
         ...envVarsFrom([
           "LOCAL_DOCKER_COMPOSE_PROJECT_NAME",
+          "LOCAL_DOCKER_POSTGRES_PORT",
+          "LOCAL_DOCKER_NEON_PROXY_PORT",
           "LOCAL_DOCKER_GIT_COMMON_DIR",
           "LOCAL_DOCKER_GIT_GITDIR",
           "LOCAL_DOCKER_GIT_COMMIT",
@@ -430,6 +487,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const localDockerBindings = {
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
+    LOCAL_DOCKER_POSTGRES_PORT: "",
+    LOCAL_DOCKER_NEON_PROXY_PORT: "",
     LOCAL_DOCKER_GIT_COMMON_DIR: "",
     LOCAL_DOCKER_GIT_GITDIR: "",
     LOCAL_DOCKER_GIT_COMMIT: "",
@@ -441,8 +500,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   };
   if (isDevelopment) {
     Object.assign(localDockerBindings, {
-      LOCAL_DOCKER_IMAGE_NAME:
-        process.env.LOCAL_DOCKER_IMAGE_NAME ?? "ghcr.io/iterate/sandbox:local",
+      LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local",
       ...localDockerEnvVars,
     });
   }
@@ -545,13 +603,17 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 
   // Start Docker containers (postgres, neon-proxy) before migrations
-  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars
-  // --wait flag ensures postgres healthcheck passes before returning
+  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars.
+  // Host ports are dynamic and resolved immediately after startup.
   console.log("Starting Docker containers...");
   execSync("pnpm docker:up", {
     cwd: repoRoot,
     stdio: "inherit",
   });
+  const ports = await resolveLocalDockerRuntimePorts();
+  console.log(
+    `Resolved local Docker ports: postgres=${ports.postgresPort}, neon-proxy=${ports.neonProxyPort}`,
+  );
 
   ensureIteratePnpmStoreVolume(repoRoot);
 }
