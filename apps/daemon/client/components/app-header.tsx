@@ -174,7 +174,7 @@ function AgentBreadcrumbDropdown({ currentAgent, agents }: AgentBreadcrumbDropdo
                   aria-hidden="true"
                 >
                   <span className="text-xs font-medium">
-                    {agentItem.path.charAt(1)?.toUpperCase() ?? "A"}
+                    {agentItem.path.charAt(1).toUpperCase() || "A"}
                   </span>
                 </div>
                 <span className="truncate">{agentItem.path}</span>
