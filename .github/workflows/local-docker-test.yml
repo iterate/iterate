@@ -49,6 +49,7 @@ on:
         value: ${{ jobs.build-and-test.outputs.test_result }}
 jobs:
   build-and-test:
+    runs-on: ubuntu-24.04
     outputs:
       test_result: ${{ steps.test.outcome }}
     steps:

@@ -79,7 +79,7 @@ export default workflow({
   jobs: {
     "build-and-test": {
       // Run on AMD64 to match Daytona snapshot builds and maximize shared Depot cache hits.
-      ...utils.runsOnUbuntuLatest,
+      ...utils.runsOnFastStartingUbuntuLatest,
       outputs: {
         test_result: "${{ steps.test.outcome }}",
       },

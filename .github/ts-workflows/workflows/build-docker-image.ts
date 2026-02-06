@@ -115,7 +115,7 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOn,
+      ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         image_ref: "${{ steps.output.outputs.image_ref }}",
         git_sha: "${{ steps.output.outputs.git_sha }}",
