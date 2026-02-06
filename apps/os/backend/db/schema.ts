@@ -34,7 +34,7 @@ export const MachineState = ["starting", "active", "detached", "archived"] as co
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-// Note: "docker" replaces "local-docker" (migration 0016).
+// Note: "docker" replaces "local-docker" (migration 0017).
 export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
 

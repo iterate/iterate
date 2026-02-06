@@ -161,17 +161,15 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
 RUN opencode run "Hello" || true
 
-# === Git directory and metadata (MUST be last - changes every commit) ===
-# Copy a minimal .git directory with packed objects for HEAD.
-# This allows `git status` to work in the container, showing dirty files.
-# The pack file is deterministic for the same commit SHA, ensuring cache hits.
-# NOTE: This is placed AFTER heavy build steps so cache isn't busted by merge commits.
-COPY --from=iterate-synthetic-git --chown=iterate:iterate . $ITERATE_REPO/.git
-
-# Rebuild the git index so `git status` works correctly
-RUN git reset HEAD
-
 ARG GIT_SHA=unknown
+# Keep a functional git repo inside the image for tools/tests that call git.
+RUN git init && \
+    git config user.email "iterate-bot@noreply.iterate.com" && \
+    git config user.name "iterate-bot" && \
+    git add . && \
+    git commit -m "snapshot ${GIT_SHA}" && \
+    git branch -M main
+
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 

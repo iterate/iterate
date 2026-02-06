@@ -11,7 +11,7 @@ import {
 import * as schema from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
-import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
+import { createMachineRuntime, type MachineRuntime } from "../../machine-runtime.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
@@ -43,38 +43,39 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   const metadata = (machine.metadata as Record<string, unknown>) ?? {};
   const buildProxyUrl = (port: number) =>
     `/org/${orgSlug}/proj/${projectSlug}/${machine.id}/proxy/${port}/`;
-  const provider = await createMachineProvider({
+  const runtime = await createMachineRuntime({
     type: machine.type,
     env: cloudflareEnv,
     externalId: machine.externalId,
     metadata,
-    buildProxyUrl,
   });
 
   // Build service options for each daemon with web UI
-  const services = getDaemonsWithWebUI().map((daemon) => {
-    const nativeUrl = provider.getPreviewUrl(daemon.internalPort);
-    const proxyUrl = buildProxyUrl(daemon.internalPort);
-    const options: ServiceOption[] = [];
+  const services = await Promise.all(
+    getDaemonsWithWebUI().map(async (daemon) => {
+      const nativeUrl = await runtime.getPreviewUrl(daemon.internalPort);
+      const proxyUrl = buildProxyUrl(daemon.internalPort);
+      const options: ServiceOption[] = [];
 
-    // Add native URL if different from proxy (e.g., Daytona has direct access)
-    if (nativeUrl && !nativeUrl.startsWith("/")) {
-      options.push({ label: "Direct", url: nativeUrl });
-    }
-    options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
+      // Add native URL if different from proxy (e.g., Daytona has direct access)
+      if (nativeUrl && !nativeUrl.startsWith("/")) {
+        options.push({ label: "Direct", url: nativeUrl });
+      }
+      options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
 
-    return {
-      id: daemon.id,
-      name: daemon.name,
-      port: daemon.internalPort,
-      options,
-    };
-  });
+      return {
+        id: daemon.id,
+        name: daemon.name,
+        port: daemon.internalPort,
+        options,
+      };
+    }),
+  );
 
   return {
     ...machine,
     metadata,
-    displayInfo: provider.displayInfo,
+    displayInfo: runtime.displayInfo,
     services,
   };
 }
@@ -100,7 +101,7 @@ async function getProviderForMachine(
   projectId: string,
   machineId: string,
   cloudflareEnv: CloudflareEnv,
-): Promise<{ provider: MachineProvider; machine: typeof schema.machine.$inferSelect }> {
+): Promise<{ runtime: MachineRuntime; machine: typeof schema.machine.$inferSelect }> {
   const machine = await db.query.machine.findFirst({
     where: and(eq(schema.machine.id, machineId), eq(schema.machine.projectId, projectId)),
   });
@@ -112,15 +113,14 @@ async function getProviderForMachine(
     });
   }
 
-  const provider = await createMachineProvider({
+  const runtime = await createMachineRuntime({
     type: machine.type,
     env: cloudflareEnv,
     externalId: machine.externalId,
     metadata: (machine.metadata as Record<string, unknown>) ?? {},
-    buildProxyUrl: () => "", // Not used for lifecycle operations
   });
 
-  return { provider, machine };
+  return { runtime, machine };
 }
 
 export const machineRouter = router({
@@ -192,14 +192,14 @@ export const machineRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { runtime, machine } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
         ctx.env,
       );
 
-      if (!provider.getProviderState) {
+      if (!runtime.getProviderState) {
         // Provider doesn't support state querying (e.g., docker)
         return {
           machineId: input.machineId,
@@ -208,7 +208,7 @@ export const machineRouter = router({
         };
       }
 
-      const providerState = await provider.getProviderState().catch((err) => {
+      const providerState = await runtime.getProviderState().catch((err) => {
         logger.error("Failed to get provider state", { machineId: input.machineId, err });
         return { state: "error", errorReason: String(err) };
       });
@@ -266,7 +266,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -288,7 +288,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.archive().catch((err) => {
+      await runtime.archive().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -306,7 +306,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { runtime, machine } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -331,7 +331,7 @@ export const machineRouter = router({
         logger.error("Failed to broadcast invalidation", err);
       });
 
-      await provider.restart().catch((err) => {
+      await runtime.restart().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -350,7 +350,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider, machine } = await getProviderForMachine(
+      const { runtime, machine } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -376,7 +376,8 @@ export const machineRouter = router({
       });
 
       // Call daemon's restartDaemon endpoint
-      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      const daemonBaseUrl = await runtime.getPreviewUrl(3000);
+      const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
       await daemonClient.restartDaemon.mutate().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -395,7 +396,7 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { provider } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
@@ -417,7 +418,7 @@ export const machineRouter = router({
         });
       }
 
-      await provider.delete().catch((err) => {
+      await runtime.delete().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
@@ -439,12 +440,14 @@ export const machineRouter = router({
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
     const isMachineType = (value: string): value is (typeof schema.MachineType)[number] =>
       (schema.MachineType as ReadonlyArray<string>).includes(value);
-    const configuredProviders = (ctx.env.SANDBOX_MACHINE_PROVIDERS ?? "")
+    const rawConfiguredProviders = (ctx.env.SANDBOX_MACHINE_PROVIDERS ?? "")
       .split(",")
       .map((provider) => provider.trim())
-      .filter(isMachineType);
+      .filter(Boolean);
+    const configuredProviders = rawConfiguredProviders.filter(isMachineType);
+    const hasExplicitConfig = rawConfiguredProviders.length > 0;
     const enabledProviders = new Set(
-      configuredProviders.length > 0
+      hasExplicitConfig
         ? configuredProviders
         : import.meta.env.DEV
           ? ["docker", "daytona", "fly", "local"]
@@ -490,77 +493,6 @@ export const machineRouter = router({
     return types;
   }),
 
-  getPreviewInfo: projectProtectedProcedure
-    .input(
-      z.object({
-        machineId: z.string(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const machineRecord = await ctx.db.query.machine.findFirst({
-        where: and(
-          eq(schema.machine.id, input.machineId),
-          eq(schema.machine.projectId, ctx.project.id),
-        ),
-      });
-      if (!machineRecord) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
-      }
-
-      const buildProxyUrl = (port: number) =>
-        `/org/${ctx.organization.slug}/proj/${ctx.project.slug}/${machineRecord.id}/proxy/${port}/`;
-
-      // Metadata can have old format { port, containerId } or new format { ports, containerId }
-      const metadata = machineRecord.metadata as {
-        containerId?: string;
-        port?: number;
-        ports?: Record<string, number>;
-        host?: string;
-      };
-
-      // Get the provider to build native URLs
-      const provider = await createMachineProvider({
-        type: machineRecord.type,
-        env: ctx.env,
-        externalId: machineRecord.externalId,
-        metadata,
-        buildProxyUrl,
-      });
-
-      // Build per-daemon URLs using provider
-      const daemons = getDaemonsWithWebUI().map((daemon) => ({
-        id: daemon.id,
-        name: daemon.name,
-        internalPort: daemon.internalPort,
-        proxyUrl: buildProxyUrl(daemon.internalPort),
-        nativeUrl: provider.getPreviewUrl(daemon.internalPort),
-      }));
-
-      // Terminal URL
-      const terminalInternalPort = 22222;
-      const terminalNativeUrl = provider.getPreviewUrl(terminalInternalPort);
-
-      // Legacy fields for backward compatibility
-      const iterateDaemon = DAEMON_DEFINITIONS.find((d) => d.id === "iterate-daemon");
-
-      return {
-        // New per-daemon URLs
-        daemons,
-        terminalUrl: buildProxyUrl(terminalInternalPort),
-        nativeTerminalUrl: terminalNativeUrl,
-        // Legacy fields (kept for backward compatibility)
-        url: buildProxyUrl(iterateDaemon?.internalPort ?? 3000),
-        daemonUrl: buildProxyUrl(iterateDaemon?.internalPort ?? 3000),
-        nativeDaemonUrl: provider.getPreviewUrl(iterateDaemon?.internalPort ?? 3000),
-        machineType: machineRecord.type,
-        containerId: metadata.containerId,
-        hostPort: metadata.ports?.["iterate-daemon"] ?? metadata.port,
-      };
-    }),
-
   // List agents running on a machine (proxies to daemon)
   listAgents: projectProtectedProcedure
     .input(
@@ -582,14 +514,14 @@ export const machineRouter = router({
         });
       }
 
-      const provider = await createMachineProvider({
+      const runtime = await createMachineRuntime({
         type: machineRecord.type,
         env: ctx.env,
         externalId: machineRecord.externalId,
         metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
-        buildProxyUrl: () => "", // Not used here
       });
-      const daemonClient = createDaemonTrpcClient(provider.previewUrl);
+      const daemonBaseUrl = await runtime.getPreviewUrl(3000);
+      const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
       const [agents, serverInfo] = await Promise.all([
         daemonClient.listAgents.query(),
         daemonClient.getServerCwd.query(),

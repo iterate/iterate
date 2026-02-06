@@ -16,7 +16,7 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { createMachineProvider } from "../providers/index.ts";
+import { createMachineRuntime } from "../machine-runtime.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -109,14 +109,13 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  const provider = await createMachineProvider({
+  const runtime = await createMachineRuntime({
     type: machineRecord.type,
     env: c.env,
     externalId,
     metadata,
-    buildProxyUrl: () => "", // Not used here
   });
-  const baseUrl = provider.getPreviewUrl(portNum);
+  const baseUrl = await runtime.getPreviewUrl(portNum);
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 

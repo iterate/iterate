@@ -25,7 +25,7 @@ Minimal, single-image setup. Depot/Fly-registry-backed. Host sync uses rsync int
 Local build (uses current repo checkout):
 
 ```bash
-pnpm os docker:build
+pnpm docker:build
 ```
 
 Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
@@ -36,7 +36,7 @@ Push to Fly registry via Depot build:
 SANDBOX_USE_DEPOT_REGISTRY=true \
 SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-local-$(date +%s) \
 SANDBOX_PUSH_FLY_REGISTRY=true \
-pnpm os docker:build
+pnpm docker:build
 ```
 
 Direct Docker build:
@@ -75,7 +75,7 @@ These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to kee
 Create snapshot directly from Dockerfile (builds on Daytona's infra):
 
 ```bash
-pnpm os daytona:build
+pnpm daytona:build
 ```
 
 Options:
@@ -88,7 +88,7 @@ Options:
 Example:
 
 ```bash
-pnpm os daytona:build --name my-snapshot --cpu 4 --memory 8
+pnpm daytona:build --name my-snapshot --cpu 4 --memory 8
 ```
 
 Requires `daytona` CLI (`daytona login`).
@@ -108,20 +108,21 @@ depot build --platform linux/amd64 --progress=plain --push \
 
 ## Testing
 
-Sandbox integration tests verify both Docker and Daytona providers work correctly.
+Sandbox integration tests verify Docker, Fly, and Daytona providers.
 
 ### Environment Variables
 
-| Variable                   | Description                                 | Default            |
-| -------------------------- | ------------------------------------------- | ------------------ |
-| `RUN_SANDBOX_TESTS`        | Enable sandbox tests (set to `true`)        | (tests skipped)    |
-| `SANDBOX_TEST_PROVIDER`    | Provider to test: `docker` or `daytona`     | `docker`           |
-| `SANDBOX_TEST_SNAPSHOT_ID` | Image (Docker) or snapshot name (Daytona)   | See defaults below |
-| `KEEP_SANDBOX_CONTAINER`   | Keep containers after tests (for debugging) | `false`            |
+| Variable                   | Description                                   | Default            |
+| -------------------------- | --------------------------------------------- | ------------------ |
+| `RUN_SANDBOX_TESTS`        | Enable sandbox tests (set to `true`)          | (tests skipped)    |
+| `SANDBOX_TEST_PROVIDER`    | Provider to test: `docker`, `fly`, `daytona`  | `docker`           |
+| `SANDBOX_TEST_SNAPSHOT_ID` | Image/snapshot override for selected provider | See defaults below |
+| `KEEP_SANDBOX_CONTAINER`   | Keep containers after tests (for debugging)   | `false`            |
 
 Default snapshot IDs:
 
 - Docker: `iterate-sandbox:local` (fallbacks to `iterate-sandbox:main`, then `registry.fly.io/iterate-sandbox-image:main`)
+- Fly: `registry.fly.io/iterate-sandbox-image:main`
 - Daytona: reads from `DAYTONA_SNAPSHOT_NAME` in Doppler
 
 ### Run Locally
@@ -141,6 +142,9 @@ RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
 # Daytona provider (requires Doppler secrets)
 doppler run -- pnpm sandbox test:daytona
 
+# Fly provider (requires Doppler secrets)
+doppler run -- sh -c 'RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1'
+
 # With specific snapshot
 RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
   SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:sha-abc123 \
@@ -152,11 +156,10 @@ KEEP_SANDBOX_CONTAINER=true pnpm sandbox test:docker
 
 ### CI Workflows
 
-| Workflow                | Description                                    |
-| ----------------------- | ---------------------------------------------- |
-| `sandbox-test.yml`      | Runs both Docker and Daytona tests in parallel |
-| `local-docker-test.yml` | Docker provider only                           |
-| `daytona-test.yml`      | Daytona provider only                          |
+| Workflow           | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `sandbox-test.yml` | Runs Docker, Fly, and Daytona provider test jobs         |
+| `daytona-test.yml` | Daytona-only provider smoke test (manual/targeted usage) |
 
 Workflows trigger on PRs/pushes to `sandbox/**`, `apps/daemon/**`.
 

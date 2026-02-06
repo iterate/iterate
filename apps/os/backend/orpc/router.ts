@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and, lt } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineProvider } from "../providers/index.ts";
+import { createMachineRuntime } from "../machine-runtime.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -195,14 +195,13 @@ export const reportStatus = os.machines.reportStatus
       });
 
       for (const detachedMachine of staleDetachedMachines) {
-        const provider = await createMachineProvider({
+        const runtime = await createMachineRuntime({
           type: detachedMachine.type,
           env,
           externalId: detachedMachine.externalId,
           metadata: (detachedMachine.metadata as Record<string, unknown>) ?? {},
-          buildProxyUrl: () => "",
         });
-        await provider.archive();
+        await runtime.archive();
 
         await db
           .update(schema.machine)

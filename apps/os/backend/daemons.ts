@@ -4,7 +4,7 @@
  * Each daemon runs inside the sandbox and may expose a web UI.
  * This is the single source of truth for daemon configuration.
  *
- * Future: could load dynamically from apps/os/sandbox/s6-daemons metadata.json files.
+ * Future: could load dynamically from sandbox metadata files.
  */
 
 export interface DaemonDefinition {

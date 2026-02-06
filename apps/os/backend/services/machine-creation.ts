@@ -3,7 +3,7 @@ import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { createMachineProvider } from "../providers/index.ts";
+import { createMachineRuntime } from "../machine-runtime.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -96,12 +96,11 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
   const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
 
   // Create provider for creation
-  const provider = await createMachineProvider({
+  const runtime = await createMachineRuntime({
     type,
     env,
     externalId: "",
     metadata: metadata ?? {},
-    buildProxyUrl: () => "",
   });
 
   // Get project-level env vars (plain text, not secrets)
@@ -115,7 +114,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
   // Create the machine via the provider
-  const providerResult = await provider.create({
+  const runtimeResult = await runtime.create({
     machineId,
     name,
     envVars: {
@@ -145,21 +144,20 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       type,
       projectId,
       state: "starting",
-      metadata: { ...(metadata ?? {}), ...(providerResult.metadata ?? {}) },
-      externalId: providerResult.externalId,
+      metadata: { ...(metadata ?? {}), ...(runtimeResult.metadata ?? {}) },
+      externalId: runtimeResult.externalId,
     })
     .returning()
     .catch(async (err) => {
       // Cleanup: delete the provider resource if DB insert fails
       try {
-        const cleanupProvider = await createMachineProvider({
+        const cleanupRuntime = await createMachineRuntime({
           type,
           env,
-          externalId: providerResult.externalId,
-          metadata: providerResult.metadata ?? {},
-          buildProxyUrl: () => "",
+          externalId: runtimeResult.externalId,
+          metadata: runtimeResult.metadata ?? {},
         });
-        await cleanupProvider.delete();
+        await cleanupRuntime.delete();
       } catch {
         // Ignore cleanup errors
       }

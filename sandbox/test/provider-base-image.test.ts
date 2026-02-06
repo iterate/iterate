@@ -12,7 +12,7 @@ import { RUN_SANDBOX_TESTS, TEST_BASE_SNAPSHOT_ID, TEST_CONFIG, test } from "./h
 const PREVIEW_BODY = "preview-ok";
 
 describe
-  .runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")
+  .runIf(RUN_SANDBOX_TESTS)
   .concurrent(`Provider Base Image (${TEST_CONFIG.provider})`, () => {
     test.scoped({
       envOverrides:

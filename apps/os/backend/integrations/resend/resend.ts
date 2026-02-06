@@ -26,7 +26,7 @@ import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import { createMachineProvider } from "../../providers/index.ts";
+import { createMachineRuntime } from "../../machine-runtime.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -158,14 +158,14 @@ async function buildMachineForwardUrl(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineRuntime({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata: metadata ?? {},
-      buildProxyUrl: () => "",
     });
-    return `${provider.previewUrl}${path}`;
+    const baseUrl = await runtime.getPreviewUrl(3000);
+    return `${baseUrl}${path}`;
   } catch (err) {
     logger.warn("[Resend Webhook] Failed to build forward URL", {
       machineId: machine.id,

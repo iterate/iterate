@@ -28,7 +28,7 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
+doppler run --config dev -- pnpm daytona:build
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR

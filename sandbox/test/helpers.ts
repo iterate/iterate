@@ -4,12 +4,13 @@
  * ## Test Configuration Environment Variables
  *
  * SANDBOX_TEST_PROVIDER
- *   Which provider to run tests against: "docker" | "daytona"
+ *   Which provider to run tests against: "docker" | "fly" | "daytona"
  *   Default: "docker"
  *
  * SANDBOX_TEST_SNAPSHOT_ID
- *   Image (Docker) or snapshot name (Daytona) to use for tests.
+ *   Image/snapshot override to use for tests.
  *   Default for Docker: "iterate-sandbox:local" (with fallback resolution in provider)
+ *   Default for Fly: "registry.fly.io/iterate-sandbox-image:main"
  *   Default for Daytona: reads from DAYTONA_SNAPSHOT_NAME env var
  *
  * SANDBOX_TEST_BASE_DOCKER_IMAGE
@@ -36,6 +37,10 @@
  *   - DAYTONA_ORG_ID (optional)
  *   - DAYTONA_SNAPSHOT_NAME (used as default if SANDBOX_TEST_SNAPSHOT_ID not set)
  *
+ * Fly provider requires (typically from Doppler):
+ *   - FLY_API_TOKEN (or FLY_API_KEY)
+ *   - FLY_IMAGE (optional, defaults to registry.fly.io/iterate-sandbox-image:main)
+ *
  * ## Usage Examples
  *
  * Run Docker tests with local image:
@@ -43,6 +48,9 @@
  *
  * Run Docker tests with specific image:
  *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:sha-abc123 pnpm sandbox test
+ *
+ * Run Fly tests:
+ *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
  *
  * Run Daytona tests:
  *   RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona doppler run -- pnpm sandbox test
@@ -87,7 +95,7 @@ export type TestProviderType = "docker" | "daytona" | "fly";
  * Test configuration parsed from environment variables.
  */
 export const TEST_CONFIG = {
-  /** Which provider to test: "docker" | "daytona" */
+  /** Which provider to test: "docker" | "fly" | "daytona" */
   provider: (process.env.SANDBOX_TEST_PROVIDER ?? "docker") as TestProviderType,
 
   /** Snapshot/image ID override (provider uses its default if not set) */

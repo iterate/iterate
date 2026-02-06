@@ -11,7 +11,7 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 
-import { createMachineProvider } from "../../providers/index.ts";
+import { createMachineRuntime } from "../../machine-runtime.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
@@ -27,14 +27,14 @@ async function buildMachineForwardUrl(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineRuntime({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata: metadata ?? {},
-      buildProxyUrl: () => "", // Not used here
     });
-    return `${provider.previewUrl}${path}`;
+    const baseUrl = await runtime.getPreviewUrl(3000);
+    return `${baseUrl}${path}`;
   } catch (err) {
     logger.warn("[Slack Webhook] Failed to build forward URL", {
       machineId: machine.id,

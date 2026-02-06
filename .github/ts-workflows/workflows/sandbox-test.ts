@@ -4,7 +4,8 @@ import * as utils from "../utils/index.ts";
 /**
  * Build sandbox image once, then:
  * 1) run Docker-provider tests,
- * 2) upload same image to Daytona,
+ * 2) run Fly-provider tests,
+ * 3) upload same image to Daytona,
  * then run Daytona-provider tests.
  */
 export default workflow({
@@ -19,7 +20,7 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "apps/os/backend/providers/local-docker.ts",
+        "apps/os/backend/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],
@@ -28,7 +29,7 @@ export default workflow({
       paths: [
         "sandbox/**",
         "apps/daemon/**",
-        "apps/os/backend/providers/local-docker.ts",
+        "apps/os/backend/machine-runtime.ts",
         "packages/pidnap/**",
         ".github/workflows/sandbox-test.yml",
       ],
@@ -158,6 +159,32 @@ export default workflow({
           if: "failure()",
           ...uses("actions/upload-artifact@v4", {
             name: "docker-provider-test-logs",
+            path: "sandbox/test-results",
+            "retention-days": 7,
+          }),
+        },
+      ],
+    },
+
+    "fly-provider-tests": {
+      "runs-on": "ubuntu-24.04",
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "dev" }),
+        {
+          name: "Run Fly provider tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "fly",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+        },
+        {
+          name: "Upload Fly test results",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "fly-provider-test-logs",
             path: "sandbox/test-results",
             "retention-days": 7,
           }),
