@@ -1,0 +1,12 @@
+{
+  "name": "fly-test-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run ./server.ts"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}
