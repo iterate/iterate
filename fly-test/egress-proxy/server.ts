@@ -49,6 +49,7 @@ async function fetchTarget(url: string): Promise<FetchPayload> {
   const response = await fetch(url, {
     method: "GET",
     redirect: "follow",
+    signal: AbortSignal.timeout(20_000),
   });
   const body = (await response.text()).slice(0, 2500);
   return {
