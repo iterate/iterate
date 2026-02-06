@@ -40,6 +40,10 @@ func (cs *certStorage) Fetch(hostname string, gen func() (*tls.Certificate, erro
 	}
 
 	cs.mu.Lock()
+	if cached, ok := cs.certs[hostname]; ok {
+		cs.mu.Unlock()
+		return cached, nil
+	}
 	cs.certs[hostname] = cert
 	cs.mu.Unlock()
 	return cert, nil
