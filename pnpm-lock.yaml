@@ -232,6 +232,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: 1.1.18
         version: 1.1.18
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/client':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)
@@ -693,6 +696,9 @@ importers:
       '@neondatabase/serverless':
         specifier: ^1.0.2
         version: 1.0.2
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/openapi':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))

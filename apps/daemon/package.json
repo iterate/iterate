@@ -44,6 +44,7 @@
     "@mariozechner/pi-ai": "^0.42.0",
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@opencode-ai/sdk": "1.1.18",
+    "@opentelemetry/api": "^1.9.0",
     "@orpc/client": "^1.13.4",
     "@orpc/contract": "^1.13.4",
     "@radix-ui/react-avatar": "^1.1.11",
