@@ -154,8 +154,7 @@ async function execMachine(
     "POST",
     `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/exec`,
     {
-      cmd: cmd[0],
-      args: cmd.slice(1),
+      command: cmd,
       timeout: 90,
     },
   );

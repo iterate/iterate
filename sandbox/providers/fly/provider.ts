@@ -198,8 +198,7 @@ export class FlySandbox extends Sandbox {
       "POST",
       `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/exec`,
       {
-        cmd: cmd[0],
-        args: cmd.slice(1),
+        command: cmd,
         timeout: 60,
       },
     );
