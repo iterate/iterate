@@ -1,77 +1,66 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
-import { Button } from "../../../components/ui/button.tsx";
-import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
-import { DaemonStatus } from "../../../components/daemon-status.tsx";
-import { HeaderActions } from "../../../components/header-actions.tsx";
-import { TypeId } from "../../../components/type-id.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { Button } from "../../components/ui/button.tsx";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
+import { DaemonStatus } from "../../components/daemon-status.tsx";
+import { HeaderActions } from "../../components/header-actions.tsx";
+import { TypeId } from "../../components/type-id.tsx";
 
-export const Route = createFileRoute(
-  "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
-)({
+export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
 });
 
-// Icon map for services
 const SERVICE_ICONS: Record<string, typeof Server> = {
   "iterate-daemon": Server,
   opencode: Code2,
 };
 
 function MachineDetailPage() {
-  const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
-  });
+  const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const machineQueryKey = trpc.machine.byId.queryKey({
-    organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
     machineId: params.machineId,
   });
 
   const machineListQueryKey = trpc.machine.list.queryKey({
-    organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
     includeArchived: false,
   });
 
   const { data: machine } = useSuspenseQuery(
     trpc.machine.byId.queryOptions({
-      organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
       machineId: params.machineId,
     }),
   );
 
-  const metadata = (machine.metadata as Record<string, unknown>) ?? {};
-  const daemonStatus =
-    metadata.daemonStatus === "ready" ||
-    metadata.daemonStatus === "error" ||
-    metadata.daemonStatus === "restarting" ||
-    metadata.daemonStatus === "stopping"
-      ? metadata.daemonStatus
-      : undefined;
-  const daemonReadyAt = typeof metadata.daemonReadyAt === "string" ? metadata.daemonReadyAt : null;
-  const daemonStatusMessage =
-    typeof metadata.daemonStatusMessage === "string" ? metadata.daemonStatusMessage : null;
-  const metadataJson = JSON.stringify(metadata, null, 2);
+  const metadata = machine.metadata as {
+    host?: string;
+    port?: number;
+    ports?: Record<string, number>;
+    containerId?: string;
+    containerName?: string;
+    snapshotName?: string;
+    sandboxName?: string;
+    daemonStatus?: "ready" | "error" | "restarting" | "stopping";
+    daemonReadyAt?: string;
+    daemonStatusMessage?: string;
+  };
 
-  // Use service info from backend
-  const { services } = machine;
+  const { commands, services } = machine;
 
-  // Mutations
   const restartMachine = useMutation({
     mutationFn: async () => {
       return trpcClient.machine.restart.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -88,7 +77,6 @@ function MachineDetailPage() {
   const restartDaemon = useMutation({
     mutationFn: async () => {
       return trpcClient.machine.restartDaemon.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -105,7 +93,6 @@ function MachineDetailPage() {
   const deleteMachine = useMutation({
     mutationFn: async () => {
       return trpcClient.machine.delete.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -113,46 +100,35 @@ function MachineDetailPage() {
     onSuccess: () => {
       toast.success("Machine deleted");
       queryClient.invalidateQueries({ queryKey: machineListQueryKey });
-      navigate({
-        to: "/orgs/$organizationSlug/projects/$projectSlug/machines",
-        params: {
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        },
-      });
+      navigate({ to: "/proj/$projectSlug/machines", params: { projectSlug: params.projectSlug } });
     },
     onError: (error) => {
       toast.error("Failed to delete: " + error.message);
     },
   });
 
-  // Copy helper
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
     toast.success(`Copied: ${text}`);
   };
 
-  // Query agents from the daemon
   const { data: agentsData } = useQuery(
     trpc.machine.listAgents.queryOptions(
       {
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "active" && daemonStatus === "ready",
-        refetchInterval: 10000, // Poll every 10s
+        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+        refetchInterval: 10000,
       },
     ),
   );
 
-  // Sort agents by updatedAt descending (most recent first)
   const agents = [...(agentsData?.agents ?? [])].sort(
     (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
   );
 
-  // Format agent time: show time, add date if >12h ago
   const formatAgentTime = (dateStr: string | null) => {
     if (!dateStr) return "";
     const date = new Date(dateStr);
@@ -166,23 +142,19 @@ function MachineDetailPage() {
     return time;
   };
 
-  // Get iterate-daemon service for agent terminal access
   const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
 
-  // Build URL for agent terminal with command (uses iterate-daemon's /terminal endpoint)
   const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
-  // Get attach command for an agent using its harness session ID
   const getAgentAttachCommand = (harnessSessionId: string) => {
     const baseCmd = `opencode attach 'http://localhost:4096' --session ${harnessSessionId}`;
     return `${baseCmd} --dir '${agentsData?.customerRepoPath}'`;
   };
 
   return (
-    <div className="p-4 space-y-6">
-      {/* Header Actions */}
+    <div className="space-y-6 p-4">
       <HeaderActions>
         <Button
           variant="outline"
@@ -212,75 +184,98 @@ function MachineDetailPage() {
         </Button>
       </HeaderActions>
 
-      {/* Machine Info Grid */}
       <div className="grid grid-cols-3 gap-4 text-sm">
         <div>
-          <dt className="text-muted-foreground text-xs">ID</dt>
+          <dt className="text-xs text-muted-foreground">ID</dt>
           <dd className="mt-1">
             <TypeId id={machine.id} startChars={10} endChars={4} />
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Status</dt>
+          <dt className="text-xs text-muted-foreground">Status</dt>
           <dd className="mt-1">
             <DaemonStatus
               state={machine.state}
-              daemonStatus={daemonStatus}
-              daemonReadyAt={daemonReadyAt ?? undefined}
-              daemonStatusMessage={daemonStatusMessage ?? undefined}
+              daemonStatus={metadata.daemonStatus}
+              daemonReadyAt={metadata.daemonReadyAt}
+              daemonStatusMessage={metadata.daemonStatusMessage}
             />
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Type</dt>
+          <dt className="text-xs text-muted-foreground">Type</dt>
           <dd className="mt-1">{machine.type}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">External ID</dt>
-          <dd className="mt-1 font-mono text-xs truncate">{machine.externalId}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground text-xs">Created</dt>
+          <dt className="text-xs text-muted-foreground">Created</dt>
           <dd className="mt-1">
             {formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}
           </dd>
         </div>
+        {metadata.containerName && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Container</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.containerName!)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {metadata.containerName}
+                <Copy className="h-3 w-3 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
+        {metadata.containerId && !metadata.containerName && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Container ID</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.containerId!)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {metadata.containerId.slice(0, 12)}
+                <Copy className="h-3 w-3 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
+        {metadata.snapshotName && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Snapshot</dt>
+            <dd className="mt-1 truncate font-mono text-xs">{metadata.snapshotName}</dd>
+          </div>
+        )}
+        {machine.type === "daytona" && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Sandbox</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.sandboxName ?? machine.externalId)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <span className="truncate">{metadata.sandboxName ?? machine.externalId}</span>
+                <Copy className="h-3 w-3 shrink-0 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
       </div>
 
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-muted-foreground">Metadata</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => copyToClipboard(metadataJson)}
-            className="h-7 px-2"
-          >
-            <Copy className="h-3 w-3 mr-1" />
-            Copy JSON
-          </Button>
-        </div>
-        <pre className="border rounded-lg bg-card p-3 font-mono text-xs overflow-x-auto">
-          {metadataJson}
-        </pre>
-      </div>
-
-      {/* Services List */}
       {machine.state !== "archived" && (
         <div className="space-y-2">
-          {/* Services */}
           {services.map((service) => {
             const Icon = SERVICE_ICONS[service.id] ?? Server;
             return (
               <div
                 key={service.id}
-                className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                className="flex items-center justify-between rounded-lg border bg-card p-3"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex min-w-0 items-center gap-3">
+                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{service.name}</div>
-                    <div className="text-xs text-muted-foreground font-mono">:{service.port}</div>
+                    <div className="truncate text-sm font-medium">{service.name}</div>
+                    <div className="font-mono text-xs text-muted-foreground">:{service.port}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -290,7 +285,7 @@ function MachineDetailPage() {
                       href={option.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                      className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
                     >
                       <ExternalLink className="h-4 w-4" />
                       {option.label}
@@ -301,24 +296,23 @@ function MachineDetailPage() {
             );
           })}
 
-          {/* Shell - terminal access via iterate-daemon */}
           {iterateDaemonService && (
-            <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-              <div className="flex items-center gap-3 min-w-0">
-                <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex items-center justify-between rounded-lg border bg-card p-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0">
                   <div className="text-sm font-medium">Shell</div>
                   <div className="text-xs text-muted-foreground">Terminal access</div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                {iterateDaemonService?.options.map((option, index) => (
+                {iterateDaemonService.options.map((option, index) => (
                   <a
                     key={index}
                     href={`${option.url}/terminal`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                    className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
                   >
                     <ExternalLink className="h-4 w-4" />
                     {option.label}
@@ -328,21 +322,55 @@ function MachineDetailPage() {
             </div>
           )}
 
-          {/* Agents */}
+          {commands.length > 0 && iterateDaemonService && (
+            <>
+              <div className="border-t pt-4">
+                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Commands</h3>
+              </div>
+              {commands.map((cmd, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between rounded-lg border bg-card p-3"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{cmd.label}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {iterateDaemonService.options.map((option, optIndex) => (
+                      <a
+                        key={optIndex}
+                        href={buildAgentTerminalUrl(option.url, cmd.command)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {option.label}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
           {agents.length > 0 && (
             <>
-              <div className="pt-4 border-t">
-                <h3 className="text-sm font-medium text-muted-foreground mb-2">Agents</h3>
+              <div className="border-t pt-4">
+                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Agents</h3>
               </div>
               {agents.map((agent) => (
                 <div
                   key={agent.id}
-                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                  className="flex items-center justify-between rounded-lg border bg-card p-3"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{agent.slug}</div>
+                      <div className="truncate text-sm font-medium">{agent.slug}</div>
                       <div className="text-xs text-muted-foreground">
                         {agent.status} · {agent.harnessType} · {formatAgentTime(agent.updatedAt)}
                       </div>
@@ -359,7 +387,7 @@ function MachineDetailPage() {
                           )}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
+                          className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
                         >
                           <ExternalLink className="h-4 w-4" />
                           {option.label}

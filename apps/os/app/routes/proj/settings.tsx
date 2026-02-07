@@ -2,36 +2,34 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
-import { Button } from "../../../components/ui/button.tsx";
-import { Field, FieldGroup, FieldLabel, FieldSet } from "../../../components/ui/field.tsx";
-import { Input } from "../../../components/ui/input.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { Button } from "../../components/ui/button.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
+import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute(
-  "/_auth/orgs/$organizationSlug/projects/$projectSlug/settings",
-)({
+export const Route = createFileRoute("/_auth/proj/$projectSlug/settings")({
   component: ProjectSettingsPage,
 });
 
 function ProjectSettingsPage() {
   const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/settings",
+    from: "/_auth/proj/$projectSlug/settings",
   });
   const navigate = useNavigate({ from: Route.fullPath });
 
-  const { data: project } = useSuspenseQuery(
+  // bySlug returns project with organization
+  const { data: projectWithOrg } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
     }),
   );
 
+  const project = projectWithOrg;
   const [name, setName] = useState(project.name);
 
   const updateProject = useMutation({
     mutationFn: async (nextName: string) => {
       return trpcClient.project.update.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name: nextName,
       });
@@ -47,15 +45,15 @@ function ProjectSettingsPage() {
   const deleteProject = useMutation({
     mutationFn: async () => {
       return trpcClient.project.delete.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       });
     },
     onSuccess: () => {
       toast.success("Project deleted");
+      // Navigate to org page after deletion
       navigate({
         to: "/orgs/$organizationSlug",
-        params: { organizationSlug: params.organizationSlug },
+        params: { organizationSlug: projectWithOrg.organization.slug },
       });
     },
     onError: (error) => {

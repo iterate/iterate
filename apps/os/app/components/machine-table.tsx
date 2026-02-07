@@ -29,7 +29,6 @@ interface Machine {
 
 interface MachineTableProps {
   machines: Machine[];
-  organizationSlug: string;
   projectSlug: string;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
@@ -49,7 +48,6 @@ function getMetadataPreview(metadata: Record<string, unknown>): string {
 
 export function MachineTable({
   machines,
-  organizationSlug,
   projectSlug,
   onArchive,
   onDelete,
@@ -101,8 +99,8 @@ export function MachineTable({
         {machines.map((machine) => (
           <Link
             key={machine.id}
-            to="/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId"
-            params={{ organizationSlug, projectSlug, machineId: machine.id }}
+            to="/proj/$projectSlug/machines/$machineId"
+            params={{ projectSlug, machineId: machine.id }}
             className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card hover:bg-accent/50 transition-colors"
           >
             <div className="min-w-0 flex-1 space-y-1">

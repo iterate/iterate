@@ -49,8 +49,8 @@ function NewProjectPage() {
       });
       toast.success("Project created");
       navigate({
-        to: "/orgs/$organizationSlug/projects/$projectSlug",
-        params: { organizationSlug: params.organizationSlug, projectSlug: project.slug },
+        to: "/proj/$projectSlug",
+        params: { projectSlug: project.slug },
       });
     },
     onError: (error) => {

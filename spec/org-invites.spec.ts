@@ -154,7 +154,7 @@ test.describe("organization invites", () => {
     await page.locator("[data-component='OrgSwitcher']").waitFor();
     await page.goto("/user/settings");
 
-    await page.getByText("Pending invites").waitFor();
+    await page.getByRole("heading", { name: "Pending invites" }).waitFor();
     await page.getByText(inviterOrgName).waitFor();
 
     // Accept the invite - find the card in the Pending invites section
