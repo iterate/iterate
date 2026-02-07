@@ -10,8 +10,12 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 
 Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test`
 
-## Git
+## Working with GitHub
 
+- Commit/push frequently (small, scoped commits)
+- Prefer pushing before long local validation so GitHub checks + review agents start early
+- After push, keep validating locally and follow up with more commits
+- Avoid large unpushed change sets
 - PR descriptions: only add `Testing`/`Validation` when non-standard human/manual steps were done/are needed. Skip trivial stuff (e.g. `pnpm test`).
 
 ## Environment variables (Doppler)
@@ -24,7 +28,7 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
+doppler run --config dev -- pnpm build:daytona
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR

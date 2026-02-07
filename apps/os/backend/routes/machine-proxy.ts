@@ -9,6 +9,7 @@
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
@@ -16,7 +17,6 @@ import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
 import { getPreviewToken, refreshPreviewToken } from "../integrations/daytona/daytona.ts";
-import { createMachineProvider } from "../providers/index.ts";
 
 export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -109,14 +109,13 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  const provider = await createMachineProvider({
+  const runtime = await createMachineRuntime({
     type: machineRecord.type,
     env: c.env,
     externalId,
     metadata,
-    buildProxyUrl: () => "", // Not used here
   });
-  const baseUrl = provider.getPreviewUrl(portNum);
+  const baseUrl = await runtime.getPreviewUrl(portNum);
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
@@ -161,7 +160,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  // For local machines (local-docker, local, local-vanilla), simple proxy without auth
+  // For non-Daytona machines (docker, fly, local), simple proxy without auth
   const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
   return rewriteHTMLUrls(response, proxyBasePath);
 });

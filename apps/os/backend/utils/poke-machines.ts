@@ -1,10 +1,10 @@
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { createMachineProvider } from "../providers/index.ts";
 
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 
@@ -28,14 +28,13 @@ async function buildDaemonBaseUrl(
   const metadata = machine.metadata as Record<string, unknown>;
 
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineRuntime({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata,
-      buildProxyUrl: () => "", // Not used here
     });
-    return provider.previewUrl;
+    return await runtime.getPreviewUrl(3000);
   } catch (err) {
     logger.warn("[poke-machines] Failed to build daemon URL", {
       machineId: machine.id,

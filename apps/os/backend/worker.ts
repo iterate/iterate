@@ -158,7 +158,7 @@ app.get("/api/ws/realtime", (c) => {
   return stub.fetch(c.req.raw);
 });
 
-// Mount machine proxy (Daytona, local-docker, etc.)
+// Mount machine proxy (Daytona, Docker, etc.)
 app.route("", machineProxyApp);
 
 export type RequestContext = {

@@ -1,5 +1,4 @@
-# Exclude .git - we use a synthetic deterministic .git via --build-context instead
-# This ensures 100% cache hits when the commit SHA hasn't changed
+# Exclude .git from build context.
 .git
 
 .DS_Store

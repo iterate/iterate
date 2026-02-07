@@ -1,0 +1,283 @@
+import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
+
+/**
+ * Build sandbox image once, then:
+ * 1) run Docker-provider tests,
+ * 2) run Fly-provider tests,
+ * 3) upload same image to Daytona,
+ * then run Daytona-provider tests.
+ */
+export default workflow({
+  name: "Sandbox Tests",
+  permissions: {
+    contents: "read",
+    "id-token": "write",
+  },
+  on: {
+    push: {
+      branches: ["main"],
+      paths: [
+        "sandbox/**",
+        "apps/daemon/**",
+        "packages/pidnap/**",
+        ".github/workflows/sandbox-test.yml",
+      ],
+    },
+    pull_request: {
+      paths: [
+        "sandbox/**",
+        "apps/daemon/**",
+        "packages/pidnap/**",
+        ".github/workflows/sandbox-test.yml",
+      ],
+    },
+    workflow_dispatch: {
+      inputs: {
+        ref: {
+          description: "Git ref to test (branch, tag, or SHA). Leave empty for current branch.",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        image_name: {
+          description: "Docker image name/tag to use",
+          required: false,
+          type: "string",
+          default: "iterate-sandbox:ci",
+        },
+      },
+    },
+  },
+  jobs: {
+    "build-image": {
+      ...utils.runsOnDepotUbuntuForContainerThings,
+      outputs: {
+        image_name: "${{ steps.metadata.outputs.image_name }}",
+        git_sha: "${{ steps.metadata.outputs.git_sha }}",
+        registry_image_name: "${{ steps.metadata.outputs.registry_image_name }}",
+        fly_registry_image_name: "${{ steps.metadata.outputs.fly_registry_image_name }}",
+      },
+      steps: [
+        {
+          name: "Checkout code",
+          ...uses("actions/checkout@v4", {
+            ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+          }),
+        },
+        {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@v4",
+        },
+        {
+          name: "Setup Node",
+          uses: "actions/setup-node@v4",
+          with: {
+            "node-version": 24,
+            cache: "pnpm",
+          },
+        },
+        {
+          name: "Install dependencies",
+          run: "pnpm install",
+        },
+        ...utils.setupDoppler({ config: "dev" }),
+        ...utils.setupDepot,
+        {
+          name: "Build multi-platform Docker image with Depot",
+          run: [
+            "set -euo pipefail",
+            "depot_project_id=\"$(jq -r '.id' depot.json)\"",
+            'if [ "$depot_project_id" = "null" ] || [ -z "$depot_project_id" ]; then',
+            '  echo "Missing depot project id in depot.json" >&2',
+            "  exit 1",
+            "fi",
+            `export REGISTRY_IMAGE_NAME="registry.depot.dev/$depot_project_id:iterate-sandbox-test-\${{ github.run_id }}-\${{ github.run_attempt }}"`,
+            "export SANDBOX_BUILD_PLATFORM=linux/amd64,linux/arm64",
+            "export SANDBOX_PUSH_FLY_REGISTRY=true",
+            "export SANDBOX_FLY_REGISTRY_APP=iterate-sandbox-image",
+            "pnpm docker:build",
+          ].join("\n"),
+        },
+        {
+          id: "metadata",
+          name: "Export build metadata",
+          run: [
+            'build_info_path=".cache/depot-build-info.json"',
+            'registry_image_name="$(jq -r ".registryImageName" "$build_info_path")"',
+            'fly_registry_image_name="$(jq -r ".flyRegistryImageNames[0] // empty" "$build_info_path")"',
+            'git_sha="$(jq -r ".gitSha" "$build_info_path")"',
+            'if [ "$registry_image_name" = "null" ] || [ -z "$registry_image_name" ] || [ -z "$fly_registry_image_name" ] || [ "$git_sha" = "null" ]; then',
+            '  echo "Missing Depot build metadata in $build_info_path" >&2',
+            "  exit 1",
+            "fi",
+            'echo "image_name=${{ inputs.image_name || "iterate-sandbox:ci" }}" >> "$GITHUB_OUTPUT"',
+            'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
+            'echo "registry_image_name=$registry_image_name" >> "$GITHUB_OUTPUT"',
+            'echo "fly_registry_image_name=$fly_registry_image_name" >> "$GITHUB_OUTPUT"',
+          ].join("\n"),
+        },
+      ],
+    },
+
+    "docker-provider-tests": {
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "dev" }),
+        {
+          name: "Pull built image from registry",
+          env: {
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
+            REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
+          },
+          run: [
+            'docker pull "$REGISTRY_IMAGE_NAME"',
+            'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
+          ].join("\n"),
+        },
+        {
+          name: "Run Docker provider tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "docker",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-image.outputs.image_name }}",
+            SANDBOX_TEST_BASE_DOCKER_IMAGE: "${{ needs.build-image.outputs.image_name }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            DOCKER_HOST: "unix:///var/run/docker.sock",
+          },
+          run: "pnpm sandbox test:docker",
+        },
+        {
+          name: "Upload Docker test results",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "docker-provider-test-logs",
+            path: "sandbox/test-results",
+            "retention-days": 7,
+          }),
+        },
+      ],
+    },
+
+    "fly-provider-tests": {
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "dev" }),
+        {
+          name: "Run Fly provider tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "fly",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-image.outputs.fly_registry_image_name }}",
+            SANDBOX_TEST_BASE_FLY_IMAGE: "${{ needs.build-image.outputs.fly_registry_image_name }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+        },
+        {
+          name: "Upload Fly test results",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "fly-provider-test-logs",
+            path: "sandbox/test-results",
+            "retention-days": 7,
+          }),
+        },
+      ],
+    },
+
+    "upload-daytona-snapshot": {
+      needs: ["build-image"],
+      ...utils.runsOnDepotUbuntuForContainerThings,
+      outputs: {
+        snapshot_name: "${{ steps.push.outputs.snapshot_name }}",
+      },
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "dev" }),
+        {
+          name: "Pull built image from registry",
+          env: {
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
+            REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
+          },
+          run: [
+            // Daytona snapshots must always be amd64, even on arm64 runners.
+            'docker pull --platform linux/amd64 "$REGISTRY_IMAGE_NAME"',
+            'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
+          ].join("\n"),
+        },
+        {
+          name: "Install and configure Daytona CLI",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: [
+            'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
+            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
+            "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
+            "daytona version",
+            "mkdir -p ~/.config/daytona",
+            `doppler run -- bash -c 'jq -n \\
+              --arg apiKey "$DAYTONA_API_KEY" \\
+              --arg orgId "$DAYTONA_ORG_ID" \\
+              "{activeProfile: \\"ci\\", profiles: [{id: \\"ci\\", name: \\"ci\\", api: {url: \\"https://app.daytona.io/api\\", key: $apiKey}, activeOrganizationId: $orgId}]}" \\
+              > ~/.config/daytona/config.json'`,
+            "daytona snapshot list --limit 1",
+          ].join("\n"),
+        },
+        {
+          id: "push",
+          name: "Upload snapshot to Daytona",
+          env: {
+            IMAGE_NAME: "${{ needs.build-image.outputs.image_name }}",
+            CI: "true",
+          },
+          run: [
+            "set -euo pipefail",
+            'snapshot_name="iterate-sandbox-${{ needs.build-image.outputs.git_sha }}"',
+            "output_file=$(mktemp)",
+            'pnpm build:daytona --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"',
+            'snapshot_name=$(grep -m 1 "^snapshot_name=" "$output_file" | sed "s/^snapshot_name=//")',
+            'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
+          ].join("\n"),
+        },
+      ],
+    },
+
+    "daytona-provider-tests": {
+      needs: ["upload-daytona-snapshot"],
+      if: "${{ needs.upload-daytona-snapshot.result == 'success' }}",
+      ...utils.runsOnDepotUbuntuForContainerThings,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "dev" }),
+        {
+          name: "Run Daytona provider tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "daytona",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}",
+            SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT:
+              "${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm sandbox test:daytona",
+        },
+        {
+          name: "Upload Daytona test results",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "daytona-provider-test-logs",
+            path: "sandbox/test-results",
+            "retention-days": 7,
+          }),
+        },
+      ],
+    },
+  },
+});
