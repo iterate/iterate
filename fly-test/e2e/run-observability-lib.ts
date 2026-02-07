@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type CommandResult = {
@@ -39,18 +38,10 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function readFileOrEmpty(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
-  }
-}
-
 export function urlEncodedForm(data: Record<string, string>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(data)) params.set(key, value);
-  return params.toString();
+  return params.toString().replaceAll("'", "%27");
 }
 
 export function nowTag(): string {

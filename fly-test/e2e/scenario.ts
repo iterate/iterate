@@ -61,8 +61,8 @@ export async function runScenario(
   provider: ObservabilityProvider,
   config: ScenarioConfig,
 ): Promise<void> {
-  await provider.up();
   try {
+    await provider.up();
     config.log(`Running shared integration scenario via provider=${provider.name}`);
 
     const allowedRaw = await provider.sandboxFetch({

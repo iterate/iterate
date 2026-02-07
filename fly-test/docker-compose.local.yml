@@ -6,7 +6,7 @@ services:
     environment:
       EGRESS_MITM_PORT: "18080"
       EGRESS_VIEWER_PORT: "18081"
-      MITM_DIR: /data/mitm
+      PROXIFY_CONFIG_DIR: /data/mitm
       EGRESS_LOG_PATH: /tmp/egress-proxy.log
     volumes:
       - fly-test-mitm-data:/data/mitm
