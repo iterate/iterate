@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils.ts";
 interface MobileKeyboardToolbarProps {
   onKeyPress: (key: string) => void;
   ctrlActive?: boolean;
+  keyboardVisible?: boolean;
   onCtrlToggle?: () => void;
-  onDismissKeyboard?: () => void;
+  onToggleKeyboard?: () => void;
   onSearch?: (query: string) => void;
   onSearchNext?: (query: string) => void;
   onSearchPrev?: (query: string) => void;
@@ -138,8 +139,9 @@ function haptic() {
 export function MobileKeyboardToolbar({
   onKeyPress,
   ctrlActive = false,
+  keyboardVisible = false,
   onCtrlToggle,
-  onDismissKeyboard,
+  onToggleKeyboard,
   onSearch,
   onSearchNext,
   onSearchPrev,
@@ -157,7 +159,6 @@ export function MobileKeyboardToolbar({
     y: number;
   } | null>(null);
 
-  const arrowBtnRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
   const popupDismissed = useRef(false);
@@ -263,6 +264,7 @@ export function MobileKeyboardToolbar({
       if (keyDef.action === "search") {
         setSearchOpen((prev) => {
           if (prev) {
+            setSearchQuery("");
             onSearchClose?.();
             return false;
           }
@@ -273,7 +275,7 @@ export function MobileKeyboardToolbar({
         return;
       }
       if (keyDef.action === "dismiss-kb") {
-        onDismissKeyboard?.();
+        onToggleKeyboard?.();
         return;
       }
       if (keyDef.modifier === "ctrl") {
@@ -284,7 +286,7 @@ export function MobileKeyboardToolbar({
         onKeyPress(keyDef.key);
       }
     },
-    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onDismissKeyboard, onSearchClose],
+    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onToggleKeyboard, onSearchClose],
   );
 
   const handlePointerCancel = useCallback(() => {
@@ -344,8 +346,7 @@ export function MobileKeyboardToolbar({
   // ── Snippet item handler ────────────────────────────────────────
 
   const handleSnippetTap = useCallback(
-    (e: React.PointerEvent, key: string) => {
-      e.preventDefault();
+    (key: string) => {
       haptic();
       onKeyPress(key);
     },
@@ -395,7 +396,6 @@ export function MobileKeyboardToolbar({
           <button
             key={keyDef.label}
             type="button"
-            ref={keyDef.action === "arrows" ? arrowBtnRef : undefined}
             data-arrow-toggle={keyDef.action === "arrows" ? "" : undefined}
             onPointerDown={(e) => handlePointerDown(e, keyDef)}
             onPointerUp={(e) => handlePointerUp(e, keyDef)}
@@ -409,9 +409,11 @@ export function MobileKeyboardToolbar({
                   ? "bg-[#3a3a3a] text-white"
                   : keyDef.action === "search" && searchOpen
                     ? "bg-[#3a3a3a] text-white"
-                    : keyDef.modifier === "ctrl" && ctrlActive
-                      ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
-                      : "bg-[#2a2a2a] text-[#d4d4d4] active:bg-[#3a3a3a]",
+                    : keyDef.action === "dismiss-kb" && keyboardVisible
+                      ? "bg-[#3a3a3a] text-white"
+                      : keyDef.modifier === "ctrl" && ctrlActive
+                        ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
+                        : "bg-[#2a2a2a] text-[#d4d4d4] active:bg-[#3a3a3a]",
             )}
           >
             {/* Special labels for action buttons */}
@@ -619,7 +621,7 @@ export function MobileKeyboardToolbar({
                     <button
                       key={item.label}
                       type="button"
-                      onPointerDown={(e) => handleSnippetTap(e, item.key)}
+                      onPointerUp={() => handleSnippetTap(item.key)}
                       className="h-8 shrink-0 rounded bg-[#2a2a2a] px-2.5 text-xs font-mono text-[#d4d4d4] active:bg-[#3a3a3a] select-none touch-manipulation whitespace-nowrap"
                     >
                       {item.label}

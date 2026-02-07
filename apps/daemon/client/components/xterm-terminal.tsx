@@ -51,6 +51,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const [ctrlActive, setCtrlActive] = useState(false);
+    const [keyboardVisible, setKeyboardVisible] = useState(false);
     const searchAddonRef = useRef<SearchAddon | null>(null);
     const isMobile = useIsMobile();
     const isMobileRef = useRef(isMobile);
@@ -148,12 +149,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Suppress autocorrect/predictive text on xterm's internal textarea
       // and hide the native blinking caret (terminal renders its own cursor)
       const helperTextarea = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+      const handleTaFocus = () => setKeyboardVisible(true);
+      const handleTaBlur = () => setKeyboardVisible(false);
       if (helperTextarea) {
         helperTextarea.setAttribute("autocorrect", "off");
         helperTextarea.setAttribute("autocomplete", "off");
         helperTextarea.setAttribute("autocapitalize", "none");
         helperTextarea.setAttribute("spellcheck", "false");
         helperTextarea.style.caretColor = "transparent";
+
+        // Track keyboard visibility via focus/blur on the textarea
+        helperTextarea.addEventListener("focus", handleTaFocus);
+        helperTextarea.addEventListener("blur", handleTaBlur);
+        // Set initial state
+        setKeyboardVisible(document.activeElement === helperTextarea);
       }
 
       // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
@@ -283,6 +292,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         socket.removeEventListener("open", handleOpen);
         socket.removeEventListener("message", handleMessage);
         socket.removeEventListener("close", handleClose);
+        helperTextarea?.removeEventListener("focus", handleTaFocus);
+        helperTextarea?.removeEventListener("blur", handleTaBlur);
         dataDisposable.dispose();
         resizeDisposable.dispose();
         window.removeEventListener("terminal:send", handleSendCommand);
@@ -306,10 +317,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
                 setCtrlActive((prev) => !prev);
                 termRef.current?.focus();
               }}
-              onDismissKeyboard={() => {
+              keyboardVisible={keyboardVisible}
+              onToggleKeyboard={() => {
                 const ta =
                   containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
-                ta?.blur();
+                if (keyboardVisible) {
+                  ta?.blur();
+                } else {
+                  ta?.focus();
+                }
               }}
               onSearch={(query) => {
                 searchAddonRef.current?.findNext(query);
