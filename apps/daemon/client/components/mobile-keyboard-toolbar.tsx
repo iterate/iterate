@@ -332,14 +332,14 @@ export function MobileKeyboardToolbar({
   useEffect(() => {
     if (!arrowsOpen) return;
     const dismiss = (e: PointerEvent) => {
-      // Don't dismiss if tapping inside the popover or the toggle button
       const target = e.target as HTMLElement;
       if (target.closest("[data-arrow-popover]") || target.closest("[data-arrow-toggle]")) return;
       setArrowsOpen(false);
     };
+    // Use a longer delay to avoid the toggle tap's own events from dismissing
     const timer = setTimeout(() => {
       document.addEventListener("pointerdown", dismiss);
-    }, 50);
+    }, 200);
     return () => {
       clearTimeout(timer);
       document.removeEventListener("pointerdown", dismiss);
@@ -420,12 +420,12 @@ export function MobileKeyboardToolbar({
         )}
 
         {/* Arrow keys popover */}
-        {arrowsOpen && arrowBtnRef.current && (
+        {arrowsOpen && (
           <div
             data-arrow-popover=""
             className="absolute z-50 rounded-lg bg-[#2a2a2a] border border-[#444] shadow-lg p-1"
             style={{
-              bottom: "calc(100% + 4px)",
+              top: "calc(100% + 4px)",
               right: 0,
             }}
           >
