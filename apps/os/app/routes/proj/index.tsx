@@ -11,6 +11,7 @@ import {
   Plus,
   SendHorizontal,
   Server,
+  Terminal,
   X,
 } from "lucide-react";
 import { z } from "zod/v4";
@@ -58,6 +59,24 @@ const IMAGE_TYPES = new Set([
 ]);
 const PREVIEW_TYPES = new Set([...IMAGE_TYPES, "application/pdf"]);
 
+const EXT_TO_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+};
+
+/** Resolve mimeType — use provided value or infer from file extension. */
+function resolveMime(mimeType?: string, fileName?: string): string {
+  if (mimeType) return mimeType;
+  if (!fileName) return "";
+  const ext = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
+  return EXT_TO_MIME[ext] ?? "";
+}
+
 function isImageType(mimeType?: string): boolean {
   return !!mimeType && IMAGE_TYPES.has(mimeType);
 }
@@ -103,6 +122,7 @@ function ProjectHomePage() {
   const [draftMessage, setDraftMessage] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: projectData } = useSuspenseQuery(
@@ -133,6 +153,7 @@ function ProjectHomePage() {
   });
 
   const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
+  const agentSessionUrl = messagesData?.agentSessionUrl;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -249,7 +270,11 @@ function ProjectHomePage() {
   );
 
   return (
-    <div className="p-4 space-y-4" data-component="ProjectHomePage">
+    <div
+      className="flex flex-col gap-4 p-4"
+      style={{ height: "calc(100svh - 4rem)" }}
+      data-component="ProjectHomePage"
+    >
       <HeaderActions>
         <Button
           type="button"
@@ -279,7 +304,7 @@ function ProjectHomePage() {
         </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
         {/* Thread sidebar */}
         <section className="space-y-3">
           {threadsData.threads.length === 0 ? (
@@ -330,8 +355,27 @@ function ProjectHomePage() {
         </section>
 
         {/* Messages + input */}
-        <section className="space-y-3 min-w-0">
-          <Card className="h-[360px] overflow-y-auto p-4 space-y-3">
+        <section className="flex min-h-0 min-w-0 flex-col gap-3">
+          {selectedThreadId && messages.length > 0 ? (
+            <div className="flex flex-shrink-0 items-center justify-between rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+              <span className="truncate font-medium">
+                {threadsData.threads.find((t) => t.threadId === selectedThreadId)?.title ??
+                  "Thread"}
+              </span>
+              {agentSessionUrl ? (
+                <a
+                  href={agentSessionUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                >
+                  <Terminal className="h-3 w-3" />
+                  Attach
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+          <Card className="min-h-0 flex-1 overflow-y-auto p-4 space-y-3">
             {messages.length === 0 ? (
               <EmptyState
                 icon={<MessageSquare className="h-5 w-5" />}
@@ -365,6 +409,7 @@ function ProjectHomePage() {
                         projectSlug={params.projectSlug}
                         machineId={activeMachine?.id ?? ""}
                         isUserMessage={message.role === "user"}
+                        onImageClick={setLightbox}
                       />
                     ))}
                   </div>
@@ -374,7 +419,7 @@ function ProjectHomePage() {
             <div ref={messagesEndRef} />
           </Card>
 
-          <form className="space-y-2" onSubmit={handleSubmit}>
+          <form className="flex-shrink-0 space-y-2" onSubmit={handleSubmit}>
             {/* Pending file previews */}
             {pendingFiles.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -475,6 +520,29 @@ function ProjectHomePage() {
           </form>
         </section>
       </div>
+
+      {/* Image lightbox */}
+      {lightbox ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8"
+          onClick={() => setLightbox(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setLightbox(null);
+          }}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          ref={(el) => el?.focus()}
+        >
+          <img
+            src={lightbox.src}
+            alt={lightbox.alt}
+            className="rounded-lg object-contain shadow-2xl"
+            style={{ maxHeight: "75vh", maxWidth: "min(75vw, 800px)" }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -487,29 +555,37 @@ function AttachmentPreview({
   projectSlug,
   machineId,
   isUserMessage,
+  onImageClick,
 }: {
   attachment: FileAttachment;
   orgSlug: string;
   projectSlug: string;
   machineId: string;
   isUserMessage: boolean;
+  onImageClick?: (info: { src: string; alt: string }) => void;
 }) {
   if (!machineId) return null;
 
   const viewUrl = buildFileUrl(orgSlug, projectSlug, machineId, attachment.filePath);
   const downloadUrl = buildFileUrl(orgSlug, projectSlug, machineId, attachment.filePath, true);
-  const mime = attachment.mimeType ?? "";
+  const mime = resolveMime(attachment.mimeType, attachment.fileName);
 
   // Inline image preview
   if (isImageType(mime)) {
     return (
       <div className="space-y-1">
-        <img
-          src={viewUrl}
-          alt={attachment.fileName}
-          className="max-h-48 max-w-full rounded object-contain"
-          loading="lazy"
-        />
+        <button
+          type="button"
+          className="cursor-zoom-in"
+          onClick={() => onImageClick?.({ src: viewUrl, alt: attachment.fileName })}
+        >
+          <img
+            src={viewUrl}
+            alt={attachment.fileName}
+            className="max-h-48 max-w-full rounded object-contain"
+            loading="lazy"
+          />
+        </button>
         <div className="flex items-center gap-1.5 text-xs opacity-70">
           <span className="truncate">{attachment.fileName}</span>
           {attachment.size ? <span>{formatFileSize(attachment.size)}</span> : null}

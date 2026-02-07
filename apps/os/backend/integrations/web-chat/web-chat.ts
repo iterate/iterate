@@ -54,6 +54,7 @@ const WebChatThreadsResponse = z.object({
 const WebChatMessagesResponse = z.object({
   threadId: z.string(),
   messages: z.array(WebChatMessage),
+  agentSessionUrl: z.string().optional(),
 });
 
 const WebhookInput = z.object({

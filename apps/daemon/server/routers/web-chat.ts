@@ -263,7 +263,20 @@ webChatRouter.get("/threads/:threadId/messages", async (c) => {
   const messages = (await listStoredMessages())
     .filter((message) => message.threadId === threadId)
     .sort((a, b) => a.createdAt - b.createdAt);
-  return c.json({ threadId, messages });
+
+  // Look up agent session URL for the "attach" link
+  let agentSessionUrl: string | undefined;
+  try {
+    const agentSlug = agentSlugForThread(threadId);
+    const agent = await getAgent(agentSlug);
+    if (agent?.harnessSessionId) {
+      agentSessionUrl = buildAgentSessionUrl(agent.harnessSessionId, agent.workingDirectory);
+    }
+  } catch {
+    // Non-critical — just omit the URL
+  }
+
+  return c.json({ threadId, messages, agentSessionUrl });
 });
 
 // --- Helpers ---
@@ -285,6 +298,22 @@ function sanitizeForSlug(value: string): string {
 
 function agentSlugForThread(threadId: string): string {
   return `web-chat-${sanitizeForSlug(threadId)}`;
+}
+
+const SessionEnv = z.object({
+  ITERATE_OS_BASE_URL: z.string(),
+  ITERATE_ORG_SLUG: z.string(),
+  ITERATE_PROJECT_SLUG: z.string(),
+  ITERATE_MACHINE_ID: z.string(),
+  ITERATE_CUSTOMER_REPO_PATH: z.string(),
+});
+
+function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | null): string {
+  const env = SessionEnv.parse(process.env);
+  const dir = workingDirectory ?? env.ITERATE_CUSTOMER_REPO_PATH;
+  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${dir}`;
+  const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
+  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
 }
 
 async function storeEvent(
