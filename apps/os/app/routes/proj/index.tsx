@@ -1,10 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createFileRoute, Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Circle, MessageSquare, Plus, SendHorizontal, Server } from "lucide-react";
 import { z } from "zod/v4";
-import { StickToBottom } from "use-stick-to-bottom";
-import { Streamdown } from "streamdown";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -57,14 +55,22 @@ function ProjectHomePage() {
     ? undefined
     : (search.thread ?? threadsData.threads[0]?.threadId);
 
-  const { data: messagesData } = useSuspenseQuery(
-    trpc.webChat.getThreadMessages.queryOptions({
+  // Poll messages when a thread is selected (agent replies asynchronously)
+  const { data: messagesData } = useQuery({
+    ...trpc.webChat.getThreadMessages.queryOptions({
       projectSlug: params.projectSlug,
       threadId: selectedThreadId,
     }),
-  );
+    refetchInterval: selectedThreadId ? 3000 : false,
+  });
 
-  const messages = selectedThreadId ? messagesData.messages : [];
+  const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
+
+  // Auto-scroll to bottom when messages change
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
 
   const sendMessage = useMutation({
     mutationFn: async (input: { text: string }) =>
@@ -76,21 +82,14 @@ function ProjectHomePage() {
     onSuccess: async (result) => {
       setDraftMessage("");
 
-      if (result.threadId !== selectedThreadId) {
-        navigate({ search: { thread: result.threadId }, replace: true });
+      if (result.threadId && result.threadId !== selectedThreadId) {
+        void navigate({ search: { thread: result.threadId }, replace: true });
       }
 
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: trpc.webChat.listThreads.queryKey({ projectSlug: params.projectSlug }),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: trpc.webChat.getThreadMessages.queryKey({
-            projectSlug: params.projectSlug,
-            threadId: result.threadId,
-          }),
-        }),
-      ]);
+      await queryClient.invalidateQueries({
+        queryKey: trpc.webChat.listThreads.queryKey({ projectSlug: params.projectSlug }),
+      });
+      // Messages will be picked up by polling via refetchInterval
     },
     onError: (error) => {
       toast.error(`Failed to send message: ${error.message}`);
@@ -188,45 +187,35 @@ function ProjectHomePage() {
         </section>
 
         <section className="space-y-3 min-w-0">
-          <Card className="overflow-hidden">
-            <StickToBottom className="h-[360px]">
-              <StickToBottom.Content className="space-y-3 p-4">
-                {messages.length === 0 ? (
-                  <EmptyState
-                    icon={<MessageSquare className="h-5 w-5" />}
-                    title="Start a new thread"
-                    description="Chat with your project configuration from here."
-                    className="py-10"
-                  />
-                ) : (
-                  messages.map((message) => (
-                    <div
-                      key={message.messageId}
-                      data-testid={`web-chat-message-${message.role}`}
-                      className={cn(
-                        "flex",
-                        message.role === "user" ? "justify-end" : "justify-start",
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "max-w-[92%] rounded-lg px-3 py-2 text-sm",
-                          message.role === "user"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-foreground",
-                        )}
-                      >
-                        {message.role === "assistant" ? (
-                          <Streamdown>{message.text}</Streamdown>
-                        ) : (
-                          <p className="whitespace-pre-wrap break-words">{message.text}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </StickToBottom.Content>
-            </StickToBottom>
+          <Card className="h-[360px] overflow-y-auto p-4 space-y-3">
+            {messages.length === 0 ? (
+              <EmptyState
+                icon={<MessageSquare className="h-5 w-5" />}
+                title="Start a new thread"
+                description="Chat with your project configuration from here."
+                className="py-10"
+              />
+            ) : (
+              messages.map((message) => (
+                <div
+                  key={message.messageId}
+                  data-testid={`web-chat-message-${message.role}`}
+                  className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}
+                >
+                  <div
+                    className={cn(
+                      "max-w-[92%] rounded-lg px-3 py-2 text-sm",
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-foreground",
+                    )}
+                  >
+                    <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                  </div>
+                </div>
+              ))
+            )}
+            <div ref={messagesEndRef} />
           </Card>
 
           <form className="space-y-2" onSubmit={handleSubmit}>

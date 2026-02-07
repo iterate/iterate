@@ -14,9 +14,8 @@ const WebChatMessage = z.object({
   text: z.string(),
   userId: z.string().optional(),
   userName: z.string().optional(),
-  sourceEventId: z.string().optional(),
-  sourceMessageId: z.string().optional(),
   agentSlug: z.string(),
+  reactions: z.array(z.string()).optional(),
   createdAt: z.number(),
 });
 
@@ -34,13 +33,10 @@ const WebChatWebhookResponse = z.object({
   success: z.boolean(),
   duplicate: z.boolean().optional(),
   threadId: z.string(),
-  messageId: z.string(),
+  messageId: z.string().optional(),
   eventId: z.string().optional(),
-  assistantEventId: z.string().nullable().optional(),
-  created: z.boolean(),
-  agentSlug: z.string(),
-  userMessage: WebChatMessage,
-  assistantMessage: WebChatMessage.nullable().optional(),
+  created: z.boolean().optional(),
+  agentSlug: z.string().optional(),
 });
 
 const WebChatThreadsResponse = z.object({

@@ -10,7 +10,6 @@ import type {
   AgentHarness,
   AgentEvent,
   AppendParams,
-  AppendResult,
   CreateAgentParams,
   CreateAgentResult,
   StartCommandOptions,
@@ -34,21 +33,6 @@ function createClient(params: { directory: string }): OpencodeClient {
     baseUrl: OPENCODE_BASE_URL,
     directory: params.directory,
   });
-}
-
-function extractAssistantText(parts: Array<unknown>): string {
-  return parts
-    .filter(
-      (part): part is { type: "text"; text: string } =>
-        typeof part === "object" &&
-        part !== null &&
-        "type" in part &&
-        "text" in part &&
-        part.type === "text" &&
-        typeof part.text === "string",
-    )
-    .map((part) => part.text)
-    .join("");
 }
 
 async function waitForSessionReady(
@@ -101,11 +85,7 @@ export const opencodeHarness: AgentHarness = {
     return { harnessSessionId };
   },
 
-  async append(
-    harnessSessionId: string,
-    event: AgentEvent,
-    params: AppendParams,
-  ): Promise<AppendResult | void> {
+  async append(harnessSessionId: string, event: AgentEvent, params: AppendParams): Promise<void> {
     if (event.type !== "user-message") {
       throw new Error(`Unsupported event type: ${event.type}`);
     }
@@ -117,25 +97,12 @@ export const opencodeHarness: AgentHarness = {
     await trackSession(harnessSessionId, params);
 
     // Send message via SDK using session.prompt()
-    const response = await client.session.prompt({
+    await client.session.prompt({
       sessionID: harnessSessionId,
       parts: [{ type: "text", text: event.content }],
       // Use default model from config if available
       ...(config.defaultModel && { model: config.defaultModel }),
     });
-
-    const responseData = response.data;
-    if (!responseData) {
-      return;
-    }
-
-    return {
-      assistantMessage: {
-        id: responseData.info.id,
-        parts: responseData.parts,
-        text: extractAssistantText(responseData.parts),
-      },
-    };
   },
 
   getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {

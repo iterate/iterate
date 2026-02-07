@@ -37,14 +37,6 @@ export interface AppendParams {
   unacknowledge: () => Promise<void>;
 }
 
-export interface AppendResult {
-  assistantMessage?: {
-    id: string;
-    text: string;
-    parts: Array<unknown>;
-  };
-}
-
 export interface AgentHarness {
   type: AgentType;
 
@@ -60,8 +52,8 @@ export interface AgentHarness {
   append(
     harnessSessionId: string,
     event: AgentEvent,
-    params: AppendParams,
-  ): Promise<AppendResult | void>;
+    params: { workingDirectory: string },
+  ): Promise<void>;
 
   /**
    * Get the command to start this agent in a terminal.

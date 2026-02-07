@@ -10,7 +10,7 @@ import { db as defaultDb } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentType } from "../db/schema.ts";
 import { getHarness as defaultGetHarness, type AgentHarness } from "../agents/index.ts";
-import type { AppendParams, AppendResult } from "../agents/types.ts";
+import type { AppendParams } from "../agents/types.ts";
 
 export interface GetOrCreateAgentParams {
   slug: string;
@@ -150,7 +150,7 @@ export async function appendToAgent(
   message: string,
   params: AppendParams,
   deps: HarnessAgentManagerDeps = defaultHarnessDeps,
-): Promise<AppendResult | void> {
+): Promise<void> {
   const { getHarness } = deps;
 
   if (!agent.harnessSessionId) {
@@ -158,5 +158,5 @@ export async function appendToAgent(
   }
 
   const harness = getHarness(agent.harnessType);
-  return harness.append(agent.harnessSessionId, { type: "user-message", content: message }, params);
+  await harness.append(agent.harnessSessionId, { type: "user-message", content: message }, params);
 }

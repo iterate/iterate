@@ -1,15 +1,32 @@
-import { eq, and, inArray, asc } from "drizzle-orm";
+/**
+ * Web Chat Router
+ *
+ * Handles incoming web chat messages forwarded from the OS backend.
+ * Creates/reuses agents per thread and sends formatted messages.
+ * Uses the harness system for SDK-based session management.
+ *
+ * Also exposes endpoints for agents to post messages back, add/remove reactions.
+ * The agent uses `iterate tool webchat` CLI to call these endpoints,
+ * analogous to how Slack agents use `iterate tool slack`.
+ *
+ * Message cases:
+ * 1. New thread - First message creates a new agent
+ * 2. Reply - Appends to existing agent (matched by threadId)
+ */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
+import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
+import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { appendToAgent, createAgent, getAgent } from "../services/agent-manager.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
 
 const logger = console;
 
-const WebChatWebhookPayload = z.object({
+// --- Schemas ---
+
+const IncomingWebhookPayload = z.object({
   type: z.literal("web-chat:message").optional(),
   threadId: z.string().trim().min(1).max(200).optional(),
   messageId: z.string().trim().min(1).max(200).optional(),
@@ -21,40 +38,65 @@ const WebChatWebhookPayload = z.object({
   createdAt: z.number().int().positive().optional(),
 });
 
-const WebChatStoredMessage = z.object({
+const PostMessagePayload = z.object({
+  threadId: z.string().trim().min(1).max(200),
+  text: z.string().trim().min(1).max(50_000),
+  messageId: z.string().trim().min(1).max(200).optional(),
+});
+
+const ReactionPayload = z.object({
+  threadId: z.string().trim().min(1).max(200),
+  messageId: z.string().trim().min(1).max(200),
+  reaction: z.string().trim().min(1).max(100),
+});
+
+const StoredMessage = z.object({
   threadId: z.string(),
   messageId: z.string(),
   role: z.enum(["user", "assistant"]),
   text: z.string(),
   userId: z.string().optional(),
   userName: z.string().optional(),
-  sourceEventId: z.string().optional(),
-  sourceMessageId: z.string().optional(),
   agentSlug: z.string(),
+  reactions: z.array(z.string()).optional(),
   createdAt: z.number().int().positive(),
 });
 
-type WebChatStoredMessage = z.infer<typeof WebChatStoredMessage>;
+type StoredMessage = z.infer<typeof StoredMessage>;
 
-const webChatEventTypes = ["web-chat:user-message", "web-chat:assistant-message"] as const;
+type WebChatEventType =
+  | "web-chat:user-message"
+  | "web-chat:assistant-message"
+  | "web-chat:reaction-added"
+  | "web-chat:reaction-removed";
 
 export const webChatRouter = new Hono();
 
+// Middleware to log requests/responses
+webChatRouter.use("*", async (c, next) => {
+  const reqBody = await c.req.raw.clone().text();
+  logger.log(`[daemon/web-chat] REQ ${c.req.method} ${c.req.path}`, reqBody.slice(0, 500));
+  await next();
+  const resBody = await c.res.clone().text();
+  logger.log(`[daemon/web-chat] RES ${c.res.status}`, resBody.slice(0, 500));
+});
+
+// --- Inbound: user sends a message via the UI ---
+
 webChatRouter.post("/webhook", async (c) => {
-  const parsedPayload = WebChatWebhookPayload.safeParse(await c.req.json());
-  if (!parsedPayload.success) {
-    return c.json({ error: "Invalid webhook payload", issues: parsedPayload.error.issues }, 400);
+  const parsed = IncomingWebhookPayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid webhook payload", issues: parsed.error.issues }, 400);
   }
 
-  const payload = parsedPayload.data;
+  const payload = parsed.data;
   const threadId = payload.threadId ?? createThreadId();
   const messageId = payload.messageId ?? `msg_${nanoid(12)}`;
   const createdAt = payload.createdAt ?? Date.now();
-  const { agentSlug, agent: existingAgent } = await findAgentForThread(threadId);
 
-  // Idempotency for retries from UI/network hiccups.
+  // Dedup by messageId
   if (payload.messageId) {
-    const existingMessage = await db
+    const existing = await db
       .select()
       .from(schema.events)
       .where(
@@ -64,23 +106,14 @@ webChatRouter.post("/webhook", async (c) => {
         ),
       )
       .limit(1);
-
-    if (existingMessage[0]) {
-      const stored = parseStoredMessage(existingMessage[0].payload);
-      if (stored) {
-        return c.json({
-          success: true,
-          duplicate: true,
-          threadId: stored.threadId,
-          agentSlug: stored.agentSlug,
-          created: false,
-          userMessage: stored,
-        });
-      }
+    if (existing[0]) {
+      return c.json({ success: true, duplicate: true, threadId });
     }
   }
 
-  const userMessage: WebChatStoredMessage = {
+  const agentSlug = agentSlugForThread(threadId);
+
+  const userMessage: StoredMessage = {
     threadId,
     messageId,
     role: "user",
@@ -91,78 +124,116 @@ webChatRouter.post("/webhook", async (c) => {
     createdAt,
   };
 
-  const userEventId = await storeEvent("web-chat:user-message", userMessage, messageId);
+  const eventId = await storeEvent("web-chat:user-message", userMessage, messageId);
 
-  let agent = existingAgent;
+  let existingAgent = await getAgent(agentSlug);
   let wasCreated = false;
   const workingDirectory = await getCustomerRepoPath();
 
-  if (!agent) {
+  if (!existingAgent) {
     wasCreated = true;
-    agent = await createAgent({
+    existingAgent = await createAgent({
       slug: agentSlug,
       harnessType: "opencode",
       workingDirectory,
-      initialPrompt: [
-        `[Agent slug: ${agentSlug}]`,
-        "[Source: web-chat]",
-        `[Thread: ${threadId}]`,
-        "You are responding in the Iterate web chat UI.",
-      ].join("\n"),
     });
   }
 
-  const messageForAgent = formatWebChatMessage({
+  const formattedMessage = formatIncomingMessage({
     payload,
     threadId,
     messageId,
     agentSlug,
-    eventId: userEventId,
+    eventId,
     isFirstMessageInThread: wasCreated,
   });
 
-  const appendResult = await appendToAgent(agent, messageForAgent, {
+  // Fire-and-forget to agent (like Slack/email). Agent posts back via CLI tool.
+  await appendToAgent(existingAgent, formattedMessage, {
     workingDirectory,
-    acknowledge: async () => logger.log(`[web-chat] Processing message ${threadId}/${messageId}`),
-    unacknowledge: async () => logger.log(`[web-chat] Finished message ${threadId}/${messageId}`),
+    acknowledge: async () => logger.log(`[web-chat] Processing ${threadId}/${messageId}`),
+    unacknowledge: async () => logger.log(`[web-chat] Finished ${threadId}/${messageId}`),
   });
-
-  const assistantText = appendResult?.assistantMessage?.text?.trim() ?? "";
-  let assistantMessage: WebChatStoredMessage | null = null;
-  let assistantEventId: string | null = null;
-
-  if (assistantText) {
-    assistantMessage = {
-      threadId,
-      messageId: `msg_${nanoid(12)}`,
-      sourceMessageId: messageId,
-      sourceEventId: userEventId,
-      role: "assistant",
-      text: assistantText,
-      agentSlug,
-      createdAt: Date.now(),
-    };
-    assistantEventId = await storeEvent("web-chat:assistant-message", assistantMessage);
-  }
 
   return c.json({
     success: true,
     duplicate: false,
     threadId,
     messageId,
-    eventId: userEventId,
-    assistantEventId,
+    eventId,
     created: wasCreated,
     agentSlug,
-    userMessage,
-    assistantMessage,
   });
 });
 
-webChatRouter.get("/threads", async (c) => {
+// --- Outbound: agent posts a message back ---
+
+webChatRouter.post("/postMessage", async (c) => {
+  const parsed = PostMessagePayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const { threadId, text } = parsed.data;
+  const messageId = parsed.data.messageId ?? `msg_${nanoid(12)}`;
+  const agentSlug = agentSlugForThread(threadId);
+
+  const assistantMessage: StoredMessage = {
+    threadId,
+    messageId,
+    role: "assistant",
+    text,
+    agentSlug,
+    createdAt: Date.now(),
+  };
+
+  const eventId = await storeEvent("web-chat:assistant-message", assistantMessage, messageId);
+
+  return c.json({ success: true, threadId, messageId, eventId });
+});
+
+// --- Reactions ---
+
+webChatRouter.post("/addReaction", async (c) => {
+  const parsed = ReactionPayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const { threadId, messageId, reaction } = parsed.data;
+  const eventId = await storeEvent("web-chat:reaction-added", {
+    threadId,
+    messageId,
+    reaction,
+    createdAt: Date.now(),
+  });
+
+  return c.json({ success: true, eventId });
+});
+
+webChatRouter.post("/removeReaction", async (c) => {
+  const parsed = ReactionPayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const { threadId, messageId, reaction } = parsed.data;
+  const eventId = await storeEvent("web-chat:reaction-removed", {
+    threadId,
+    messageId,
+    reaction,
+    createdAt: Date.now(),
+  });
+
+  return c.json({ success: true, eventId });
+});
+
+// --- Read endpoints ---
+
+webChatRouter.get("/threads", async (_c) => {
   const messages = await listStoredMessages();
   const threads = buildThreadSummaries(messages);
-  return c.json({ threads });
+  return _c.json({ threads });
 });
 
 webChatRouter.get("/threads/:threadId/messages", async (c) => {
@@ -173,30 +244,30 @@ webChatRouter.get("/threads/:threadId/messages", async (c) => {
   return c.json({ threadId, messages });
 });
 
+// --- Helpers ---
+
 function createThreadId(): string {
   return `thread-${Date.now().toString(36)}-${nanoid(8)}`;
 }
 
-function sanitizeThreadIdForSlug(threadId: string): string {
-  const sanitized = threadId
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return sanitized || "thread";
+function sanitizeForSlug(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 50) || "thread"
+  );
 }
 
-async function findAgentForThread(
-  threadId: string,
-): Promise<{ agent: Awaited<ReturnType<typeof getAgent>>; agentSlug: string }> {
-  const agentSlug = `web-chat-${sanitizeThreadIdForSlug(threadId)}`;
-  const agent = await getAgent(agentSlug);
-  return { agent, agentSlug };
+function agentSlugForThread(threadId: string): string {
+  return `web-chat-${sanitizeForSlug(threadId)}`;
 }
 
 async function storeEvent(
-  type: "web-chat:user-message" | "web-chat:assistant-message",
-  payload: WebChatStoredMessage,
+  type: WebChatEventType,
+  payload: Record<string, unknown>,
   externalId?: string,
 ): Promise<string> {
   const eventId = `evt_${nanoid(12)}`;
@@ -204,31 +275,31 @@ async function storeEvent(
     id: eventId,
     type,
     externalId,
-    payload: payload as unknown as Record<string, unknown>,
+    payload,
   });
   return eventId;
 }
 
-function parseStoredMessage(payload: Record<string, unknown> | null): WebChatStoredMessage | null {
+function parseStoredMessage(payload: Record<string, unknown> | null): StoredMessage | null {
   if (!payload) return null;
-  const parsed = WebChatStoredMessage.safeParse(payload);
+  const parsed = StoredMessage.safeParse(payload);
   return parsed.success ? parsed.data : null;
 }
 
-async function listStoredMessages(): Promise<WebChatStoredMessage[]> {
+async function listStoredMessages(): Promise<StoredMessage[]> {
   const events = await db
     .select()
     .from(schema.events)
-    .where(inArray(schema.events.type, [...webChatEventTypes]))
+    .where(inArray(schema.events.type, ["web-chat:user-message", "web-chat:assistant-message"]))
     .orderBy(asc(schema.events.createdAt));
 
   return events
     .map((event) => parseStoredMessage(event.payload))
-    .filter((message): message is WebChatStoredMessage => message !== null);
+    .filter((message): message is StoredMessage => message !== null);
 }
 
-function buildThreadSummaries(messages: WebChatStoredMessage[]) {
-  const byThread = new Map<string, WebChatStoredMessage[]>();
+function buildThreadSummaries(messages: StoredMessage[]) {
+  const byThread = new Map<string, StoredMessage[]>();
   for (const message of messages) {
     const threadMessages = byThread.get(message.threadId) ?? [];
     threadMessages.push(message);
@@ -243,7 +314,7 @@ function buildThreadSummaries(messages: WebChatStoredMessage[]) {
 
       return {
         threadId,
-        agentSlug: lastMessage?.agentSlug ?? `web-chat-${sanitizeThreadIdForSlug(threadId)}`,
+        agentSlug: lastMessage?.agentSlug ?? agentSlugForThread(threadId),
         messageCount: sorted.length,
         title: (firstUserMessage?.text ?? "New thread").slice(0, 120),
         lastMessagePreview: (lastMessage?.text ?? "").slice(0, 160),
@@ -254,8 +325,8 @@ function buildThreadSummaries(messages: WebChatStoredMessage[]) {
     .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
 }
 
-function formatWebChatMessage(params: {
-  payload: z.infer<typeof WebChatWebhookPayload>;
+function formatIncomingMessage(params: {
+  payload: z.infer<typeof IncomingWebhookPayload>;
   threadId: string;
   messageId: string;
   agentSlug: string;
@@ -272,7 +343,7 @@ function formatWebChatMessage(params: {
 
   return [
     intro,
-    "Refer to WEB_CHAT.md for this channel's response expectations.",
+    "Refer to WEB_CHAT.md for how to respond via `iterate tool webchat`.",
     "",
     `From: ${sender}`,
     `Message: ${payload.text}`,
