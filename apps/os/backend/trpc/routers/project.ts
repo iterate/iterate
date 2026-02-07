@@ -65,9 +65,13 @@ export const projectRouter = router({
     return projects;
   }),
 
-  // Get project by slug
+  // Get project by slug (project slugs are globally unique)
+  // Returns project with organization info
   bySlug: projectProtectedProcedure.query(async ({ ctx }) => {
-    return ctx.project;
+    return {
+      ...ctx.project,
+      organization: ctx.organization,
+    };
   }),
 
   create: orgAdminMutation

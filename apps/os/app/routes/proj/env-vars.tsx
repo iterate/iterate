@@ -14,15 +14,15 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
-import { EmptyState } from "../../../components/empty-state.tsx";
-import { Button } from "../../../components/ui/button.tsx";
-import { Input } from "../../../components/ui/input.tsx";
-import { Textarea } from "../../../components/ui/textarea.tsx";
-import { Checkbox } from "../../../components/ui/checkbox.tsx";
-import { Label } from "../../../components/ui/label.tsx";
-import { HeaderActions } from "../../../components/header-actions.tsx";
-import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { EmptyState } from "../../components/empty-state.tsx";
+import { Button } from "../../components/ui/button.tsx";
+import { Input } from "../../components/ui/input.tsx";
+import { Textarea } from "../../components/ui/textarea.tsx";
+import { Checkbox } from "../../components/ui/checkbox.tsx";
+import { Label } from "../../components/ui/label.tsx";
+import { HeaderActions } from "../../components/header-actions.tsx";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import {
   Sheet,
   SheetContent,
@@ -30,30 +30,26 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "../../../components/ui/sheet.tsx";
+} from "../../components/ui/sheet.tsx";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../../../components/ui/dialog.tsx";
+} from "../../components/ui/dialog.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "../../../components/ui/dropdown-menu.tsx";
-import { Alert, AlertDescription } from "../../../components/ui/alert.tsx";
-import { getSecretHint } from "../../../lib/secret-hint.ts";
+} from "../../components/ui/dropdown-menu.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
+import { getSecretHint } from "../../lib/secret-hint.ts";
 
-const Search = z.object({
-  add: z.boolean().optional(),
-});
+const Search = z.object({ add: z.boolean().optional() });
 
-export const Route = createFileRoute(
-  "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
-)({
+export const Route = createFileRoute("/_auth/proj/$projectSlug/env-vars")({
   validateSearch: Search,
   component: ProjectEnvVarsPage,
 });
@@ -83,20 +79,16 @@ type EnvVar = {
 };
 
 function ProjectEnvVarsPage() {
-  const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/env-vars",
-  });
+  const params = useParams({ from: "/_auth/proj/$projectSlug/env-vars" });
   const queryClient = useQueryClient();
 
-  // Sheet state
+  const { data: projectWithOrg } = useSuspenseQuery(
+    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
+  );
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
   const [deleteConfirmEnvVar, setDeleteConfirmEnvVar] = useState<EnvVar | null>(null);
-
-  // Info dialogs for non-editable sources
   const [infoDialogEnvVar, setInfoDialogEnvVar] = useState<EnvVar | null>(null);
-
-  // Form state
   const [formKey, setFormKey] = useState("");
   const [formValue, setFormValue] = useState("");
   const [formDescription, setFormDescription] = useState("");
@@ -104,17 +96,13 @@ function ProjectEnvVarsPage() {
   const [secretHintDismissed, setSecretHintDismissed] = useState(false);
 
   const envVarListOptions = trpc.envVar.list.queryOptions({
-    organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
   });
-
   const { data: allEnvVars } = useSuspenseQuery(envVarListOptions);
 
-  // Split into active env vars and recommended (user-scoped secrets)
   const envVars = allEnvVars.filter((v) => v.source.type !== "recommended");
   const recommendedEnvVars = allEnvVars.filter((v) => v.source.type === "recommended");
 
-  // Derive which connectors are connected from env var sources or secret scopes
   const connectorScopes = new Set(["google", "github", "slack"]);
   const connectedProviders = new Set(
     allEnvVars.flatMap((v) => [
@@ -130,17 +118,12 @@ function ProjectEnvVarsPage() {
   ];
   const missingConnectors = connectorSuggestions.filter((c) => !connectedProviders.has(c.provider));
 
-  // Find which keys are overridden (appear multiple times, later one wins)
   const overriddenKeys = new Set<string>();
   const seenKeys = new Map<string, number>();
   envVars.forEach((v, idx) => {
-    if (seenKeys.has(v.key)) {
-      overriddenKeys.add(v.key);
-    }
+    if (seenKeys.has(v.key)) overriddenKeys.add(v.key);
     seenKeys.set(v.key, idx);
   });
-
-  // Which specific entries are overridden (not the overriding ones)
   const isOverridden = (envVar: EnvVar, idx: number) => {
     if (!overriddenKeys.has(envVar.key)) return false;
     const lastIdx = seenKeys.get(envVar.key);
@@ -150,7 +133,6 @@ function ProjectEnvVarsPage() {
   const setEnvVar = useMutation({
     mutationFn: async (input: { key: string; value: string; description?: string }) => {
       return trpcClient.envVar.set.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
@@ -164,49 +146,36 @@ function ProjectEnvVarsPage() {
       setEditingEnvVar(null);
       toast.success("Environment variable saved!");
     },
-    onError: (error) => {
-      toast.error("Failed to save: " + error.message);
-    },
+    onError: (error) => toast.error("Failed to save: " + error.message),
   });
 
   const createSecret = useMutation({
-    mutationFn: async (input: { key: string; value: string }) => {
-      return trpcClient.secret.create.mutate({
-        organizationSlug: params.organizationSlug,
+    mutationFn: async (input: { key: string; value: string }) =>
+      trpcClient.secret.create.mutate({
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
-      });
-    },
+      }),
   });
 
   const updateSecret = useMutation({
-    mutationFn: async (input: { key: string; value: string }) => {
-      return trpcClient.secret.updateByKey.mutate({
-        organizationSlug: params.organizationSlug,
+    mutationFn: async (input: { key: string; value: string }) =>
+      trpcClient.secret.updateByKey.mutate({
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
-      });
-    },
+      }),
   });
 
   const deleteEnvVar = useMutation({
-    mutationFn: async (key: string) => {
-      return trpcClient.envVar.delete.mutate({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        key,
-      });
-    },
+    mutationFn: async (key: string) =>
+      trpcClient.envVar.delete.mutate({ projectSlug: params.projectSlug, key }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
       setDeleteConfirmEnvVar(null);
       toast.success("Environment variable deleted!");
     },
-    onError: (error) => {
-      toast.error("Failed to delete: " + error.message);
-    },
+    onError: (error) => toast.error("Failed to delete: " + error.message),
   });
 
   const resetForm = () => {
@@ -228,9 +197,7 @@ function ProjectEnvVarsPage() {
       setInfoDialogEnvVar(envVar);
       return;
     }
-    // User-defined - open edit sheet
     setFormKey(envVar.key);
-    // If it's a secret, don't show the magic string - show empty for new value entry
     setFormValue(envVar.secret ? "" : envVar.value);
     setFormDescription(envVar.description ?? "");
     setFormIsSecret(!!envVar.secret);
@@ -245,31 +212,22 @@ function ProjectEnvVarsPage() {
     const description = formDescription.trim() || undefined;
     if (!key || (!value && !isEditingExistingSecret)) return;
 
-    // Check if this key will override an existing one
     const existingNonUser = envVars.find((v) => v.key === key && v.source.type !== "user");
     if (existingNonUser && !editingEnvVar) {
-      // Show info toast but continue
-      toast.info(
-        `This will override the ${existingNonUser.source.type === "global" ? "global" : existingNonUser.source.type === "connection" ? (existingNonUser.source as { type: "connection"; provider: string }).provider : ""} env var "${key}"`,
-      );
+      toast.info(`This will override existing env var \"${key}\"`);
     }
 
     if (formIsSecret) {
-      // Create/update secret, then env var with magic string
       const secretKey = `env.${key}`;
       try {
         if (editingEnvVar) {
-          // Update existing secret only if a new value was provided
-          if (value) {
-            await updateSecret.mutateAsync({ key: secretKey, value });
-          }
+          if (value) await updateSecret.mutateAsync({ key: secretKey, value });
         } else {
           await createSecret.mutateAsync({ key: secretKey, value });
         }
         const magicValue = `getIterateSecret({secretKey: '${secretKey}'})`;
         await setEnvVar.mutateAsync({ key, value: magicValue, description });
       } catch (error) {
-        // If secret already exists, try updating it
         if (error instanceof Error && error.message.includes("already exists")) {
           try {
             await updateSecret.mutateAsync({ key: secretKey, value });
@@ -285,9 +243,10 @@ function ProjectEnvVarsPage() {
           );
         }
       }
-    } else {
-      setEnvVar.mutate({ key, value, description });
+      return;
     }
+
+    setEnvVar.mutate({ key, value, description });
   };
 
   const getSourceLabel = (source: EnvVarSource): string => {
@@ -304,13 +263,12 @@ function ProjectEnvVarsPage() {
   };
 
   const isPending = setEnvVar.isPending || createSecret.isPending;
-  // When editing an existing secret, allow empty value to keep existing
   const isEditingExistingSecret = !!editingEnvVar?.secret && formIsSecret;
 
   const addSheet = (
     <Sheet open={addSheetOpen} onOpenChange={setAddSheetOpen}>
       <SheetContent>
-        <form onSubmit={handleSubmit} className="flex flex-col h-full">
+        <form onSubmit={handleSubmit} className="flex h-full flex-col">
           <SheetHeader>
             <SheetTitle>
               {editingEnvVar ? "Edit Environment Variable" : "Add Environment Variable"}
@@ -385,7 +343,7 @@ function ProjectEnvVarsPage() {
                   ) : (
                     <>
                       The value will be stored encrypted. The env var will be set to{" "}
-                      <code className="bg-muted px-1 rounded">
+                      <code className="rounded bg-muted px-1">
                         getIterateSecret({`{secretKey: 'env.${formKey || "YOUR_KEY"}'}`})
                       </code>
                     </>
@@ -438,29 +396,21 @@ function ProjectEnvVarsPage() {
           </DialogTitle>
           <DialogDescription>
             {infoDialogEnvVar.source.type === "global"
-              ? "This is a global env var provided by Iterate and can't be edited or removed. You can override it by adding another env var with the same name."
-              : `This env var comes from your ${(infoDialogEnvVar.source as { type: "connection"; provider: string }).provider} connection. You can remove it by disconnecting, or override it by adding another env var with the same name.`}
+              ? "This is provided by Iterate and can't be edited or removed. You can override it with the same key."
+              : "This comes from a connector. You can override it with the same key."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-4">
           <div>
-            <div className="text-sm font-medium mb-1">Name</div>
+            <div className="mb-1 text-sm font-medium">Name</div>
             <code className="text-sm">{infoDialogEnvVar.key}</code>
           </div>
           <div>
-            <div className="text-sm font-medium mb-1">Value</div>
-            <code className="text-sm text-muted-foreground break-all">
+            <div className="mb-1 text-sm font-medium">Value</div>
+            <code className="break-all text-sm text-muted-foreground">
               {infoDialogEnvVar.value}
             </code>
           </div>
-          {infoDialogEnvVar.egressProxyRule && (
-            <div>
-              <div className="text-sm font-medium mb-1">Egress Proxy Rule</div>
-              <code className="text-sm text-muted-foreground">
-                {infoDialogEnvVar.egressProxyRule}
-              </code>
-            </div>
-          )}
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => setInfoDialogEnvVar(null)}>
@@ -510,44 +460,28 @@ function ProjectEnvVarsPage() {
           <span className="hidden sm:inline">Add Environment Variable</span>
         </Button>
       </HeaderActions>
-
       {addSheet}
       {infoDialogContent}
-
       <ConfirmDialog
         open={!!deleteConfirmEnvVar}
         onOpenChange={(open) => !open && setDeleteConfirmEnvVar(null)}
         title="Delete environment variable?"
-        description={
-          deleteConfirmEnvVar
-            ? isSecretWithCustomKey(deleteConfirmEnvVar)
-              ? `This will permanently delete "${deleteConfirmEnvVar.key}" and its stored secret. This action cannot be undone.`
-              : `This will delete "${deleteConfirmEnvVar.key}".`
-            : ""
-        }
+        description={deleteConfirmEnvVar ? `This will delete \"${deleteConfirmEnvVar.key}\".` : ""}
         confirmLabel="Delete"
         onConfirm={() => deleteConfirmEnvVar && deleteEnvVar.mutate(deleteConfirmEnvVar.key)}
         destructive
       />
-
-      {/* Explainer */}
-      <p className="text-sm text-muted-foreground mb-4">
-        Environment variables are available to your machines. Secret values use{" "}
-        <code className="text-xs bg-muted px-1 rounded">getIterateSecret(...)</code> which the
-        egress proxy resolves at request time, so secrets are not visible to our agent.
+      <p className="mb-4 text-sm text-muted-foreground">
+        Environment variables are available to your machines.
       </p>
 
-      {/* Missing connectors */}
       {missingConnectors.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-4">
+        <div className="mb-4 flex flex-wrap gap-2">
           {missingConnectors.map(({ provider, label, icon: Icon }) => (
             <Link
               key={provider}
-              to="/orgs/$organizationSlug/projects/$projectSlug/connectors"
-              params={{
-                organizationSlug: params.organizationSlug,
-                projectSlug: params.projectSlug,
-              }}
+              to="/proj/$projectSlug/connectors"
+              params={{ projectSlug: params.projectSlug }}
             >
               <Button variant="outline" size="sm">
                 <Icon className="h-4 w-4" />
@@ -558,73 +492,62 @@ function ProjectEnvVarsPage() {
         </div>
       )}
 
-      {/* Table-like layout */}
-      <div className="border rounded-lg divide-y">
+      <div className="divide-y rounded-lg border">
         {envVars.map((envVar, idx) => {
           const overridden = isOverridden(envVar, idx);
           const isUserDefined = envVar.source.type === "user";
           const isNonEditable = !isUserDefined;
-
           return (
             <div
               key={`${envVar.key}-${idx}`}
-              className={`flex items-center px-4 py-3 gap-4 ${isNonEditable ? "opacity-70" : ""}`}
+              className={`flex items-center gap-4 px-4 py-3 ${isNonEditable ? "opacity-70" : ""}`}
             >
-              {/* Left content */}
-              <div className="flex-1 min-w-0">
-                {/* Top row: name | value */}
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-4">
-                  {/* Name column - fixed width */}
                   <span
-                    className={`w-56 shrink-0 font-mono text-sm truncate ${overridden ? "text-muted-foreground" : ""}`}
+                    className={`w-56 shrink-0 truncate font-mono text-sm ${overridden ? "text-muted-foreground" : ""}`}
                     style={overridden ? { textDecoration: "line-through" } : undefined}
                     title={envVar.key}
                   >
                     {envVar.key}
                   </span>
-
-                  {/* Value column - takes remaining space */}
                   <span
-                    className="flex-1 min-w-0 font-mono text-sm text-muted-foreground truncate"
+                    className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground"
                     style={overridden ? { textDecoration: "line-through" } : undefined}
                     title={envVar.value}
                   >
                     {envVar.value}
                   </span>
                 </div>
-
-                {/* Second row: source info */}
-                <div className="flex items-center gap-4 mt-0.5">
-                  <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
+                <div className="mt-0.5 flex items-center gap-4">
+                  <div className="flex w-56 shrink-0 items-center gap-1 text-xs text-muted-foreground">
                     {envVar.secret && <Lock className="h-3 w-3" />}
                     <span>{getSourceLabel(envVar.source)}</span>
                   </div>
                   {envVar.description && (
-                    <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+                    <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                       {envVar.description}
                     </div>
                   )}
                 </div>
               </div>
-
-              {/* Menu button - vertically centered */}
               {isUserDefined ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="shrink-0 h-8 w-8">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
                       <MoreHorizontal className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => handleOpenEdit(envVar)}>
-                      <Pencil className="h-4 w-4 mr-2" />
+                      <Pencil className="mr-2 h-4 w-4" />
                       Edit
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => setDeleteConfirmEnvVar(envVar)}
                       className="text-destructive"
                     >
-                      <Trash2 className="h-4 w-4 mr-2" />
+                      <Trash2 className="mr-2 h-4 w-4" />
                       Delete
                     </DropdownMenuItem>
                   </DropdownMenuContent>
@@ -633,7 +556,7 @@ function ProjectEnvVarsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="shrink-0 h-8 w-8"
+                  className="h-8 w-8 shrink-0"
                   onClick={() => handleOpenEdit(envVar)}
                 >
                   <MoreHorizontal className="h-4 w-4" />
@@ -644,41 +567,23 @@ function ProjectEnvVarsPage() {
         })}
       </div>
 
-      {/* Recommended env vars (user-scoped secrets like Google) */}
       {recommendedEnvVars.length > 0 && (
         <div className="mt-6">
-          <h3 className="text-sm font-medium mb-2">Recommended</h3>
-          <p className="text-sm text-muted-foreground mb-3">
-            These env vars are available from your connected accounts. Add them to make them
-            accessible to your machines.
-          </p>
-          <div className="border rounded-lg divide-y">
+          <h3 className="mb-2 text-sm font-medium">Recommended</h3>
+          <div className="divide-y rounded-lg border">
             {recommendedEnvVars.map((rec) => (
-              <div key={rec.key} className="flex items-center px-4 py-3 gap-4">
-                <div className="flex-1 min-w-0">
+              <div key={rec.key} className="flex items-center gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-4">
-                    <span className="w-56 shrink-0 font-mono text-sm truncate" title={rec.key}>
+                    <span className="w-56 shrink-0 truncate font-mono text-sm" title={rec.key}>
                       {rec.key}
                     </span>
                     <span
-                      className="flex-1 min-w-0 font-mono text-sm text-muted-foreground truncate"
+                      className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground"
                       title={rec.value}
                     >
                       {rec.value}
                     </span>
-                  </div>
-                  <div className="flex items-center gap-4 mt-0.5">
-                    <div className="w-56 shrink-0 text-xs text-muted-foreground flex items-center gap-1">
-                      <Lock className="h-3 w-3" />
-                      <span>
-                        {rec.source.type === "recommended" &&
-                          rec.source.provider.charAt(0).toUpperCase() +
-                            rec.source.provider.slice(1)}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-                      {rec.description}
-                    </div>
                   </div>
                 </div>
                 <Button
@@ -705,7 +610,6 @@ function ProjectEnvVarsPage() {
   );
 }
 
-/** Shows a hint when the value looks like it should be a secret */
 function SecretHintAlert({
   formKey,
   formValue,
@@ -719,19 +623,14 @@ function SecretHintAlert({
 }) {
   const hint = getSecretHint(formKey, formValue);
   if (!hint.looksLikeSecret || dismissed) return null;
-
-  const messages: Record<NonNullable<typeof hint.reason>, string> = {
-    "key-name": "The key name suggests this might be a secret.",
-    "value-pattern": "The value looks like an API key or token.",
-    "high-entropy": "The value has high entropy (looks random).",
-  };
-
   return (
     <Alert variant="destructive">
       <Lock className="h-4 w-4" />
-      <AlertDescription className="text-xs flex items-center justify-between gap-2">
-        <span>{messages[hint.reason!]} Check "Store as secret" or dismiss this warning.</span>
-        <Button variant="outline" size="sm" className="h-6 text-xs shrink-0" onClick={onDismiss}>
+      <AlertDescription className="flex items-center justify-between gap-2 text-xs">
+        <span>
+          This value looks like a secret. Check "Store as secret" or dismiss this warning.
+        </span>
+        <Button variant="outline" size="sm" className="h-6 shrink-0 text-xs" onClick={onDismiss}>
           Dismiss
         </Button>
       </AlertDescription>
@@ -739,7 +638,6 @@ function SecretHintAlert({
   );
 }
 
-/** Check if the secret hint warning is blocking submission */
 function hasBlockingSecretHint(
   formKey: string,
   formValue: string,
@@ -747,14 +645,5 @@ function hasBlockingSecretHint(
   dismissed: boolean,
 ): boolean {
   if (formIsSecret || dismissed) return false;
-  const hint = getSecretHint(formKey, formValue);
-  return hint.looksLikeSecret;
-}
-
-/**
- * Check if an env var is a user-created secret (env.* key).
- * Deleting these is permanent because the secret is also deleted.
- */
-function isSecretWithCustomKey(envVar: EnvVar): boolean {
-  return envVar.secret?.secretScope === "env";
+  return getSecretHint(formKey, formValue).looksLikeSecret;
 }

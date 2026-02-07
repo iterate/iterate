@@ -142,17 +142,15 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
   return next({ ctx });
 });
 
-// Project protected procedure that requires authentication and project access
-// Uses slug instead of ID
-export const projectProtectedProcedure = orgProtectedProcedure
+// Project protected procedure that requires authentication and project access.
+// Project slugs are globally unique, so only projectSlug is required.
+export const projectProtectedProcedure = protectedProcedure
   .input(z.object({ projectSlug: z.string() }))
-  .use(async ({ ctx, input, next }) => {
+  .use(async ({ ctx, input, next, path }) => {
     const proj = await ctx.db.query.project.findFirst({
-      where: and(
-        eq(projectTable.organizationId, ctx.organization.id),
-        eq(projectTable.slug, input.projectSlug),
-      ),
+      where: eq(projectTable.slug, input.projectSlug),
       with: {
+        organization: true,
         projectRepos: true,
         envVars: true,
         accessTokens: true,
@@ -163,13 +161,30 @@ export const projectProtectedProcedure = orgProtectedProcedure
     if (!proj) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `Project with slug ${input.projectSlug} not found in organization`,
+        message: `Project with slug ${input.projectSlug} not found`,
+      });
+    }
+
+    // Check user has access to the project's organization
+    const membership = await ctx.db.query.organizationUserMembership.findFirst({
+      where: and(
+        eq(organizationUserMembership.organizationId, proj.organizationId),
+        eq(organizationUserMembership.userId, ctx.user.id),
+      ),
+    });
+
+    if (!membership && ctx.user.role !== "admin") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Access to ${path} denied: User does not have access to this project`,
       });
     }
 
     return next({
       ctx: {
         ...ctx,
+        organization: proj.organization,
+        membership: membership ?? undefined,
         project: proj,
       },
     });

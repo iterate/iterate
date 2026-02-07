@@ -184,8 +184,8 @@ export function ProjectBreadcrumbDropdown({
       ariaLabel="switch project"
       prefix="Project:"
       getItemLinkProps={(item) => ({
-        to: "/orgs/$organizationSlug/projects/$projectSlug",
-        params: { organizationSlug, projectSlug: item.slug },
+        to: "/proj/$projectSlug",
+        params: { projectSlug: item.slug },
       })}
       addAction={{
         label: "Add project",
@@ -201,7 +201,6 @@ export function ProjectBreadcrumbDropdown({
 interface MachineBreadcrumbDropdownProps {
   currentName: string;
   currentId: string;
-  organizationSlug: string;
   projectSlug: string;
   items: DropdownItem[];
   isCurrentPage?: boolean;
@@ -210,7 +209,6 @@ interface MachineBreadcrumbDropdownProps {
 export function MachineBreadcrumbDropdown({
   currentName,
   currentId,
-  organizationSlug,
   projectSlug,
   items,
   isCurrentPage = false,
@@ -225,14 +223,14 @@ export function MachineBreadcrumbDropdown({
       ariaLabel="switch machine"
       prefix="Machine:"
       getItemLinkProps={(item) => ({
-        to: "/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
-        params: { organizationSlug, projectSlug, machineId: item.id },
+        to: "/proj/$projectSlug/machines/$machineId",
+        params: { projectSlug, machineId: item.id },
       })}
       addAction={{
         label: "Add machine",
         linkProps: {
-          to: "/orgs/$organizationSlug/projects/$projectSlug/machines",
-          params: { organizationSlug, projectSlug },
+          to: "/proj/$projectSlug/machines",
+          params: { projectSlug },
           search: { create: true },
         },
       }}
