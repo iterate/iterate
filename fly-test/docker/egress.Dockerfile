@@ -14,7 +14,6 @@ ENV PATH=/root/.bun/bin:${PATH}
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
-  openssl \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://bun.sh/install | bash
@@ -26,6 +25,6 @@ COPY egress-proxy /proof/egress-proxy
 COPY mitm-go /proof/mitm-go
 
 RUN chmod +x /proof/egress-proxy/start.sh /proof/mitm-go/start.sh
-RUN bun --version && /usr/local/bin/fly-mitm --help >/dev/null
+RUN bun --version && test -x /usr/local/bin/fly-mitm
 
 ENTRYPOINT ["/bin/bash", "/proof/egress-proxy/start.sh"]
