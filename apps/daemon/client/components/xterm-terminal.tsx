@@ -305,9 +305,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
                 ta?.blur();
               }}
               onSearch={(query) => {
-                searchAddonRef.current?.findNext(query, {
-                  decorations: { activeMatchColorOverviewRuler: "#ffcc00" },
-                });
+                searchAddonRef.current?.findNext(query);
               }}
               onSearchNext={(query) => {
                 searchAddonRef.current?.findNext(query);
