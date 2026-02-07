@@ -200,6 +200,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       requestAnimationFrame(() => {
         fitAddon.fit();
         sendResize();
+        // Focus immediately so the cursor blinks on first render
+        terminal.focus();
       });
 
       // Let Shift+PageUp/Down pass through to the browser
@@ -217,6 +219,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           sendResize();
         });
         terminal.focus();
+        // On mobile, explicitly focus the xterm textarea with a small delay
+        // so iOS opens the virtual keyboard (it treats the websocket-open
+        // callback as close-enough to a user gesture on initial page load)
+        if (isMobileRef.current && helperTextarea) {
+          setTimeout(() => helperTextarea.focus(), 100);
+        }
       };
 
       const handleMessage = (event: MessageEvent) => {
@@ -359,7 +367,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             data-connection-status={connectionStatus}
             className="absolute inset-0"
             onClick={() => termRef.current?.focus()}
-            onTouchStart={() => termRef.current?.focus()}
+            onTouchStart={() => {
+              termRef.current?.focus();
+              // On iOS, terminal.focus() alone may not open the keyboard.
+              // Explicitly focus the textarea in the user-gesture context.
+              const ta = containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+              ta?.focus();
+            }}
           />
         </div>
       </div>
