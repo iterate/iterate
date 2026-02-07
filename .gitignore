@@ -56,3 +56,8 @@ playwriter-screenshot-*
 # PR video recordings
 pr-videos/
 *.log
+
+# fly-test generated artifacts
+fly-test/proof-logs/
+fly-test/mitm-go/go-mitm/fly-mitm-linux-amd64
+fly-test/.cache/
