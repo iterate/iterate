@@ -269,7 +269,7 @@ export function MobileKeyboardToolbar({
         onKeyPress(keyDef.key);
       }
     },
-    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onDismissKeyboard],
+    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onDismissKeyboard, onSearchClose],
   );
 
   const handlePointerCancel = useCallback(() => {

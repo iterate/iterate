@@ -285,7 +285,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         termRef.current = null;
         container.innerHTML = "";
       };
-    }, [socket, onParamsChange]);
+    }, [socket, onParamsChange, isMobile]);
 
     return (
       <div className="flex h-full w-full flex-col bg-[#1e1e1e]">
