@@ -12,6 +12,7 @@ import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-q
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
+import type { MachineType } from "@iterate-com/sandbox/providers/types";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Checkbox } from "../../components/ui/checkbox.tsx";
@@ -35,8 +36,6 @@ import { EmptyState } from "../../components/empty-state.tsx";
 import { MachineTable } from "../../components/machine-table.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 
-type MachineType = "daytona" | "local-docker" | "local";
-
 const DEFAULT_LOCAL_PORTS: Record<string, string> = {
   "iterate-daemon": "3000",
   "iterate-daemon-server": "3001",
@@ -54,7 +53,7 @@ function dateSlug() {
 }
 
 function isDefaultMachineName(name: string) {
-  return /^(daytona|local-docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
+  return /^(daytona|docker|fly|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
 }
 
 const Search = z.object({
@@ -214,7 +213,7 @@ function ProjectMachinesPage() {
       return;
     }
 
-    if (newMachineType === "local-docker") {
+    if (newMachineType === "docker") {
       const imageName = newLocalDockerImage.trim();
       if (!imageName) {
         toast.error("Docker image is required");
@@ -344,7 +343,7 @@ function ProjectMachinesPage() {
                 </div>
               </div>
             )}
-            {newMachineType === "local-docker" && (
+            {newMachineType === "docker" && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Docker Image</label>
@@ -359,15 +358,12 @@ function ProjectMachinesPage() {
                 </div>
                 <div className="flex items-start gap-2">
                   <Checkbox
-                    id="local-docker-sync-repo"
+                    id="docker-sync-repo"
                     checked={newLocalDockerSyncRepo}
                     onCheckedChange={(value) => setNewLocalDockerSyncRepo(value === true)}
                     disabled={createMachine.isPending}
                   />
-                  <label
-                    className="text-sm font-medium leading-tight"
-                    htmlFor="local-docker-sync-repo"
-                  >
+                  <label className="text-sm font-medium leading-tight" htmlFor="docker-sync-repo">
                     Sync host git repo into the sandbox
                   </label>
                 </div>

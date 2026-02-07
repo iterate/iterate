@@ -56,7 +56,7 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  const { commands, services } = machine;
+  const { services } = machine;
 
   const restartMachine = useMutation({
     mutationFn: async () => {
@@ -320,41 +320,6 @@ function MachineDetailPage() {
                 ))}
               </div>
             </div>
-          )}
-
-          {commands.length > 0 && iterateDaemonService && (
-            <>
-              <div className="border-t pt-4">
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Commands</h3>
-              </div>
-              {commands.map((cmd, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between rounded-lg border bg-card p-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{cmd.label}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {iterateDaemonService.options.map((option, optIndex) => (
-                      <a
-                        key={optIndex}
-                        href={buildAgentTerminalUrl(option.url, cmd.command)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        {option.label}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
           )}
 
           {agents.length > 0 && (
