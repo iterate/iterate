@@ -48,7 +48,6 @@ function makeLogger(summaryPath: string): (line: string) => void {
 function createProvider(config: RunnerConfig, log: (line: string) => void): ObservabilityProvider {
   const init = {
     flyDir: config.flyDir,
-    artifactDir: config.artifactDir,
     app: config.app,
     cleanupOnExit: config.cleanupOnExit,
     targetUrl: config.targetUrl,

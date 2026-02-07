@@ -3,14 +3,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findFlyDir, nowTag, runCommand } from "../e2e/run-observability-lib.ts";
+import type { CommandResult } from "../e2e/run-observability-lib.ts";
 
 type BenchmarkPhase = "warmup" | "proxied" | "direct" | "idle";
-
-type CommandResult = {
-  status: number;
-  stdout: string;
-  stderr: string;
-};
 
 type DockerStatRaw = {
   BlockIO: string;
@@ -144,6 +139,7 @@ async function main(): Promise<void> {
   const flyDir = findFlyDir();
   const composeFile = join(flyDir, "docker-compose.local.yml");
   const composeProject = process.env["BENCH_COMPOSE_PROJECT"] ?? "proxylat";
+  const cleanupStack = process.env["BENCH_CLEANUP_STACK"] !== "0";
   const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
   const requests = Number.parseInt(process.env["BENCH_REQUESTS"] ?? "30", 10);
   const sampleMs = Number.parseInt(process.env["BENCH_SAMPLE_MS"] ?? "500", 10);
@@ -311,6 +307,11 @@ async function main(): Promise<void> {
     process.stdout.write(`benchmark report: ${outputPath}\n`);
   } finally {
     if (!statsProc.killed) statsProc.kill("SIGKILL");
+    if (cleanupStack) {
+      runCommand("docker", ["compose", "-f", composeFile, "-p", composeProject, "down", "-v"], {
+        allowFailure: true,
+      });
+    }
   }
 }
 
