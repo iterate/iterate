@@ -73,32 +73,26 @@ For local development, each developer gets their own namespace based on `ITERATE
 To create a new Daytona snapshot from the repo root:
 
 ```bash
-pnpm daytona:build
-```
-
-Or from the repo root using the filter flag:
-
-```bash
-pnpm --filter os daytona:build
+pnpm build:daytona
 ```
 
 To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
-doppler run --config dev -- pnpm daytona:build
+doppler run --config dev -- pnpm build:daytona
 
 # For staging snapshots
-doppler run --config stg -- pnpm daytona:build
+doppler run --config stg -- pnpm build:daytona
 
 # For production snapshots
-doppler run --config prd -- pnpm daytona:build
+doppler run --config prd -- pnpm build:daytona
 ```
 
 If you want to force a specific Doppler config:
 
 ```bash
-doppler run --config stg -- pnpm daytona:build
+doppler run --config stg -- pnpm build:daytona
 ```
 
 This will:

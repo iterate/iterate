@@ -133,8 +133,7 @@ export default workflow({
             REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
           },
           run: [
-            // Daytona snapshots must always be amd64, even on arm64 runners.
-            'docker pull --platform linux/amd64 "$REGISTRY_IMAGE_NAME"',
+            'docker pull "$REGISTRY_IMAGE_NAME"',
             'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
           ].join("\n"),
         },
@@ -207,7 +206,8 @@ export default workflow({
             REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
           },
           run: [
-            'docker pull "$REGISTRY_IMAGE_NAME"',
+            // Daytona snapshots must always be amd64, even on arm64 runners.
+            'docker pull --platform linux/amd64 "$REGISTRY_IMAGE_NAME"',
             'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
           ].join("\n"),
         },
@@ -241,7 +241,7 @@ export default workflow({
             "set -euo pipefail",
             'snapshot_name="iterate-sandbox-${{ needs.build-image.outputs.git_sha }}"',
             "output_file=$(mktemp)",
-            'pnpm daytona:build --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"',
+            'pnpm build:daytona --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"',
             'snapshot_name=$(grep -m 1 "^snapshot_name=" "$output_file" | sed "s/^snapshot_name=//")',
             'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
           ].join("\n"),

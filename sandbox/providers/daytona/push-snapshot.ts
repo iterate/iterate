@@ -1,7 +1,7 @@
 /**
  * Push local Docker sandbox image to Daytona as a snapshot.
  *
- * Usage: pnpm daytona:build [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
+ * Usage: pnpm build:daytona [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
  * This script expects the image to already be built with `pnpm docker:build`,
  * which loads the image into local Docker daemon. By default, uses the most recently built :local image.

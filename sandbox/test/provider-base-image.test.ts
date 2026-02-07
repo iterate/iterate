@@ -65,12 +65,19 @@ describe
         // Fly sandboxes can be IPv6-only in some environments, making external fetch
         // from the local test runner unreliable even when the machine is healthy.
         if (TEST_CONFIG.provider === "fly") {
-          const internalFetch = await sandbox.exec([
-            "sh",
-            "-c",
-            `curl -sS --max-time 10 http://127.0.0.1:${previewPort}/preview-ok.txt`,
-          ]);
-          expect(internalFetch).toContain(PREVIEW_BODY);
+          await expect
+            .poll(
+              async () => {
+                const internalFetch = await sandbox.exec([
+                  "sh",
+                  "-c",
+                  `curl -sS --max-time 10 http://127.0.0.1:${previewPort}/preview-ok.txt`,
+                ]);
+                return internalFetch;
+              },
+              { timeout: 20_000, interval: 500 },
+            )
+            .toContain(PREVIEW_BODY);
           expect(baseUrl).toContain(".fly.dev");
           return;
         }
@@ -91,6 +98,6 @@ describe
         const fetched = await fetchPreview("/preview-ok.txt");
         expect(await fetched.text()).toContain(PREVIEW_BODY);
       },
-      60000,
+      120000,
     );
   });

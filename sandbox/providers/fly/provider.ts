@@ -14,11 +14,12 @@ const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
 const WAIT_TIMEOUT_SECONDS = 300;
 const MAX_WAIT_TIMEOUT_SECONDS = 60;
-const DEFAULT_SERVICE_PORTS = [3000, 3001, 4096, 7777, 9876];
+const DEFAULT_WEB_INTERNAL_PORT = 3000;
+const DEFAULT_SERVICE_PORTS = [3001, 4096, 7777, 9876];
 const DEFAULT_FLY_ORG = "iterate";
 const DEFAULT_FLY_IMAGE = "registry.fly.io/iterate-sandbox-image:main";
-const DEFAULT_FLY_MACHINE_CPUS = 1;
-const DEFAULT_FLY_MACHINE_MEMORY_MB = 1024;
+const DEFAULT_FLY_MACHINE_CPUS = 2;
+const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
 const APP_NAME_MAX_LENGTH = 63;
 const PROVIDER_ID_SEPARATOR = ":";
@@ -286,17 +287,43 @@ async function waitForState(params: {
 
 function buildPreviewUrl(params: { baseDomain: string; appName: string; port: number }): string {
   const { baseDomain, appName, port } = params;
+  if (port === DEFAULT_WEB_INTERNAL_PORT) return `https://${appName}.${baseDomain}`;
   if (port === 443) return `https://${appName}.${baseDomain}`;
   if (port === 80) return `http://${appName}.${baseDomain}`;
   return `http://${appName}.${baseDomain}:${port}`;
 }
 
-function makeService(port: number): Record<string, unknown> {
+function makeService(params: {
+  internalPort: number;
+  externalPorts: Array<{ port: number; handlers?: string[] }>;
+}): Record<string, unknown> {
+  const { internalPort, externalPorts } = params;
   return {
     protocol: "tcp",
-    internal_port: port,
-    ports: [{ port, handlers: ["http"] }],
+    internal_port: internalPort,
+    ports: externalPorts.map((portConfig) => ({
+      port: portConfig.port,
+      ...(portConfig.handlers?.length ? { handlers: portConfig.handlers } : {}),
+    })),
   };
+}
+
+function buildServices(): Array<Record<string, unknown>> {
+  return [
+    makeService({
+      internalPort: DEFAULT_WEB_INTERNAL_PORT,
+      externalPorts: [
+        { port: 80, handlers: ["http"] },
+        { port: 443, handlers: ["tls", "http"] },
+      ],
+    }),
+    ...DEFAULT_SERVICE_PORTS.map((port) =>
+      makeService({
+        internalPort: port,
+        externalPorts: [{ port }],
+      }),
+    ),
+  ];
 }
 
 function isTransientFlyError(error: unknown): boolean {
@@ -324,6 +351,11 @@ function isGraphQlNotFoundError(error: unknown): boolean {
     message.includes("couldn't resolve") ||
     message.includes("cannot return null")
   );
+}
+
+function isMachineStillActiveError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return message.includes("failed_precondition") && message.includes("still active");
 }
 
 async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Promise<void> {
@@ -478,12 +510,22 @@ export class FlySandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
-    await flyApi({
-      env: this.env,
-      method: "POST",
-      path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
-      body: {},
-    });
+    for (let attempt = 1; attempt <= EXEC_RETRY_LIMIT; attempt += 1) {
+      try {
+        await flyApi({
+          env: this.env,
+          method: "POST",
+          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
+          body: {},
+        });
+        break;
+      } catch (error) {
+        if (!isMachineStillActiveError(error) || attempt >= EXEC_RETRY_LIMIT) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      }
+    }
 
     await waitForState({
       env: this.env,
@@ -578,6 +620,11 @@ export class FlyProvider extends SandboxProvider {
     const base = slugify(opts.id ?? opts.name) || "sandbox";
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
+    const envVars = {
+      ...opts.envVars,
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS:
+        opts.envVars?.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS ?? ".fly.dev",
+    };
 
     const appName = buildSandboxAppName({
       prefix: this.env.SANDBOX_FLY_APP_NAME,
@@ -598,14 +645,14 @@ export class FlyProvider extends SandboxProvider {
         skip_launch: false,
         config: {
           image: opts.providerSnapshotId ?? this.defaultSnapshotId,
-          env: opts.envVars,
+          env: envVars,
           guest: {
             cpu_kind: "shared",
             cpus: this.env.SANDBOX_FLY_MACHINE_CPUS,
             memory_mb: this.env.SANDBOX_FLY_MACHINE_MEMORY_MB,
           },
           restart: { policy: "always" },
-          services: DEFAULT_SERVICE_PORTS.map((port) => makeService(port)),
+          services: buildServices(),
           metadata: {
             "com.iterate.sandbox": "true",
             "com.iterate.machine_type": "fly",

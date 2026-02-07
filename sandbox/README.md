@@ -75,7 +75,7 @@ These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to kee
 Create snapshot directly from Dockerfile (builds on Daytona's infra):
 
 ```bash
-pnpm daytona:build
+pnpm build:daytona
 ```
 
 Options:
@@ -88,7 +88,7 @@ Options:
 Example:
 
 ```bash
-pnpm daytona:build --name my-snapshot --cpu 4 --memory 8
+pnpm build:daytona --name my-snapshot --cpu 4 --memory 8
 ```
 
 Requires `daytona` CLI (`daytona login`).

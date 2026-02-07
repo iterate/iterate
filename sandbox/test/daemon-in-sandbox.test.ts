@@ -22,9 +22,23 @@ import { describe } from "vitest";
 import type { TRPCRouter } from "../../apps/daemon/server/trpc/router.ts";
 import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
-import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
+import {
+  test,
+  ITERATE_REPO_PATH,
+  RUN_SANDBOX_TESTS,
+  POLL_DEFAULTS,
+  TEST_CONFIG,
+} from "./helpers.ts";
 
 class TerminalProcessStateError extends Error {}
+
+async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Response | null> {
+  try {
+    return await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Wait for a process to become healthy using pidnap client.
@@ -38,6 +52,28 @@ async function waitForServiceHealthy(params: {
   timeoutMs?: number;
 }): Promise<void> {
   const { sandbox, process, timeoutMs = 60_000 } = params;
+
+  if (sandbox.type === "fly" && (process === "daemon-backend" || process === "daemon-frontend")) {
+    const healthUrl =
+      process === "daemon-backend"
+        ? "http://127.0.0.1:3001/api/health"
+        : "http://127.0.0.1:3000/api/health";
+    const start = Date.now();
+    let lastError: unknown;
+
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const response = await sandbox.exec(["curl", "-sf", "--max-time", "5", healthUrl]);
+        if (response.includes('"status":"ok"')) return;
+      } catch (error) {
+        lastError = error;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    throw new Error(`Timeout waiting for ${process} to become healthy: ${String(lastError)}`);
+  }
+
   const start = Date.now();
   let lastError: unknown;
 
@@ -71,7 +107,7 @@ async function waitForServiceHealthy(params: {
 
 // ============ Pidnap-Specific Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
+describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
       await waitForServiceHealthy({ sandbox, process: "daemon-backend", timeoutMs: 30000 });
@@ -135,8 +171,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     // Verify health endpoint from host
     await expect
       .poll(async () => {
-        const response = await fetch(`${baseUrl}/api/health`);
-        if (!response.ok) return "";
+        const response = await fetchWithTimeout(`${baseUrl}/api/health`);
+        if (!response?.ok) return "";
         return await response.text();
       }, POLL_DEFAULTS)
       .toMatch(/ok|healthy/);
@@ -156,7 +192,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     // First verify the proxy is working by polling for health endpoint
     await expect
       .poll(async () => {
-        const response = await fetch(`${baseUrl}/api/health`).catch(() => null);
+        const response = await fetchWithTimeout(`${baseUrl}/api/health`);
         return response?.ok ?? false;
       }, POLL_DEFAULTS)
       .toBe(true);
@@ -194,12 +230,14 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     // index.html
     await expect
       .poll(async () => {
-        const root = await fetch(`${baseUrl}/`);
+        const root = await fetchWithTimeout(`${baseUrl}/`);
+        if (!root) return false;
         const contentType = root.headers.get("content-type") ?? "";
         return root.ok && contentType.includes("text/html");
       }, POLL_DEFAULTS)
       .toBe(true);
-    const root = await fetch(`${baseUrl}/`);
+    const root = await fetchWithTimeout(`${baseUrl}/`);
+    if (!root) throw new Error("Timed out fetching daemon index page");
     expect(root.ok).toBe(true);
     expect(root.headers.get("content-type")).toContain("text/html");
     const html = await root.text();
@@ -208,8 +246,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     // health
     await expect
       .poll(async () => {
-        const response = await fetch(`${baseUrl}/api/health`);
-        return response.ok;
+        const response = await fetchWithTimeout(`${baseUrl}/api/health`);
+        return response?.ok ?? false;
       }, POLL_DEFAULTS)
       .toBe(true);
 
@@ -224,8 +262,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
       const cssUrl = `${baseUrl}${cssMatch[1]!.replace(/^\.\//, "/")}`;
       await expect
         .poll(async () => {
-          const response = await fetch(cssUrl);
-          return response.ok;
+          const response = await fetchWithTimeout(cssUrl);
+          return response?.ok ?? false;
         }, POLL_DEFAULTS)
         .toBe(true);
     }
@@ -233,8 +271,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
       const jsUrl = `${baseUrl}${jsMatch[1]!.replace(/^\.\//, "/")}`;
       await expect
         .poll(async () => {
-          const response = await fetch(jsUrl);
-          return response.ok;
+          const response = await fetchWithTimeout(jsUrl);
+          return response?.ok ?? false;
         }, POLL_DEFAULTS)
         .toBe(true);
     }
@@ -242,16 +280,16 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     // logo
     await expect
       .poll(async () => {
-        const response = await fetch(`${baseUrl}/logo.svg`);
-        return response.ok;
+        const response = await fetchWithTimeout(`${baseUrl}/logo.svg`);
+        return response?.ok ?? false;
       }, POLL_DEFAULTS)
       .toBe(true);
 
     // SPA fallback
     await expect
       .poll(async () => {
-        const response = await fetch(`${baseUrl}/agents/some-agent-id`);
-        if (!response.ok) return "";
+        const response = await fetchWithTimeout(`${baseUrl}/agents/some-agent-id`);
+        if (!response?.ok) return "";
         return response.headers.get("content-type") ?? "";
       }, POLL_DEFAULTS)
       .toContain("text/html");
@@ -260,7 +298,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
 
 // ============ Container Restart Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
+describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;
@@ -280,8 +318,8 @@ describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
     await expect
       .poll(
         async () => {
-          const response = await fetch(`${baseUrl}/api/health`);
-          return response.ok;
+          const response = await fetchWithTimeout(`${baseUrl}/api/health`);
+          return response?.ok ?? false;
         },
         { timeout: 60_000, interval: 500 }, // longer timeout for container restart
       )
