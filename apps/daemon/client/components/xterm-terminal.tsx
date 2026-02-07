@@ -59,6 +59,24 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       isMobileRef.current = isMobile;
     }, [isMobile]);
 
+    // Detect keyboard visibility via VisualViewport on mobile.
+    // On iOS, programmatic .focus() on a textarea does NOT open the keyboard,
+    // but fires the "focus" event — so focus/blur is unreliable. Instead we
+    // compare visualViewport.height to window.innerHeight; a significant drop
+    // (>100px) indicates the virtual keyboard is open.
+    useEffect(() => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const KEYBOARD_THRESHOLD = 100; // px
+      const update = () => {
+        setKeyboardVisible(window.innerHeight - vv.height > KEYBOARD_THRESHOLD);
+      };
+      vv.addEventListener("resize", update);
+      // Set initial state
+      update();
+      return () => vv.removeEventListener("resize", update);
+    }, []);
+
     // Ref so the onData handler (set up once) can read current modifier state
     const ctrlActiveRef = useRef(false);
     useEffect(() => {
@@ -149,20 +167,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Suppress autocorrect/predictive text on xterm's internal textarea
       // and hide the native blinking caret (terminal renders its own cursor)
       const helperTextarea = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
-      const handleTaFocus = () => setKeyboardVisible(true);
-      const handleTaBlur = () => setKeyboardVisible(false);
       if (helperTextarea) {
         helperTextarea.setAttribute("autocorrect", "off");
         helperTextarea.setAttribute("autocomplete", "off");
         helperTextarea.setAttribute("autocapitalize", "none");
         helperTextarea.setAttribute("spellcheck", "false");
         helperTextarea.style.caretColor = "transparent";
-
-        // Track keyboard visibility via focus/blur on the textarea
-        helperTextarea.addEventListener("focus", handleTaFocus);
-        helperTextarea.addEventListener("blur", handleTaBlur);
-        // Set initial state
-        setKeyboardVisible(document.activeElement === helperTextarea);
       }
 
       // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
@@ -292,8 +302,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         socket.removeEventListener("open", handleOpen);
         socket.removeEventListener("message", handleMessage);
         socket.removeEventListener("close", handleClose);
-        helperTextarea?.removeEventListener("focus", handleTaFocus);
-        helperTextarea?.removeEventListener("blur", handleTaBlur);
         dataDisposable.dispose();
         resizeDisposable.dispose();
         window.removeEventListener("terminal:send", handleSendCommand);
