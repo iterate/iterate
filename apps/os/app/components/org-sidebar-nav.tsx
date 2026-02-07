@@ -98,18 +98,15 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
               {projects.map((project) => {
                 const isActive = Boolean(
                   matchRoute({
-                    to: "/orgs/$organizationSlug/projects/$projectSlug",
-                    params: { organizationSlug: orgSlug, projectSlug: project.slug },
+                    to: "/proj/$projectSlug",
+                    params: { projectSlug: project.slug },
                     fuzzy: true,
                   }),
                 );
                 return (
                   <SidebarMenuItem key={project.id}>
                     <SidebarMenuButton asChild isActive={isActive}>
-                      <Link
-                        to="/orgs/$organizationSlug/projects/$projectSlug"
-                        params={{ organizationSlug: orgSlug, projectSlug: project.slug }}
-                      >
+                      <Link to="/proj/$projectSlug" params={{ projectSlug: project.slug }}>
                         <Box className="h-4 w-4" />
                         <span>{project.name}</span>
                       </Link>

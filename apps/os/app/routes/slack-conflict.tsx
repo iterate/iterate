@@ -38,7 +38,6 @@ function SlackConflictPage() {
   const transferConnection = useMutation({
     mutationFn: () =>
       trpcClient.project.transferSlackConnection.mutate({
-        organizationSlug: newProject.organizationSlug,
         projectSlug: newProject.slug,
         slackTeamId: search.teamId,
       }),
@@ -47,22 +46,17 @@ function SlackConflictPage() {
       // Invalidate both projects' Slack connection queries
       queryClient.invalidateQueries({
         queryKey: trpc.project.getSlackConnection.queryKey({
-          organizationSlug: newProject.organizationSlug,
           projectSlug: newProject.slug,
         }),
       });
       queryClient.invalidateQueries({
         queryKey: trpc.project.getSlackConnection.queryKey({
-          organizationSlug: search.existingOrgSlug,
           projectSlug: search.existingProjectSlug,
         }),
       });
       navigate({
-        to: "/orgs/$organizationSlug/projects/$projectSlug/connectors",
-        params: {
-          organizationSlug: newProject.organizationSlug,
-          projectSlug: newProject.slug,
-        },
+        to: "/proj/$projectSlug/connectors",
+        params: { projectSlug: newProject.slug },
       });
     },
     onError: (error) => {
@@ -72,11 +66,8 @@ function SlackConflictPage() {
 
   const handleKeepExisting = () => {
     navigate({
-      to: "/orgs/$organizationSlug/projects/$projectSlug/connectors",
-      params: {
-        organizationSlug: search.existingOrgSlug,
-        projectSlug: search.existingProjectSlug,
-      },
+      to: "/proj/$projectSlug/connectors",
+      params: { projectSlug: search.existingProjectSlug },
     });
   };
 

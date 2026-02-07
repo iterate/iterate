@@ -17,13 +17,13 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { Spinner } from "../../../components/ui/spinner.tsx";
-import { trpc } from "../../../lib/trpc.tsx";
-import { useSessionUser } from "../../../hooks/use-session-user.ts";
-import { usePostHogIdentity } from "../../../hooks/use-posthog-identity.tsx";
-import { SidebarShell } from "../../../components/sidebar-shell.tsx";
-import { OrgSwitcher } from "../../../components/org-project-switcher.tsx";
-import { OrgSidebarNav } from "../../../components/org-sidebar-nav.tsx";
+import { Spinner } from "../../components/ui/spinner.tsx";
+import { trpc } from "../../lib/trpc.tsx";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
+import { SidebarShell } from "../../components/sidebar-shell.tsx";
+import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
+import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -33,31 +33,23 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-} from "../../../components/ui/sidebar.tsx";
-import { AppHeader } from "../../../components/app-header.tsx";
-import { HeaderActionsProvider } from "../../../components/header-actions.tsx";
-import { useHeaderActions } from "../../../hooks/use-header-actions.ts";
+} from "../../components/ui/sidebar.tsx";
+import { AppHeader } from "../../components/app-header.tsx";
+import { HeaderActionsProvider } from "../../components/header-actions.tsx";
+import { useHeaderActions } from "../../hooks/use-header-actions.ts";
 
-export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$projectSlug")({
+export const Route = createFileRoute("/_auth/proj/$projectSlug")({
   // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
-    const currentOrg = await context.queryClient.ensureQueryData(
-      trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
+    // Lookup project by slug only (globally unique)
+    const project = await context.queryClient.ensureQueryData(
+      trpc.project.bySlug.queryOptions({
+        projectSlug: params.projectSlug,
       }),
     );
 
-    if (!currentOrg) {
+    if (!project) {
       throw redirect({ to: "/" });
-    }
-
-    // Ensure project exists within the org
-    const projectExists = currentOrg.projects?.some((p) => p.slug === params.projectSlug);
-    if (!projectExists) {
-      throw redirect({
-        to: "/orgs/$organizationSlug",
-        params: { organizationSlug: params.organizationSlug },
-      });
     }
   },
 
@@ -65,18 +57,10 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
   loader: ({ context, params }) => {
     context.queryClient.prefetchQuery(
       trpc.project.bySlug.queryOptions({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       }),
     );
     context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
-    context.queryClient.prefetchQuery(
-      trpc.machine.list.queryOptions({
-        organizationSlug: params.organizationSlug,
-        projectSlug: params.projectSlug,
-        includeArchived: false,
-      }),
-    );
   },
 
   component: ProjectLayout,
@@ -84,7 +68,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/projects/$pr
 
 function ProjectLayout() {
   const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug",
+    from: "/_auth/proj/$projectSlug",
   });
   const matchRoute = useMatchRoute();
   const { user } = useSessionUser();
@@ -96,23 +80,19 @@ function ProjectLayout() {
 
   const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
 
-  const { data: currentOrg } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
-    }),
-  );
-
-  const { data: currentProject } = useSuspenseQuery(
+  // bySlug returns project with organization
+  const { data: projectWithOrg } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
     }),
   );
 
+  const currentOrg = projectWithOrg.organization;
+  const currentProject = projectWithOrg;
+
   // Fetch machines list for breadcrumb dropdown
   const { data: machinesList } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
       includeArchived: false,
     }),
@@ -120,7 +100,7 @@ function ProjectLayout() {
 
   // Detect if we're on a machine detail page and extract machine ID
   const machineMatch = matchRoute({
-    to: "/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId",
+    to: "/proj/$projectSlug/machines/$machineId",
     params,
   });
   const currentMachineId = machineMatch
@@ -176,7 +156,14 @@ function ProjectLayout() {
     slug: currentOrg.slug,
   };
 
-  const projects = (currentOrg.projects ?? []).map((p) => ({
+  // Fetch org with projects for the sidebar
+  const { data: orgWithProjects } = useSuspenseQuery(
+    trpc.organization.withProjects.queryOptions({
+      organizationSlug: currentOrg.slug,
+    }),
+  );
+
+  const projects = (orgWithProjects?.projects ?? []).map((p) => ({
     id: p.id,
     name: p.name,
     slug: p.slug,
@@ -189,30 +176,30 @@ function ProjectLayout() {
     slug: m.id, // machines use id for routing
   }));
 
-  // Type-safe navigation items
+  // Type-safe navigation items - using simplified /proj routes
   const navItems = [
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/connectors" as const,
+      to: "/proj/$projectSlug/connectors" as const,
       label: "Connectors",
       icon: Plug,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/machines" as const,
+      to: "/proj/$projectSlug/machines" as const,
       label: "Machines",
       icon: Server,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/env-vars" as const,
+      to: "/proj/$projectSlug/env-vars" as const,
       label: "Env vars",
       icon: SlidersHorizontal,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/approvals" as const,
+      to: "/proj/$projectSlug/approvals" as const,
       label: "Approvals",
       icon: ShieldCheck,
     },
     {
-      to: "/orgs/$organizationSlug/projects/$projectSlug/settings" as const,
+      to: "/proj/$projectSlug/settings" as const,
       label: "Settings",
       icon: Settings,
     },
@@ -220,7 +207,7 @@ function ProjectLayout() {
 
   const isHomeActive = Boolean(
     matchRoute({
-      to: "/orgs/$organizationSlug/projects/$projectSlug",
+      to: "/proj/$projectSlug",
       params,
       fuzzy: false,
     }),
@@ -241,7 +228,7 @@ function ProjectLayout() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={isHomeActive}>
-                  <Link to="/orgs/$organizationSlug/projects/$projectSlug" params={params}>
+                  <Link to="/proj/$projectSlug" params={params}>
                     <Home className="h-4 w-4" />
                     <span>Home</span>
                   </Link>
@@ -305,7 +292,7 @@ function ProjectLayout() {
         <AppHeader
           orgName={currentOrg.name}
           projectName={currentProject?.name}
-          organizationSlug={params.organizationSlug}
+          organizationSlug={currentOrg.slug}
           projectSlug={params.projectSlug}
           organizations={orgsList}
           projects={projects}

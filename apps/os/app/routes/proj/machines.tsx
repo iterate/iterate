@@ -1,21 +1,21 @@
 import { useState, type FormEvent } from "react";
 import {
   createFileRoute,
-  useParams,
-  Outlet,
-  useChildMatches,
   useNavigate,
+  useParams,
   useSearch,
   Link,
+  Outlet,
+  useMatchRoute,
 } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
-import { Button } from "../../../components/ui/button.tsx";
-import { Checkbox } from "../../../components/ui/checkbox.tsx";
-import { Input } from "../../../components/ui/input.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { Button } from "../../components/ui/button.tsx";
+import { Checkbox } from "../../components/ui/checkbox.tsx";
+import { Input } from "../../components/ui/input.tsx";
 import {
   Sheet,
   SheetContent,
@@ -23,21 +23,20 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "../../../components/ui/sheet.tsx";
+} from "../../components/ui/sheet.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../../components/ui/select.tsx";
-import { EmptyState } from "../../../components/empty-state.tsx";
-import { MachineTable } from "../../../components/machine-table.tsx";
-import { HeaderActions } from "../../../components/header-actions.tsx";
+} from "../../components/ui/select.tsx";
+import { EmptyState } from "../../components/empty-state.tsx";
+import { MachineTable } from "../../components/machine-table.tsx";
+import { HeaderActions } from "../../components/header-actions.tsx";
 
 type MachineType = "daytona" | "local-docker" | "local";
 
-/** Default ports for daemons in local machine type */
 const DEFAULT_LOCAL_PORTS: Record<string, string> = {
   "iterate-daemon": "3000",
   "iterate-daemon-server": "3001",
@@ -45,7 +44,6 @@ const DEFAULT_LOCAL_PORTS: Record<string, string> = {
 };
 const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
 
-/** Generate a readable date slug like "jan-14-15h30" */
 function dateSlug() {
   const d = new Date();
   const month = d.toLocaleString("en-US", { month: "short" }).toLowerCase();
@@ -55,7 +53,6 @@ function dateSlug() {
   return `${month}-${day}-${hour}h${min}`;
 }
 
-/** Check if name matches auto-generated pattern */
 function isDefaultMachineName(name: string) {
   return /^(daytona|local-docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
 }
@@ -64,47 +61,39 @@ const Search = z.object({
   create: z.boolean().optional(),
 });
 
-export const Route = createFileRoute(
-  "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
-)({
+export const Route = createFileRoute("/_auth/proj/$projectSlug/machines")({
   validateSearch: Search,
   component: ProjectMachinesPage,
 });
 
 function ProjectMachinesPage() {
-  const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
-  });
-  const search = useSearch({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/machines",
-  });
+  const params = useParams({ from: "/_auth/proj/$projectSlug/machines" });
+  const search = useSearch({ from: "/_auth/proj/$projectSlug/machines" });
+  const matchRoute = useMatchRoute();
   const navigate = useNavigate({ from: Route.fullPath });
-  const childMatches = useChildMatches();
   const queryClient = useQueryClient();
 
-  // Sheet open state driven by URL search param
+  const machineDetailMatch = matchRoute({
+    to: "/proj/$projectSlug/machines/$machineId",
+    params,
+  });
+
   const createSheetOpen = search.create === true;
   const setCreateSheetOpen = (open: boolean) => {
-    navigate({
-      search: open ? { create: true } : {},
-      replace: true,
-    });
+    navigate({ search: open ? { create: true } : {}, replace: true });
   };
 
-  // Fetch daemon definitions and available machine types for the form
   const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
   const { data: machineTypes } = useSuspenseQuery(
     trpc.machine.getAvailableMachineTypes.queryOptions(),
   );
 
-  // Default to first enabled type
   const defaultType =
     machineTypes.find((t) => !t.disabledReason)?.type ?? machineTypes[0]?.type ?? "daytona";
 
   const [newMachineType, setNewMachineType] = useState<MachineType>(defaultType);
   const [newMachineName, setNewMachineName] = useState(`${defaultType}-${dateSlug()}`);
   const [newLocalHost, setNewLocalHost] = useState("localhost");
-  // Per-daemon port state for local machines (daemonId -> port string)
   const [newLocalPorts, setNewLocalPorts] = useState<Record<string, string>>(DEFAULT_LOCAL_PORTS);
   const [newLocalDockerImage, setNewLocalDockerImage] = useState("iterate-sandbox:local");
   const [newLocalDockerSyncRepo, setNewLocalDockerSyncRepo] = useState(true);
@@ -113,7 +102,6 @@ function ProjectMachinesPage() {
   );
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
-    organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
     includeArchived: false,
   });
@@ -131,7 +119,6 @@ function ProjectMachinesPage() {
       metadata?: Record<string, unknown>;
     }) => {
       return trpcClient.machine.create.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name,
         type,
@@ -158,7 +145,6 @@ function ProjectMachinesPage() {
   const archiveMachine = useMutation({
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.archive.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
@@ -175,7 +161,6 @@ function ProjectMachinesPage() {
   const deleteMachine = useMutation({
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.delete.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
@@ -192,24 +177,17 @@ function ProjectMachinesPage() {
   const restartMachine = useMutation({
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.restart.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
       toast.success("Machine restarting...");
-      // Don't refetch - the backend broadcasts invalidation which triggers realtime update
     },
     onError: (error) => {
       toast.error("Failed to restart machine: " + error.message);
     },
   });
-
-  // If there's a child route (e.g., machine detail), render it instead
-  if (childMatches.length > 0) {
-    return <Outlet />;
-  }
 
   const handleCreateMachine = (e: FormEvent) => {
     e.preventDefault();
@@ -222,7 +200,6 @@ function ProjectMachinesPage() {
         toast.error("Host is required for local machines");
         return;
       }
-      // Validate all daemon ports
       const ports: Record<string, number> = {};
       for (const daemon of daemonData.daemons) {
         const portStr = newLocalPorts[daemon.id] ?? "";
@@ -233,11 +210,7 @@ function ProjectMachinesPage() {
         }
         ports[daemon.id] = port;
       }
-      createMachine.mutate({
-        name: trimmedName,
-        type: newMachineType,
-        metadata: { host, ports },
-      });
+      createMachine.mutate({ name: trimmedName, type: newMachineType, metadata: { host, ports } });
       return;
     }
 
@@ -250,12 +223,7 @@ function ProjectMachinesPage() {
       createMachine.mutate({
         name: trimmedName,
         type: newMachineType,
-        metadata: {
-          localDocker: {
-            imageName,
-            syncRepo: newLocalDockerSyncRepo,
-          },
-        },
+        metadata: { localDocker: { imageName, syncRepo: newLocalDockerSyncRepo } },
       });
       return;
     }
@@ -266,12 +234,7 @@ function ProjectMachinesPage() {
         toast.error("Snapshot name is required");
         return;
       }
-      const metadata: Record<string, unknown> = { snapshotName };
-      createMachine.mutate({
-        name: trimmedName,
-        type: newMachineType,
-        metadata,
-      });
+      createMachine.mutate({ name: trimmedName, type: newMachineType, metadata: { snapshotName } });
       return;
     }
 
@@ -281,7 +244,7 @@ function ProjectMachinesPage() {
   const createSheet = (
     <Sheet open={createSheetOpen} onOpenChange={setCreateSheetOpen}>
       <SheetContent>
-        <form onSubmit={handleCreateMachine} className="flex flex-col h-full">
+        <form onSubmit={handleCreateMachine} className="flex h-full flex-col">
           <SheetHeader>
             <SheetTitle>Create Machine</SheetTitle>
             <SheetDescription>Create a new machine in this project.</SheetDescription>
@@ -307,10 +270,8 @@ function ProjectMachinesPage() {
                   onValueChange={(v) => {
                     const type = v as MachineType;
                     setNewMachineType(type);
-                    // Only auto-generate name if it looks like a default name
-                    if (isDefaultMachineName(newMachineName)) {
+                    if (isDefaultMachineName(newMachineName))
                       setNewMachineName(`${type}-${dateSlug()}`);
-                    }
                   }}
                   disabled={createMachine.isPending}
                 >
@@ -333,18 +294,16 @@ function ProjectMachinesPage() {
               </div>
             )}
             {newMachineType === "daytona" && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Snapshot Name</label>
-                  <Input
-                    placeholder="iterate-sandbox-<sha>"
-                    value={newDaytonaSnapshotName}
-                    onChange={(e) => setNewDaytonaSnapshotName(e.target.value)}
-                    disabled={createMachine.isPending}
-                    autoComplete="off"
-                    data-1p-ignore
-                  />
-                </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Snapshot Name</label>
+                <Input
+                  placeholder="iterate-sandbox-<sha>"
+                  value={newDaytonaSnapshotName}
+                  onChange={(e) => setNewDaytonaSnapshotName(e.target.value)}
+                  disabled={createMachine.isPending}
+                  autoComplete="off"
+                  data-1p-ignore
+                />
               </div>
             )}
             {newMachineType === "local" && (
@@ -412,13 +371,6 @@ function ProjectMachinesPage() {
                     Sync host git repo into the sandbox
                   </label>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  When enabled, the sandbox mounts your repo read-only and rsyncs it into
-                  ~/src/github.com/iterate/iterate at startup. This means `git status` in the
-                  container starts out matching your host, but commits made in the container won't
-                  appear on your host filesystem. It slows restarts, but avoids rebuilding images to
-                  pick up code changes.
-                </p>
               </div>
             )}
           </div>
@@ -440,6 +392,8 @@ function ProjectMachinesPage() {
     </Sheet>
   );
 
+  if (machineDetailMatch) return <Outlet />;
+
   if (machines.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -460,12 +414,11 @@ function ProjectMachinesPage() {
     );
   }
 
-  // Split machines into active and previous
   const activeMachines = machines.filter((m) => m.state === "active");
   const previousMachines = machines.filter((m) => m.state !== "active");
 
   return (
-    <div className="p-4 space-y-6">
+    <div className="space-y-6 p-4">
       <HeaderActions>
         <Button asChild size="sm">
           <Link to={Route.fullPath} params={params} search={{ create: true }}>
@@ -475,8 +428,6 @@ function ProjectMachinesPage() {
         </Button>
       </HeaderActions>
       {createSheet}
-
-      {/* Active machine section */}
       {activeMachines.length > 0 && (
         <section className="space-y-3">
           <div>
@@ -487,7 +438,6 @@ function ProjectMachinesPage() {
           </div>
           <MachineTable
             machines={activeMachines}
-            organizationSlug={params.organizationSlug}
             projectSlug={params.projectSlug}
             onArchive={(id) => archiveMachine.mutate(id)}
             onDelete={(id) => deleteMachine.mutate(id)}
@@ -495,8 +445,6 @@ function ProjectMachinesPage() {
           />
         </section>
       )}
-
-      {/* Previous machines section */}
       {previousMachines.length > 0 && (
         <section className="space-y-3">
           <div>
@@ -508,7 +456,6 @@ function ProjectMachinesPage() {
           </div>
           <MachineTable
             machines={previousMachines}
-            organizationSlug={params.organizationSlug}
             projectSlug={params.projectSlug}
             onArchive={(id) => archiveMachine.mutate(id)}
             onDelete={(id) => deleteMachine.mutate(id)}

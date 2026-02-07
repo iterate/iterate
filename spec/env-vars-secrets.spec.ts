@@ -130,7 +130,7 @@ test.describe("env vars", () => {
     await page.locator("#env-value").fill("some_value");
 
     // Verify warning appears
-    await page.getByText("The key name suggests this might be a secret").waitFor();
+    await page.getByText("This value looks like a secret").waitFor();
 
     // Verify Add button is disabled - wait for it to have the disabled attribute
     await page.locator('button[type="submit"][disabled]').waitFor();
@@ -139,9 +139,7 @@ test.describe("env vars", () => {
     await page.getByRole("button", { name: "Dismiss" }).click();
 
     // Warning should disappear
-    await page
-      .getByText("The key name suggests this might be a secret")
-      .waitFor({ state: "hidden" });
+    await page.getByText("This value looks like a secret").waitFor({ state: "hidden" });
 
     // Add button should now be enabled - click() will fail if still disabled
     await page.getByRole("button", { name: "Add" }).click();
@@ -165,14 +163,14 @@ test.describe("env vars", () => {
     await page.locator("#env-value").fill("my_secret_value");
 
     // Verify warning appears
-    await page.getByText(/suggests this might be a secret/).waitFor();
+    await page.getByText(/looks like a secret/).waitFor();
 
     // Check "Store as secret"
     await page.locator("#is-secret").check();
 
     // Warning should be replaced with the encryption info
     await page.getByText("The value will be stored encrypted").waitFor();
-    await page.getByText(/suggests this might be a secret/).waitFor({ state: "hidden" });
+    await page.getByText(/looks like a secret/).waitFor({ state: "hidden" });
 
     // Submit should work
     await page.getByRole("button", { name: "Add" }).click();
