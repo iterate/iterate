@@ -26,22 +26,35 @@ const logger = console;
 
 // --- Schemas ---
 
+const Attachment = z.object({
+  /** Original file name */
+  fileName: z.string(),
+  /** Absolute path on the machine filesystem */
+  filePath: z.string(),
+  /** MIME type */
+  mimeType: z.string().optional(),
+  /** File size in bytes */
+  size: z.number().optional(),
+});
+
 const IncomingWebhookPayload = z.object({
   type: z.literal("web-chat:message").optional(),
   threadId: z.string().trim().min(1).max(200).optional(),
   messageId: z.string().trim().min(1).max(200).optional(),
-  text: z.string().trim().min(1).max(50_000),
+  text: z.string().trim().max(50_000).optional().default(""),
   userId: z.string().trim().min(1).max(200).optional(),
   userName: z.string().trim().min(1).max(200).optional(),
   projectId: z.string().trim().min(1).max(200).optional(),
   projectSlug: z.string().trim().min(1).max(200).optional(),
+  attachments: z.array(Attachment).optional(),
   createdAt: z.number().int().positive().optional(),
 });
 
 const PostMessagePayload = z.object({
   threadId: z.string().trim().min(1).max(200),
-  text: z.string().trim().min(1).max(50_000),
+  text: z.string().trim().max(50_000).optional().default(""),
   messageId: z.string().trim().min(1).max(200).optional(),
+  attachments: z.array(Attachment).optional(),
 });
 
 const ReactionPayload = z.object({
@@ -59,6 +72,7 @@ const StoredMessage = z.object({
   userName: z.string().optional(),
   agentSlug: z.string(),
   reactions: z.array(z.string()).optional(),
+  attachments: z.array(Attachment).optional(),
   createdAt: z.number().int().positive(),
 });
 
@@ -90,6 +104,12 @@ webChatRouter.post("/webhook", async (c) => {
   }
 
   const payload = parsed.data;
+
+  // Must have text or attachments
+  if (!payload.text && (!payload.attachments || payload.attachments.length === 0)) {
+    return c.json({ error: "Message must have text or attachments" }, 400);
+  }
+
   const threadId = payload.threadId ?? createThreadId();
   const messageId = payload.messageId ?? `msg_${nanoid(12)}`;
   const createdAt = payload.createdAt ?? Date.now();
@@ -121,6 +141,7 @@ webChatRouter.post("/webhook", async (c) => {
     userId: payload.userId,
     userName: payload.userName,
     agentSlug,
+    attachments: payload.attachments,
     createdAt,
   };
 
@@ -184,6 +205,7 @@ webChatRouter.post("/postMessage", async (c) => {
     role: "assistant",
     text,
     agentSlug,
+    attachments: parsed.data.attachments,
     createdAt: Date.now(),
   };
 
@@ -336,17 +358,29 @@ function formatIncomingMessage(params: {
   const { payload, threadId, messageId, agentSlug, eventId, isFirstMessageInThread } = params;
 
   const intro = isFirstMessageInThread
-    ? `[Agent: ${agentSlug}] New web chat thread started.`
+    ? `[Agent: ${agentSlug}] New webchat thread started.`
     : `Another message in web chat thread ${threadId}.`;
 
   const sender = payload.userName ?? payload.userId ?? "unknown";
 
+  const attachmentLines =
+    payload.attachments && payload.attachments.length > 0
+      ? [
+          "",
+          "Attachments:",
+          ...payload.attachments.map(
+            (a) => `  - ${a.fileName} (${a.mimeType ?? "unknown type"}, path: ${a.filePath})`,
+          ),
+        ]
+      : [];
+
   return [
     intro,
-    "Refer to WEB_CHAT.md for how to respond via `iterate tool webchat`.",
+    "Refer to WEB_CHAT.md for how to respond via `iterate tool webchat`. Do not use the assistant message to respond to the end-user, they will not see it.",
     "",
     `From: ${sender}`,
-    `Message: ${payload.text}`,
+    ...(payload.text ? [`Message: ${payload.text}`] : []),
+    ...attachmentLines,
     "",
     `thread_id=${threadId} message_id=${messageId} eventId=${eventId}`,
   ].join("\n");

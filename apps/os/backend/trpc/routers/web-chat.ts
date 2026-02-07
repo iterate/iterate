@@ -9,10 +9,18 @@ import {
   listWebChatThreadsFromMachine,
 } from "../../integrations/web-chat/web-chat.ts";
 
+const AttachmentInput = z.object({
+  fileName: z.string(),
+  filePath: z.string(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+});
+
 const SendMessageInput = z.object({
   threadId: z.string().trim().min(1).max(200).optional(),
-  text: z.string().trim().min(1).max(50_000),
+  text: z.string().trim().max(50_000).optional().default(""),
   messageId: z.string().trim().min(1).max(200).optional(),
+  attachments: z.array(AttachmentInput).optional(),
 });
 
 const GetThreadMessagesInput = z.object({
@@ -31,10 +39,7 @@ export const webChatRouter = router({
 
     const response = await listWebChatThreadsFromMachine(machine, ctx.env);
     if (!response.success) {
-      throw new TRPCError({
-        code: "BAD_GATEWAY",
-        message: response.error,
-      });
+      throw new TRPCError({ code: "BAD_GATEWAY", message: response.error });
     }
 
     return response.data;
@@ -95,6 +100,7 @@ export const webChatRouter = router({
         userName: ctx.user.name ?? ctx.user.email,
         projectId: ctx.project.id,
         projectSlug: ctx.project.slug,
+        attachments: input.attachments,
         createdAt: Date.now(),
       } satisfies Record<string, unknown>;
 

@@ -13,7 +13,7 @@ export default iterateConfig({
    * Default model used for OpenCode sessions.
    */
   defaultModel: {
-    providerID: "opencode",
-    modelID: "kimi-k2.5-free",
+    providerID: "anthropic",
+    modelID: "claude-opus-4-6",
   },
 });

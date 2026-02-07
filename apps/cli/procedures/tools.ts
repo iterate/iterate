@@ -34,10 +34,18 @@ function getReplicateClient() {
  * Web Chat client — thin HTTP wrapper over the daemon's local web-chat endpoints.
  * Analogous to how `@slack/web-api` WebClient wraps the Slack API, but much simpler.
  */
+interface WebChatAttachment {
+  fileName: string;
+  filePath: string;
+  mimeType?: string;
+  size?: number;
+}
+
 interface WebChatClient {
   postMessage(params: {
     threadId: string;
-    text: string;
+    text?: string;
+    attachments?: WebChatAttachment[];
   }): Promise<{ success: boolean; threadId: string; messageId: string; eventId: string }>;
   addReaction(params: {
     threadId: string;
@@ -70,7 +78,7 @@ interface WebChatClient {
 }
 
 function getWebChatClient(): WebChatClient {
-  const baseUrl = "http://localhost:4096/api/integrations/web-chat";
+  const baseUrl = "http://localhost:3001/api/integrations/web-chat";
 
   async function post(path: string, body: Record<string, unknown>) {
     const response = await fetch(`${baseUrl}${path}`, {

@@ -15,7 +15,8 @@ The `webchat` object is an HTTP client with these methods:
 interface WebChatClient {
   postMessage(params: {
     threadId: string;
-    text: string;
+    text?: string;
+    attachments?: Array<{ fileName: string; filePath: string; mimeType?: string; size?: number }>;
   }): Promise<{ success: boolean; threadId: string; messageId: string; eventId: string }>;
   addReaction(params: {
     threadId: string;
@@ -119,8 +120,31 @@ The raw web chat payload is stored in SQLite. To inspect it:
 sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id='EVENT_ID'"
 ```
 
+## Sending Files
+
+To send a file to the user, create the file anywhere on the filesystem, then include it as an attachment:
+
+```bash
+iterate tool webchat 'await webchat.postMessage({
+  threadId: "THREAD_ID",
+  text: "Here is the generated image:",
+  attachments: [{ fileName: "output.png", filePath: "/tmp/output.png", mimeType: "image/png" }],
+})'
+```
+
+The UI will show inline previews for images (jpeg, png, gif, webp) and view/download buttons for PDFs and other files. Any absolute path on the machine filesystem works.
+
+## Receiving Files
+
+When a user uploads files, the incoming message will list them under "Attachments:" with their file paths. The files are written to `/tmp/web-chat-uploads/` and you can read them directly:
+
+```bash
+cat /tmp/web-chat-uploads/abc123-photo.jpg
+```
+
 ## Best Practices
 
 1. **Be concise**: Web chat messages should be shorter than typical coding responses.
 2. **Markdown supported**: The web chat UI renders markdown.
 3. **Reply promptly**: Always use `webchat.postMessage` to reply — do not rely on your assistant output being shown directly.
+4. **Include file metadata**: When sending files, include `mimeType` so the UI knows how to preview them.

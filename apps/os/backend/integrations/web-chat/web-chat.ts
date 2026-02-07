@@ -7,6 +7,13 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { createMachineProvider } from "../../providers/index.ts";
 
+const WebChatAttachment = z.object({
+  fileName: z.string(),
+  filePath: z.string(),
+  mimeType: z.string().optional(),
+  size: z.number().optional(),
+});
+
 const WebChatMessage = z.object({
   threadId: z.string(),
   messageId: z.string(),
@@ -16,6 +23,7 @@ const WebChatMessage = z.object({
   userName: z.string().optional(),
   agentSlug: z.string(),
   reactions: z.array(z.string()).optional(),
+  attachments: z.array(WebChatAttachment).optional(),
   createdAt: z.number(),
 });
 
@@ -52,7 +60,8 @@ const WebhookInput = z.object({
   projectSlug: z.string().min(1),
   threadId: z.string().min(1).optional(),
   messageId: z.string().min(1).optional(),
-  text: z.string().trim().min(1).max(50_000),
+  text: z.string().trim().max(50_000).optional().default(""),
+  attachments: z.array(WebChatAttachment).optional(),
 });
 
 const ListThreadsInput = z.object({
@@ -278,6 +287,7 @@ webChatApp.post("/webhook", async (c) => {
       userName: user.name ?? user.email,
       projectId: project.id,
       projectSlug: project.slug,
+      attachments: parsedInput.data.attachments,
       createdAt: Date.now(),
     } satisfies Record<string, unknown>;
 
