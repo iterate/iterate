@@ -82,9 +82,6 @@ function ProjectEnvVarsPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/env-vars" });
   const queryClient = useQueryClient();
 
-  const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
-  );
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
   const [deleteConfirmEnvVar, setDeleteConfirmEnvVar] = useState<EnvVar | null>(null);
@@ -214,7 +211,7 @@ function ProjectEnvVarsPage() {
 
     const existingNonUser = envVars.find((v) => v.key === key && v.source.type !== "user");
     if (existingNonUser && !editingEnvVar) {
-      toast.info(`This will override existing env var \"${key}\"`);
+      toast.info(`This will override existing env var "${key}"`);
     }
 
     if (formIsSecret) {
@@ -466,7 +463,7 @@ function ProjectEnvVarsPage() {
         open={!!deleteConfirmEnvVar}
         onOpenChange={(open) => !open && setDeleteConfirmEnvVar(null)}
         title="Delete environment variable?"
-        description={deleteConfirmEnvVar ? `This will delete \"${deleteConfirmEnvVar.key}\".` : ""}
+        description={deleteConfirmEnvVar ? `This will delete "${deleteConfirmEnvVar.key}".` : ""}
         confirmLabel="Delete"
         onConfirm={() => deleteConfirmEnvVar && deleteEnvVar.mutate(deleteConfirmEnvVar.key)}
         destructive

@@ -37,12 +37,6 @@ function ProjectAccessTokensPage() {
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Get project with organization info
-  const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      projectSlug: params.projectSlug,
-    }),
-  );
   const { data: tokens } = useSuspenseQuery(
     trpc.accessToken.list.queryOptions({
       projectSlug: params.projectSlug,

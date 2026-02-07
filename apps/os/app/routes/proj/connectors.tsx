@@ -47,8 +47,6 @@ function ProjectConnectorsPage() {
   const search = useSearch({ from: "/_auth/proj/$projectSlug/connectors" });
   const queryClient = useQueryClient();
 
-  useSuspenseQuery(trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }));
-
   useEffect(() => {
     if (search.error === "slack_oauth_denied") toast.error("Slack authorization was denied.");
     if (search.error === "google_oauth_denied") toast.error("Google authorization was denied.");
