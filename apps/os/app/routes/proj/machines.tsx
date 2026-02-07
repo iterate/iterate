@@ -1,5 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { createFileRoute, useNavigate, useParams, useSearch, Link } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  useNavigate,
+  useParams,
+  useSearch,
+  Link,
+  Outlet,
+  useMatchRoute,
+} from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
@@ -61,12 +69,15 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug/machines")({
 function ProjectMachinesPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines" });
   const search = useSearch({ from: "/_auth/proj/$projectSlug/machines" });
+  const matchRoute = useMatchRoute();
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
 
-  const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
-  );
+  const machineDetailMatch = matchRoute({
+    to: "/proj/$projectSlug/machines/$machineId",
+    params,
+  });
+
   const createSheetOpen = search.create === true;
   const setCreateSheetOpen = (open: boolean) => {
     navigate({ search: open ? { create: true } : {}, replace: true });
@@ -380,6 +391,8 @@ function ProjectMachinesPage() {
       </SheetContent>
     </Sheet>
   );
+
+  if (machineDetailMatch) return <Outlet />;
 
   if (machines.length === 0) {
     return (

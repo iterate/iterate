@@ -165,6 +165,13 @@ export const projectProtectedProcedure = protectedProcedure
       });
     }
 
+    if (!proj.organization) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Project with slug ${input.projectSlug} has no organization`,
+      });
+    }
+
     // Check user has access to the project's organization
     const membership = await ctx.db.query.organizationUserMembership.findFirst({
       where: and(

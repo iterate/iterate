@@ -1,4 +1,4 @@
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -49,8 +49,10 @@ function ProjectConnectorsPage() {
 
   useSuspenseQuery(trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }));
 
-  if (search.error === "slack_oauth_denied") toast.error("Slack authorization was denied.");
-  if (search.error === "google_oauth_denied") toast.error("Google authorization was denied.");
+  useEffect(() => {
+    if (search.error === "slack_oauth_denied") toast.error("Slack authorization was denied.");
+    if (search.error === "google_oauth_denied") toast.error("Google authorization was denied.");
+  }, [search.error]);
 
   const { data: slackConnection } = useSuspenseQuery(
     trpc.project.getSlackConnection.queryOptions({

@@ -68,9 +68,6 @@ function ProjectApprovalsPage() {
   const [summarizingIds, setSummarizingIds] = useState<Set<string>>(new Set());
   const [generatingRuleForIds, setGeneratingRuleForIds] = useState<Set<string>>(new Set());
 
-  const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
-  );
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
   );
