@@ -226,6 +226,40 @@ function MachineDetailPage() {
             </dd>
           </div>
         )}
+        {metadata.containerId && !metadata.containerName && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Container ID</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.containerId!)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                {metadata.containerId.slice(0, 12)}
+                <Copy className="h-3 w-3 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
+        {metadata.snapshotName && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Snapshot</dt>
+            <dd className="mt-1 truncate font-mono text-xs">{metadata.snapshotName}</dd>
+          </div>
+        )}
+        {machine.type === "daytona" && (
+          <div>
+            <dt className="text-xs text-muted-foreground">Sandbox</dt>
+            <dd className="mt-1">
+              <button
+                onClick={() => copyToClipboard(metadata.sandboxName ?? machine.externalId)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <span className="truncate">{metadata.sandboxName ?? machine.externalId}</span>
+                <Copy className="h-3 w-3 shrink-0 opacity-50" />
+              </button>
+            </dd>
+          </div>
+        )}
       </div>
 
       {machine.state !== "archived" && (
