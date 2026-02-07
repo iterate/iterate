@@ -133,7 +133,8 @@ export default workflow({
             REGISTRY_IMAGE_NAME: "${{ needs.build-image.outputs.registry_image_name }}",
           },
           run: [
-            'docker pull "$REGISTRY_IMAGE_NAME"',
+            // Daytona snapshots must always be amd64, even on arm64 runners.
+            'docker pull --platform linux/amd64 "$REGISTRY_IMAGE_NAME"',
             'docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"',
           ].join("\n"),
         },
