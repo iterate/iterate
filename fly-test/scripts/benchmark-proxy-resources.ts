@@ -86,7 +86,7 @@ function summarize(values: number[]): PhaseSummary {
 }
 
 function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function getContainerIds(composeFile: string, composeProject: string): string[] {
@@ -108,8 +108,6 @@ function getContainerIds(composeFile: string, composeProject: string): string[] 
 }
 
 function sampleResources(
-  composeFile: string,
-  composeProject: string,
   containerIds: string[],
   phase: BenchmarkPhase,
   samples: ResourceSample[],
@@ -184,7 +182,7 @@ function runPhase(
   const durations: number[] = [];
   for (let i = 0; i < requests; i += 1) {
     durations.push(runRequest(composeFile, composeProject, requestFlag, targetUrl));
-    sampleResources(composeFile, composeProject, containerIds, phase, samples);
+    sampleResources(containerIds, phase, samples);
   }
   return durations;
 }
@@ -210,7 +208,7 @@ async function main(): Promise<void> {
 
   const samples: ResourceSample[] = [];
   try {
-    sampleResources(composeFile, composeProject, containerIds, "warmup", samples);
+    sampleResources(containerIds, "warmup", samples);
     const proxied = runPhase(
       composeFile,
       composeProject,
@@ -231,7 +229,7 @@ async function main(): Promise<void> {
       "--noproxy '*'",
       samples,
     );
-    sampleResources(composeFile, composeProject, containerIds, "idle", samples);
+    sampleResources(containerIds, "idle", samples);
 
     const proxiedSummary = summarize(proxied);
     const directSummary = summarize(direct);
