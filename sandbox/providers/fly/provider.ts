@@ -11,24 +11,105 @@ import {
 import { slugify } from "../utils.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
+const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
 const WAIT_TIMEOUT_SECONDS = 300;
 const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const DEFAULT_SERVICE_PORTS = [3000, 3001, 4096, 7777, 9876];
 const DEFAULT_FLY_ORG = "iterate";
 const DEFAULT_FLY_IMAGE = "registry.fly.io/iterate-sandbox-image:main";
+const DEFAULT_FLY_MACHINE_CPUS = 1;
+const DEFAULT_FLY_MACHINE_MEMORY_MB = 1024;
 const EXEC_RETRY_LIMIT = 3;
+const APP_NAME_MAX_LENGTH = 63;
+const PROVIDER_ID_SEPARATOR = ":";
+const LIST_APPS_PAGE_SIZE = 100;
 
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
   FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
   FLY_REGION: z.string().default("ord"),
   FLY_IMAGE: z.string().default(DEFAULT_FLY_IMAGE),
+  SANDBOX_FLY_MACHINE_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
+  SANDBOX_FLY_MACHINE_MEMORY_MB: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_FLY_MACHINE_MEMORY_MB),
   SANDBOX_FLY_APP_NAME: z.string(),
   FLY_NETWORK: z.string().optional(),
   FLY_BASE_DOMAIN: z.string().default("fly.dev"),
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;
+
+type FlyGraphQlResponse<TData> = {
+  data?: TData;
+  errors?: Array<{ message?: string }>;
+};
+
+type FlyAppNetwork = {
+  app: {
+    sharedIpAddress: string | null;
+  } | null;
+};
+
+type FlyAllocateIp = {
+  allocateIpAddress: {
+    ipAddress: {
+      address: string;
+      type: string;
+      region: string;
+    } | null;
+  } | null;
+};
+
+type FlyOrgApps = {
+  organization: {
+    apps: {
+      nodes: Array<{ name: string }>;
+      pageInfo: {
+        hasNextPage: boolean;
+        endCursor: string | null;
+      };
+    };
+  } | null;
+};
+
+const FLY_APP_NETWORK_QUERY = `
+  query FlyAppNetwork($appName: String!) {
+    app(name: $appName) {
+      sharedIpAddress
+    }
+  }
+`;
+
+const FLY_ALLOCATE_SHARED_V4_MUTATION = `
+  mutation FlyAllocateSharedV4($appId: ID!) {
+    allocateIpAddress(input: { appId: $appId, type: shared_v4 }) {
+      ipAddress {
+        address
+        type
+        region
+      }
+    }
+  }
+`;
+
+const FLY_ORG_APPS_QUERY = `
+  query FlyOrgApps($orgSlug: String!, $first: Int!, $after: String) {
+    organization(slug: $orgSlug) {
+      apps(first: $first, after: $after) {
+        nodes {
+          name
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+`;
 
 function withFlyToken(env: Record<string, string | undefined>): Record<string, string | undefined> {
   if (env.FLY_API_TOKEN || !env.FLY_API_KEY) {
@@ -49,6 +130,61 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function encodeProviderId(appName: string, machineId: string): string {
+  return `${appName}${PROVIDER_ID_SEPARATOR}${machineId}`;
+}
+
+function decodeProviderId(params: {
+  providerId: string;
+  fallbackAppName: string;
+}): { appName: string; machineId: string } | null {
+  const { providerId, fallbackAppName } = params;
+  const trimmed = providerId.trim();
+  if (!trimmed) return null;
+
+  const separatorIndex = trimmed.indexOf(PROVIDER_ID_SEPARATOR);
+  if (separatorIndex <= 0 || separatorIndex >= trimmed.length - 1) {
+    // Legacy ids only stored machine id.
+    return {
+      appName: fallbackAppName,
+      machineId: trimmed,
+    };
+  }
+
+  return {
+    appName: trimmed.slice(0, separatorIndex),
+    machineId: trimmed.slice(separatorIndex + 1),
+  };
+}
+
+function sanitizeAppNamePart(value: string): string {
+  return slugify(value).replace(/^-+/, "").replace(/-+$/, "");
+}
+
+function buildSandboxAppName(params: { prefix: string; base: string; suffix: string }): string {
+  const prefix = sanitizeAppNamePart(params.prefix) || "iterate-sandbox";
+  const base = sanitizeAppNamePart(params.base) || "sandbox";
+  const suffix = sanitizeAppNamePart(params.suffix) || "id";
+
+  const suffixSegment = suffix.slice(0, 12);
+  let appName = `${prefix}-${base}-${suffixSegment}`;
+
+  if (appName.length > APP_NAME_MAX_LENGTH) {
+    const maxStemLength = APP_NAME_MAX_LENGTH - suffixSegment.length - 1;
+    const stem = `${prefix}-${base}`.slice(0, Math.max(1, maxStemLength)).replace(/-+$/, "");
+    appName = `${stem}-${suffixSegment}`;
+  }
+
+  appName = appName.slice(0, APP_NAME_MAX_LENGTH).replace(/-+$/, "");
+  return appName || `iterate-sandbox-${suffixSegment}`;
+}
+
+function isSandboxAppName(params: { env: FlyEnv; appName: string }): boolean {
+  const { env, appName } = params;
+  const legacyName = env.SANDBOX_FLY_APP_NAME;
+  return appName === legacyName || appName.startsWith(`${legacyName}-`);
 }
 
 async function flyApi<T = unknown>(params: {
@@ -78,6 +214,41 @@ async function flyApi<T = unknown>(params: {
   } catch {
     return text as T;
   }
+}
+
+async function flyGraphQL<TData>(params: {
+  env: FlyEnv;
+  query: string;
+  variables?: Record<string, unknown>;
+}): Promise<TData> {
+  const { env, query, variables } = params;
+  const response = await fetch(FLY_GRAPHQL_BASE, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.FLY_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  const payload = (await response.json()) as FlyGraphQlResponse<TData>;
+  if (!response.ok) {
+    throw new Error(`GraphQL request failed (${response.status}): ${JSON.stringify(payload)}`);
+  }
+
+  if (payload.errors?.length) {
+    const message = payload.errors
+      .map((error) => error.message)
+      .filter((value): value is string => Boolean(value))
+      .join("; ");
+    throw new Error(`GraphQL request failed: ${message || "unknown error"}`);
+  }
+
+  if (!payload.data) {
+    throw new Error("GraphQL request returned no data");
+  }
+
+  return payload.data;
 }
 
 async function waitForState(params: {
@@ -146,14 +317,24 @@ function isNotFoundError(error: unknown): boolean {
   return String(error).toLowerCase().includes("(404)");
 }
 
-async function ensureFlyAppExists(env: FlyEnv): Promise<void> {
+function isGraphQlNotFoundError(error: unknown): boolean {
+  const message = String(error).toLowerCase();
+  return (
+    message.includes("not found") ||
+    message.includes("couldn't resolve") ||
+    message.includes("cannot return null")
+  );
+}
+
+async function ensureFlyAppExists(params: { env: FlyEnv; appName: string }): Promise<void> {
+  const { env, appName } = params;
   try {
     await flyApi({
       env,
       method: "POST",
       path: "/v1/apps",
       body: {
-        app_name: env.SANDBOX_FLY_APP_NAME,
+        app_name: appName,
         org_slug: env.FLY_ORG,
         ...(env.FLY_NETWORK ? { network: env.FLY_NETWORK } : {}),
       },
@@ -162,6 +343,38 @@ async function ensureFlyAppExists(env: FlyEnv): Promise<void> {
     if (!isAlreadyExistsError(error)) {
       throw error;
     }
+  }
+}
+
+async function ensureFlyIngress(params: { env: FlyEnv; appName: string }): Promise<void> {
+  const { env, appName } = params;
+
+  const appNetwork = await flyGraphQL<FlyAppNetwork>({
+    env,
+    query: FLY_APP_NETWORK_QUERY,
+    variables: { appName },
+  });
+  if (!appNetwork.app) {
+    throw new Error(`Fly app ${appName} not found after creation`);
+  }
+
+  if (appNetwork.app.sharedIpAddress) {
+    return;
+  }
+
+  await flyGraphQL<FlyAllocateIp>({
+    env,
+    query: FLY_ALLOCATE_SHARED_V4_MUTATION,
+    variables: { appId: appName },
+  });
+
+  const verify = await flyGraphQL<FlyAppNetwork>({
+    env,
+    query: FLY_APP_NETWORK_QUERY,
+    variables: { appName },
+  });
+  if (!verify.app?.sharedIpAddress) {
+    throw new Error(`Failed to allocate shared IPv4 for Fly app ${appName}`);
   }
 }
 
@@ -190,12 +403,12 @@ export class FlySandbox extends Sandbox {
 
   private readonly env: FlyEnv;
 
-  constructor(env: FlyEnv, machineId: string) {
+  constructor(params: { env: FlyEnv; appName: string; machineId: string }) {
     super();
-    this.env = env;
-    this.appName = env.SANDBOX_FLY_APP_NAME;
-    this.machineId = machineId;
-    this.providerId = machineId;
+    this.env = params.env;
+    this.appName = params.appName;
+    this.machineId = params.machineId;
+    this.providerId = encodeProviderId(this.appName, this.machineId);
   }
 
   async getPreviewUrl(opts: { port: number }): Promise<string> {
@@ -210,6 +423,7 @@ export class FlySandbox extends Sandbox {
     if (cmd.length === 0) {
       throw new Error("Fly exec requires at least one command token");
     }
+
     let payload: unknown;
     for (let attempt = 1; attempt <= EXEC_RETRY_LIMIT; attempt += 1) {
       try {
@@ -230,6 +444,7 @@ export class FlySandbox extends Sandbox {
         await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
       }
     }
+
     if (payload === undefined) {
       throw new Error("Fly exec did not return a payload");
     }
@@ -269,6 +484,7 @@ export class FlySandbox extends Sandbox {
       path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
       body: {},
     });
+
     await waitForState({
       env: this.env,
       appName: this.appName,
@@ -285,6 +501,7 @@ export class FlySandbox extends Sandbox {
         path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/stop`,
         body: {},
       });
+
       await waitForState({
         env: this.env,
         appName: this.appName,
@@ -309,6 +526,7 @@ export class FlySandbox extends Sandbox {
       await this.start();
       return;
     }
+
     await waitForState({
       env: this.env,
       appName: this.appName,
@@ -323,6 +541,16 @@ export class FlySandbox extends Sandbox {
         env: this.env,
         method: "DELETE",
         path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}?force=true`,
+      });
+    } catch {
+      // best effort cleanup
+    }
+
+    try {
+      await flyApi({
+        env: this.env,
+        method: "DELETE",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}`,
       });
     } catch {
       // best effort cleanup
@@ -350,8 +578,15 @@ export class FlyProvider extends SandboxProvider {
     const base = slugify(opts.id ?? opts.name) || "sandbox";
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
-    const appName = this.env.SANDBOX_FLY_APP_NAME;
-    await ensureFlyAppExists(this.env);
+
+    const appName = buildSandboxAppName({
+      prefix: this.env.SANDBOX_FLY_APP_NAME,
+      base,
+      suffix,
+    });
+
+    await ensureFlyAppExists({ env: this.env, appName });
+    await ensureFlyIngress({ env: this.env, appName });
 
     const createPayload = await flyApi<unknown>({
       env: this.env,
@@ -364,7 +599,11 @@ export class FlyProvider extends SandboxProvider {
         config: {
           image: opts.providerSnapshotId ?? this.defaultSnapshotId,
           env: opts.envVars,
-          guest: { cpu_kind: "shared", cpus: 1, memory_mb: 1024 },
+          guest: {
+            cpu_kind: "shared",
+            cpus: this.env.SANDBOX_FLY_MACHINE_CPUS,
+            memory_mb: this.env.SANDBOX_FLY_MACHINE_MEMORY_MB,
+          },
           restart: { policy: "always" },
           services: DEFAULT_SERVICE_PORTS.map((port) => makeService(port)),
           metadata: {
@@ -379,23 +618,77 @@ export class FlyProvider extends SandboxProvider {
     const machineId = resolveMachineId(createPayload);
     await waitForState({ env: this.env, appName, machineId, state: "started" });
 
-    return new FlySandbox(this.env, machineId);
+    return new FlySandbox({
+      env: this.env,
+      appName,
+      machineId,
+    });
   }
 
   get(providerId: string): FlySandbox | null {
-    if (!providerId.trim()) return null;
-    return new FlySandbox(this.env, providerId);
+    const decoded = decodeProviderId({
+      providerId,
+      fallbackAppName: this.env.SANDBOX_FLY_APP_NAME,
+    });
+    if (!decoded) return null;
+
+    return new FlySandbox({
+      env: this.env,
+      appName: decoded.appName,
+      machineId: decoded.machineId,
+    });
   }
 
   async listSandboxes(): Promise<SandboxInfo[]> {
-    try {
-      const machinesPayload = await flyApi<unknown>({
+    const appNames: string[] = [];
+    let after: string | null = null;
+
+    while (true) {
+      const appsPage: FlyOrgApps = await flyGraphQL<FlyOrgApps>({
         env: this.env,
-        method: "GET",
-        path: `/v1/apps/${encodeURIComponent(this.env.SANDBOX_FLY_APP_NAME)}/machines`,
+        query: FLY_ORG_APPS_QUERY,
+        variables: {
+          orgSlug: this.env.FLY_ORG,
+          first: LIST_APPS_PAGE_SIZE,
+          after,
+        },
       });
-      const machineList = Array.isArray(machinesPayload) ? machinesPayload : [];
-      const sandboxes: SandboxInfo[] = [];
+
+      const apps = appsPage.organization?.apps;
+      if (!apps) break;
+
+      apps.nodes
+        .map((node: { name: string }) => node.name)
+        .filter((appName: string) => isSandboxAppName({ env: this.env, appName }))
+        .forEach((appName: string) => appNames.push(appName));
+
+      if (!apps.pageInfo.hasNextPage) break;
+      after = apps.pageInfo.endCursor;
+      if (!after) break;
+    }
+
+    const lists = await Promise.all(
+      appNames.map(async (appName) => {
+        try {
+          const machinesPayload = await flyApi<unknown>({
+            env: this.env,
+            method: "GET",
+            path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
+          });
+          return { appName, machinesPayload };
+        } catch (error) {
+          if (isNotFoundError(error) || isGraphQlNotFoundError(error)) {
+            return { appName, machinesPayload: [] };
+          }
+          throw error;
+        }
+      }),
+    );
+
+    const sandboxes: SandboxInfo[] = [];
+
+    for (const list of lists) {
+      const machineList = Array.isArray(list.machinesPayload) ? list.machinesPayload : [];
       for (const machine of machineList) {
         const machineRecord = asRecord(machine);
         const machineId = asString(machineRecord.id);
@@ -408,18 +701,14 @@ export class FlyProvider extends SandboxProvider {
 
         sandboxes.push({
           type: "fly" as const,
-          providerId: machineId,
+          providerId: encodeProviderId(list.appName, machineId),
           name: asString(machineRecord.name) ?? machineId,
           state: asString(machineRecord.state) ?? "unknown",
         });
       }
-      return sandboxes;
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return [];
-      }
-      throw error;
     }
+
+    return sandboxes;
   }
 
   async listSnapshots(): Promise<SnapshotInfo[]> {
