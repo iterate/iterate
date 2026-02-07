@@ -49,10 +49,19 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
-    const mobileInputRef = useRef<HTMLInputElement>(null);
-    const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
     const [ctrlActive, setCtrlActive] = useState(false);
+    const [altActive, setAltActive] = useState(false);
     const isMobile = useIsMobile();
+
+    // Refs so the custom key handler (set up once) can read current modifier state
+    const ctrlActiveRef = useRef(false);
+    const altActiveRef = useRef(false);
+    useEffect(() => {
+      ctrlActiveRef.current = ctrlActive;
+    }, [ctrlActive]);
+    useEffect(() => {
+      altActiveRef.current = altActive;
+    }, [altActive]);
 
     const wsUrl = useMemo(() => {
       const baseUri = new URL(document.baseURI);
@@ -76,49 +85,18 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
     const connectionStatus = READY_STATE_MAP[socket.readyState] ?? "disconnected";
 
-    // Handle mobile keyboard input
-    const handleMobileInput = useCallback(
-      (e: React.ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value;
-        if (value && socket.readyState === WebSocket.OPEN) {
-          if (ctrlActive && value.length === 1) {
-            // Convert letter to Ctrl code (A=1, B=2, etc.)
-            const code = value.toUpperCase().charCodeAt(0) - 64;
-            if (code >= 1 && code <= 26) {
-              socket.send(String.fromCharCode(code));
-            } else {
-              // Non-letter character, send as-is
-              socket.send(value);
-            }
-          } else {
-            socket.send(value);
-          }
-        }
-        // Always reset Ctrl state after any input
-        setCtrlActive(false);
-        e.target.value = "";
-      },
-      [socket, ctrlActive],
-    );
-
-    // Handle key presses from the mobile toolbar
+    // Handle key presses from the mobile toolbar and snippets panel
     const handleToolbarKeyPress = useCallback(
       (key: string) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(key);
         }
-        // Reset Ctrl state after any toolbar key press (consistent with other input handlers)
+        // Reset modifiers after any key press
         setCtrlActive(false);
+        setAltActive(false);
       },
       [socket],
     );
-
-    // Focus mobile input to trigger keyboard on mobile devices
-    const focusMobileInput = useCallback(() => {
-      if (isMobile && mobileInputRef.current) {
-        mobileInputRef.current.focus();
-      }
-    }, [isMobile]);
 
     useImperativeHandle(ref, () => ({
       sendText: (text: string) => {
@@ -162,6 +140,18 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminal.loadAddon(new ClipboardAddon());
 
       terminal.open(container);
+
+      // Suppress autocorrect/predictive text on xterm's internal textarea
+      // and hide the native blinking caret (terminal renders its own cursor)
+      const helperTextarea = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+      if (helperTextarea) {
+        helperTextarea.setAttribute("autocorrect", "off");
+        helperTextarea.setAttribute("autocomplete", "off");
+        helperTextarea.setAttribute("autocapitalize", "none");
+        helperTextarea.setAttribute("spellcheck", "false");
+        helperTextarea.style.caretColor = "transparent";
+      }
+
       // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
       terminal.loadAddon(new LigaturesAddon());
 
@@ -181,7 +171,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       const sendResize = () => {
         const { cols, rows } = terminal;
-        setTermSize({ cols, rows });
         sendControl({ type: "resize", cols, rows });
       };
 
@@ -190,10 +179,34 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         sendResize();
       });
 
+      // Intercept keyboard events to apply Ctrl/Alt modifier toggles from the toolbar
       terminal.attachCustomKeyEventHandler((event) => {
         if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
           return false;
         }
+
+        // Only process keydown events for modifier interception
+        if (event.type !== "keydown") return true;
+
+        // Ctrl modifier: convert letter keys to control characters
+        if (ctrlActiveRef.current && event.key.length === 1 && /[a-zA-Z]/.test(event.key)) {
+          const code = event.key.toLowerCase().charCodeAt(0) - 96; // a=1, b=2, c=3 ...
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(String.fromCharCode(code));
+          }
+          setCtrlActive(false);
+          return false;
+        }
+
+        // Alt modifier: prefix with ESC (standard terminal Alt encoding)
+        if (altActiveRef.current && event.key.length === 1) {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send("\x1b" + event.key);
+          }
+          setAltActive(false);
+          return false;
+        }
+
         return true;
       });
 
@@ -204,11 +217,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           sendResize();
         });
         terminal.focus();
-        // On mobile, also focus the hidden input to trigger keyboard
-        if (mobileInputRef.current) {
-          // Small delay to ensure terminal is ready
-          setTimeout(() => mobileInputRef.current?.focus(), 100);
-        }
       };
 
       const handleMessage = (event: MessageEvent) => {
@@ -295,61 +303,31 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     }, [socket, onParamsChange]);
 
     return (
-      <div className="absolute inset-0 bg-[#1e1e1e] p-4">
-        <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
-          {termSize.cols}x{termSize.rows}
-        </div>
-        {/* Terminal container - leave space at bottom on mobile for toolbar */}
-        <div className="relative h-full w-full overflow-hidden">
+      <div className="flex h-full w-full flex-col bg-[#1e1e1e]">
+        {/* Mobile toolbar at top */}
+        {isMobile && (
+          <div className="shrink-0">
+            <MobileKeyboardToolbar
+              onKeyPress={handleToolbarKeyPress}
+              ctrlActive={ctrlActive}
+              altActive={altActive}
+              onCtrlToggle={() => setCtrlActive((prev) => !prev)}
+              onAltToggle={() => setAltActive((prev) => !prev)}
+            />
+          </div>
+        )}
+
+        {/* Terminal fills remaining space */}
+        <div className="relative min-h-0 flex-1">
           <div
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
-            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-24" : "bottom-0"}`}
-            onClick={() => {
-              termRef.current?.focus();
-              focusMobileInput();
-            }}
+            className="absolute inset-0"
+            onClick={() => termRef.current?.focus()}
+            onTouchStart={() => termRef.current?.focus()}
           />
-          {/* Hidden input for mobile keyboard - captures typed text */}
-          {isMobile && (
-            <input
-              ref={mobileInputRef}
-              type="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              className="absolute opacity-0 pointer-events-none"
-              style={{ top: -9999, left: -9999 }}
-              onChange={handleMobileInput}
-              onKeyDown={(e) => {
-                // Handle special keys that don't produce input events
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (socket.readyState === WebSocket.OPEN) {
-                    socket.send("\r");
-                  }
-                  setCtrlActive(false);
-                } else if (e.key === "Backspace") {
-                  e.preventDefault();
-                  if (socket.readyState === WebSocket.OPEN) {
-                    socket.send("\x7f");
-                  }
-                  setCtrlActive(false);
-                }
-              }}
-            />
-          )}
         </div>
-        {/* Mobile keyboard toolbar */}
-        {isMobile && (
-          <MobileKeyboardToolbar
-            onKeyPress={handleToolbarKeyPress}
-            ctrlActive={ctrlActive}
-            onCtrlToggle={() => setCtrlActive((prev) => !prev)}
-          />
-        )}
       </div>
     );
   },
