@@ -200,14 +200,23 @@ async function main(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
   const outputPath = join(outDir, `${nowTag()}-proxy-resource-bench.json`);
 
-  process.stdout.write(`starting stack: project=${composeProject}\n`);
-  runCommand("docker", ["compose", "-f", composeFile, "-p", composeProject, "up", "-d", "--build"]);
-
-  const containerIds = getContainerIds(composeFile, composeProject);
-  if (containerIds.length === 0) throw new Error("no running containers found");
-
   const samples: ResourceSample[] = [];
   try {
+    process.stdout.write(`starting stack: project=${composeProject}\n`);
+    runCommand("docker", [
+      "compose",
+      "-f",
+      composeFile,
+      "-p",
+      composeProject,
+      "up",
+      "-d",
+      "--build",
+    ]);
+
+    const containerIds = getContainerIds(composeFile, composeProject);
+    if (containerIds.length === 0) throw new Error("no running containers found");
+
     sampleResources(containerIds, "warmup", samples);
     const proxied = runPhase(
       composeFile,
