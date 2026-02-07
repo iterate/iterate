@@ -8,6 +8,7 @@ import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 import { emailRouter } from "./routers/email.ts";
+import { webChatRouter } from "./routers/web-chat.ts";
 
 const app = baseApp.use(
   logger(),
@@ -50,5 +51,6 @@ app.all("/api/trpc/*", (c) => {
 app.route("/api/pty", ptyRouter);
 app.route("/api/integrations/slack", slackRouter);
 app.route("/api/integrations/email", emailRouter);
+app.route("/api/integrations/web-chat", webChatRouter);
 
 export default app;
