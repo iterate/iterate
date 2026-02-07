@@ -52,13 +52,19 @@ export const ptyRouter = new Hono();
 
 function spawnPtyProcess(): pty.IPty {
   const shell = process.env.SHELL || "/bin/bash";
+  const env = {
+    ...process.env,
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+  } as Record<string, string>;
+
+  if (env.FORCE_COLOR && env.NO_COLOR) {
+    delete env.NO_COLOR;
+  }
   return pty.spawn(shell, [], {
     name: "xterm-256color",
     cwd: homedir(),
-    env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } as Record<
-      string,
-      string
-    >,
+    env,
   });
 }
 

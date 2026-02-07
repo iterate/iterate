@@ -115,11 +115,21 @@
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply bg-[#1e1e1e];
+    min-height: 100%;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-[#1e1e1e] text-foreground;
+    min-height: 100%;
   }
+}
+
+#root {
+  min-height: 100%;
+  background: #1e1e1e;
 }
 
 /* Ensure xterm terminal elements fill their container */
@@ -130,15 +140,6 @@
 
 [data-testid="terminal-container"] .xterm-viewport {
   overflow-y: auto !important;
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
 }
 
 /* Router progress animation */
@@ -156,4 +157,13 @@
 
 .animate-progress {
   animation: progress 1s ease-in-out infinite;
+}
+
+/* Hide scrollbars while keeping scroll functionality */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
