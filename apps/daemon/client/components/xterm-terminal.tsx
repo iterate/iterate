@@ -53,6 +53,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const [ctrlActive, setCtrlActive] = useState(false);
     const searchAddonRef = useRef<SearchAddon | null>(null);
     const isMobile = useIsMobile();
+    const isMobileRef = useRef(isMobile);
+    useEffect(() => {
+      isMobileRef.current = isMobile;
+    }, [isMobile]);
 
     // Ref so the onData handler (set up once) can read current modifier state
     const ctrlActiveRef = useRef(false);
@@ -111,7 +115,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const container = containerRef.current;
 
       const terminal = new Terminal({
-        fontSize: isMobile ? 10 : 14,
+        fontSize: isMobileRef.current ? 10 : 14,
         cursorBlink: true,
         fontFamily:
           '"JetBrainsMono Nerd Font", "JetBrains Mono", Monaco, Menlo, "Courier New", monospace',
@@ -240,12 +244,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const dataDisposable = terminal.onData((data: string) => {
         if (socket.readyState !== WebSocket.OPEN) return;
 
-        // Ctrl modifier: convert single letter to control character (a=0x01 … z=0x1a)
-        if (ctrlActiveRef.current && data.length === 1 && /[a-zA-Z]/.test(data)) {
-          const code = data.toLowerCase().charCodeAt(0) - 96;
-          socket.send(String.fromCharCode(code));
+        // Ctrl modifier: convert letter to control character, clear on any input
+        if (ctrlActiveRef.current && data.length === 1) {
           setCtrlActive(false);
-          return;
+          if (/[a-zA-Z]/.test(data)) {
+            const code = data.toLowerCase().charCodeAt(0) - 96;
+            socket.send(String.fromCharCode(code));
+            return;
+          }
+          // Non-letter: clear modifier, send normally
         }
 
         socket.send(data);
@@ -285,7 +292,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         termRef.current = null;
         container.innerHTML = "";
       };
-    }, [socket, onParamsChange, isMobile]);
+    }, [socket, onParamsChange]);
 
     return (
       <div className="flex h-full w-full flex-col bg-[#1e1e1e]">

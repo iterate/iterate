@@ -160,6 +160,7 @@ export function MobileKeyboardToolbar({
   const arrowBtnRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
+  const popupDismissed = useRef(false);
   const repeatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -181,15 +182,26 @@ export function MobileKeyboardToolbar({
     }
   }, []);
 
+  // Clean up timers on unmount to prevent leaked intervals
+  useEffect(() => {
+    return () => {
+      if (longPressTimer.current) clearTimeout(longPressTimer.current);
+      if (repeatTimer.current) clearTimeout(repeatTimer.current);
+      if (repeatInterval.current) clearInterval(repeatInterval.current);
+    };
+  }, []);
+
   // ── Primary key handlers ────────────────────────────────────────
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent, keyDef: KeyDef) => {
       e.preventDefault();
       longPressFired.current = false;
+      popupDismissed.current = false;
 
       if (popup) {
         setPopup(null);
+        popupDismissed.current = true;
         return;
       }
 
@@ -234,6 +246,9 @@ export function MobileKeyboardToolbar({
       if (keyDef.repeat) return;
 
       if (longPressFired.current) return;
+
+      // Tap was only to dismiss a popup — don't fire the key action
+      if (popupDismissed.current) return;
 
       haptic();
 
