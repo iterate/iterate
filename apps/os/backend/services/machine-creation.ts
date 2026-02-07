@@ -134,6 +134,10 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
     },
   });
+  const machineMetadata = {
+    ...(metadata ?? {}),
+    ...(runtimeResult.metadata ?? {}),
+  };
 
   // Create machine in DB with 'starting' state
   const [newMachine] = await db
@@ -144,7 +148,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       type,
       projectId,
       state: "starting",
-      metadata: runtimeResult.metadata ?? {},
+      metadata: machineMetadata,
       externalId: runtimeResult.externalId,
     })
     .returning()
@@ -155,7 +159,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
           type,
           env,
           externalId: runtimeResult.externalId,
-          metadata: runtimeResult.metadata ?? {},
+          metadata: machineMetadata,
         });
         await cleanupRuntime.delete();
       } catch {
