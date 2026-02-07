@@ -6,7 +6,6 @@ export type FetchPayload = {
 
 export type ProviderInit = {
   flyDir: string;
-  artifactDir: string;
   app: string;
   cleanupOnExit: boolean;
   targetUrl: string;
