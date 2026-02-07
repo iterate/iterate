@@ -6,13 +6,17 @@ interface MobileKeyboardToolbarProps {
   ctrlActive?: boolean;
   onCtrlToggle?: () => void;
   onDismissKeyboard?: () => void;
+  onSearch?: (query: string) => void;
+  onSearchNext?: (query: string) => void;
+  onSearchPrev?: (query: string) => void;
+  onSearchClose?: () => void;
 }
 
 interface KeyDef {
   label: string;
   key?: string;
   modifier?: "ctrl";
-  action?: "snippets" | "arrows" | "dismiss-kb";
+  action?: "snippets" | "arrows" | "dismiss-kb" | "search";
   longPress?: { label: string; key: string };
   /** Fire repeatedly while held (initial delay then fast interval) */
   repeat?: boolean;
@@ -27,6 +31,7 @@ const TOOLBAR_KEYS: KeyDef[] = [
   { label: "Ctrl", modifier: "ctrl" },
   { label: "-", key: "-", icon: true, longPress: { label: "|", key: "|" } },
   { label: "/", key: "/", icon: true, longPress: { label: "\\", key: "\\" } },
+  { label: "search", action: "search", icon: true },
   { label: "arrows", action: "arrows", icon: true },
   { label: "⌨", action: "dismiss-kb", icon: true },
   { label: "⌫", key: "\x7f", icon: true, repeat: true },
@@ -135,9 +140,16 @@ export function MobileKeyboardToolbar({
   ctrlActive = false,
   onCtrlToggle,
   onDismissKeyboard,
+  onSearch,
+  onSearchNext,
+  onSearchPrev,
+  onSearchClose,
 }: MobileKeyboardToolbarProps) {
   const [expanded, setExpanded] = useState(false);
   const [arrowsOpen, setArrowsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [popup, setPopup] = useState<{
     label: string;
     key: string;
@@ -231,6 +243,18 @@ export function MobileKeyboardToolbar({
       }
       if (keyDef.action === "arrows") {
         setArrowsOpen((prev) => !prev);
+        return;
+      }
+      if (keyDef.action === "search") {
+        setSearchOpen((prev) => {
+          if (prev) {
+            onSearchClose?.();
+            return false;
+          }
+          // Focus input on next tick after render
+          setTimeout(() => searchInputRef.current?.focus(), 50);
+          return true;
+        });
         return;
       }
       if (keyDef.action === "dismiss-kb") {
@@ -362,24 +386,28 @@ export function MobileKeyboardToolbar({
             onPointerUp={(e) => handlePointerUp(e, keyDef)}
             onPointerCancel={handlePointerCancel}
             className={cn(
-              "relative h-8 rounded text-xs font-mono transition-colors select-none touch-manipulation",
-              keyDef.icon ? "w-7 shrink-0" : "flex-1",
+              "relative h-8 rounded text-[10px] font-mono transition-colors select-none touch-manipulation",
+              keyDef.icon ? "w-7 shrink-0" : "min-w-0 flex-1",
               keyDef.action === "snippets" && expanded
                 ? "bg-[#3a3a3a] text-white"
                 : keyDef.action === "arrows" && arrowsOpen
                   ? "bg-[#3a3a3a] text-white"
-                  : keyDef.modifier === "ctrl" && ctrlActive
-                    ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
-                    : "bg-[#2a2a2a] text-[#d4d4d4] active:bg-[#3a3a3a]",
+                  : keyDef.action === "search" && searchOpen
+                    ? "bg-[#3a3a3a] text-white"
+                    : keyDef.modifier === "ctrl" && ctrlActive
+                      ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
+                      : "bg-[#2a2a2a] text-[#d4d4d4] active:bg-[#3a3a3a]",
             )}
           >
-            {/* Snippets toggle: chevron that flips */}
+            {/* Special labels for action buttons */}
             {keyDef.action === "snippets" ? (
               <span className={cn("inline-block transition-transform", expanded && "rotate-180")}>
                 ▾
               </span>
             ) : keyDef.action === "arrows" ? (
               "⇅"
+            ) : keyDef.action === "search" ? (
+              "⌕"
             ) : (
               keyDef.label
             )}
@@ -494,6 +522,73 @@ export function MobileKeyboardToolbar({
           </div>
         )}
       </div>
+
+      {/* Search bar */}
+      {searchOpen && (
+        <div className="flex items-center gap-1 pb-1">
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (e.target.value) onSearch?.(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (searchQuery) {
+                  if (e.shiftKey) {
+                    onSearchPrev?.(searchQuery);
+                  } else {
+                    onSearchNext?.(searchQuery);
+                  }
+                }
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setSearchOpen(false);
+                setSearchQuery("");
+                onSearchClose?.();
+              }
+            }}
+            placeholder="Search..."
+            className="h-7 min-w-0 flex-1 rounded bg-[#2a2a2a] px-2 text-xs font-mono text-[#d4d4d4] placeholder-[#666] outline-none focus:ring-1 focus:ring-[#555]"
+          />
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              if (searchQuery) onSearchPrev?.(searchQuery);
+            }}
+            className="h-7 w-7 shrink-0 rounded bg-[#2a2a2a] text-xs font-mono text-[#d4d4d4] active:bg-[#3a3a3a] select-none touch-manipulation"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              if (searchQuery) onSearchNext?.(searchQuery);
+            }}
+            className="h-7 w-7 shrink-0 rounded bg-[#2a2a2a] text-xs font-mono text-[#d4d4d4] active:bg-[#3a3a3a] select-none touch-manipulation"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              setSearchOpen(false);
+              setSearchQuery("");
+              onSearchClose?.();
+            }}
+            className="h-7 w-7 shrink-0 rounded bg-[#2a2a2a] text-xs font-mono text-[#d4d4d4] active:bg-[#3a3a3a] select-none touch-manipulation"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Expandable snippet rows (Shell, Sym, Nav) */}
       {expanded && (

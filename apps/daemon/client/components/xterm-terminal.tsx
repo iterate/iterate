@@ -15,6 +15,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { SearchAddon } from "@xterm/addon-search";
 import { useIsMobile } from "@/hooks/use-mobile.ts";
 import { MobileKeyboardToolbar } from "@/components/mobile-keyboard-toolbar.tsx";
 
@@ -50,6 +51,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const [ctrlActive, setCtrlActive] = useState(false);
+    const searchAddonRef = useRef<SearchAddon | null>(null);
     const isMobile = useIsMobile();
 
     // Ref so the onData handler (set up once) can read current modifier state
@@ -132,6 +134,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(new UnicodeGraphemesAddon());
       terminal.loadAddon(new ClipboardAddon());
+
+      const searchAddon = new SearchAddon();
+      terminal.loadAddon(searchAddon);
+      searchAddonRef.current = searchAddon;
 
       terminal.open(container);
 
@@ -297,6 +303,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
                 const ta =
                   containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
                 ta?.blur();
+              }}
+              onSearch={(query) => {
+                searchAddonRef.current?.findNext(query, {
+                  decorations: { activeMatchColorOverviewRuler: "#ffcc00" },
+                });
+              }}
+              onSearchNext={(query) => {
+                searchAddonRef.current?.findNext(query);
+              }}
+              onSearchPrev={(query) => {
+                searchAddonRef.current?.findPrevious(query);
+              }}
+              onSearchClose={() => {
+                searchAddonRef.current?.clearDecorations();
               }}
             />
           </div>
