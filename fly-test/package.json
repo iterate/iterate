@@ -6,6 +6,7 @@
     "e2e": "tsx ./e2e/run-observability.ts",
     "e2e:docker": "E2E_BACKEND=docker tsx ./e2e/run-observability.ts",
     "e2e:fly": "E2E_BACKEND=fly tsx ./e2e/run-observability.ts",
+    "bench:resources": "tsx ./scripts/benchmark-proxy-resources.ts",
     "test": "vitest run ./e2e/run-observability.integration.test.ts",
     "typecheck": "tsc --noEmit -p ./tsconfig.json",
     "build:fly-images": "bash ./scripts/build-fly-images.sh"
