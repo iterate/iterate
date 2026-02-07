@@ -4,32 +4,47 @@ import { cn } from "@/lib/utils.ts";
 interface MobileKeyboardToolbarProps {
   onKeyPress: (key: string) => void;
   ctrlActive?: boolean;
-  altActive?: boolean;
   onCtrlToggle?: () => void;
-  onAltToggle?: () => void;
+  onDismissKeyboard?: () => void;
 }
 
 interface KeyDef {
   label: string;
   key?: string;
-  modifier?: "ctrl" | "alt";
-  action?: "snippets";
+  modifier?: "ctrl";
+  action?: "snippets" | "arrows" | "dismiss-kb";
   longPress?: { label: string; key: string };
+  /** Fire repeatedly while held (initial delay then fast interval) */
+  repeat?: boolean;
   /** Render at fixed narrow width (icons, symbols, arrows) */
   icon?: boolean;
 }
 
 const TOOLBAR_KEYS: KeyDef[] = [
-  { label: "≡", action: "snippets", icon: true },
+  { label: "snippets", action: "snippets", icon: true },
   { label: "Tab", key: "\t", longPress: { label: "~", key: "~" } },
   { label: "Esc", key: "\x1b", longPress: { label: "`", key: "`" } },
   { label: "Ctrl", modifier: "ctrl" },
-  { label: "Alt", modifier: "alt" },
   { label: "-", key: "-", icon: true, longPress: { label: "|", key: "|" } },
-  { label: "↑", key: "\x1b[A", icon: true, longPress: { label: "PgUp", key: "\x1b[5~" } },
-  { label: "↓", key: "\x1b[B", icon: true, longPress: { label: "PgDn", key: "\x1b[6~" } },
-  { label: "←", key: "\x1b[D", icon: true, longPress: { label: "Home", key: "\x1b[H" } },
-  { label: "→", key: "\x1b[C", icon: true, longPress: { label: "End", key: "\x1b[F" } },
+  { label: "/", key: "/", icon: true, longPress: { label: "\\", key: "\\" } },
+  { label: "arrows", action: "arrows", icon: true },
+  { label: "⌨", action: "dismiss-kb", icon: true },
+  { label: "⌫", key: "\x7f", icon: true, repeat: true },
+];
+
+// ── Arrow key definitions for the popover ────────────────────────────
+
+interface ArrowKeyDef {
+  label: string;
+  key: string;
+  longPress?: { label: string; key: string };
+}
+
+const ARROW_KEYS: ArrowKeyDef[] = [
+  { label: "↑", key: "\x1b[A", longPress: { label: "PgUp", key: "\x1b[5~" } },
+  { label: "↓", key: "\x1b[B", longPress: { label: "PgDn", key: "\x1b[6~" } },
+  { label: "←", key: "\x1b[D", longPress: { label: "Home", key: "\x1b[H" } },
+  { label: "→", key: "\x1b[C", longPress: { label: "End", key: "\x1b[F" } },
 ];
 
 // ── Snippet rows (horizontal scroll) ────────────────────────────────
@@ -44,27 +59,16 @@ interface SnippetRow {
   items: SnippetItem[];
 }
 
+// Expandable rows behind chevron toggle
 const SNIPPET_ROWS: SnippetRow[] = [
-  {
-    title: "Ctrl",
-    items: [
-      { label: "C", key: "\x03" },
-      { label: "D", key: "\x04" },
-      { label: "Z", key: "\x1a" },
-      { label: "L", key: "\x0c" },
-      { label: "R", key: "\x12" },
-      { label: "W", key: "\x17" },
-      { label: "A", key: "\x01" },
-      { label: "E", key: "\x05" },
-      { label: "U", key: "\x15" },
-      { label: "K", key: "\x0b" },
-      { label: "P", key: "\x10" },
-      { label: "N", key: "\x0e" },
-    ],
-  },
   {
     title: "Shell",
     items: [
+      { label: "pi", key: "pi" },
+      { label: "opencode", key: "opencode" },
+      { label: "claude", key: "claude" },
+      { label: "codex", key: "codex" },
+      { label: "tmux", key: "tmux" },
       { label: "ls -la", key: "ls -la" },
       { label: "cd ..", key: "cd .." },
       { label: "pwd", key: "pwd" },
@@ -80,6 +84,8 @@ const SNIPPET_ROWS: SnippetRow[] = [
   {
     title: "Sym",
     items: [
+      { label: "/", key: "/" },
+      { label: "\\", key: "\\" },
       { label: "|", key: "|" },
       { label: "&", key: "&" },
       { label: ">", key: ">" },
@@ -88,8 +94,6 @@ const SNIPPET_ROWS: SnippetRow[] = [
       { label: "${}", key: "${}" },
       { label: "`", key: "`" },
       { label: "~", key: "~" },
-      { label: "/", key: "/" },
-      { label: "\\", key: "\\" },
       { label: "{}", key: "{}" },
       { label: "[]", key: "[]" },
       { label: "()", key: "()" },
@@ -117,6 +121,8 @@ const SNIPPET_ROWS: SnippetRow[] = [
 // ── Helpers ──────────────────────────────────────────────────────────
 
 const LONG_PRESS_MS = 300;
+const REPEAT_INITIAL_DELAY_MS = 300;
+const REPEAT_INTERVAL_MS = 80;
 
 function haptic() {
   navigator.vibrate?.(10);
@@ -127,11 +133,11 @@ function haptic() {
 export function MobileKeyboardToolbar({
   onKeyPress,
   ctrlActive = false,
-  altActive = false,
   onCtrlToggle,
-  onAltToggle,
+  onDismissKeyboard,
 }: MobileKeyboardToolbarProps) {
   const [expanded, setExpanded] = useState(false);
+  const [arrowsOpen, setArrowsOpen] = useState(false);
   const [popup, setPopup] = useState<{
     label: string;
     key: string;
@@ -139,13 +145,27 @@ export function MobileKeyboardToolbar({
     y: number;
   } | null>(null);
 
+  const arrowBtnRef = useRef<HTMLButtonElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressFired = useRef(false);
+  const repeatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repeatInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearTimer = useCallback(() => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
+    }
+  }, []);
+
+  const clearRepeat = useCallback(() => {
+    if (repeatTimer.current) {
+      clearTimeout(repeatTimer.current);
+      repeatTimer.current = null;
+    }
+    if (repeatInterval.current) {
+      clearInterval(repeatInterval.current);
+      repeatInterval.current = null;
     }
   }, []);
 
@@ -158,6 +178,20 @@ export function MobileKeyboardToolbar({
 
       if (popup) {
         setPopup(null);
+        return;
+      }
+
+      // Auto-repeat keys: fire immediately, then repeat on hold
+      if (keyDef.repeat && keyDef.key) {
+        haptic();
+        onKeyPress(keyDef.key);
+        const key = keyDef.key;
+        repeatTimer.current = setTimeout(() => {
+          repeatInterval.current = setInterval(() => {
+            haptic();
+            onKeyPress(key);
+          }, REPEAT_INTERVAL_MS);
+        }, REPEAT_INITIAL_DELAY_MS);
         return;
       }
 
@@ -175,13 +209,17 @@ export function MobileKeyboardToolbar({
         }, LONG_PRESS_MS);
       }
     },
-    [popup],
+    [popup, onKeyPress],
   );
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent, keyDef: KeyDef) => {
       e.preventDefault();
       clearTimer();
+      clearRepeat();
+
+      // Repeat keys already fired on pointerdown — nothing to do on up
+      if (keyDef.repeat) return;
 
       if (longPressFired.current) return;
 
@@ -191,25 +229,78 @@ export function MobileKeyboardToolbar({
         setExpanded((prev) => !prev);
         return;
       }
-      if (keyDef.modifier === "ctrl") {
-        onCtrlToggle?.();
+      if (keyDef.action === "arrows") {
+        setArrowsOpen((prev) => !prev);
         return;
       }
-      if (keyDef.modifier === "alt") {
-        onAltToggle?.();
+      if (keyDef.action === "dismiss-kb") {
+        onDismissKeyboard?.();
+        return;
+      }
+      if (keyDef.modifier === "ctrl") {
+        onCtrlToggle?.();
         return;
       }
       if (keyDef.key) {
         onKeyPress(keyDef.key);
       }
     },
-    [clearTimer, onKeyPress, onCtrlToggle, onAltToggle],
+    [clearTimer, clearRepeat, onKeyPress, onCtrlToggle, onDismissKeyboard],
   );
 
   const handlePointerCancel = useCallback(() => {
     clearTimer();
+    clearRepeat();
     longPressFired.current = false;
-  }, [clearTimer]);
+  }, [clearTimer, clearRepeat]);
+
+  // ── Arrow popover key handler (repeat on hold + long-press) ────
+
+  const handleArrowPointerDown = useCallback(
+    (e: React.PointerEvent, arrow: ArrowKeyDef) => {
+      e.preventDefault();
+      e.stopPropagation();
+      longPressFired.current = false;
+      haptic();
+      onKeyPress(arrow.key);
+
+      // Start repeat
+      const key = arrow.key;
+      repeatTimer.current = setTimeout(() => {
+        repeatInterval.current = setInterval(() => {
+          haptic();
+          onKeyPress(key);
+        }, REPEAT_INTERVAL_MS);
+      }, REPEAT_INITIAL_DELAY_MS);
+
+      // Also set up long-press for variant
+      if (arrow.longPress) {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        longPressTimer.current = setTimeout(() => {
+          longPressFired.current = true;
+          clearRepeat();
+          haptic();
+          setPopup({
+            label: arrow.longPress!.label,
+            key: arrow.longPress!.key,
+            x: rect.left + rect.width / 2,
+            y: rect.top,
+          });
+        }, LONG_PRESS_MS);
+      }
+    },
+    [onKeyPress, clearRepeat],
+  );
+
+  const handleArrowPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimer();
+      clearRepeat();
+    },
+    [clearTimer, clearRepeat],
+  );
 
   // ── Snippet item handler ────────────────────────────────────────
 
@@ -236,32 +327,69 @@ export function MobileKeyboardToolbar({
     };
   }, [popup]);
 
+  // ── Dismiss arrow popover on outside tap ────────────────────────
+
+  useEffect(() => {
+    if (!arrowsOpen) return;
+    const dismiss = (e: PointerEvent) => {
+      // Don't dismiss if tapping inside the popover or the toggle button
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-arrow-popover]") || target.closest("[data-arrow-toggle]")) return;
+      setArrowsOpen(false);
+    };
+    const timer = setTimeout(() => {
+      document.addEventListener("pointerdown", dismiss);
+    }, 50);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("pointerdown", dismiss);
+    };
+  }, [arrowsOpen]);
+
   // ── Render ──────────────────────────────────────────────────────
 
   return (
     <div className="w-full bg-[#1e1e1e]">
       {/* Primary toolbar row */}
-      <div className="relative flex gap-1 px-1 py-1">
+      <div className="relative flex gap-1 pb-1">
         {TOOLBAR_KEYS.map((keyDef) => (
           <button
             key={keyDef.label}
             type="button"
+            ref={keyDef.action === "arrows" ? arrowBtnRef : undefined}
+            data-arrow-toggle={keyDef.action === "arrows" ? "" : undefined}
             onPointerDown={(e) => handlePointerDown(e, keyDef)}
             onPointerUp={(e) => handlePointerUp(e, keyDef)}
             onPointerCancel={handlePointerCancel}
             className={cn(
-              "h-10 rounded text-xs font-mono transition-colors select-none touch-manipulation",
-              keyDef.icon ? "w-8 shrink-0" : "flex-1",
+              "relative h-8 rounded text-xs font-mono transition-colors select-none touch-manipulation",
+              keyDef.icon ? "w-7 shrink-0" : "flex-1",
               keyDef.action === "snippets" && expanded
                 ? "bg-[#3a3a3a] text-white"
-                : keyDef.modifier === "ctrl" && ctrlActive
-                  ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
-                  : keyDef.modifier === "alt" && altActive
+                : keyDef.action === "arrows" && arrowsOpen
+                  ? "bg-[#3a3a3a] text-white"
+                  : keyDef.modifier === "ctrl" && ctrlActive
                     ? "bg-[#2563eb] text-white border-b-2 border-[#60a5fa]"
                     : "bg-[#2a2a2a] text-[#d4d4d4] active:bg-[#3a3a3a]",
             )}
           >
-            {keyDef.label}
+            {/* Snippets toggle: chevron that flips */}
+            {keyDef.action === "snippets" ? (
+              <span className={cn("inline-block transition-transform", expanded && "rotate-180")}>
+                ▾
+              </span>
+            ) : keyDef.action === "arrows" ? (
+              "⇅"
+            ) : (
+              keyDef.label
+            )}
+
+            {/* Long-press hint */}
+            {keyDef.longPress && (
+              <span className="absolute -top-0.5 right-0.5 text-[7px] leading-none text-[#666]">
+                {keyDef.longPress.label}
+              </span>
+            )}
           </button>
         ))}
 
@@ -290,20 +418,93 @@ export function MobileKeyboardToolbar({
             </button>
           </div>
         )}
+
+        {/* Arrow keys popover */}
+        {arrowsOpen && arrowBtnRef.current && (
+          <div
+            data-arrow-popover=""
+            className="absolute z-50 rounded-lg bg-[#2a2a2a] border border-[#444] shadow-lg p-1"
+            style={{
+              bottom: "calc(100% + 4px)",
+              right: 0,
+            }}
+          >
+            <div className="grid grid-cols-3 gap-1 w-[108px]">
+              {/* Row 1: _ ↑ _ */}
+              <div />
+              <button
+                type="button"
+                onPointerDown={(e) => handleArrowPointerDown(e, ARROW_KEYS[0]!)}
+                onPointerUp={handleArrowPointerUp}
+                onPointerCancel={handlePointerCancel}
+                className="relative h-9 w-9 rounded bg-[#3a3a3a] text-sm font-mono text-[#d4d4d4] active:bg-[#555] select-none touch-manipulation"
+              >
+                ↑
+                {ARROW_KEYS[0]!.longPress && (
+                  <span className="absolute -top-0.5 right-0.5 text-[6px] leading-none text-[#666]">
+                    {ARROW_KEYS[0]!.longPress.label}
+                  </span>
+                )}
+              </button>
+              <div />
+              {/* Row 2: ← ↓ → */}
+              <button
+                type="button"
+                onPointerDown={(e) => handleArrowPointerDown(e, ARROW_KEYS[2]!)}
+                onPointerUp={handleArrowPointerUp}
+                onPointerCancel={handlePointerCancel}
+                className="relative h-9 w-9 rounded bg-[#3a3a3a] text-sm font-mono text-[#d4d4d4] active:bg-[#555] select-none touch-manipulation"
+              >
+                ←
+                {ARROW_KEYS[2]!.longPress && (
+                  <span className="absolute -top-0.5 right-0.5 text-[6px] leading-none text-[#666]">
+                    {ARROW_KEYS[2]!.longPress.label}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => handleArrowPointerDown(e, ARROW_KEYS[1]!)}
+                onPointerUp={handleArrowPointerUp}
+                onPointerCancel={handlePointerCancel}
+                className="relative h-9 w-9 rounded bg-[#3a3a3a] text-sm font-mono text-[#d4d4d4] active:bg-[#555] select-none touch-manipulation"
+              >
+                ↓
+                {ARROW_KEYS[1]!.longPress && (
+                  <span className="absolute -top-0.5 right-0.5 text-[6px] leading-none text-[#666]">
+                    {ARROW_KEYS[1]!.longPress.label}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => handleArrowPointerDown(e, ARROW_KEYS[3]!)}
+                onPointerUp={handleArrowPointerUp}
+                onPointerCancel={handlePointerCancel}
+                className="relative h-9 w-9 rounded bg-[#3a3a3a] text-sm font-mono text-[#d4d4d4] active:bg-[#555] select-none touch-manipulation"
+              >
+                →
+                {ARROW_KEYS[3]!.longPress && (
+                  <span className="absolute -top-0.5 right-0.5 text-[6px] leading-none text-[#666]">
+                    {ARROW_KEYS[3]!.longPress.label}
+                  </span>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Expandable snippet rows */}
+      {/* Expandable snippet rows (Shell, Sym, Nav) */}
       {expanded && (
-        <div className="flex flex-col gap-px border-t border-[#333]">
+        <div className="flex flex-col gap-px">
           {SNIPPET_ROWS.map((row) => (
             <div key={row.title} className="flex items-center">
-              {/* Section label */}
-              <div className="w-10 shrink-0 pl-2 text-[10px] font-semibold text-[#666] uppercase">
+              <div className="w-10 shrink-0 text-[10px] font-semibold text-[#666] uppercase">
                 {row.title}
               </div>
-              {/* Horizontal scroll area */}
               <div className="flex-1 overflow-x-auto overscroll-x-contain scrollbar-none">
-                <div className="flex gap-1 px-1 py-1">
+                <div className="flex gap-1 py-1">
                   {row.items.map((item) => (
                     <button
                       key={item.label}

@@ -50,18 +50,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const [ctrlActive, setCtrlActive] = useState(false);
-    const [altActive, setAltActive] = useState(false);
     const isMobile = useIsMobile();
 
-    // Refs so the custom key handler (set up once) can read current modifier state
+    // Ref so the onData handler (set up once) can read current modifier state
     const ctrlActiveRef = useRef(false);
-    const altActiveRef = useRef(false);
     useEffect(() => {
       ctrlActiveRef.current = ctrlActive;
     }, [ctrlActive]);
-    useEffect(() => {
-      altActiveRef.current = altActive;
-    }, [altActive]);
 
     const wsUrl = useMemo(() => {
       const baseUri = new URL(document.baseURI);
@@ -91,9 +86,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(key);
         }
-        // Reset modifiers after any key press
+        // Reset modifier after any key press
         setCtrlActive(false);
-        setAltActive(false);
       },
       [socket],
     );
@@ -115,7 +109,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const container = containerRef.current;
 
       const terminal = new Terminal({
-        fontSize: 14,
+        fontSize: isMobile ? 10 : 14,
         cursorBlink: true,
         fontFamily:
           '"JetBrainsMono Nerd Font", "JetBrains Mono", Monaco, Menlo, "Courier New", monospace',
@@ -179,34 +173,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         sendResize();
       });
 
-      // Intercept keyboard events to apply Ctrl/Alt modifier toggles from the toolbar
+      // Let Shift+PageUp/Down pass through to the browser
       terminal.attachCustomKeyEventHandler((event) => {
         if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
           return false;
         }
-
-        // Only process keydown events for modifier interception
-        if (event.type !== "keydown") return true;
-
-        // Ctrl modifier: convert letter keys to control characters
-        if (ctrlActiveRef.current && event.key.length === 1 && /[a-zA-Z]/.test(event.key)) {
-          const code = event.key.toLowerCase().charCodeAt(0) - 96; // a=1, b=2, c=3 ...
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(String.fromCharCode(code));
-          }
-          setCtrlActive(false);
-          return false;
-        }
-
-        // Alt modifier: prefix with ESC (standard terminal Alt encoding)
-        if (altActiveRef.current && event.key.length === 1) {
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send("\x1b" + event.key);
-          }
-          setAltActive(false);
-          return false;
-        }
-
         return true;
       });
 
@@ -261,9 +232,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       socket.addEventListener("close", handleClose);
 
       const dataDisposable = terminal.onData((data: string) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(data);
+        if (socket.readyState !== WebSocket.OPEN) return;
+
+        // Ctrl modifier: convert single letter to control character (a=0x01 … z=0x1a)
+        if (ctrlActiveRef.current && data.length === 1 && /[a-zA-Z]/.test(data)) {
+          const code = data.toLowerCase().charCodeAt(0) - 96;
+          socket.send(String.fromCharCode(code));
+          setCtrlActive(false);
+          return;
         }
+
+        socket.send(data);
       });
 
       const resizeDisposable = terminal.onResize(() => sendResize());
@@ -310,9 +289,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             <MobileKeyboardToolbar
               onKeyPress={handleToolbarKeyPress}
               ctrlActive={ctrlActive}
-              altActive={altActive}
-              onCtrlToggle={() => setCtrlActive((prev) => !prev)}
-              onAltToggle={() => setAltActive((prev) => !prev)}
+              onCtrlToggle={() => {
+                setCtrlActive((prev) => !prev);
+                termRef.current?.focus();
+              }}
+              onDismissKeyboard={() => {
+                const ta =
+                  containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+                ta?.blur();
+              }}
             />
           </div>
         )}
