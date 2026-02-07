@@ -190,8 +190,6 @@ export class FlyProvider implements ObservabilityProvider {
         "-e",
         "EGRESS_MITM_PORT=18080",
         "-e",
-        "EGRESS_VIEWER_PORT=18081",
-        "-e",
         `DEFAULT_TARGET_URL=${this.targetUrl}`,
       ],
       { env: this.env },
