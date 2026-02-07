@@ -1,4 +1,4 @@
-FROM golang:1.25-bookworm AS mitm-build
+FROM golang:1.23-bookworm AS mitm-build
 WORKDIR /src
 COPY mitm-go/go-mitm/go.mod ./go.mod
 COPY mitm-go/go-mitm/go.sum ./go.sum
