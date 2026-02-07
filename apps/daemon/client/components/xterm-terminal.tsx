@@ -113,6 +113,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
         // Reset modifier after any key press
         setCtrlActive(false);
+        // Re-focus terminal so cursor stays active and keyboard stays open
+        termRef.current?.focus();
+        const ta = containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+        ta?.focus();
       },
       [socket],
     );
