@@ -1,10 +1,10 @@
 # mitm-go
 
-Go-based MITM path (current implementation).
+Go-based MITM path (proxify embed).
 
 ## Files
 
-- `go-mitm/main.go`: Go `goproxy` daemon.
+- `go-mitm/main.go`: tiny Go daemon embedding `proxify`.
 - `go-mitm/go.mod`: module + deps.
 - `start.sh`: minimal runtime command used by egress startup.
 
@@ -13,9 +13,8 @@ Go-based MITM path (current implementation).
 Required env:
 
 - `MITM_PORT` (default `18080`)
-- `TRANSFORM_URL` (default `http://127.0.0.1:18081`)
-- `MITM_CA_CERT` (default `/data/mitm/ca.crt`)
-- `MITM_CA_KEY` (default `/data/mitm/ca.key`)
+- `HANDLER_URL` (default `http://127.0.0.1:18081/proxy`)
+- `PROXIFY_CONFIG_DIR` (default `/data/proxify`)
 
 Run:
 

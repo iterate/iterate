@@ -30,10 +30,10 @@ retry() {
 : >"$INIT_LOG"
 log "START host=$(hostname) egress_host=$EGRESS_PROXY_HOST"
 
-EGRESS_CA_URL="http://${EGRESS_PROXY_HOST}:${EGRESS_VIEWER_PORT}/ca.crt"
-retry 20 curl -fsSL "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate-fly-test-ca.crt >>"$INIT_LOG" 2>&1
+EGRESS_CA_URL="http://proxify/cacert"
+retry 20 curl -fsSL --proxy "http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}" "$EGRESS_CA_URL" -o /usr/local/share/ca-certificates/iterate-fly-test-ca.crt >>"$INIT_LOG" 2>&1
 update-ca-certificates >>"$INIT_LOG" 2>&1
-log "ca_install=ok source=${EGRESS_CA_URL}"
+log "ca_install=ok source=${EGRESS_CA_URL} proxy=http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}"
 
 EGRESS_PROXY_URL="http://${EGRESS_PROXY_HOST}:${EGRESS_MITM_PORT}"
 export HTTP_PROXY="$EGRESS_PROXY_URL"

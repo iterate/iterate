@@ -2,12 +2,13 @@
 set -euo pipefail
 
 MITM_PORT="${MITM_PORT:-18080}"
-TRANSFORM_URL="${TRANSFORM_URL:-http://127.0.0.1:18081}"
-MITM_CA_CERT="${MITM_CA_CERT:-/data/mitm/ca.crt}"
-MITM_CA_KEY="${MITM_CA_KEY:-/data/mitm/ca.key}"
+HANDLER_URL="${HANDLER_URL:-http://127.0.0.1:18081/proxy}"
+PROXIFY_CONFIG_DIR="${PROXIFY_CONFIG_DIR:-/data/proxify}"
 
-exec /usr/local/bin/fly-mitm \
-  --listen ":${MITM_PORT}" \
-  --transform-url "${TRANSFORM_URL}" \
-  --ca-cert "${MITM_CA_CERT}" \
-  --ca-key "${MITM_CA_KEY}"
+mkdir -p "$PROXIFY_CONFIG_DIR"
+
+exec env \
+  MITM_PORT="${MITM_PORT}" \
+  HANDLER_URL="${HANDLER_URL}" \
+  PROXIFY_CONFIG_DIR="${PROXIFY_CONFIG_DIR}" \
+  /usr/local/bin/fly-mitm

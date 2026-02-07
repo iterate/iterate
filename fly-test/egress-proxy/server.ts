@@ -2,7 +2,6 @@ import fs from "node:fs";
 
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
-const MITM_CA_CERT_PATH = process.env.MITM_CA_CERT_PATH ?? "/data/mitm/ca.crt";
 const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
 const TRANSFORM_TIMEOUT_MS = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
 const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));
@@ -45,6 +44,7 @@ function sanitizeInboundHeaders(input: Headers): Headers {
     if (lower === "x-forwarded-host") continue;
     if (lower === "x-forwarded-proto") continue;
     if (lower === "x-forwarded-port") continue;
+    if (lower === "x-proxy-target-url") continue;
     headers.append(key, value);
   }
   headers.set("accept-encoding", "identity");
@@ -81,14 +81,13 @@ function getTail(maxLines: number): string {
   return `${lines.slice(-maxLines).join("\n")}\n`;
 }
 
-function deriveTarget(request: Request, url: URL): string | null {
-  const host = (request.headers.get("x-forwarded-host") ?? "").trim();
-  const proto = (request.headers.get("x-forwarded-proto") ?? "").trim().toLowerCase();
-  if (host.length === 0 || proto.length === 0) return null;
-  if (proto !== "http" && proto !== "https") return null;
-
+function deriveTarget(request: Request): string | null {
+  const header = (request.headers.get("x-proxy-target-url") ?? "").trim();
+  if (header.length === 0) return null;
   try {
-    return new URL(`${proto}://${host}${url.pathname}${url.search}`).toString();
+    const parsed = new URL(header);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
   } catch {
     return null;
   }
@@ -170,7 +169,7 @@ Bun.serve({
   hostname: "::",
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const target = deriveTarget(request, url);
+    const target = deriveTarget(request);
     if (target !== null) {
       return handleTransform(request, target);
     }
@@ -187,21 +186,6 @@ Bun.serve({
     if (url.pathname === "/healthz") {
       return new Response("ok\n", {
         headers: { "content-type": "text/plain; charset=utf-8" },
-      });
-    }
-
-    if (url.pathname === "/ca.crt") {
-      if (!fs.existsSync(MITM_CA_CERT_PATH)) {
-        return new Response("ca cert not ready\n", {
-          status: 404,
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
-      }
-      return new Response(fs.readFileSync(MITM_CA_CERT_PATH), {
-        headers: {
-          "content-type": "application/x-pem-file",
-          "cache-control": "no-store",
-        },
       });
     }
 
