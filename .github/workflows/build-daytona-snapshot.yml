@@ -37,7 +37,7 @@ on:
         value: ${{ jobs.build.outputs.git_sha }}
 jobs:
   build:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
       snapshot_name: ${{ steps.push.outputs.snapshot_name }}
       git_sha: ${{ steps.push.outputs.git_sha }}
@@ -101,7 +101,7 @@ jobs:
             echo "Missing Depot registry metadata in $build_info_path" >&2
             exit 1
           fi
-          time depot pull --project "$depot_project_id" "$depot_save_tag"
+          time depot pull --platform "linux/amd64" --project "$depot_project_id" "$depot_save_tag"
           docker image inspect "$image_ref" > /dev/null
           docker tag "$image_ref" "$IMAGE_NAME"
           echo 'Pulled image: $image_ref'

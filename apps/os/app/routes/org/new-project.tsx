@@ -29,8 +29,9 @@ function NewProjectPage() {
     trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
   );
 
-  // Compute default name in component
-  const defaultName = org?.projects?.length ? "" : "main";
+  // Default name for first project is org name (slug will match org slug)
+  const isFirstProject = !org?.projects?.length;
+  const defaultName = isFirstProject ? (org?.name ?? "") : "";
   const [name, setName] = useState(defaultName);
 
   const createProject = useMutation({
@@ -48,8 +49,8 @@ function NewProjectPage() {
       });
       toast.success("Project created");
       navigate({
-        to: "/orgs/$organizationSlug/projects/$projectSlug",
-        params: { organizationSlug: params.organizationSlug, projectSlug: project.slug },
+        to: "/proj/$projectSlug",
+        params: { projectSlug: project.slug },
       });
     },
     onError: (error) => {

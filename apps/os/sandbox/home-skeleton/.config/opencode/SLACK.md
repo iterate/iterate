@@ -1,5 +1,18 @@
 # Slack Channel Instructions
 
+## Quick Reference: Sending Messages
+
+**IMPORTANT:** `iterate tool slack` takes JavaScript code as its only argument - there are NO subcommands.
+
+```bash
+# Reply to a thread (replace CHANNEL and THREAD_TS with actual values)
+iterate tool slack 'await slack.chat.postMessage({ channel: "CHANNEL", thread_ts: "THREAD_TS", text: "Your message" })'
+```
+
+The `slack` object is a `@slack/web-api` WebClient instance. See examples below for reactions, thread history, etc.
+
+---
+
 ## Message Types
 
 You will receive one of three message types:
@@ -10,10 +23,10 @@ You will receive one of three message types:
 
 **What to do:**
 
-- Add :eyes: reaction to acknowledge
 - Understand the request fully before acting
 - Respond with your findings/actions
-- Remove :eyes: when responding
+
+Note: The :eyes: reaction is added automatically when you receive the message and removed when your turn ends.
 
 ### 2. Mid-Thread Mention
 
@@ -21,11 +34,11 @@ You will receive one of three message types:
 
 **What to do:**
 
-- Add :eyes: reaction to acknowledge
 - Query the raw event to get conversation context if needed
 - Query other events for the thread_ts or use `slack.conversations.replies` to fetch thread history
 - Respond addressing the specific question
-- Remove :eyes: when responding
+
+Note: The :eyes: reaction is added automatically when you receive the message and removed when your turn ends.
 
 ### 3. FYI Message
 
@@ -50,7 +63,7 @@ head -1 /tmp/test_download.jpg
 
 ## Sending Replies
 
-Use the `iterate tool slack` CLI command to interact with Slack. This gives you access to the full Slack Web API via a `slack` client object.
+Use `iterate tool slack '<js code>'` to interact with Slack. Pass JavaScript code as a single string argument - the `slack` object is a `@slack/web-api` WebClient.
 
 **Reply to a message:**
 
@@ -68,7 +81,7 @@ iterate tool slack 'await slack.chat.postMessage({
 iterate tool slack 'await slack.reactions.add({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
-  name: "eyes",
+  name: "thumbsup",
 })'
 ```
 
@@ -78,7 +91,7 @@ iterate tool slack 'await slack.reactions.add({
 iterate tool slack 'await slack.reactions.remove({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
-  name: "eyes",
+  name: "thumbsup",
 })'
 ```
 
@@ -122,8 +135,8 @@ If a message contains files or attachments, query the raw event to get file URLs
 
 ## Best Practices
 
-1. **Acknowledge quickly**: When starting work on a request, add the :eyes: emoji to show you're looking at it.
-2. **Remove acknowledgment when done**: Remove :eyes: and post your response together.
-3. **Be concise**: Slack messages should be shorter than typical coding responses. Sacrifice grammar for sake of concision.
-4. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
-5. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
+1. **Be concise**: Slack messages should be shorter than typical coding responses. Sacrifice grammar for sake of concision.
+2. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
+3. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
+
+Note: The :eyes: reaction is managed automatically - it's added when you receive a message and removed when your turn ends. You don't need to manage it manually.

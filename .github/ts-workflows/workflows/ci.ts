@@ -38,7 +38,7 @@ export default {
      * and then pass those values as inputs to the reusable workflow.
      */
     variables: {
-      ...utils.runsOnFastStartingUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         {
           id: "get_env",
@@ -77,7 +77,7 @@ export default {
     slack_failure: {
       needs: ["variables", "build-daytona-snapshot", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
-      ...utils.runsOnFastStartingUbuntuLatest,
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,

@@ -50,11 +50,8 @@ const maybeRedirectToOrg = createServerFn({ method: "GET" })
         const firstProject = orgWithProjects.projects?.[0];
         if (firstProject) {
           throw redirect({
-            to: "/orgs/$organizationSlug/projects/$projectSlug",
-            params: {
-              organizationSlug: orgWithProjects.slug,
-              projectSlug: firstProject.slug,
-            },
+            to: "/proj/$projectSlug",
+            params: { projectSlug: firstProject.slug },
           });
         }
       }

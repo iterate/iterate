@@ -19,7 +19,7 @@ export default workflow({
   jobs: {
     "flake-detection": {
       "timeout-minutes": 60,
-      ...utils.runsOnFastStartingUbuntuLatest,
+      ...utils.runsOnDepotUbuntuForContainerThings,
       strategy: {
         "fail-fast": false,
         matrix: {

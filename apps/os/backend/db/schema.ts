@@ -27,8 +27,9 @@ export type UserRole = (typeof UserRole)[number];
 // Machine states:
 // - starting: machine is being provisioned, not yet ready for use
 // - active: machine is ready and is the current active machine for the project
+// - detached: machine was replaced by a newer active machine but may still be reachable
 // - archived: machine has been replaced or manually archived
-export const MachineState = ["starting", "active", "archived"] as const;
+export const MachineState = ["starting", "active", "detached", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
@@ -234,18 +235,14 @@ export const project = pgTable(
   (t) => ({
     id: iterateId("prj"),
     name: t.text().notNull(),
-    slug: t.text().notNull(), // URL-safe slug: alphanumeric only, must contain letter
+    slug: t.text().notNull().unique(), // Globally unique URL-safe slug
     organizationId: t
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [
-    uniqueIndex().on(t.organizationId, t.slug),
-    uniqueIndex().on(t.organizationId, t.name),
-    slugCheck("slug", "project_slug_valid"),
-  ],
+  (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
 );
 
 export const projectRelations = relations(project, ({ one, many }) => ({

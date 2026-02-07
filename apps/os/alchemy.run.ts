@@ -9,6 +9,7 @@ import {
   Tunnel,
   WorkerLoader,
   Worker,
+  Self,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -396,8 +397,8 @@ async function setupDatabase() {
       branch,
       delete: true,
     });
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -420,8 +421,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -444,8 +445,8 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
-    await seedGlobalSecrets(role.connectionUrl.unencrypted);
+    await migrate(role.connectionUrlPooled.unencrypted);
+    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -547,6 +548,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     bindings: {
       ...dbConfig,
       ...envSecrets,
+      SELF: Self,
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,

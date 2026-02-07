@@ -69,7 +69,17 @@ const STRIP_REQUEST_HEADERS = [
 const STRIP_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
 
 // Magic string pattern: getIterateSecret({secretKey: "...", machineId?: "...", userId?: "...", userEmail?: "..."})
-export const MAGIC_STRING_PATTERN = /getIterateSecret\(\s*\{([^}]+)\}\s*\)/g;
+const MAGIC_STRING_PATTERN_SOURCE = String.raw`getIterateSecret\(\s*\{([^}]+)\}\s*\)`;
+export const MAGIC_STRING_PATTERN = new RegExp(MAGIC_STRING_PATTERN_SOURCE, "g");
+
+function createMagicStringPattern(): RegExp {
+  // Avoid sharing lastIndex state across requests.
+  return new RegExp(MAGIC_STRING_PATTERN_SOURCE, "g");
+}
+
+export function hasMagicString(input: string): boolean {
+  return createMagicStringPattern().test(input);
+}
 
 // Error types for secret resolution
 export type SecretError = {
@@ -405,7 +415,7 @@ async function replaceMagicStrings(
   context: EgressContext,
   cache?: RequestSecretCache,
 ): Promise<ReplaceMagicStringsResult> {
-  const matches = [...input.matchAll(MAGIC_STRING_PATTERN)];
+  const matches = [...input.matchAll(createMagicStringPattern())];
   if (matches.length === 0) {
     return { ok: true, result: input, usedSecrets: [] };
   }
@@ -483,9 +493,7 @@ async function processHeaderValue(
       // Not URL-encoded, continue with raw decoded value
     }
 
-    const hasMagic = MAGIC_STRING_PATTERN.test(decoded);
-    // Reset regex lastIndex since we used .test()
-    MAGIC_STRING_PATTERN.lastIndex = 0;
+    const hasMagic = hasMagicString(decoded);
 
     // Check if decoded value contains magic strings
     if (!hasMagic) {
@@ -727,7 +735,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     }
 
     // Forward the request to the original destination
-    let response = await fetch(processedURL, {
+    const fetchImpl = getFetch(processedURL, { headers: c.req.raw.headers });
+    let response = await fetchImpl(processedURL, {
       method: originalMethod,
       headers: forwardHeaders,
       body: requestBody,
@@ -801,7 +810,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
           }
 
           // Retry the request with buffered body
-          response = await fetch(retryUrlResult.result, {
+          const retryFetchImpl = getFetch(retryUrlResult.result, { headers: c.req.raw.headers });
+          response = await retryFetchImpl(retryUrlResult.result, {
             method: originalMethod,
             headers: retryHeaders,
             body: requestBody,
@@ -853,6 +863,27 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     );
   }
 });
+
+function getFetch(targetUrl: string, { headers }: { headers: HeadersInit }): typeof fetch {
+  const requestHeaders = new Headers(headers);
+  const requestHost = requestHeaders.get("host") ?? requestHeaders.get("x-forwarded-host");
+  if (!requestHost) {
+    return fetch;
+  }
+
+  let requestHostname: string;
+  try {
+    requestHostname = new URL(`http://${requestHost}`).hostname;
+  } catch {
+    return fetch;
+  }
+
+  if (new URL(targetUrl).hostname !== requestHostname) {
+    return fetch;
+  }
+
+  return env.SELF.fetch;
+}
 
 /**
  * Check if the HTTP method typically has a request body.

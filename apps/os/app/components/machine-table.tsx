@@ -27,7 +27,7 @@ interface Machine {
   id: string;
   name: string;
   type: string;
-  state: "starting" | "active" | "archived";
+  state: "starting" | "active" | "detached" | "archived";
   externalId: string;
   createdAt: Date;
   metadata: {
@@ -58,7 +58,6 @@ interface Machine {
 
 interface MachineTableProps {
   machines: Machine[];
-  organizationSlug: string;
   projectSlug: string;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
@@ -68,7 +67,6 @@ interface MachineTableProps {
 
 export function MachineTable({
   machines,
-  organizationSlug,
   projectSlug,
   onArchive,
   onDelete,
@@ -164,8 +162,8 @@ export function MachineTable({
         {machines.map((machine) => (
           <Link
             key={machine.id}
-            to="/orgs/$organizationSlug/projects/$projectSlug/machines/$machineId"
-            params={{ organizationSlug, projectSlug, machineId: machine.id }}
+            to="/proj/$projectSlug/machines/$machineId"
+            params={{ projectSlug, machineId: machine.id }}
             className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card hover:bg-accent/50 transition-colors"
           >
             <div className="min-w-0 flex-1 space-y-1">
@@ -177,7 +175,9 @@ export function MachineTable({
                       ? "fill-green-500 text-green-500"
                       : machine.state === "starting"
                         ? "fill-yellow-500 text-yellow-500"
-                        : "fill-muted text-muted"
+                        : machine.state === "detached"
+                          ? "fill-blue-500 text-blue-500"
+                          : "fill-muted text-muted"
                   }`}
                 />
                 <span className="font-medium truncate">{machine.name}</span>
