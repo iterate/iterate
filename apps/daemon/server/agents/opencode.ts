@@ -4,8 +4,27 @@
  * Uses @opencode-ai/sdk to manage sessions and send messages.
  */
 
-import { createOpencodeClient, type OpencodeClient, type Session } from "@opencode-ai/sdk/v2";
+import {
+  createOpencodeClient,
+  type OpencodeClient,
+  type Session,
+  type Event as OpencodeRuntimeEvent,
+} from "@opencode-ai/sdk/v2";
+import {
+  SpanStatusCode,
+  context,
+  trace,
+  type Context,
+  type Span,
+  type SpanStatus,
+} from "@opentelemetry/api";
 import { getConfig } from "../config-loader.ts";
+import { withSpan } from "../utils/otel.ts";
+import {
+  buildJaegerTraceUrl,
+  buildLogsSearchUrl,
+  buildOpencodeAttachUrl,
+} from "../utils/observability-links.ts";
 import type {
   AgentHarness,
   AgentEvent,
@@ -27,6 +46,7 @@ const ITERATE_REPO = "/home/iterate/src/github.com/iterate/iterate";
 // Polling config for session readiness
 const READINESS_POLL_INTERVAL_MS = 200;
 const READINESS_TIMEOUT_MS = 10000;
+const eventTracer = trace.getTracer("iterate.daemon.opencode.events");
 
 function createClient(params: { directory: string }): OpencodeClient {
   return createOpencodeClient({
@@ -40,21 +60,32 @@ async function waitForSessionReady(
   sessionId: string,
   timeoutMs = READINESS_TIMEOUT_MS,
 ): Promise<void> {
-  const startTime = Date.now();
+  await withSpan(
+    "daemon.opencode.wait_for_session_ready",
+    { attributes: { "opencode.session_id": sessionId } },
+    async (span) => {
+      const startTime = Date.now();
+      let pollCount = 0;
 
-  while (Date.now() - startTime < timeoutMs) {
-    const response = await client.session.list();
-    if (response.data) {
-      const session = response.data.find((s: Session) => s.id === sessionId);
-      if (session) {
-        // Session exists and is ready
-        return;
+      while (Date.now() - startTime < timeoutMs) {
+        pollCount += 1;
+        const response = await client.session.list();
+        if (response.data) {
+          const session = response.data.find((s: Session) => s.id === sessionId);
+          if (session) {
+            span.setAttribute("opencode.readiness.poll_count", pollCount);
+            span.setAttribute("opencode.readiness.wait_ms", Date.now() - startTime);
+            return;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, READINESS_POLL_INTERVAL_MS));
       }
-    }
-    await new Promise((resolve) => setTimeout(resolve, READINESS_POLL_INTERVAL_MS));
-  }
 
-  throw new Error(`OpenCode session ${sessionId} not ready after ${timeoutMs}ms`);
+      span.setAttribute("opencode.readiness.poll_count", pollCount);
+      span.setAttribute("opencode.readiness.wait_ms", Date.now() - startTime);
+      throw new Error(`OpenCode session ${sessionId} not ready after ${timeoutMs}ms`);
+    },
+  );
 }
 
 export const opencodeHarness: AgentHarness = {
@@ -65,24 +96,36 @@ export const opencodeHarness: AgentHarness = {
     // This needs to match the working directory that opencode serve ran with
     const workingDirectory = params.workingDirectory || ITERATE_REPO;
 
-    console.log(`Creating OpenCode client for ${workingDirectory}`, { params, ITERATE_REPO });
-    const client = createClient({ directory: workingDirectory });
+    return withSpan(
+      "daemon.opencode.create_agent",
+      {
+        attributes: {
+          "agent.slug": params.slug,
+          "agent.working_directory": workingDirectory,
+        },
+      },
+      async (span) => {
+        console.log(`Creating OpenCode client for ${workingDirectory}`, { params, ITERATE_REPO });
+        const client = createClient({ directory: workingDirectory });
 
-    // Create OpenCode session via SDK
-    const response = await client.session.create({ title: `Agent: ${params.slug}` });
+        // Create OpenCode session via SDK
+        const response = await client.session.create({ title: `Agent: ${params.slug}` });
 
-    if (!response.data) {
-      throw new Error("Failed to create OpenCode session");
-    }
+        if (!response.data) {
+          throw new Error("Failed to create OpenCode session");
+        }
 
-    console.log(`Created OpenCode session`, response);
+        console.log(`Created OpenCode session`, response);
 
-    const harnessSessionId = response.data.id;
+        const harnessSessionId = response.data.id;
+        span.setAttribute("opencode.session_id", harnessSessionId);
 
-    // Wait for session to be ready
-    await waitForSessionReady(client, harnessSessionId);
+        // Wait for session to be ready
+        await waitForSessionReady(client, harnessSessionId);
 
-    return { harnessSessionId };
+        return { harnessSessionId };
+      },
+    );
   },
 
   async append(harnessSessionId: string, event: AgentEvent, params: AppendParams): Promise<void> {
@@ -90,19 +133,63 @@ export const opencodeHarness: AgentHarness = {
       throw new Error(`Unsupported event type: ${event.type}`);
     }
 
-    const client = createClient({ directory: params.workingDirectory });
-    const config = getConfig();
+    await withSpan(
+      "daemon.opencode.append",
+      {
+        attributes: {
+          "opencode.session_id": harnessSessionId,
+          "agent.event_type": event.type,
+          "agent.message_length": event.content.length,
+        },
+      },
+      async () => {
+        const client = createClient({ directory: params.workingDirectory });
+        const config = getConfig();
 
-    // Track session for acknowledgment lifecycle
-    await trackSession(harnessSessionId, params);
+        // Track session for acknowledgment lifecycle
+        await withSpan(
+          "daemon.opencode.track_session",
+          {
+            attributes: {
+              "opencode.session_id": harnessSessionId,
+            },
+          },
+          async () => trackSession(harnessSessionId, params),
+        );
 
-    // Send message via SDK using session.prompt()
-    await client.session.prompt({
-      sessionID: harnessSessionId,
-      parts: [{ type: "text", text: event.content }],
-      // Use default model from config if available
-      ...(config.defaultModel && { model: config.defaultModel }),
-    });
+        // Send message via SDK using session.prompt()
+        await withSpan(
+          "daemon.opencode.prompt",
+          {
+            attributes: {
+              "opencode.session_id": harnessSessionId,
+              ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
+            },
+          },
+          async (span) => {
+            setTrackedSessionParentContext(harnessSessionId, context.active());
+
+            const attachUrl = buildOpencodeAttachUrl({
+              sessionId: harnessSessionId,
+              workingDirectory: params.workingDirectory,
+            });
+            const logsUrl = buildLogsSearchUrl(harnessSessionId);
+            const traceUrl = buildJaegerTraceUrl(span.spanContext().traceId);
+
+            if (attachUrl) span.setAttribute("iterate.link.attach_url", attachUrl);
+            if (logsUrl) span.setAttribute("iterate.link.log_url", logsUrl);
+            if (traceUrl) span.setAttribute("iterate.link.trace_url", traceUrl);
+
+            await client.session.prompt({
+              sessionID: harnessSessionId,
+              parts: [{ type: "text", text: event.content }],
+              // Use default model from config if available
+              ...(config.defaultModel && { model: config.defaultModel }),
+            });
+          },
+        );
+      },
+    );
   },
 
   getStartCommand(_workingDirectory: string, options?: StartCommandOptions): string[] {
@@ -123,12 +210,22 @@ export const opencodeHarness: AgentHarness = {
 
 interface SessionTracking {
   sessionId: string;
-  unacknowledge: () => Promise<void>;
+  unacknowledgeCallbacks: Array<() => Promise<void>>;
   setStatus?: (
     status: string,
     context: { tool: string; input: Record<string, unknown> },
   ) => Promise<void>;
   workingDirectory: string;
+  startedAtMs: number;
+  firstBusyAtMs?: number;
+  firstAssistantMessageAtMs?: number;
+  firstPartAtMs?: number;
+  activePhase?: {
+    kind: string;
+    startedAtMs: number;
+    span: Span;
+  };
+  parentContext: Context;
 }
 
 // Track active sessions and their callbacks
@@ -136,6 +233,72 @@ const trackedSessions = new Map<string, SessionTracking>();
 
 // Event subscription state
 let subscriptionActive = false;
+
+function getTrackedSession(sessionId: string): SessionTracking | undefined {
+  return trackedSessions.get(sessionId);
+}
+
+function setTrackedSessionParentContext(sessionId: string, parentContext: Context): void {
+  const tracking = getTrackedSession(sessionId);
+  if (!tracking) return;
+  tracking.parentContext = parentContext;
+}
+
+function endActivePhase(
+  tracking: SessionTracking,
+  reason: string,
+  status: SpanStatus = { code: SpanStatusCode.OK },
+): void {
+  if (!tracking.activePhase) return;
+  const elapsedMs = Date.now() - tracking.activePhase.startedAtMs;
+  tracking.activePhase.span.setAttribute("phase.elapsed_ms", elapsedMs);
+  tracking.activePhase.span.setAttribute("phase.end_reason", reason);
+  tracking.activePhase.span.setStatus(status);
+  tracking.activePhase.span.end();
+  tracking.activePhase = undefined;
+}
+
+function setActivePhase(
+  tracking: SessionTracking,
+  params: { sessionId: string; phase: string; messageId?: string; partId?: string },
+): void {
+  if (tracking.activePhase?.kind === params.phase) return;
+  endActivePhase(tracking, `switch:${params.phase}`);
+  const phaseName = params.phase.replaceAll(":", ".");
+  const span = eventTracer.startSpan(
+    `daemon.opencode.phase.${phaseName}`,
+    {
+      attributes: {
+        "opencode.session_id": params.sessionId,
+        "opencode.phase": params.phase,
+        ...(params.messageId ? { "opencode.message_id": params.messageId } : {}),
+        ...(params.partId ? { "opencode.part_id": params.partId } : {}),
+      },
+    },
+    tracking.parentContext,
+  );
+  tracking.activePhase = {
+    kind: params.phase,
+    startedAtMs: Date.now(),
+    span,
+  };
+}
+
+function getSessionIdFromEvent(event: OpencodeRuntimeEvent): string | undefined {
+  switch (event.type) {
+    case "session.status":
+    case "session.idle":
+      return event.properties.sessionID;
+    case "message.updated":
+      return event.properties.info.sessionID;
+    case "message.part.updated":
+      return event.properties.part.sessionID;
+    case "session.error":
+      return event.properties.sessionID;
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Stop tracking a session and call its unacknowledge callback.
@@ -146,12 +309,19 @@ async function stopTracking(sessionId: string): Promise<void> {
 
   // Delete first to prevent duplicate calls (both session.idle and session.status fire)
   trackedSessions.delete(sessionId);
-  logger.log(`[opencode] Stopped tracking session ${sessionId}`);
+  const elapsedMs = Date.now() - tracking.startedAtMs;
+  logger.log(`[opencode] Stopped tracking session ${sessionId}`, {
+    elapsedMs,
+    trackedSessionCount: trackedSessions.size,
+  });
+  endActivePhase(tracking, "session_stopped");
 
-  try {
-    await tracking.unacknowledge();
-  } catch (error) {
-    logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
+  for (const unacknowledge of tracking.unacknowledgeCallbacks) {
+    try {
+      await unacknowledge();
+    } catch (error) {
+      logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
+    }
   }
 }
 
@@ -159,74 +329,117 @@ async function stopTracking(sessionId: string): Promise<void> {
  * Handle a single event from opencode.
  * Events come directly as { type, properties } objects (not wrapped in GlobalEvent).
  */
-function handleEvent(event: unknown): void {
-  if (!event || typeof event !== "object") return;
+function handleEvent(event: OpencodeRuntimeEvent): void {
+  const sessionId = getSessionIdFromEvent(event);
+  const tracking = sessionId ? getTrackedSession(sessionId) : undefined;
 
-  // Events are { type: string, properties: { ... } }
-  const evt = event as { type?: string; properties?: unknown };
-  const eventType = evt.type;
-  if (!eventType) return;
-
-  // Log all event types for debugging
-  if (eventType !== "message.updated") {
-    logger.log(`[opencode] Event: ${eventType}`);
-  }
-
-  // Handle session.idle events - this fires when the agent finishes its turn
-  if (eventType === "session.idle") {
-    const props = evt.properties as { sessionID?: string } | undefined;
-    if (props?.sessionID && trackedSessions.has(props.sessionID)) {
-      logger.log(`[opencode] Session ${props.sessionID} became idle`);
-      stopTracking(props.sessionID);
+  if (event.type === "session.status" && tracking) {
+    const statusType = event.properties.status.type;
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: `status:${statusType}`,
+      });
+    }
+    if (statusType === "busy" && !tracking.firstBusyAtMs) {
+      tracking.firstBusyAtMs = Date.now();
+      logger.log("[opencode] First busy status", {
+        sessionId,
+        elapsedMs: tracking.firstBusyAtMs - tracking.startedAtMs,
+      });
+    }
+    if (statusType === "retry") {
+      logger.warn("[opencode] Retry status", {
+        sessionId,
+        attempt: event.properties.status.attempt,
+        message: event.properties.status.message,
+        nextMs: event.properties.status.next,
+      });
+    }
+    if (statusType === "idle") {
+      logger.log(`[opencode] Session ${sessionId} status changed to idle`);
+      if (sessionId) {
+        void stopTracking(sessionId);
+      }
     }
   }
 
-  // Also handle session.status with type: idle
-  if (eventType === "session.status") {
-    const props = evt.properties as { sessionID?: string; status?: { type?: string } } | undefined;
-    if (
-      props?.sessionID &&
-      props?.status?.type === "idle" &&
-      trackedSessions.has(props.sessionID)
-    ) {
-      logger.log(`[opencode] Session ${props.sessionID} status changed to idle`);
-      stopTracking(props.sessionID);
+  if (event.type === "message.updated" && tracking && event.properties.info.role === "assistant") {
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: "message:assistant",
+        messageId: event.properties.info.id,
+      });
     }
+    if (!tracking.firstAssistantMessageAtMs) {
+      tracking.firstAssistantMessageAtMs = Date.now();
+      logger.log("[opencode] First assistant message", {
+        sessionId,
+        elapsedMs: tracking.firstAssistantMessageAtMs - tracking.startedAtMs,
+      });
+    }
+  }
+
+  if (event.type === "message.part.updated" && tracking) {
+    if (sessionId) {
+      setActivePhase(tracking, {
+        sessionId,
+        phase: `part:${event.properties.part.type}`,
+        messageId: event.properties.part.messageID,
+        partId: event.properties.part.id,
+      });
+    }
+    if (!tracking.firstPartAtMs) {
+      tracking.firstPartAtMs = Date.now();
+      logger.log("[opencode] First message part", {
+        sessionId,
+        partType: event.properties.part.type,
+        elapsedMs: tracking.firstPartAtMs - tracking.startedAtMs,
+      });
+    }
+  }
+
+  if (event.type === "session.error") {
+    logger.error("[opencode] Session error event", {
+      sessionId: event.properties.sessionID ?? null,
+      error: event.properties.error,
+    });
+    if (tracking?.activePhase) {
+      endActivePhase(tracking, "session_error", {
+        code: SpanStatusCode.ERROR,
+        message: "session.error",
+      });
+    }
+    if (sessionId) {
+      void stopTracking(sessionId);
+    }
+  }
+
+  if (event.type === "session.idle" && tracking && sessionId) {
+    logger.log(`[opencode] Session ${sessionId} became idle`);
+    void stopTracking(sessionId);
   }
 
   // Handle tool call events — update status when a tool starts running
-  if (eventType === "message.part.updated") {
-    const props = evt.properties as
-      | {
-          part?: {
-            type?: string;
-            sessionID?: string;
-            tool?: string;
-            state?: { status?: string; title?: string };
-          };
-        }
-      | undefined;
-    const part = props?.part;
-    if (part?.type === "tool" && part.sessionID && trackedSessions.has(part.sessionID)) {
-      const state = part.state as
-        | { status?: string; title?: string; input?: Record<string, unknown> }
-        | undefined;
-      logger.log(
-        `[opencode] Tool event: tool=${part.tool} status=${state?.status} title=${JSON.stringify(state?.title)} inputKeys=${JSON.stringify(Object.keys(state?.input ?? {}))} description=${JSON.stringify((state?.input as Record<string, unknown> | undefined)?.description)}`,
-      );
-      if (state?.status === "running" || state?.status === "completed") {
+  if (event.type === "message.part.updated" && tracking) {
+    const part = event.properties.part;
+    if (part.type === "tool") {
+      const state = part.state as {
+        status?: string;
+        title?: string;
+        input?: Record<string, unknown>;
+      };
+      if (state.status === "running" || state.status === "completed") {
         // title may arrive late (populated on completion or in a later running update)
         // fall back to input.description (common for Bash/Edit tools), then tool name
-        const input = state.input as Record<string, unknown> | undefined;
-        const description = typeof input?.description === "string" ? input.description : undefined;
+        const input = (state.input ?? {}) as Record<string, unknown>;
+        const description = typeof input.description === "string" ? input.description : undefined;
         const status = (state.title || description || part.tool || "Working").slice(0, 30);
-        const tracking = trackedSessions.get(part.sessionID);
-        if (tracking?.setStatus) {
-          tracking
-            .setStatus(status, { tool: part.tool ?? "", input: input ?? {} })
-            .catch((error) => {
-              logger.error(`[opencode] Error calling setStatus:`, error);
-            });
+        if (tracking.setStatus) {
+          tracking.setStatus(status, { tool: part.tool ?? "", input }).catch((error) => {
+            logger.error(`[opencode] Error calling setStatus:`, error);
+          });
         }
       }
     }
@@ -236,7 +449,7 @@ function handleEvent(event: unknown): void {
 /**
  * Process incoming events from opencode.
  */
-async function processEvents(stream: AsyncGenerator<unknown>): Promise<void> {
+async function processEvents(stream: AsyncGenerator<OpencodeRuntimeEvent>): Promise<void> {
   logger.log(`[opencode] Event subscription started`);
 
   for await (const event of stream) {
@@ -248,6 +461,11 @@ async function processEvents(stream: AsyncGenerator<unknown>): Promise<void> {
   }
 
   logger.log(`[opencode] Event subscription ended`);
+  const trackedSessionIds = [...trackedSessions.keys()];
+  for (const sessionId of trackedSessionIds) {
+    logger.warn("[opencode] Cleaning up tracked session after subscription ended", { sessionId });
+    await stopTracking(sessionId);
+  }
   subscriptionActive = false;
 }
 
@@ -265,7 +483,7 @@ async function ensureEventSubscription(workingDirectory: string): Promise<void> 
     const subscription = await client.event.subscribe();
 
     // Process events in background using the stream property
-    processEvents(subscription.stream).catch((error) => {
+    processEvents(subscription.stream as AsyncGenerator<OpencodeRuntimeEvent>).catch((error) => {
       logger.error(`[opencode] Event processing error:`, error);
       subscriptionActive = false;
     });
@@ -287,13 +505,25 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     logger.error(`[opencode] Error calling acknowledge for session ${sessionId}:`, error);
   }
 
-  // Store tracking info
-  trackedSessions.set(sessionId, {
-    sessionId,
-    unacknowledge: params.unacknowledge,
-    setStatus: params.setStatus,
-    workingDirectory: params.workingDirectory,
-  });
+  const existing = trackedSessions.get(sessionId);
+  if (existing) {
+    existing.unacknowledgeCallbacks.push(params.unacknowledge);
+    existing.setStatus = params.setStatus;
+    existing.workingDirectory = params.workingDirectory;
+    existing.parentContext = context.active();
+    logger.log(`[opencode] Updated tracking session ${sessionId}`, {
+      unackCount: existing.unacknowledgeCallbacks.length,
+    });
+  } else {
+    trackedSessions.set(sessionId, {
+      sessionId,
+      unacknowledgeCallbacks: [params.unacknowledge],
+      setStatus: params.setStatus,
+      workingDirectory: params.workingDirectory,
+      startedAtMs: Date.now(),
+      parentContext: context.active(),
+    });
+  }
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
 

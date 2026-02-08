@@ -10,10 +10,50 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
+import { withSpan } from "../../utils/otel.ts";
 
 import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
+
+type CorrelationContext = {
+  requestId: string;
+  traceparent: string;
+  slackEventId?: string;
+};
+
+function randomHex(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function isValidTraceparent(value: string | null | undefined): value is string {
+  if (!value) return false;
+  return /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/i.test(value);
+}
+
+function generateTraceparent(): string {
+  return `00-${randomHex(16)}-${randomHex(8)}-01`;
+}
+
+function createCorrelationContext(params: {
+  incomingRequestId: string | null;
+  incomingTraceparent: string | null;
+  slackEventId?: string;
+}): CorrelationContext {
+  const requestId =
+    params.incomingRequestId?.trim() ||
+    (params.slackEventId ? `slack-${params.slackEventId}` : `slack-${crypto.randomUUID()}`);
+
+  return {
+    requestId,
+    traceparent: isValidTraceparent(params.incomingTraceparent)
+      ? params.incomingTraceparent
+      : generateTraceparent(),
+    ...(params.slackEventId && { slackEventId: params.slackEventId }),
+  };
+}
 
 /**
  * Build URL to forward webhooks to a machine's daemon.
@@ -53,32 +93,81 @@ export async function forwardSlackWebhookToMachine(
   machine: typeof schema.machine.$inferSelect,
   payload: Record<string, unknown>,
   env: CloudflareEnv,
+  correlation: CorrelationContext,
 ): Promise<{ success: boolean; error?: string }> {
-  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/slack/webhook", env);
-  if (!targetUrl) {
-    return { success: false, error: "Could not build forward URL" };
-  }
-  try {
-    const resp = await fetch(targetUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) {
-      logger.error("[Slack Webhook] Forward failed", {
+  return withSpan(
+    "slack.webhook.forward_to_machine",
+    {
+      attributes: {
+        "messaging.system": "slack",
+        "messaging.operation": "process",
+        "slack.event_id": correlation.slackEventId ?? "unknown",
+        "iterate.request_id": correlation.requestId,
+        "machine.id": machine.id,
+        "machine.type": machine.type,
+      },
+    },
+    async (span) => {
+      const targetUrl = await buildMachineForwardUrl(
         machine,
-        targetUrl,
-        status: resp.status,
-        text: await resp.text(),
-      });
-      return { success: false, error: `HTTP ${resp.status}` };
-    }
-    return { success: true };
-  } catch (err) {
-    logger.error("[Slack Webhook] Forward error", err);
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
-  }
+        "/api/integrations/slack/webhook",
+        env,
+      );
+      if (!targetUrl) {
+        span.setAttribute("forward.success", false);
+        span.setAttribute("forward.error", "could_not_build_forward_url");
+        return { success: false, error: "Could not build forward URL" };
+      }
+
+      span.setAttribute("url.full", targetUrl);
+
+      try {
+        const resp = await fetch(targetUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-iterate-request-id": correlation.requestId,
+            traceparent: correlation.traceparent,
+            ...(correlation.slackEventId ? { "x-slack-event-id": correlation.slackEventId } : {}),
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10000),
+        });
+        span.setAttribute("http.response.status_code", resp.status);
+
+        if (!resp.ok) {
+          span.setAttribute("forward.success", false);
+          span.setAttribute("forward.error", `http_${resp.status}`);
+          logger.error("[Slack Webhook] Forward failed", {
+            machine,
+            targetUrl,
+            status: resp.status,
+            text: await resp.text(),
+            correlation,
+          });
+          return { success: false, error: `HTTP ${resp.status}` };
+        }
+
+        span.setAttribute("forward.success", true);
+        logger.info("[Slack Webhook] Forwarded to machine", {
+          machineId: machine.id,
+          targetUrl,
+          correlation,
+        });
+        return { success: true };
+      } catch (err) {
+        span.setAttribute("forward.success", false);
+        span.setAttribute("forward.error", err instanceof Error ? err.message : String(err));
+        logger.error("[Slack Webhook] Forward error", {
+          err,
+          machineId: machine.id,
+          targetUrl,
+          correlation,
+        });
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 }
 
 export const SLACK_BOT_SCOPES = [
@@ -433,9 +522,18 @@ slackApp.post("/webhook", async (c) => {
   }
   // Extract event_id for dedup
   const slackEventId = payload.event_id as string;
+  const correlation = createCorrelationContext({
+    incomingRequestId: c.req.header("x-iterate-request-id") ?? null,
+    incomingTraceparent: c.req.header("traceparent") ?? null,
+    slackEventId,
+  });
 
   // Log full payload for debugging
-  logger.debug("[Slack Webhook] Received", { payload });
+  logger.debug("[Slack Webhook] Received", {
+    payload,
+    requestId: correlation.requestId,
+    traceparent: correlation.traceparent,
+  });
 
   // Get references before returning (needed in background)
   const db = c.var.db;
@@ -443,86 +541,108 @@ slackApp.post("/webhook", async (c) => {
 
   // RETURN IMMEDIATELY - process in background for Slack compliance
   waitUntil(
-    (async () => {
-      try {
-        if (!teamId) {
-          logger.warn("[Slack Webhook] No team_id in payload");
-          // Still track the event, just without groups
-          trackWebhookEvent(env, {
-            distinctId: "slack:unknown",
-            event: "slack:webhook_received",
-            properties: payload,
-          });
-          return;
-        }
+    withSpan(
+      "slack.webhook.process",
+      {
+        attributes: {
+          "messaging.system": "slack",
+          "messaging.operation": "process",
+          "iterate.request_id": correlation.requestId,
+          "slack.event_id": slackEventId ?? "unknown",
+          "slack.team_id": teamId ?? "unknown",
+        },
+      },
+      async (span) => {
+        try {
+          if (!teamId) {
+            logger.warn("[Slack Webhook] No team_id in payload", { correlation });
+            span.setAttribute("process.result", "missing_team_id");
+            // Still track the event, just without groups
+            trackWebhookEvent(env, {
+              distinctId: "slack:unknown",
+              event: "slack:webhook_received",
+              properties: payload,
+            });
+            return;
+          }
 
-        // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
-        logger.debug("[Slack Webhook] Looking up connection", { teamId });
-        // Find connection and the single active machine for its project
-        const connection = await db.query.projectConnection.findFirst({
-          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
-          with: {
-            project: {
-              with: {
-                machines: {
-                  where: (m, { eq }) => eq(m.state, "active"),
-                  limit: 1,
+          // TODO: move enrichment out of webhook path (tasks/machine-metrics-pipeline.md).
+          logger.debug("[Slack Webhook] Looking up connection", { teamId, correlation });
+          // Find connection and the single active machine for its project
+          const connection = await db.query.projectConnection.findFirst({
+            where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
+            with: {
+              project: {
+                with: {
+                  machines: {
+                    where: (m, { eq }) => eq(m.state, "active"),
+                    limit: 1,
+                  },
                 },
               },
             },
-          },
-        });
-
-        // Track webhook in PostHog with group association
-        trackWebhookEvent(env, {
-          distinctId: `slack:${teamId}`,
-          event: "slack:webhook_received",
-          properties: payload,
-          groups: connection?.project
-            ? {
-                organization: connection.project.organizationId,
-                project: connection.projectId,
-              }
-            : undefined,
-        });
-
-        // Dedup check using external_id (Slack's event_id)
-        if (slackEventId) {
-          const existing = await db.query.event.findFirst({
-            where: (e, { eq }) => eq(e.externalId, slackEventId),
           });
-          if (existing) {
-            logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId });
+
+          // Track webhook in PostHog with group association
+          trackWebhookEvent(env, {
+            distinctId: `slack:${teamId}`,
+            event: "slack:webhook_received",
+            properties: payload,
+            groups: connection?.project
+              ? {
+                  organization: connection.project.organizationId,
+                  project: connection.projectId,
+                }
+              : undefined,
+          });
+
+          // Dedup check using external_id (Slack's event_id)
+          if (slackEventId) {
+            const existing = await db.query.event.findFirst({
+              where: (e, { eq }) => eq(e.externalId, slackEventId),
+            });
+            if (existing) {
+              logger.debug("[Slack Webhook] Duplicate, skipping", { slackEventId, correlation });
+              span.setAttribute("process.result", "duplicate_event");
+              return;
+            }
+          }
+
+          const projectId = connection?.projectId;
+          if (!projectId) {
+            logger.warn("[Slack Webhook] No project for team", { teamId, correlation });
+            span.setAttribute("process.result", "missing_project_connection");
             return;
           }
+
+          // Get the single active machine for this project
+          const targetMachine = connection.project?.machines[0] ?? null;
+
+          // Forward to machine if available
+          if (targetMachine) {
+            logger.debug("[Slack Webhook] Forwarding to machine", {
+              machineId: targetMachine.id,
+              correlation,
+            });
+            span.setAttribute("machine.id", targetMachine.id);
+            await forwardSlackWebhookToMachine(targetMachine, payload, env, correlation);
+          }
+
+          // Save event with type slack:webhook-received, detailed info in payload
+          await db.insert(schema.event).values({
+            type: "slack:webhook-received",
+            payload: payload,
+            projectId,
+            externalId: slackEventId,
+          });
+          span.setAttribute("process.result", "ok");
+        } catch (err) {
+          logger.error("[Slack Webhook] Background error", { err, correlation });
+          span.setAttribute("process.result", "error");
+          throw err;
         }
-
-        const projectId = connection?.projectId;
-        if (!projectId) {
-          logger.warn("[Slack Webhook] No project for team", { teamId });
-          return;
-        }
-
-        // Get the single active machine for this project
-        const targetMachine = connection.project?.machines[0] ?? null;
-
-        // Forward to machine if available
-        if (targetMachine) {
-          logger.debug("[Slack Webhook] Forwarding to machine", { machineId: targetMachine.id });
-          await forwardSlackWebhookToMachine(targetMachine, payload, env);
-        }
-
-        // Save event with type slack:webhook-received, detailed info in payload
-        await db.insert(schema.event).values({
-          type: "slack:webhook-received",
-          payload: payload,
-          projectId,
-          externalId: slackEventId,
-        });
-      } catch (err) {
-        logger.error("[Slack Webhook] Background error", err);
-      }
-    })(),
+      },
+    ),
   );
 
   return c.text("ok");

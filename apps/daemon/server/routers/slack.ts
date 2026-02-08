@@ -31,18 +31,29 @@ import type { AppendParams } from "../agents/types.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { withSpan } from "../utils/otel.ts";
+import { buildJaegerTraceUrl, buildLogsSearchUrl } from "../utils/observability-links.ts";
 
 const logger = console;
+
+type RequestCorrelation = {
+  requestId: string;
+  traceparent: string | null;
+  forwardedSlackEventId: string | null;
+};
 
 /**
  * Run a slack command via the iterate CLI.
  * The CLI loads env vars from ~/.iterate/.env (including proxy settings and SLACK_BOT_TOKEN).
- * We don't pass env explicitly - let the CLI script handle it via --env-file-if-exists.
  */
-async function runSlackCommand(code: string): Promise<void> {
-  logger.log("[slack] runSlackCommand:", code.slice(0, 80) + "...");
+async function runSlackCommand(code: string, requestId?: string): Promise<void> {
+  logger.log("[slack] runSlackCommand", {
+    requestId,
+    preview: code.slice(0, 80) + "...",
+  });
   const result = await x("iterate", ["tool", "slack", code], { throwOnError: false });
-  logger.log("[slack] CLI result:", {
+  logger.log("[slack] CLI result", {
+    requestId,
     exitCode: result.exitCode,
     stdout: result.stdout.slice(0, 200),
     stderr: result.stderr.slice(0, 200),
@@ -65,20 +76,26 @@ function createSlackCallbacks(params: {
   /** Message timestamp to add/remove the emoji on (often `event.ts`, sometimes `threadTs`) */
   emojiTimestamp: string;
   emoji: string;
+  requestId?: string;
 }): Pick<AppendParams, "acknowledge" | "unacknowledge" | "setStatus"> {
-  const { channel, threadTs, emojiTimestamp, emoji } = params;
+  const { channel, threadTs, emojiTimestamp, emoji, requestId } = params;
 
   return {
     acknowledge: async () => {
       try {
         await runSlackCommand(
           `await slack.reactions.add(${JSON.stringify({ channel, timestamp: emojiTimestamp, name: emoji })})`,
+          requestId,
         );
-        logger.log(`[slack] Added :${emoji}: to ${channel}/${emojiTimestamp}`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (!msg.includes("already_reacted")) {
-          logger.error(`[slack] Failed to add :${emoji}:`, error);
+          logger.error(`[slack] Failed to add :${emoji}:`, {
+            error,
+            channel,
+            timestamp: emojiTimestamp,
+            requestId,
+          });
         }
       }
     },
@@ -87,18 +104,24 @@ function createSlackCallbacks(params: {
       try {
         await runSlackCommand(
           `await slack.reactions.remove(${JSON.stringify({ channel, timestamp: emojiTimestamp, name: emoji })})`,
+          requestId,
         );
-        logger.log(`[slack] Removed :${emoji}: from ${channel}/${emojiTimestamp}`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (!msg.includes("no_reaction")) {
-          logger.error(`[slack] Failed to remove :${emoji}:`, error);
+          logger.error(`[slack] Failed to remove :${emoji}:`, {
+            error,
+            channel,
+            timestamp: emojiTimestamp,
+            requestId,
+          });
         }
       }
       // Clear thread status
       try {
         await runSlackCommand(
           `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status: "" })})`,
+          requestId,
         );
       } catch {
         // Non-critical
@@ -115,9 +138,10 @@ function createSlackCallbacks(params: {
       try {
         await runSlackCommand(
           `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status })})`,
+          requestId,
         );
       } catch (error) {
-        logger.error(`[slack] Failed to set thread status:`, error);
+        logger.error(`[slack] Failed to set thread status:`, { error, requestId });
       }
     },
   };
@@ -300,223 +324,291 @@ interface ParsedReaction {
 }
 
 slackRouter.post("/webhook", async (c) => {
+  const correlation: RequestCorrelation = {
+    requestId: c.req.header("x-iterate-request-id") ?? `daemon-${nanoid(10)}`,
+    traceparent: c.req.header("traceparent") ?? null,
+    forwardedSlackEventId: c.req.header("x-slack-event-id") ?? null,
+  };
+
   const payload = (await c.req.json()) as SlackWebhookPayload;
-
-  console.log(`[daemon/slack] Received payload`, payload);
-
-  // Store the raw event for later inspection
   const slackEventId = payload.event_id;
-  const eventId = await storeEvent(payload, slackEventId);
 
-  const parsed = parseWebhookPayload(payload);
+  logger.log("[daemon/slack] Received payload", { correlation, slackEventId, payload });
 
-  // Handle ignored cases
-  if (parsed.case === "ignored") {
-    return c.json({ success: true, message: parsed.reason, eventId });
+  if (correlation.forwardedSlackEventId && slackEventId) {
+    if (correlation.forwardedSlackEventId !== slackEventId) {
+      logger.warn("[Slack Webhook] Header/body Slack event mismatch", {
+        correlation,
+        slackEventId,
+      });
+    }
   }
 
-  // Handle reaction events - need to look up the thread_ts from the original message
-  if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
-    try {
-      const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
-      if (!threadTs) {
-        return c.json({
-          success: true,
-          message: "Ignored: could not find thread for reacted message",
-          eventId,
-        });
-      }
+  return withSpan(
+    "daemon.slack.webhook",
+    {
+      attributes: {
+        "messaging.system": "slack",
+        "messaging.operation": "process",
+        "iterate.request_id": correlation.requestId,
+        "slack.event_id": slackEventId ?? "unknown",
+      },
+    },
+    async (span) => {
+      const traceUrl = buildJaegerTraceUrl(span.spanContext().traceId);
+      const logsUrl = buildLogsSearchUrl(correlation.requestId);
+      if (traceUrl) span.setAttribute("iterate.link.trace_url", traceUrl);
+      if (logsUrl) span.setAttribute("iterate.link.log_url", logsUrl);
 
-      // Check for associated agent first, then fall back to slack-{thread_ts}
-      const { agent: existingAgent, agentSlug } = await findAgentForThread(
-        parsed.channel,
-        threadTs,
+      const eventId = await withSpan(
+        "daemon.slack.store_event",
+        {
+          attributes: {
+            "iterate.request_id": correlation.requestId,
+            "slack.event_id": slackEventId ?? "unknown",
+          },
+        },
+        async () => storeEvent(payload, slackEventId),
       );
 
-      if (!existingAgent) {
+      const parsed = parseWebhookPayload(payload);
+      if (parsed.case === "ignored") {
+        span.setAttribute("daemon.result", "ignored");
         return c.json({
           success: true,
-          message: "Ignored: no agent for this thread",
+          message: parsed.reason,
           eventId,
+          requestId: correlation.requestId,
         });
       }
 
-      const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      const { setStatus } = createSlackCallbacks({
-        channel: parsed.channel,
-        threadTs,
-        emojiTimestamp: threadTs,
-        emoji: "eyes",
-      });
-      await appendToAgent(existingAgent, message, {
-        workingDirectory: await getCustomerRepoPath(),
-        acknowledge: async () =>
-          logger.log(`[slack] Processing reaction in ${parsed.channel}/${threadTs}`),
-        unacknowledge: async () =>
-          logger.log(`[slack] Finished processing reaction in ${parsed.channel}/${threadTs}`),
-        setStatus,
-      });
-      return c.json({ success: true, agentSlug, created: false, case: parsed.case, eventId });
-    } catch (error) {
-      logger.error("[Slack Webhook] Failed to handle reaction event", error);
-      return c.json({ error: "Internal server error" }, 500);
-    }
-  }
+      if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
+        const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
+        if (!threadTs) {
+          return c.json({
+            success: true,
+            message: "Ignored: could not find thread for reacted message",
+            eventId,
+            requestId: correlation.requestId,
+          });
+        }
 
-  // From here on, parsed is a ParsedMessage (not a reaction)
-  const { event, threadTs } = parsed as ParsedMessage;
-  const channel = event.channel || "";
-  const messageText = event.text || "";
+        const { agent: existingAgent, agentSlug } = await findAgentForThread(
+          parsed.channel,
+          threadTs,
+        );
+        if (!existingAgent) {
+          return c.json({
+            success: true,
+            message: "Ignored: no agent for this thread",
+            eventId,
+            requestId: correlation.requestId,
+          });
+        }
 
-  try {
-    // Check for associated agent first, then fall back to slack-{thread_ts}
-    const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
+        const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+        const { setStatus } = createSlackCallbacks({
+          channel: parsed.channel,
+          threadTs,
+          emojiTimestamp: threadTs,
+          emoji: "eyes",
+          requestId: correlation.requestId,
+        });
+        await appendToAgent(existingAgent, message, {
+          workingDirectory: await getCustomerRepoPath(),
+          acknowledge: async () =>
+            logger.log(`[slack] Processing reaction in ${parsed.channel}/${threadTs}`),
+          unacknowledge: async () =>
+            logger.log(`[slack] Finished processing reaction in ${parsed.channel}/${threadTs}`),
+          setStatus,
+        });
+        span.setAttribute("daemon.result", parsed.case);
+        return c.json({
+          success: true,
+          agentSlug,
+          created: false,
+          case: parsed.case,
+          eventId,
+          requestId: correlation.requestId,
+        });
+      }
 
-    // Check for backslash commands - these are handled directly without forwarding to agent
-    const commandName = parseBackslashCommand(messageText);
-    if (commandName) {
-      const handler = backslashCommands[commandName];
-      const response = await handler({ channel, threadTs, agentSlug, existingAgent });
+      const { event, threadTs } = parsed as ParsedMessage;
+      const channel = event.channel || "";
+      const messageText = event.text || "";
+      const { agent: existingAgent, agentSlug } = await findAgentForThread(channel, threadTs);
 
-      // Send response via Slack API
-      await slackPostMessage({
-        channel,
-        thread_ts: threadTs,
-        text: response.text,
-        blocks: response.blocks,
-      });
+      const commandName = parseBackslashCommand(messageText);
+      if (commandName) {
+        const handler = backslashCommands[commandName];
+        const response = await handler({ channel, threadTs, agentSlug, existingAgent });
 
-      return c.json({
-        success: true,
-        case: "backslash_command",
-        command: commandName,
-        eventId,
-      });
-    }
+        await withSpan(
+          "daemon.slack.post_message",
+          {
+            attributes: {
+              "iterate.request_id": correlation.requestId,
+              "slack.channel": channel,
+              "slack.thread_ts": threadTs,
+            },
+          },
+          async () =>
+            slackPostMessage(
+              {
+                channel,
+                thread_ts: threadTs,
+                text: response.text,
+                blocks: response.blocks,
+              },
+              correlation.requestId,
+            ),
+        );
 
-    // Case 1: New thread @mention - create agent and start fresh conversation
-    if (parsed.case === "new_thread_mention") {
-      if (existingAgent) {
-        // Agent exists (either via association or slack-{thread_ts})
+        span.setAttribute("daemon.result", "backslash_command");
+        return c.json({
+          success: true,
+          case: "backslash_command",
+          command: commandName,
+          eventId,
+          requestId: correlation.requestId,
+        });
+      }
+
+      if (parsed.case === "new_thread_mention") {
         const workingDirectory = await getCustomerRepoPath();
-        const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
+        if (existingAgent) {
+          const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
+          const callbacks = createSlackCallbacks({
+            channel,
+            threadTs,
+            emojiTimestamp: event.ts,
+            emoji: "eyes",
+            requestId: correlation.requestId,
+          });
+          await appendToAgent(existingAgent, message, { workingDirectory, ...callbacks });
+          span.setAttribute("daemon.result", "mid_thread_mention");
+          return c.json({
+            success: true,
+            agentSlug,
+            created: false,
+            case: "mid_thread_mention",
+            eventId,
+            requestId: correlation.requestId,
+          });
+        }
+
+        const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
+        const agent = await createAgent({
+          slug: newAgentSlug,
+          harnessType: "opencode",
+          workingDirectory,
+          initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
+        });
+
+        const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
         const callbacks = createSlackCallbacks({
           channel,
           threadTs,
           emojiTimestamp: event.ts,
           emoji: "eyes",
+          requestId: correlation.requestId,
         });
-        await appendToAgent(existingAgent, message, { workingDirectory, ...callbacks });
+        await appendToAgent(agent, message, { workingDirectory, ...callbacks });
+        span.setAttribute("daemon.result", "new_thread_mention");
+        return c.json({
+          success: true,
+          agentSlug: newAgentSlug,
+          created: true,
+          case: "new_thread_mention",
+          eventId,
+          requestId: correlation.requestId,
+        });
+      }
+
+      if (parsed.case === "mid_thread_mention") {
+        let agent = existingAgent;
+        let wasCreated = false;
+        let finalAgentSlug = agentSlug;
+        const workingDirectory = await getCustomerRepoPath();
+
+        if (!agent) {
+          finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
+          agent = await createAgent({
+            slug: finalAgentSlug,
+            harnessType: "opencode",
+            workingDirectory,
+            initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
+          });
+          wasCreated = true;
+        }
+
+        const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
+        const callbacks = createSlackCallbacks({
+          channel,
+          threadTs,
+          emojiTimestamp: event.ts,
+          emoji: "eyes",
+          requestId: correlation.requestId,
+        });
+        await appendToAgent(agent, message, { workingDirectory, ...callbacks });
+        span.setAttribute("daemon.result", "mid_thread_mention");
+        return c.json({
+          success: true,
+          agentSlug: finalAgentSlug,
+          created: wasCreated,
+          case: "mid_thread_mention",
+          eventId,
+          requestId: correlation.requestId,
+        });
+      }
+
+      if (parsed.case === "fyi_message") {
+        if (!existingAgent) {
+          span.setAttribute("daemon.result", "ignored_no_agent");
+          return c.json({
+            success: true,
+            message: "Ignored: no mention and no existing agent",
+            eventId,
+            requestId: correlation.requestId,
+          });
+        }
+
+        const message = formatFyiMessage(event, threadTs, eventId);
+        const callbacks = createSlackCallbacks({
+          channel,
+          threadTs,
+          emojiTimestamp: threadTs,
+          emoji: "thinking_face",
+          requestId: correlation.requestId,
+        });
+        await appendToAgent(existingAgent, message, {
+          workingDirectory: await getCustomerRepoPath(),
+          ...callbacks,
+        });
+        span.setAttribute("daemon.result", "fyi_message");
         return c.json({
           success: true,
           agentSlug,
           created: false,
-          case: "mid_thread_mention",
+          case: "fyi_message",
           eventId,
+          requestId: correlation.requestId,
         });
       }
 
-      // No existing agent - create new slack-{thread_ts} agent
-      const newAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
-      const workingDirectory = await getCustomerRepoPath();
-      const agent = await createAgent({
-        slug: newAgentSlug,
-        harnessType: "opencode",
-        workingDirectory,
-        initialPrompt: `[Agent slug: ${newAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
-      });
-
-      const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
-      const callbacks = createSlackCallbacks({
-        channel,
-        threadTs,
-        emojiTimestamp: event.ts,
-        emoji: "eyes",
-      });
-      await appendToAgent(agent, message, { workingDirectory, ...callbacks });
-      return c.json({
-        success: true,
-        agentSlug: newAgentSlug,
-        created: true,
-        case: "new_thread_mention",
-        eventId,
-      });
-    }
-
-    // Case 2: Mid-thread @mention - create agent if needed, join existing conversation
-    if (parsed.case === "mid_thread_mention") {
-      let agent = existingAgent;
-      let wasCreated = false;
-      let finalAgentSlug = agentSlug;
-      const workingDirectory = await getCustomerRepoPath();
-
-      if (!agent) {
-        finalAgentSlug = `slack-${sanitizeThreadId(threadTs)}`;
-        agent = await createAgent({
-          slug: finalAgentSlug,
-          harnessType: "opencode",
-          workingDirectory,
-          initialPrompt: `[Agent slug: ${finalAgentSlug}]\n[Source: slack]\n[Thread: ${channel}/${threadTs}]`,
-        });
-        wasCreated = true;
-      }
-
-      const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
-      const callbacks = createSlackCallbacks({
-        channel,
-        threadTs,
-        emojiTimestamp: event.ts,
-        emoji: "eyes",
-      });
-      await appendToAgent(agent, message, { workingDirectory, ...callbacks });
-      return c.json({
-        success: true,
-        agentSlug: finalAgentSlug,
-        created: wasCreated,
-        case: "mid_thread_mention",
-        eventId,
-      });
-    }
-
-    // Case 3: FYI message - only forward if agent already exists
-    if (parsed.case === "fyi_message") {
-      if (!existingAgent) {
-        return c.json({
-          success: true,
-          message: "Ignored: no mention and no existing agent",
-          eventId,
-        });
-      }
-
-      const message = formatFyiMessage(event, threadTs, eventId);
-      const callbacks = createSlackCallbacks({
-        channel,
-        threadTs,
-        emojiTimestamp: threadTs,
-        emoji: "thinking_face",
-      });
-      await appendToAgent(existingAgent, message, {
-        workingDirectory: await getCustomerRepoPath(),
-        ...callbacks,
-      });
-      return c.json({ success: true, agentSlug, created: false, case: "fyi_message", eventId });
-    }
-
-    // Should never reach here
-    return c.json({ error: "Unknown message case" }, 500);
-  } catch (error) {
-    logger.error("[Slack Webhook] Failed to handle webhook", error);
+      return c.json({ error: "Unknown message case" }, 500);
+    },
+  ).catch((error) => {
+    logger.error("[Slack Webhook] Failed to handle webhook", { error, correlation });
     return c.json({ error: "Internal server error" }, 500);
-  }
+  });
 });
 
 const slackPostMessage = async (
   params: Parameters<import("@slack/web-api").WebClient["chat"]["postMessage"]>[0],
+  requestId?: string,
 ) => {
-  // todo: use the slack client directly instead of cli - once we have fixed the proxy issues and can use the proxy and env vars in the daemon
-  await x("iterate", ["tool", "slack", `await slack.chat.postMessage(${JSON.stringify(params)})`], {
-    throwOnError: true,
-  });
+  await runSlackCommand(`await slack.chat.postMessage(${JSON.stringify(params)})`, requestId);
 };
 
 /**

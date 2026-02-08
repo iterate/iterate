@@ -41,6 +41,8 @@ const DEFAULT_LOCAL_PORTS: Record<string, string> = {
   "iterate-daemon": "3000",
   "iterate-daemon-server": "3001",
   opencode: "4096",
+  "jaeger-ui": "16686",
+  "jaeger-otlp-http": "4318",
 };
 const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
 

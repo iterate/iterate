@@ -10,6 +10,7 @@ import { db as defaultDb } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentType } from "../db/schema.ts";
 import { getHarness as defaultGetHarness, type AgentHarness } from "../agents/index.ts";
+import { withSpan } from "../utils/otel.ts";
 import type { AppendParams } from "../agents/types.ts";
 
 export interface GetOrCreateAgentParams {
@@ -68,11 +69,21 @@ export async function createAgent(
   const harness = getHarness(harnessType);
   const id = randomUUID();
 
-  const result = await harness.createAgent({
-    slug,
-    workingDirectory,
-    sessionName: `agent-${id.slice(0, 8)}`,
-  });
+  const result = await withSpan(
+    "daemon.agent.create",
+    {
+      attributes: {
+        "agent.slug": slug,
+        "agent.harness_type": harnessType,
+      },
+    },
+    async () =>
+      harness.createAgent({
+        slug,
+        workingDirectory,
+        sessionName: `agent-${id.slice(0, 8)}`,
+      }),
+  );
 
   // Insert agent into database
   const [newAgent] = await db
@@ -156,7 +167,19 @@ export async function appendToAgent(
   if (!agent.harnessSessionId) {
     throw new Error(`Agent ${agent.slug} has no harness session ID`);
   }
+  const harnessSessionId = agent.harnessSessionId;
 
   const harness = getHarness(agent.harnessType);
-  await harness.append(agent.harnessSessionId, { type: "user-message", content: message }, params);
+  await withSpan(
+    "daemon.agent.append",
+    {
+      attributes: {
+        "agent.id": agent.id,
+        "agent.slug": agent.slug,
+        "agent.harness_type": agent.harnessType,
+      },
+    },
+    async () =>
+      harness.append(harnessSessionId, { type: "user-message", content: message }, params),
+  );
 }
