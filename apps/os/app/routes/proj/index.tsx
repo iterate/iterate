@@ -137,7 +137,7 @@ function ProjectHomePage() {
   const activeMachine = machines.find((m) => m.state === "active") ?? null;
 
   const { data: threadsData } = useSuspenseQuery(
-    trpc.webChat.listThreads.queryOptions({ projectSlug: params.projectSlug }),
+    trpc.webchat.listThreads.queryOptions({ projectSlug: params.projectSlug }),
   );
 
   const isCreatingThread = search.thread === "new";
@@ -146,7 +146,7 @@ function ProjectHomePage() {
     : (search.thread ?? threadsData.threads[0]?.threadId);
 
   const { data: messagesData } = useQuery({
-    ...trpc.webChat.getThreadMessages.queryOptions({
+    ...trpc.webchat.getThreadMessages.queryOptions({
       projectSlug: params.projectSlug,
       threadId: selectedThreadId,
     }),
@@ -209,7 +209,7 @@ function ProjectHomePage() {
 
   const sendMessage = useMutation({
     mutationFn: async (input: { text: string; attachments?: FileAttachment[] }) =>
-      trpcClient.webChat.sendMessage.mutate({
+      trpcClient.webchat.sendMessage.mutate({
         projectSlug: params.projectSlug,
         threadId: selectedThreadId,
         text: input.text,
@@ -222,7 +222,7 @@ function ProjectHomePage() {
         void navigate({ search: { thread: result.threadId }, replace: true });
       }
       await queryClient.invalidateQueries({
-        queryKey: trpc.webChat.listThreads.queryKey({ projectSlug: params.projectSlug }),
+        queryKey: trpc.webchat.listThreads.queryKey({ projectSlug: params.projectSlug }),
       });
     },
     onError: (error) => {
@@ -294,7 +294,7 @@ function ProjectHomePage() {
           <EmptyState
             icon={<Server className="h-8 w-8" />}
             title="No active machine"
-            description="Web chat runs through your active machine, like Slack and email webhooks."
+            description="Webchat runs through your active machine, like Slack and email webhooks."
             action={
               <Button asChild size="sm">
                 <Link to="/proj/$projectSlug/machines" params={params}>
@@ -326,7 +326,7 @@ function ProjectHomePage() {
                   <button
                     key={thread.threadId}
                     type="button"
-                    data-testid={`web-chat-thread-${thread.threadId}`}
+                    data-testid={`webchat-thread-${thread.threadId}`}
                     className={cn(
                       "w-full rounded-lg border bg-card p-3 text-left transition-colors",
                       "hover:bg-muted/50",
@@ -389,7 +389,7 @@ function ProjectHomePage() {
               messages.map((message) => (
                 <div
                   key={message.messageId}
-                  data-testid={`web-chat-message-${message.role}`}
+                  data-testid={`webchat-message-${message.role}`}
                   className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}
                 >
                   <div
@@ -471,7 +471,7 @@ function ProjectHomePage() {
               onDrop={handleDrop}
             >
               <Textarea
-                data-testid="web-chat-input"
+                data-testid="webchat-input"
                 value={draftMessage}
                 onChange={(event) => setDraftMessage(event.target.value)}
                 placeholder="Message your project... (paste or drop files)"
@@ -512,7 +512,7 @@ function ProjectHomePage() {
                 </p>
               </div>
               <Button
-                data-testid="web-chat-send"
+                data-testid="webchat-send"
                 type="submit"
                 size="sm"
                 disabled={

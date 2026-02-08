@@ -1,9 +1,9 @@
 import { expect } from "@playwright/test";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
 
-test.describe("project home web chat", () => {
-  test("shows web chat and machine prerequisite", async ({ page }) => {
-    const testEmail = `web-chat-${Date.now()}+test@nustom.com`;
+test.describe("project home webchat", () => {
+  test("shows webchat and machine prerequisite", async ({ page }) => {
+    const testEmail = `webchat-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
     await createOrganization(page);
     await createProject(page);
@@ -13,17 +13,17 @@ test.describe("project home web chat", () => {
     await page.getByRole("button", { name: "New Thread" }).waitFor();
     await page.getByText("No active machine").waitFor();
     await page.getByRole("link", { name: "Open machines" }).waitFor();
-    await page.getByTestId("web-chat-input").waitFor();
+    await page.getByTestId("webchat-input").waitFor();
   });
 
-  test("can send and receive in a web chat thread", async ({ page }) => {
+  test("can send and receive in a webchat thread", async ({ page }) => {
     test.skip(
-      process.env.WEB_CHAT_LLM_SPEC !== "1",
-      "Set WEB_CHAT_LLM_SPEC=1 to run the LLM-backed web chat spec",
+      process.env.WEBCHAT_LLM_SPEC !== "1",
+      "Set WEBCHAT_LLM_SPEC=1 to run the LLM-backed webchat spec",
     );
 
-    const testEmail = `web-chat-live-${Date.now()}+test@nustom.com`;
-    const machineName = `Web Chat Machine ${Date.now()}`;
+    const testEmail = `webchat-live-${Date.now()}+test@nustom.com`;
+    const machineName = `Webchat Machine ${Date.now()}`;
 
     await login(page, testEmail);
     await createOrganization(page);
@@ -52,20 +52,20 @@ test.describe("project home web chat", () => {
     await sidebarButton(page, "Home").click();
     await page.getByRole("button", { name: "New Thread" }).click();
 
-    await page.getByTestId("web-chat-input").fill("Reply with exactly: ACK");
-    await page.getByTestId("web-chat-send").click();
+    await page.getByTestId("webchat-input").fill("Reply with exactly: ACK");
+    await page.getByTestId("webchat-send").click();
 
-    await page.getByTestId("web-chat-message-user").last().waitFor({ timeout: 15000 });
+    await page.getByTestId("webchat-message-user").last().waitFor({ timeout: 15000 });
 
     await expect
-      .poll(() => page.getByTestId("web-chat-message-assistant").count(), { timeout: 120000 })
+      .poll(() => page.getByTestId("webchat-message-assistant").count(), { timeout: 120000 })
       .toBeGreaterThan(0);
 
     await expect
       .poll(
         async () => {
           const assistantText = await page
-            .getByTestId("web-chat-message-assistant")
+            .getByTestId("webchat-message-assistant")
             .last()
             .innerText();
           return assistantText.trim().length;

@@ -4,10 +4,10 @@ import { z } from "zod/v4";
 import { router, projectProtectedMutation, projectProtectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import {
-  forwardWebChatWebhookToMachine,
-  listWebChatMessagesFromMachine,
-  listWebChatThreadsFromMachine,
-} from "../../integrations/web-chat/web-chat.ts";
+  forwardWebchatWebhookToMachine,
+  listWebchatMessagesFromMachine,
+  listWebchatThreadsFromMachine,
+} from "../../integrations/webchat/webchat.ts";
 
 const AttachmentInput = z.object({
   fileName: z.string(),
@@ -27,7 +27,7 @@ const GetThreadMessagesInput = z.object({
   threadId: z.string().trim().min(1).max(200).optional(),
 });
 
-export const webChatRouter = router({
+export const webchatRouter = router({
   listThreads: projectProtectedProcedure.query(async ({ ctx }) => {
     const machine = await ctx.db.query.machine.findFirst({
       where: and(eq(schema.machine.projectId, ctx.project.id), eq(schema.machine.state, "active")),
@@ -37,7 +37,7 @@ export const webChatRouter = router({
       return { threads: [] };
     }
 
-    const response = await listWebChatThreadsFromMachine(machine, ctx.env);
+    const response = await listWebchatThreadsFromMachine(machine, ctx.env);
     if (!response.success) {
       throw new TRPCError({ code: "BAD_GATEWAY", message: response.error });
     }
@@ -63,7 +63,7 @@ export const webChatRouter = router({
         return { threadId: input.threadId, messages: [] };
       }
 
-      const response = await listWebChatMessagesFromMachine(machine, input.threadId, ctx.env);
+      const response = await listWebchatMessagesFromMachine(machine, input.threadId, ctx.env);
       if (!response.success) {
         throw new TRPCError({
           code: "BAD_GATEWAY",
@@ -92,7 +92,7 @@ export const webChatRouter = router({
       }
 
       const payload = {
-        type: "web-chat:message",
+        type: "webchat:message",
         threadId: input.threadId,
         messageId: input.messageId ?? crypto.randomUUID(),
         text: input.text,
@@ -104,7 +104,7 @@ export const webChatRouter = router({
         createdAt: Date.now(),
       } satisfies Record<string, unknown>;
 
-      const response = await forwardWebChatWebhookToMachine(machine, payload, ctx.env);
+      const response = await forwardWebchatWebhookToMachine(machine, payload, ctx.env);
       if (!response.success) {
         throw new TRPCError({
           code: "BAD_GATEWAY",

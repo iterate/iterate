@@ -1,4 +1,4 @@
-# Web Chat Channel Instructions
+# Webchat Channel Instructions
 
 ## Quick Reference: Sending Messages
 
@@ -12,7 +12,7 @@ iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "
 The `webchat` object is an HTTP client with these methods:
 
 ```ts
-interface WebChatClient {
+interface WebchatClient {
   postMessage(params: {
     threadId: string;
     text?: string;
@@ -57,7 +57,7 @@ You will receive one of two message types:
 
 ### 1. New Thread
 
-**Trigger:** A user started a new web chat thread.
+**Trigger:** A user started a new webchat thread.
 
 **What to do:**
 
@@ -114,7 +114,7 @@ iterate tool webchat 'const result = await webchat.getThreadMessages({ threadId:
 
 ## Inspecting Raw Events
 
-The raw web chat payload is stored in SQLite. To inspect it:
+The raw webchat payload is stored in SQLite. To inspect it:
 
 ```bash
 sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id='EVENT_ID'"
@@ -136,15 +136,15 @@ The UI will show inline previews for images (jpeg, png, gif, webp) and view/down
 
 ## Receiving Files
 
-When a user uploads files, the incoming message will list them under "Attachments:" with their file paths. The files are written to `/tmp/web-chat-uploads/` and you can read them directly:
+When a user uploads files, the incoming message will list them under "Attachments:" with their file paths. The files are written to `/tmp/webchat-uploads/` and you can read them directly:
 
 ```bash
-cat /tmp/web-chat-uploads/abc123-photo.jpg
+cat /tmp/webchat-uploads/abc123-photo.jpg
 ```
 
 ## Best Practices
 
-1. **Be concise**: Web chat messages should be shorter than typical coding responses.
-2. **Markdown supported**: The web chat UI renders markdown.
+1. **Be concise**: Webchat messages should be shorter than typical coding responses.
+2. **Markdown supported**: The webchat UI renders markdown.
 3. **Reply promptly**: Always use `webchat.postMessage` to reply — do not rely on your assistant output being shown directly.
 4. **Include file metadata**: When sending files, include `mimeType` so the UI knows how to preview them.

@@ -17,7 +17,7 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { googleApp } from "./integrations/google/google.ts";
 import { resendApp } from "./integrations/resend/resend.ts";
-import { webChatApp } from "./integrations/web-chat/web-chat.ts";
+import { webchatApp } from "./integrations/webchat/webchat.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
@@ -142,7 +142,7 @@ app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/google", googleApp);
 app.route("/api/integrations/resend", resendApp);
-app.route("/api/integrations/web-chat", webChatApp);
+app.route("/api/integrations/webchat", webchatApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
 app.route("/api", egressApprovalsApp);

@@ -7,14 +7,14 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { createMachineProvider } from "../../providers/index.ts";
 
-const WebChatAttachment = z.object({
+const WebchatAttachment = z.object({
   fileName: z.string(),
   filePath: z.string(),
   mimeType: z.string().optional(),
   size: z.number().optional(),
 });
 
-const WebChatMessage = z.object({
+const WebchatMessage = z.object({
   threadId: z.string(),
   messageId: z.string(),
   role: z.enum(["user", "assistant"]),
@@ -23,11 +23,11 @@ const WebChatMessage = z.object({
   userName: z.string().optional(),
   agentSlug: z.string(),
   reactions: z.array(z.string()).optional(),
-  attachments: z.array(WebChatAttachment).optional(),
+  attachments: z.array(WebchatAttachment).optional(),
   createdAt: z.number(),
 });
 
-const WebChatThread = z.object({
+const WebchatThread = z.object({
   threadId: z.string(),
   agentSlug: z.string(),
   messageCount: z.number(),
@@ -37,7 +37,7 @@ const WebChatThread = z.object({
   lastMessageAt: z.number(),
 });
 
-const WebChatWebhookResponse = z.object({
+const WebchatWebhookResponse = z.object({
   success: z.boolean(),
   duplicate: z.boolean().optional(),
   threadId: z.string(),
@@ -47,13 +47,13 @@ const WebChatWebhookResponse = z.object({
   agentSlug: z.string().optional(),
 });
 
-const WebChatThreadsResponse = z.object({
-  threads: z.array(WebChatThread),
+const WebchatThreadsResponse = z.object({
+  threads: z.array(WebchatThread),
 });
 
-const WebChatMessagesResponse = z.object({
+const WebchatMessagesResponse = z.object({
   threadId: z.string(),
-  messages: z.array(WebChatMessage),
+  messages: z.array(WebchatMessage),
   agentSessionUrl: z.string().optional(),
   status: z.string().optional(),
 });
@@ -63,7 +63,7 @@ const WebhookInput = z.object({
   threadId: z.string().min(1).optional(),
   messageId: z.string().min(1).optional(),
   text: z.string().trim().max(50_000).optional().default(""),
-  attachments: z.array(WebChatAttachment).optional(),
+  attachments: z.array(WebchatAttachment).optional(),
 });
 
 const ListThreadsInput = z.object({
@@ -75,11 +75,11 @@ const ListMessagesInput = z.object({
   threadId: z.string().min(1),
 });
 
-type WebChatWebhookResponse = z.infer<typeof WebChatWebhookResponse>;
-type WebChatThreadsResponse = z.infer<typeof WebChatThreadsResponse>;
-type WebChatMessagesResponse = z.infer<typeof WebChatMessagesResponse>;
+type WebchatWebhookResponse = z.infer<typeof WebchatWebhookResponse>;
+type WebchatThreadsResponse = z.infer<typeof WebchatThreadsResponse>;
+type WebchatMessagesResponse = z.infer<typeof WebchatMessagesResponse>;
 
-export const webChatApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+export const webchatApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
 async function buildMachineForwardUrl(
   machine: typeof schema.machine.$inferSelect,
@@ -98,7 +98,7 @@ async function buildMachineForwardUrl(
     });
     return `${provider.previewUrl}${path}`;
   } catch (error) {
-    logger.warn("[Web Chat] Failed to build machine forward URL", {
+    logger.warn("[webchat] Failed to build machine forward URL", {
       machineId: machine.id,
       type: machine.type,
       error: error instanceof Error ? error.message : String(error),
@@ -150,16 +150,12 @@ async function resolveProjectAndMachine(
   };
 }
 
-export async function forwardWebChatWebhookToMachine(
+export async function forwardWebchatWebhookToMachine(
   machine: typeof schema.machine.$inferSelect,
   payload: Record<string, unknown>,
   env: CloudflareEnv,
-): Promise<{ success: true; data: WebChatWebhookResponse } | { success: false; error: string }> {
-  const targetUrl = await buildMachineForwardUrl(
-    machine,
-    "/api/integrations/web-chat/webhook",
-    env,
-  );
+): Promise<{ success: true; data: WebchatWebhookResponse } | { success: false; error: string }> {
+  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/webchat/webhook", env);
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
@@ -176,7 +172,7 @@ export async function forwardWebChatWebhookToMachine(
       return { success: false, error: `HTTP ${response.status}` };
     }
 
-    const parsed = WebChatWebhookResponse.safeParse(await response.json());
+    const parsed = WebchatWebhookResponse.safeParse(await response.json());
     if (!parsed.success) {
       return { success: false, error: "Invalid webhook response from machine daemon" };
     }
@@ -190,15 +186,11 @@ export async function forwardWebChatWebhookToMachine(
   }
 }
 
-export async function listWebChatThreadsFromMachine(
+export async function listWebchatThreadsFromMachine(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<{ success: true; data: WebChatThreadsResponse } | { success: false; error: string }> {
-  const targetUrl = await buildMachineForwardUrl(
-    machine,
-    "/api/integrations/web-chat/threads",
-    env,
-  );
+): Promise<{ success: true; data: WebchatThreadsResponse } | { success: false; error: string }> {
+  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/webchat/threads", env);
   if (!targetUrl) {
     return { success: false, error: "Could not build forward URL" };
   }
@@ -213,7 +205,7 @@ export async function listWebChatThreadsFromMachine(
       return { success: false, error: `HTTP ${response.status}` };
     }
 
-    const parsed = WebChatThreadsResponse.safeParse(await response.json());
+    const parsed = WebchatThreadsResponse.safeParse(await response.json());
     if (!parsed.success) {
       return { success: false, error: "Invalid threads response from machine daemon" };
     }
@@ -227,14 +219,14 @@ export async function listWebChatThreadsFromMachine(
   }
 }
 
-export async function listWebChatMessagesFromMachine(
+export async function listWebchatMessagesFromMachine(
   machine: typeof schema.machine.$inferSelect,
   threadId: string,
   env: CloudflareEnv,
-): Promise<{ success: true; data: WebChatMessagesResponse } | { success: false; error: string }> {
+): Promise<{ success: true; data: WebchatMessagesResponse } | { success: false; error: string }> {
   const targetUrl = await buildMachineForwardUrl(
     machine,
-    `/api/integrations/web-chat/threads/${encodeURIComponent(threadId)}/messages`,
+    `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`,
     env,
   );
   if (!targetUrl) {
@@ -251,7 +243,7 @@ export async function listWebChatMessagesFromMachine(
       return { success: false, error: `HTTP ${response.status}` };
     }
 
-    const parsed = WebChatMessagesResponse.safeParse(await response.json());
+    const parsed = WebchatMessagesResponse.safeParse(await response.json());
     if (!parsed.success) {
       return { success: false, error: "Invalid messages response from machine daemon" };
     }
@@ -265,7 +257,7 @@ export async function listWebChatMessagesFromMachine(
   }
 }
 
-webChatApp.post("/webhook", async (c) => {
+webchatApp.post("/webhook", async (c) => {
   const parsedInput = WebhookInput.safeParse(await c.req.json());
   if (!parsedInput.success) {
     return c.json({ error: "Invalid request body", issues: parsedInput.error.issues }, 400);
@@ -281,7 +273,7 @@ webChatApp.post("/webhook", async (c) => {
     }
 
     const payload = {
-      type: "web-chat:message",
+      type: "webchat:message",
       threadId: parsedInput.data.threadId,
       messageId: parsedInput.data.messageId ?? crypto.randomUUID(),
       text: parsedInput.data.text,
@@ -293,9 +285,9 @@ webChatApp.post("/webhook", async (c) => {
       createdAt: Date.now(),
     } satisfies Record<string, unknown>;
 
-    const forwarded = await forwardWebChatWebhookToMachine(machine, payload, c.env);
+    const forwarded = await forwardWebchatWebhookToMachine(machine, payload, c.env);
     if (!forwarded.success) {
-      logger.error("[Web Chat] Failed to forward webhook to machine", {
+      logger.error("[webchat] Failed to forward webhook to machine", {
         projectId: project.id,
         machineId: machine.id,
         error: forwarded.error,
@@ -317,12 +309,12 @@ webChatApp.post("/webhook", async (c) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    logger.error("[Web Chat] Unexpected webhook error", error);
+    logger.error("[webchat] Unexpected webhook error", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
-webChatApp.get("/threads", async (c) => {
+webchatApp.get("/threads", async (c) => {
   const parsedInput = ListThreadsInput.safeParse({
     projectSlug: c.req.query("projectSlug"),
   });
@@ -336,7 +328,7 @@ webChatApp.get("/threads", async (c) => {
       return c.json({ threads: [] });
     }
 
-    const response = await listWebChatThreadsFromMachine(machine, c.env);
+    const response = await listWebchatThreadsFromMachine(machine, c.env);
     if (!response.success) {
       return c.json({ error: response.error }, 502);
     }
@@ -355,12 +347,12 @@ webChatApp.get("/threads", async (c) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    logger.error("[Web Chat] Unexpected list threads error", error);
+    logger.error("[webchat] Unexpected list threads error", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
 
-webChatApp.get("/threads/:threadId/messages", async (c) => {
+webchatApp.get("/threads/:threadId/messages", async (c) => {
   const parsedInput = ListMessagesInput.safeParse({
     projectSlug: c.req.query("projectSlug"),
     threadId: c.req.param("threadId"),
@@ -375,7 +367,7 @@ webChatApp.get("/threads/:threadId/messages", async (c) => {
       return c.json({ threadId: parsedInput.data.threadId, messages: [] });
     }
 
-    const response = await listWebChatMessagesFromMachine(
+    const response = await listWebchatMessagesFromMachine(
       machine,
       parsedInput.data.threadId,
       c.env,
@@ -398,7 +390,7 @@ webChatApp.get("/threads/:threadId/messages", async (c) => {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    logger.error("[Web Chat] Unexpected list messages error", error);
+    logger.error("[webchat] Unexpected list messages error", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });

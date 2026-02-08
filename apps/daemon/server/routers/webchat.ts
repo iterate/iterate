@@ -1,7 +1,7 @@
 /**
- * Web Chat Router
+ * Webchat Router
  *
- * Handles incoming web chat messages forwarded from the OS backend.
+ * Handles incoming webchat messages forwarded from the OS backend.
  * Creates/reuses agents per thread and sends formatted messages.
  * Uses the harness system for SDK-based session management.
  *
@@ -38,7 +38,7 @@ const Attachment = z.object({
 });
 
 const IncomingWebhookPayload = z.object({
-  type: z.literal("web-chat:message").optional(),
+  type: z.literal("webchat:message").optional(),
   threadId: z.string().trim().min(1).max(200).optional(),
   messageId: z.string().trim().min(1).max(200).optional(),
   text: z.string().trim().max(50_000).optional().default(""),
@@ -86,26 +86,26 @@ const StoredMessage = z.object({
 
 type StoredMessage = z.infer<typeof StoredMessage>;
 
-type WebChatEventType =
-  | "web-chat:user-message"
-  | "web-chat:assistant-message"
-  | "web-chat:reaction-added"
-  | "web-chat:reaction-removed";
+type WebchatEventType =
+  | "webchat:user-message"
+  | "webchat:assistant-message"
+  | "webchat:reaction-added"
+  | "webchat:reaction-removed";
 
-export const webChatRouter = new Hono();
+export const webchatRouter = new Hono();
 
 // Middleware to log requests/responses
-webChatRouter.use("*", async (c, next) => {
+webchatRouter.use("*", async (c, next) => {
   const reqBody = await c.req.raw.clone().text();
-  logger.log(`[daemon/web-chat] REQ ${c.req.method} ${c.req.path}`, reqBody.slice(0, 500));
+  logger.log(`[daemon/webchat] REQ ${c.req.method} ${c.req.path}`, reqBody.slice(0, 500));
   await next();
   const resBody = await c.res.clone().text();
-  logger.log(`[daemon/web-chat] RES ${c.res.status}`, resBody.slice(0, 500));
+  logger.log(`[daemon/webchat] RES ${c.res.status}`, resBody.slice(0, 500));
 });
 
 // --- Inbound: user sends a message via the UI ---
 
-webChatRouter.post("/webhook", async (c) => {
+webchatRouter.post("/webhook", async (c) => {
   const parsed = IncomingWebhookPayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid webhook payload", issues: parsed.error.issues }, 400);
@@ -129,7 +129,7 @@ webChatRouter.post("/webhook", async (c) => {
       .from(schema.events)
       .where(
         and(
-          eq(schema.events.type, "web-chat:user-message"),
+          eq(schema.events.type, "webchat:user-message"),
           eq(schema.events.externalId, payload.messageId),
         ),
       )
@@ -153,7 +153,7 @@ webChatRouter.post("/webhook", async (c) => {
     createdAt,
   };
 
-  const eventId = await storeEvent("web-chat:user-message", userMessage, messageId);
+  const eventId = await storeEvent("webchat:user-message", userMessage, messageId);
 
   let existingAgent = await getAgent(agentSlug);
   let wasCreated = false;
@@ -180,9 +180,9 @@ webChatRouter.post("/webhook", async (c) => {
   // Fire-and-forget to agent (like Slack/email). Agent posts back via CLI tool.
   await appendToAgent(existingAgent, formattedMessage, {
     workingDirectory,
-    acknowledge: async () => logger.log(`[web-chat] Processing ${threadId}/${messageId}`),
+    acknowledge: async () => logger.log(`[webchat] Processing ${threadId}/${messageId}`),
     unacknowledge: async () => {
-      logger.log(`[web-chat] Finished ${threadId}/${messageId}`);
+      logger.log(`[webchat] Finished ${threadId}/${messageId}`);
       threadStatuses.delete(threadId);
     },
     setStatus: async (status) => {
@@ -203,7 +203,7 @@ webChatRouter.post("/webhook", async (c) => {
 
 // --- Outbound: agent posts a message back ---
 
-webChatRouter.post("/postMessage", async (c) => {
+webchatRouter.post("/postMessage", async (c) => {
   const parsed = PostMessagePayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
@@ -223,21 +223,21 @@ webChatRouter.post("/postMessage", async (c) => {
     createdAt: Date.now(),
   };
 
-  const eventId = await storeEvent("web-chat:assistant-message", assistantMessage, messageId);
+  const eventId = await storeEvent("webchat:assistant-message", assistantMessage, messageId);
 
   return c.json({ success: true, threadId, messageId, eventId });
 });
 
 // --- Reactions ---
 
-webChatRouter.post("/addReaction", async (c) => {
+webchatRouter.post("/addReaction", async (c) => {
   const parsed = ReactionPayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
   const { threadId, messageId, reaction } = parsed.data;
-  const eventId = await storeEvent("web-chat:reaction-added", {
+  const eventId = await storeEvent("webchat:reaction-added", {
     threadId,
     messageId,
     reaction,
@@ -247,14 +247,14 @@ webChatRouter.post("/addReaction", async (c) => {
   return c.json({ success: true, eventId });
 });
 
-webChatRouter.post("/removeReaction", async (c) => {
+webchatRouter.post("/removeReaction", async (c) => {
   const parsed = ReactionPayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
   const { threadId, messageId, reaction } = parsed.data;
-  const eventId = await storeEvent("web-chat:reaction-removed", {
+  const eventId = await storeEvent("webchat:reaction-removed", {
     threadId,
     messageId,
     reaction,
@@ -266,7 +266,7 @@ webChatRouter.post("/removeReaction", async (c) => {
 
 // --- Status ---
 
-webChatRouter.post("/setStatus", async (c) => {
+webchatRouter.post("/setStatus", async (c) => {
   const parsed = SetStatusPayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
@@ -284,13 +284,13 @@ webChatRouter.post("/setStatus", async (c) => {
 
 // --- Read endpoints ---
 
-webChatRouter.get("/threads", async (_c) => {
+webchatRouter.get("/threads", async (_c) => {
   const messages = await listStoredMessages();
   const threads = buildThreadSummaries(messages);
   return _c.json({ threads });
 });
 
-webChatRouter.get("/threads/:threadId/messages", async (c) => {
+webchatRouter.get("/threads/:threadId/messages", async (c) => {
   const threadId = c.req.param("threadId");
   const messages = (await listStoredMessages())
     .filter((message) => message.threadId === threadId)
@@ -330,7 +330,7 @@ function sanitizeForSlug(value: string): string {
 }
 
 function agentSlugForThread(threadId: string): string {
-  return `web-chat-${sanitizeForSlug(threadId)}`;
+  return `webchat-${sanitizeForSlug(threadId)}`;
 }
 
 const SessionEnv = z.object({
@@ -350,7 +350,7 @@ function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | nul
 }
 
 async function storeEvent(
-  type: WebChatEventType,
+  type: WebchatEventType,
   payload: Record<string, unknown>,
   externalId?: string,
 ): Promise<string> {
@@ -374,7 +374,7 @@ async function listStoredMessages(): Promise<StoredMessage[]> {
   const events = await db
     .select()
     .from(schema.events)
-    .where(inArray(schema.events.type, ["web-chat:user-message", "web-chat:assistant-message"]))
+    .where(inArray(schema.events.type, ["webchat:user-message", "webchat:assistant-message"]))
     .orderBy(asc(schema.events.createdAt));
 
   return events
@@ -421,7 +421,7 @@ function formatIncomingMessage(params: {
 
   const intro = isFirstMessageInThread
     ? `[Agent: ${agentSlug}] New webchat thread started.`
-    : `Another message in web chat thread ${threadId}.`;
+    : `Another message in webchat thread ${threadId}.`;
 
   const sender = payload.userName ?? payload.userId ?? "unknown";
 
@@ -438,7 +438,7 @@ function formatIncomingMessage(params: {
 
   return [
     intro,
-    "Refer to WEB_CHAT.md for how to respond via `iterate tool webchat`. Do not use the assistant message to respond to the end-user, they will not see it.",
+    "Refer to WEBCHAT.md for how to respond via `iterate tool webchat`. Do not use the assistant message to respond to the end-user, they will not see it.",
     "",
     `From: ${sender}`,
     ...(payload.text ? [`Message: ${payload.text}`] : []),

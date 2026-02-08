@@ -2,10 +2,10 @@
  * Files Router
  *
  * Serves files from the machine filesystem and accepts uploads.
- * Used by web-chat to let agents send files (by URL) and users upload files.
+ * Used by webchat to let agents send files (by URL) and users upload files.
  *
  * - GET /read/* — serve any file by absolute path
- * - POST /upload — accept multipart file upload, write to /tmp/web-chat-uploads/
+ * - POST /upload — accept multipart file upload, write to /tmp/webchat-uploads/
  */
 import { createReadStream, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -16,7 +16,7 @@ import { nanoid } from "nanoid";
 
 const logger = console;
 
-const UPLOAD_DIR = "/tmp/web-chat-uploads";
+const UPLOAD_DIR = "/tmp/webchat-uploads";
 
 const MIME_TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -110,7 +110,7 @@ filesRouter.get("/read/*", async (c) => {
 });
 
 /**
- * Accept multipart file upload. Writes to /tmp/web-chat-uploads/{id}-{filename}.
+ * Accept multipart file upload. Writes to /tmp/webchat-uploads/{id}-{filename}.
  * Returns the file path and a URL to retrieve it.
  */
 filesRouter.post("/upload", async (c) => {

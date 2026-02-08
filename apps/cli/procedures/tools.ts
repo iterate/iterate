@@ -31,21 +31,21 @@ function getReplicateClient() {
 }
 
 /**
- * Web Chat client — thin HTTP wrapper over the daemon's local web-chat endpoints.
+ * Webchat client — thin HTTP wrapper over the daemon's local webchat endpoints.
  * Analogous to how `@slack/web-api` WebClient wraps the Slack API, but much simpler.
  */
-interface WebChatAttachment {
+interface WebchatAttachment {
   fileName: string;
   filePath: string;
   mimeType?: string;
   size?: number;
 }
 
-interface WebChatClient {
+interface WebchatClient {
   postMessage(params: {
     threadId: string;
     text?: string;
-    attachments?: WebChatAttachment[];
+    attachments?: WebchatAttachment[];
   }): Promise<{ success: boolean; threadId: string; messageId: string; eventId: string }>;
   addReaction(params: {
     threadId: string;
@@ -77,8 +77,8 @@ interface WebChatClient {
   }>;
 }
 
-function getWebChatClient(): WebChatClient {
-  const baseUrl = "http://localhost:3001/api/integrations/web-chat";
+function getWebchatClient(): WebchatClient {
+  const baseUrl = "http://localhost:3001/api/integrations/webchat";
 
   async function post(path: string, body: Record<string, unknown>) {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -88,7 +88,7 @@ function getWebChatClient(): WebChatClient {
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Web chat API error ${response.status}: ${text}`);
+      throw new Error(`Webchat API error ${response.status}: ${text}`);
     }
     return response.json();
   }
@@ -97,7 +97,7 @@ function getWebChatClient(): WebChatClient {
     const response = await fetch(`${baseUrl}${path}`);
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Web chat API error ${response.status}: ${text}`);
+      throw new Error(`Webchat API error ${response.status}: ${text}`);
     }
     return response.json();
   }
@@ -234,11 +234,11 @@ export const toolsRouter = t.router({
       return result;
     }),
   webchat: t.procedure
-    .meta({ description: "Run web chat API code" })
+    .meta({ description: "Run webchat API code" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
-          A JavaScript script that uses a web chat client named \`webchat\`. For example:
+          A JavaScript script that uses a webchat client named \`webchat\`. For example:
 
           await webchat.postMessage({
             threadId: "THREAD_ID",
@@ -257,7 +257,7 @@ export const toolsRouter = t.router({
       const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
       const _execute = new AsyncFunction("webchat", "require", input.code);
-      const result = await _execute(getWebChatClient(), require);
+      const result = await _execute(getWebchatClient(), require);
       return result;
     }),
   printenv: t.procedure
