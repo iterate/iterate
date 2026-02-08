@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   File,
+  Loader2,
   MessageSquare,
   Paperclip,
   Plus,
@@ -154,6 +155,7 @@ function ProjectHomePage() {
 
   const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
   const agentSessionUrl = messagesData?.agentSessionUrl;
+  const threadStatus = messagesData?.status;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -416,6 +418,12 @@ function ProjectHomePage() {
                 </div>
               ))
             )}
+            {threadStatus ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>{threadStatus}</span>
+              </div>
+            ) : null}
             <div ref={messagesEndRef} />
           </Card>
 

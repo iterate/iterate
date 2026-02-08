@@ -63,6 +63,14 @@ const ReactionPayload = z.object({
   reaction: z.string().trim().min(1).max(100),
 });
 
+const SetStatusPayload = z.object({
+  threadId: z.string().trim().min(1).max(200),
+  status: z.string().trim().max(30),
+});
+
+/** In-memory thread status — cleared when agent goes idle (status set to "") */
+const threadStatuses = new Map<string, string>();
+
 const StoredMessage = z.object({
   threadId: z.string(),
   messageId: z.string(),
@@ -173,7 +181,13 @@ webChatRouter.post("/webhook", async (c) => {
   await appendToAgent(existingAgent, formattedMessage, {
     workingDirectory,
     acknowledge: async () => logger.log(`[web-chat] Processing ${threadId}/${messageId}`),
-    unacknowledge: async () => logger.log(`[web-chat] Finished ${threadId}/${messageId}`),
+    unacknowledge: async () => {
+      logger.log(`[web-chat] Finished ${threadId}/${messageId}`);
+      threadStatuses.delete(threadId);
+    },
+    setStatus: async (status) => {
+      threadStatuses.set(threadId, status);
+    },
   });
 
   return c.json({
@@ -250,6 +264,24 @@ webChatRouter.post("/removeReaction", async (c) => {
   return c.json({ success: true, eventId });
 });
 
+// --- Status ---
+
+webChatRouter.post("/setStatus", async (c) => {
+  const parsed = SetStatusPayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const { threadId, status } = parsed.data;
+  if (status) {
+    threadStatuses.set(threadId, status);
+  } else {
+    threadStatuses.delete(threadId);
+  }
+
+  return c.json({ success: true });
+});
+
 // --- Read endpoints ---
 
 webChatRouter.get("/threads", async (_c) => {
@@ -276,7 +308,8 @@ webChatRouter.get("/threads/:threadId/messages", async (c) => {
     // Non-critical — just omit the URL
   }
 
-  return c.json({ threadId, messages, agentSessionUrl });
+  const status = threadStatuses.get(threadId) ?? "";
+  return c.json({ threadId, messages, agentSessionUrl, status });
 });
 
 // --- Helpers ---

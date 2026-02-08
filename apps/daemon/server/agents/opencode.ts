@@ -124,6 +124,10 @@ export const opencodeHarness: AgentHarness = {
 interface SessionTracking {
   sessionId: string;
   unacknowledge: () => Promise<void>;
+  setStatus?: (
+    status: string,
+    context: { tool: string; input: Record<string, unknown> },
+  ) => Promise<void>;
   workingDirectory: string;
 }
 
@@ -163,6 +167,11 @@ function handleEvent(event: unknown): void {
   const eventType = evt.type;
   if (!eventType) return;
 
+  // Log all event types for debugging
+  if (eventType !== "message.updated") {
+    logger.log(`[opencode] Event: ${eventType}`);
+  }
+
   // Handle session.idle events - this fires when the agent finishes its turn
   if (eventType === "session.idle") {
     const props = evt.properties as { sessionID?: string } | undefined;
@@ -182,6 +191,44 @@ function handleEvent(event: unknown): void {
     ) {
       logger.log(`[opencode] Session ${props.sessionID} status changed to idle`);
       stopTracking(props.sessionID);
+    }
+  }
+
+  // Handle tool call events — update status when a tool starts running
+  if (eventType === "message.part.updated") {
+    const props = evt.properties as
+      | {
+          part?: {
+            type?: string;
+            sessionID?: string;
+            tool?: string;
+            state?: { status?: string; title?: string };
+          };
+        }
+      | undefined;
+    const part = props?.part;
+    if (part?.type === "tool" && part.sessionID && trackedSessions.has(part.sessionID)) {
+      const state = part.state as
+        | { status?: string; title?: string; input?: Record<string, unknown> }
+        | undefined;
+      logger.log(
+        `[opencode] Tool event: tool=${part.tool} status=${state?.status} title=${JSON.stringify(state?.title)} inputKeys=${JSON.stringify(Object.keys(state?.input ?? {}))} description=${JSON.stringify((state?.input as Record<string, unknown> | undefined)?.description)}`,
+      );
+      if (state?.status === "running" || state?.status === "completed") {
+        // title may arrive late (populated on completion or in a later running update)
+        // fall back to input.description (common for Bash/Edit tools), then tool name
+        const input = state.input as Record<string, unknown> | undefined;
+        const description = typeof input?.description === "string" ? input.description : undefined;
+        const status = (state.title || description || part.tool || "Working").slice(0, 30);
+        const tracking = trackedSessions.get(part.sessionID);
+        if (tracking?.setStatus) {
+          tracking
+            .setStatus(status, { tool: part.tool ?? "", input: input ?? {} })
+            .catch((error) => {
+              logger.error(`[opencode] Error calling setStatus:`, error);
+            });
+        }
+      }
     }
   }
 }
@@ -244,6 +291,7 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
   trackedSessions.set(sessionId, {
     sessionId,
     unacknowledge: params.unacknowledge,
+    setStatus: params.setStatus,
     workingDirectory: params.workingDirectory,
   });
 
