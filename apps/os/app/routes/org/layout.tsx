@@ -1,4 +1,4 @@
-import { createFileRoute, Outlet, redirect, useMatch, useParams } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useMemo } from "react";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -40,12 +40,6 @@ function OrgLayout() {
   const { user } = useSessionUser();
   const [headerActions, setHeaderActions] = useHeaderActions();
 
-  // Check if we're rendering a project child route - if so, just pass through to Outlet
-  const projectMatch = useMatch({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug",
-    shouldThrow: false,
-  });
-
   const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
 
   const { data: currentOrg } = useSuspenseQuery(
@@ -80,11 +74,6 @@ function OrgLayout() {
           }
         : null,
   });
-
-  // If we're in a project route, just render the outlet (project layout handles UI)
-  if (projectMatch) {
-    return <Outlet />;
-  }
 
   if (!user || !userProps) {
     throw new Error("User not found - should not happen in auth-required layout");
