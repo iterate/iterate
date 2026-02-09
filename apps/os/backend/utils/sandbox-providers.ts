@@ -27,7 +27,6 @@ export function getProjectSandboxProviderOptions(
     options.push({
       type: "daytona",
       label: "Daytona (Cloud)",
-      disabledReason: env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
     });
   }
 
