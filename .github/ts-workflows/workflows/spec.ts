@@ -26,11 +26,7 @@ export default workflow({
         },
         { run: "pnpm install" },
         { run: "pnpm docker:up" },
-        { uses: "dopplerhq/cli-action@v2" },
-        {
-          name: "Setup Doppler",
-          run: "doppler setup --project os --config dev_test",
-        },
+        ...utils.setupDoppler({ config: "dev_test" }),
         {
           name: "Install Playwright browsers",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",

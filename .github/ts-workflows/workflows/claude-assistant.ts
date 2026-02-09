@@ -56,10 +56,7 @@ export default workflow({
           name: "Install dependencies",
           run: "pnpm install",
         },
-        {
-          name: "Install Doppler CLI",
-          uses: "dopplerhq/cli-action@v3",
-        },
+        utils.installDopplerCli,
         {
           name: "Fetch secrets from Doppler",
           id: "doppler",
