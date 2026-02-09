@@ -164,7 +164,7 @@ if (useDepotRegistry && !depotSaveTag) {
 
 // Determine output mode:
 // - --load for local daemon (default, needed by Daytona and local dev)
-// - --save for Depot Registry (single-platform CI fast path)
+// - --save for Depot Registry (optional publish path for single-platform builds)
 // - --push for explicit registry image names (multi-platform builds)
 const outputArgs = isMultiPlatform
   ? ["--push", "-t", registryImageName!]
