@@ -124,6 +124,11 @@ export type ParsedSecret = {
   userEmail?: string;
 };
 
+/** Extract the scope/namespace prefix from a secret key (e.g., "github.access_token" → "github") */
+export function getSecretScope(secretKey: string): string {
+  return secretKey.split(".")[0];
+}
+
 /**
  * Parse the magic string arguments using JSON5.
  * JSON5 allows unquoted keys and single-quoted strings.
@@ -144,7 +149,7 @@ export function parseMagicString(match: string): ParsedSecret | null {
     if (!parsed.secretKey) return null;
     return {
       secretKey: parsed.secretKey,
-      secretScope: parsed.secretKey.split(".")[0],
+      secretScope: getSecretScope(parsed.secretKey),
       machineId: parsed.machineId,
       userId: parsed.userId,
       userEmail: parsed.userEmail,

@@ -2,7 +2,11 @@ import { eq, and, isNull, or } from "drizzle-orm";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { parseMagicString, type ParsedSecret } from "../egress-proxy/egress-proxy.ts";
+import {
+  parseMagicString,
+  getSecretScope,
+  type ParsedSecret,
+} from "../egress-proxy/egress-proxy.ts";
 import { decryptWithSecret } from "./encryption-core.ts";
 
 export type { ParsedSecret };
@@ -294,7 +298,15 @@ export async function getUnifiedEnvVars(
         ? secret.encryptedValue
         : undefined;
     const value = await getSecretValue(secret.key, encryptedValue, secret.user.email);
-    const magicString = `getIterateSecret({secretKey: '${secret.key}', userEmail: '${secret.user.email}'})`;
+
+    // Build ParsedSecret directly instead of round-tripping through magic string text.
+    // parseMagicString only extracts what's in the string (userEmail), losing userId.
+    const parsedSecret: ParsedSecret = {
+      secretKey: secret.key,
+      secretScope: getSecretScope(secret.key),
+      userId: secret.userId,
+      userEmail: secret.user.email,
+    };
 
     for (const envVarName of envVarNames) {
       // Skip if already exists as an active env var
@@ -303,7 +315,7 @@ export async function getUnifiedEnvVars(
       result.push({
         key: envVarName,
         value,
-        secret: parseMagicString(magicString),
+        secret: parsedSecret,
         description: `Scoped to ${secret.user.email}`,
         egressProxyRule: secret.egressProxyRule,
         source: { type: "recommended", provider, userEmail: secret.user.email },
