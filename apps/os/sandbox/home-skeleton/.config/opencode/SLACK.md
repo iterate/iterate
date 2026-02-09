@@ -1,54 +1,110 @@
 # Slack Channel Instructions
 
-## Quick Reference: Sending Messages
+## Hard Rule: CLI Shape
 
-**IMPORTANT:** `iterate tool slack` takes JavaScript code as its only argument - there are NO subcommands.
+`iterate tool slack` takes one arg: JS code.
+`slack` is a `@slack/web-api` `WebClient`.
 
 ```bash
-# Reply to a thread (replace CHANNEL and THREAD_TS with actual values)
-iterate tool slack 'await slack.chat.postMessage({ channel: "CHANNEL", thread_ts: "THREAD_TS", text: "Your message" })'
+# valid
+iterate tool slack 'await slack.chat.postMessage({ channel: "C123", thread_ts: "1234.5678", text: "hi" })'
+
+# invalid! ERROR!!!!
+iterate tool slack send --channel C123 --thread_ts 1234.5678 --text "hi"
+iterate tool slack --channel C123
+iterate tool slack postMessage ...
 ```
-
-The `slack` object is a `@slack/web-api` WebClient instance. See examples below for reactions, thread history, etc.
-
----
 
 ## Message Types
 
-You will receive one of three message types:
+1. New thread `@mention`: understand ask, reply in thread.
+2. Mid-thread `@mention`: fetch context via `slack.conversations.replies`; query raw event/related events for `thread_ts` when needed; reply to exact ask.
+3. FYI (no `@mention`): usually no reply; reply only for direct ask/instruction; keep brief.
 
-### 1. New Thread Mention
+`:eyes:` reaction is auto-managed.
 
-**Trigger:** You've been @mentioned to start a new conversation (no existing thread).
+## Common Commands
 
-**What to do:**
+Reply:
 
-- Understand the request fully before acting
-- Respond with your findings/actions
+```bash
+iterate tool slack 'await slack.chat.postMessage({
+  channel: "CHANNEL_ID",
+  thread_ts: "THREAD_TS",
+  text: "Your response",
+})'
+```
 
-Note: The :eyes: reaction is added automatically when you receive the message and removed when your turn ends.
+Add reaction:
 
-### 2. Mid-Thread Mention
+```bash
+iterate tool slack 'await slack.reactions.add({
+  channel: "CHANNEL_ID",
+  timestamp: "MESSAGE_TS",
+  name: "thumbsup",
+})'
+```
 
-**Trigger:** You've been @mentioned in an existing thread (joining a conversation in progress).
+Remove reaction:
 
-**What to do:**
+```bash
+iterate tool slack 'await slack.reactions.remove({
+  channel: "CHANNEL_ID",
+  timestamp: "MESSAGE_TS",
+  name: "thumbsup",
+})'
+```
 
-- Query the raw event to get conversation context if needed
-- Query other events for the thread_ts or use `slack.conversations.replies` to fetch thread history
-- Respond addressing the specific question
+Thread history:
 
-Note: The :eyes: reaction is added automatically when you receive the message and removed when your turn ends.
+```bash
+iterate tool slack 'await slack.conversations.replies({
+  channel: "CHANNEL_ID",
+  ts: "THREAD_TS",
+})'
+```
 
-### 3. FYI Message
+## Types and Docs
 
-**Trigger:** A message in a thread you're participating in, but you weren't @mentioned.
+WebClient TypeScript source: https://github.com/slackapi/node-slack-sdk/blob/main/packages/web-api/src/WebClient.ts
 
-**What to do:**
+Inspect types locally:
 
-- Usually no response needed - just note the information
-- Only respond if it's clearly a direct question or instruction to you
-- If you do respond, keep it brief
+```bash
+pnpm --dir "${ITERATE_REPO:-$PWD}/apps/os" exec node -p "require.resolve('@slack/web-api/dist/methods.d.ts')"
+```
+
+## `Promise.all` for parallel calls
+
+List replies while posting a "searching" response:
+
+```bash
+iterate tool slack 'const [replies, sent] = await Promise.all([
+  slack.conversations.replies({ channel: "CHANNEL_ID", ts: "THREAD_TS" }),
+  slack.chat.postMessage({
+    channel: "CHANNEL_ID",
+    thread_ts: "THREAD_TS",
+    text: "Looking now :mag:",
+  }),
+]);'
+```
+
+Post response and remove reaction at same time:
+
+```bash
+iterate tool slack 'await Promise.all([
+  slack.chat.postMessage({
+    channel: "CHANNEL_ID",
+    thread_ts: "THREAD_TS",
+    text: "Done. Applied fix.",
+  }),
+  slack.reactions.remove({
+    channel: "CHANNEL_ID",
+    timestamp: "MESSAGE_TS",
+    name: "eyes",
+  }),
+]);'
+```
 
 ## Files
 
@@ -61,63 +117,13 @@ file /tmp/test_download.jpg
 head -1 /tmp/test_download.jpg
 ```
 
-## Sending Replies
+## Raw Events
 
-Use `iterate tool slack '<js code>'` to interact with Slack. Pass JavaScript code as a single string argument - the `slack` object is a `@slack/web-api` WebClient.
-
-**Reply to a message:**
-
-```bash
-iterate tool slack 'await slack.chat.postMessage({
-  channel: "CHANNEL_ID",
-  thread_ts: "THREAD_TS",
-  text: "Your response here",
-})'
-```
-
-**Add a reaction:**
-
-```bash
-iterate tool slack 'await slack.reactions.add({
-  channel: "CHANNEL_ID",
-  timestamp: "MESSAGE_TS",
-  name: "thumbsup",
-})'
-```
-
-**Remove a reaction:**
-
-```bash
-iterate tool slack 'await slack.reactions.remove({
-  channel: "CHANNEL_ID",
-  timestamp: "MESSAGE_TS",
-  name: "thumbsup",
-})'
-```
-
-**Get thread history (for mid-thread context):**
-
-```bash
-iterate tool slack 'await slack.conversations.replies({
-  channel: "CHANNEL_ID",
-  ts: "THREAD_TS",
-})'
-```
-
-## Inspecting Raw Events
-
-The raw Slack webhook payload is stored in SQLite. To inspect it (useful for files, attachments, reactions, etc.):
+Slack webhook payloads are in SQLite:
 
 ```bash
 sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id='EVENT_ID'"
 ```
-
-## Handling Files and Attachments
-
-If a message contains files or attachments, query the raw event to get file URLs. When downloading files from Slack:
-
-- Use `slack.token` to get the auth token for authenticated requests
-- Follow redirects when downloading
 
 ## Best Practices
 
