@@ -445,8 +445,11 @@ export class Manager {
 
     restartingProcess.start();
 
-    // Track env reload config for this process (default 5000ms)
-    this.envReloadConfig.set(name, envOptions?.reloadDelay ?? 5000);
+    // Track env reload config for this process.
+    // Default: 5000ms, but if inheritGlobalEnv is false, default to no reload
+    // (no point restarting for env changes the process won't see).
+    const defaultDelay = envOptions?.inheritGlobalEnv === false ? false : 5000;
+    this.envReloadConfig.set(name, envOptions?.reloadDelay ?? defaultDelay);
 
     this.logger.info(`Added and started restarting process: ${name}`);
     return restartingProcess;
@@ -481,7 +484,8 @@ export class Manager {
         processLogger,
       );
       this.restartingProcesses.set(entry.name, restartingProcess);
-      this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? 5000);
+      const defaultDelay = entry.envOptions?.inheritGlobalEnv === false ? false : 5000;
+      this.envReloadConfig.set(entry.name, entry.envOptions?.reloadDelay ?? defaultDelay);
     }
 
     // Build and validate dependency graph
