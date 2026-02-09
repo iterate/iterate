@@ -189,7 +189,7 @@ console.log("Build command:");
 console.log(buildCommand);
 
 // 15-minute timeout for depot build (fails fast instead of GitHub's 6-hour default)
-const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 30 * 60 * 1000;
 
 execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
