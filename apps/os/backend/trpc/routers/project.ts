@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import * as arctic from "arctic";
 import {
   router,
+  publicProcedure,
   protectedProcedure,
   orgProtectedProcedure,
   projectProtectedProcedure,
@@ -27,8 +28,25 @@ import { decrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
 import { linkExternalIdToGroups } from "../../lib/posthog.ts";
+import {
+  PROJECT_SANDBOX_PROVIDER,
+  getAvailableProjectSandboxProviders,
+  getDefaultProjectSandboxProvider,
+  getProjectSandboxProviderOptions,
+} from "../../utils/sandbox-providers.ts";
 
 export const projectRouter = router({
+  getAvailableSandboxProviders: publicProcedure.query(({ ctx }) => {
+    const providers = getProjectSandboxProviderOptions(ctx.env, import.meta.env.DEV);
+    const enabledProviders = providers.filter((provider) => !provider.disabledReason);
+
+    return {
+      providers,
+      defaultProvider: getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV),
+      showProviderSelector: enabledProviders.length >= 2,
+    };
+  }),
+
   // Get minimal project info by ID (for conflict resolution, no org access required)
   // Returns just enough info to display the project/org names and slugs
   getProjectInfoById: protectedProcedure
@@ -79,9 +97,25 @@ export const projectRouter = router({
       z.object({
         name: z.string().min(1).max(100),
         slug: z.string().min(1).max(50).optional(), // Optional: defaults to org slug if first project
+        sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const availableProviders = getAvailableProjectSandboxProviders(ctx.env, import.meta.env.DEV);
+      if (availableProviders.length === 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No sandbox providers are enabled",
+        });
+      }
+      const sandboxProvider = input.sandboxProvider ?? availableProviders[0];
+      if (!availableProviders.includes(sandboxProvider)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Sandbox provider '${sandboxProvider}' is not enabled`,
+        });
+      }
+
       // Determine base slug: use provided slug, or org slug for first project, or slugify name
       const orgProjects = await ctx.db.query.project.findMany({
         where: eq(project.organizationId, ctx.organization.id),
@@ -102,7 +136,7 @@ export const projectRouter = router({
           name: input.name,
           slug,
           organizationId: ctx.organization.id,
-          sandboxProvider: "daytona",
+          sandboxProvider,
         })
         .returning();
 

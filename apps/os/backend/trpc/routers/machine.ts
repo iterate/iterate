@@ -19,6 +19,7 @@ import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
 
 function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
@@ -447,61 +448,21 @@ export const machineRouter = router({
 
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
-    const isMachineType = (value: string): value is (typeof schema.MachineType)[number] =>
-      (schema.MachineType as ReadonlyArray<string>).includes(value);
-    const rawConfiguredProviders = (ctx.env.SANDBOX_MACHINE_PROVIDERS ?? "")
-      .split(",")
-      .map((provider) => provider.trim())
-      .filter(Boolean);
-    const configuredProviders = rawConfiguredProviders.filter(isMachineType);
-    const hasExplicitConfig = rawConfiguredProviders.length > 0;
-    const enabledProviders = new Set(
-      hasExplicitConfig
-        ? configuredProviders
-        : import.meta.env.DEV
-          ? ["docker", "daytona", "fly", "local"]
-          : ["daytona"],
-    );
     const types: Array<{
       type: (typeof schema.MachineType)[number];
       label: string;
       disabledReason?: string;
     }> = [];
 
-    if (enabledProviders.has("docker")) {
+    for (const provider of getProjectSandboxProviderOptions(ctx.env, import.meta.env.DEV)) {
       types.push({
-        type: "docker",
-        label: "Docker",
-        disabledReason: import.meta.env.DEV
-          ? undefined
-          : "Docker provider only available in development",
+        type: provider.type,
+        label: provider.label,
+        disabledReason: provider.disabledReason,
       });
     }
 
-    if (enabledProviders.has("daytona")) {
-      types.push({
-        type: "daytona",
-        label: "Daytona (Cloud)",
-        disabledReason: ctx.env.DAYTONA_SNAPSHOT_NAME ? undefined : "DAYTONA_SNAPSHOT_NAME not set",
-      });
-    }
-
-    if (enabledProviders.has("fly")) {
-      const hasFlyToken = Boolean(ctx.env.FLY_API_TOKEN ?? ctx.env.FLY_API_KEY);
-      const hasFlyAppName = Boolean(ctx.env.SANDBOX_FLY_APP_NAME);
-      const flyDisabledReason = !hasFlyToken
-        ? "FLY_API_TOKEN (or FLY_API_KEY) not set"
-        : !hasFlyAppName
-          ? "SANDBOX_FLY_APP_NAME not set"
-          : undefined;
-      types.push({
-        type: "fly",
-        label: "Fly.io",
-        disabledReason: flyDisabledReason,
-      });
-    }
-
-    if (enabledProviders.has("local")) {
+    if (import.meta.env.DEV) {
       types.push({ type: "local", label: "Local (Host:Port)" });
     }
 

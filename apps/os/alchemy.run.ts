@@ -268,6 +268,9 @@ const Env = z.object({
   VITE_DAYTONA_SNAPSHOT_NAME: Optional,
   DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
   DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
+  SANDBOX_DAYTONA_ENABLED: BoolyString,
+  SANDBOX_DOCKER_ENABLED: BoolyString,
+  SANDBOX_FLY_ENABLED: BoolyString,
   SANDBOX_MACHINE_PROVIDERS: Optional,
   FLY_API_TOKEN: Optional,
   FLY_API_KEY: Optional,
