@@ -4,10 +4,104 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 import { createMachineProvider } from "../providers/index.ts";
+import { probeMachineReadiness } from "../services/machine-readiness-probe.ts";
+import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
+
+  // Step 1: Verify a machine actually works before activating it
+  cc.registerConsumer({
+    name: "verifyMachineReadiness",
+    on: "machine:verify-readiness",
+    visibilityTimeout: 180, // probe polls for up to 120s, give extra headroom
+    retry: (job) => {
+      // The probe itself already polls for up to 120s, so retries here
+      // cover transient infra failures (e.g. worker restarted mid-probe).
+      // Allow 2 retries with generous delays.
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe", delay: 30 };
+      return { retry: false, reason: "probe failed after retries" };
+    },
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      // Guard against duplicate probes — only probe machines still in "starting" state.
+      // A concurrent reportStatus or a duplicate outbox delivery could fire this again
+      // after the machine has already been activated or archived.
+      if (machine.state !== "starting") {
+        logger.info("[outbox] Skipping readiness probe, machine no longer starting", {
+          machineId,
+          state: machine.state,
+        });
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const probeResult = await probeMachineReadiness(machine, env);
+
+      if (!probeResult.ok) {
+        logger.error("[outbox] Machine readiness probe failed", {
+          machineId,
+          detail: probeResult.detail,
+        });
+
+        const currentMetadata = (machine.metadata as Record<string, unknown>) ?? {};
+        await db
+          .update(schema.machine)
+          .set({
+            metadata: {
+              ...currentMetadata,
+              daemonStatus: "error",
+              daemonStatusMessage: `Readiness probe failed: ${probeResult.detail}`,
+            },
+          })
+          .where(eq(schema.machine.id, machineId));
+
+        await broadcastInvalidation(env).catch(() => {});
+        return `probe failed: ${probeResult.detail}`;
+      }
+
+      logger.info("[outbox] Machine readiness probe passed", {
+        machineId,
+        detail: probeResult.detail,
+      });
+
+      // Probe passed — activate the machine via the existing machine:activated flow
+      const readyMetadata = {
+        ...((machine.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "ready",
+        daemonStatusMessage: "Daemon ready",
+        daemonReadyAt: new Date().toISOString(),
+      };
+
+      await cc.sendTx(db, "machine:activated", async (tx) => {
+        // Bulk-detach all active machines for this project
+        await tx
+          .update(schema.machine)
+          .set({ state: "detached" })
+          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")));
+
+        // Promote this machine to active
+        await tx
+          .update(schema.machine)
+          .set({ state: "active", metadata: readyMetadata })
+          .where(eq(schema.machine.id, machineId));
+
+        logger.info("[outbox] Machine activated after readiness probe", { machineId });
+
+        return { payload: { machineId, projectId } };
+      });
+
+      await broadcastInvalidation(env).catch(() => {});
+      return `probe passed, machine activated`;
+    },
+  });
 
   // Step 2: When a machine is activated, find stale detached machines and fan out archive events
   cc.registerConsumer({

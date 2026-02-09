@@ -9,6 +9,7 @@ Sacrifice grammar for concision. Don't waste tokens. Skip obvious context.
 - Frontend react guide
 - TypeScript (repo-wide)
 - Task system
+- Debugging machine errors
 - Pointers
 
 ## Meta: writing AGENTS.md
@@ -110,6 +111,19 @@ Canonical example: `apps/os/app/routes/org/project/machines.tsx`
 - Frontmatter keys: state, priority, size, dependsOn
 - Working: read task → check deps → clarify if needed → execute
 - Recording: create file in `tasks/` → brief description → confirm with user
+
+## Debugging machine errors
+
+When a machine shows `status=error` in the dashboard:
+
+1. Find the container: `docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}"` — most recent is usually the one
+2. Check daemon logs: `docker logs <container-name> 2>&1 | tail -100`
+3. Common causes:
+   - **Readiness probe failed** — the platform sends "1+2=?" via webchat and polls for "3". Check for `500` or OpenCode session errors in logs. Probe code: `apps/os/backend/services/machine-readiness-probe.ts`
+   - **Daemon bootstrap failed** — daemon couldn't fetch env/config from control plane. Look for `[bootstrap] Fatal error` in logs
+   - **OpenCode not ready** — race between daemon accepting HTTP and OpenCode server starting. Look for `Failed to create OpenCode session`
+4. Key log patterns: `webchat/webhook`, `readiness-probe`, `opencode`, `bootstrap`
+5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (probe + activation), `apps/os/backend/services/machine-creation.ts`
 
 ## Pointers
 

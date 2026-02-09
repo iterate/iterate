@@ -145,6 +145,10 @@ export const opencodeHarness: AgentHarness = {
       async () => {
         const client = createClient({ directory: params.workingDirectory });
         const config = getConfig();
+        if (config.defaultModel && typeof config.defaultModel !== "function") {
+          console.warn("defaultModel is not a function, deleting");
+          delete config.defaultModel;
+        }
 
         // Track session for acknowledgment lifecycle
         await withSpan(
@@ -163,7 +167,9 @@ export const opencodeHarness: AgentHarness = {
           {
             attributes: {
               "opencode.session_id": harnessSessionId,
-              ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
+              ...(config.defaultModel
+                ? { "llm.model": Object.values(config.defaultModel()).join("/") }
+                : {}),
             },
           },
           async (span) => {
@@ -184,7 +190,7 @@ export const opencodeHarness: AgentHarness = {
               sessionID: harnessSessionId,
               parts: [{ type: "text", text: event.content }],
               // Use default model from config if available
-              ...(config.defaultModel && { model: config.defaultModel }),
+              ...(config.defaultModel && { model: config.defaultModel() }),
             });
           },
         );

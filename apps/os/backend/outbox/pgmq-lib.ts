@@ -60,6 +60,10 @@ export type ConsumerDefinition<Payload> = {
   /** delay before processing in seconds. if not specified, will process immediately */
   delay: DelayFn<Payload>;
   retry: RetryFn;
+  /** visibility timeout in seconds. extend this for long-running handlers
+   * to prevent the message from becoming visible again mid-processing.
+   * default queue VT is 30s. */
+  visibilityTimeout?: number;
   /** handler function */
   handler: (params: {
     eventName: string;
@@ -139,6 +143,15 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           );
         }
         logger.info(`[outbox] START msg_id=${job.msg_id} consumer=${consumer.name}`);
+        if (consumer.visibilityTimeout) {
+          await db.execute(sql`
+            select pgmq.set_vt(
+              queue_name => ${queueName}::text,
+              msg_id => ${job.msg_id}::bigint,
+              vt => ${consumer.visibilityTimeout}::integer
+            )
+          `);
+        }
         const result = await consumer.handler({
           eventId: job.message.event_id,
           eventName: job.message.event_name,
@@ -370,6 +383,8 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     when?: WhenFn<EventTypes[P]>;
     delay?: DelayFn<EventTypes[P]>;
     retry?: RetryFn;
+    /** visibility timeout in seconds for long-running handlers (default: 30s from pgmq.read) */
+    visibilityTimeout?: number;
     handler: (params: {
       eventName: P;
       eventId: number;
@@ -384,6 +399,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       when: (options.when as WhenFn<{}>) ?? (() => true),
       delay: (options.delay as DelayFn<{}>) ?? (() => 0),
       retry: options.retry ?? defaultRetryFn,
+      visibilityTimeout: options.visibilityTimeout,
       handler: async (params) => {
         return options.handler({
           eventName: options.on,

@@ -6,6 +6,10 @@ import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
+  "machine:verify-readiness": {
+    machineId: string;
+    projectId: string;
+  };
   "machine:activated": {
     machineId: string;
     projectId: string;

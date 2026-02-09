@@ -149,30 +149,22 @@ export const reportStatus = os.machines.reportStatus
       daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
     };
 
-    // If machine is in 'starting' state and daemon reports ready, activate it
-    // This detaches any existing active machine and promotes this one to active
+    // If machine is in 'starting' state and daemon reports ready, verify it
+    // actually works before activating. The readiness probe runs async via outbox.
     if (status === "ready" && machineWithOrg.state === "starting") {
-      // Transaction: bulk-detach active machines, activate new one, emit event.
-      // Archival of stale detached machines happens asynchronously via outbox consumers.
-      await outboxClient.sendTx(db, "machine:activated", async (tx) => {
-        // Detach all currently active machines for this project (single UPDATE)
-        await tx
-          .update(schema.machine)
-          .set({ state: "detached" })
-          .where(
-            and(
-              eq(schema.machine.projectId, machineWithOrg.projectId),
-              eq(schema.machine.state, "active"),
-            ),
-          );
+      const verifyingMetadata = {
+        ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "verifying",
+        daemonStatusMessage: "Running readiness probe...",
+        daemonReadyAt: null,
+      };
 
-        // Promote this machine to active
+      // Set verifying status and emit event in one transaction
+      await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
         await tx
           .update(schema.machine)
-          .set({ state: "active", metadata: updatedMetadata })
+          .set({ metadata: verifyingMetadata })
           .where(eq(schema.machine.id, machine.id));
-
-        logger.info("Machine activated", { machineId: machine.id });
 
         return {
           payload: {
