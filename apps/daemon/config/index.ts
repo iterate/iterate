@@ -18,7 +18,7 @@ export interface IterateConfig {
    * Default model to use for OpenCode sessions.
    * @example { providerID: "anthropic", modelID: "claude-sonnet-4-5" }
    */
-  defaultModel?: ModelRef;
+  defaultModel?: () => ModelRef;
 }
 
 /**

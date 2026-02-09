@@ -163,7 +163,9 @@ export const opencodeHarness: AgentHarness = {
           {
             attributes: {
               "opencode.session_id": harnessSessionId,
-              ...(config.defaultModel ? { "llm.model": String(config.defaultModel) } : {}),
+              ...(config.defaultModel
+                ? { "llm.model": Object.values(config.defaultModel()).join("/") }
+                : {}),
             },
           },
           async (span) => {
@@ -184,7 +186,7 @@ export const opencodeHarness: AgentHarness = {
               sessionID: harnessSessionId,
               parts: [{ type: "text", text: event.content }],
               // Use default model from config if available
-              ...(config.defaultModel && { model: config.defaultModel }),
+              ...(config.defaultModel && { model: config.defaultModel() }),
             });
           },
         );

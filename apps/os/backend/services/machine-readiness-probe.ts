@@ -6,6 +6,8 @@ import { logger } from "../tag-logger.ts";
 const PROBE_THREAD_ID = "__readiness-probe__";
 const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
 const POLL_INTERVAL_MS = 3_000;
+const SEND_RETRY_INTERVAL_MS = 3_000;
+const SEND_MAX_WAIT_MS = 60_000;
 const MAX_WAIT_MS = 120_000;
 
 /**
@@ -21,18 +23,14 @@ export async function probeMachineReadiness(
     return { ok: false, detail: "Could not build preview URL for machine" };
   }
 
-  const messageId = `probe_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-
-  // 1. Send the probe message via webchat webhook
-  const sendResult = await sendProbeMessage(previewUrl, messageId);
+  // 1. Send the probe message via webchat webhook (retries with fresh messageId each attempt)
+  const sendResult = await sendProbeMessage(previewUrl);
   if (!sendResult.ok) {
     return { ok: false, detail: `Failed to send probe: ${sendResult.detail}` };
   }
 
-  const threadId = sendResult.threadId;
-
   // 2. Poll for a response containing "3" or "three"
-  const pollResult = await pollForAnswer(previewUrl, threadId, messageId);
+  const pollResult = await pollForAnswer(previewUrl, sendResult.threadId);
   return pollResult;
 }
 
@@ -60,43 +58,72 @@ async function buildPreviewUrl(
 
 async function sendProbeMessage(
   previewUrl: string,
-  messageId: string,
-): Promise<{ ok: true; threadId: string } | { ok: false; detail: string }> {
+): Promise<{ ok: true; threadId: string; messageId: string } | { ok: false; detail: string }> {
   const url = `${previewUrl}/api/integrations/webchat/webhook`;
-  const payload = {
-    type: "webchat:message",
-    threadId: PROBE_THREAD_ID,
-    messageId,
-    text: PROBE_TEXT,
-    userId: "__system__",
-    userName: "Readiness Probe",
-    createdAt: Date.now(),
-  };
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30_000),
-    });
+  // Retry the initial send — the daemon may still be booting internal services
+  // (e.g. OpenCode server) even though its HTTP server is already accepting
+  // connections, so 5xx / connection-refused are expected for a short window.
+  // Each attempt uses a fresh messageId so the daemon's dedup logic doesn't
+  // silently swallow retries after a failed first attempt that stored the event.
+  const deadline = Date.now() + SEND_MAX_WAIT_MS;
+  let lastDetail = "";
 
-    if (!response.ok) {
+  while (Date.now() < deadline) {
+    const messageId = `probe_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const payload = {
+      type: "webchat:message",
+      threadId: PROBE_THREAD_ID,
+      messageId,
+      text: PROBE_TEXT,
+      userId: "__system__",
+      userName: "Readiness Probe",
+      createdAt: Date.now(),
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      if (response.ok) {
+        const data = (await response.json()) as { threadId?: string };
+        return { ok: true, threadId: data.threadId ?? PROBE_THREAD_ID, messageId };
+      }
+
       const body = await response.text().catch(() => "<no body>");
-      return { ok: false, detail: `HTTP ${response.status}: ${body.slice(0, 200)}` };
+      lastDetail = `HTTP ${response.status}: ${body.slice(0, 200)}`;
+
+      // 4xx (other than 408/429) are not transient — bail immediately
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        response.status !== 408 &&
+        response.status !== 429
+      ) {
+        return { ok: false, detail: lastDetail };
+      }
+
+      logger.info("[readiness-probe] Send got retryable response, will retry", {
+        status: response.status,
+      });
+    } catch (err) {
+      lastDetail = err instanceof Error ? err.message : String(err);
+      logger.info("[readiness-probe] Send error (will retry)", { error: lastDetail });
     }
 
-    const data = (await response.json()) as { threadId?: string };
-    return { ok: true, threadId: data.threadId ?? PROBE_THREAD_ID };
-  } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    await sleep(SEND_RETRY_INTERVAL_MS);
   }
+
+  return { ok: false, detail: `Send failed after ${SEND_MAX_WAIT_MS / 1000}s: ${lastDetail}` };
 }
 
 async function pollForAnswer(
   previewUrl: string,
   threadId: string,
-  _probeMessageId: string,
 ): Promise<{ ok: boolean; detail: string }> {
   const url = `${previewUrl}/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`;
   const deadline = Date.now() + MAX_WAIT_MS;
