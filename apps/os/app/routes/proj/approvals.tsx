@@ -3,32 +3,31 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Circle, MailOpen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
-import { cn } from "../../../lib/utils.ts";
-import { Button } from "../../../components/ui/button.tsx";
-import { Input } from "../../../components/ui/input.tsx";
-import { Textarea } from "../../../components/ui/textarea.tsx";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { cn } from "../../lib/utils.ts";
+import { Button } from "../../components/ui/button.tsx";
+import { Input } from "../../components/ui/input.tsx";
+import { Textarea } from "../../components/ui/textarea.tsx";
 import {
   Field,
   FieldGroup,
   FieldLabel,
   FieldSet,
   FieldLegend,
-} from "../../../components/ui/field.tsx";
+} from "../../components/ui/field.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../../components/ui/select.tsx";
-import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs.tsx";
-import { EmptyState } from "../../../components/empty-state.tsx";
-import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
-import { useQueryInvalidation } from "../../../hooks/use-query-invalidation.ts";
+} from "../../components/ui/select.tsx";
+import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.tsx";
+import { EmptyState } from "../../components/empty-state.tsx";
+import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
+import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 
 type ApprovalStatus = "pending" | "approved" | "rejected" | "timeout";
-
 type Approval = {
   id: string;
   method: string;
@@ -40,7 +39,6 @@ type Approval = {
   decidedAt: string | null;
   decidedBy: string | null;
 };
-
 type PolicyView = {
   id: string;
   rule: string;
@@ -49,16 +47,12 @@ type PolicyView = {
   reason: string | null;
 };
 
-export const Route = createFileRoute(
-  "/_auth/orgs/$organizationSlug/projects/$projectSlug/approvals",
-)({
+export const Route = createFileRoute("/_auth/proj/$projectSlug/approvals")({
   component: ProjectApprovalsPage,
 });
 
 function ProjectApprovalsPage() {
-  const params = useParams({
-    from: "/_auth/orgs/$organizationSlug/projects/$projectSlug/approvals",
-  });
+  const params = useParams({ from: "/_auth/proj/$projectSlug/approvals" });
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<ApprovalStatus | "all">("pending");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -75,16 +69,12 @@ function ProjectApprovalsPage() {
   const [generatingRuleForIds, setGeneratingRuleForIds] = useState<Set<string>>(new Set());
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-    }),
+    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
   );
 
   useQueryInvalidation(project.organizationId);
 
   const policiesQueryOptions = trpc.project.listEgressPolicies.queryOptions({
-    organizationSlug: params.organizationSlug,
     projectSlug: params.projectSlug,
   });
   const policiesQuery = useSuspenseQuery(policiesQueryOptions);
@@ -94,20 +84,15 @@ function ProjectApprovalsPage() {
     queryKey: approvalsQueryKey,
     queryFn: async () => {
       const query = new URLSearchParams();
-      if (filter !== "all") {
-        query.set("status", filter);
-      }
+      if (filter !== "all") query.set("status", filter);
       const response = await fetch(`/api/projects/${project.id}/approvals?${query}`, {
         credentials: "include",
       });
-      if (!response.ok) {
-        throw new Error("Failed to fetch approvals");
-      }
+      if (!response.ok) throw new Error("Failed to fetch approvals");
       return response.json() as Promise<{ approvals: Approval[] }>;
     },
     enabled: typeof window !== "undefined",
   });
-
   const approvals = data?.approvals ?? [];
 
   const approveMutation = useMutation({
@@ -116,17 +101,14 @@ function ProjectApprovalsPage() {
         method: "POST",
         credentials: "include",
       });
-      if (!response.ok) {
-        throw new Error("Failed to approve request");
-      }
+      if (!response.ok) throw new Error("Failed to approve request");
     },
     onSuccess: () => {
       toast.success("Request approved");
       queryClient.invalidateQueries({ queryKey: approvalsQueryKey });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to approve request");
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to approve request"),
   });
 
   const rejectMutation = useMutation({
@@ -135,24 +117,20 @@ function ProjectApprovalsPage() {
         method: "POST",
         credentials: "include",
       });
-      if (!response.ok) {
-        throw new Error("Failed to reject request");
-      }
+      if (!response.ok) throw new Error("Failed to reject request");
     },
     onSuccess: () => {
       toast.success("Request rejected");
       queryClient.invalidateQueries({ queryKey: approvalsQueryKey });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to reject request");
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to reject request"),
   });
 
   const summarizeMutation = useMutation({
     mutationFn: async (approvalId: string) => {
       setSummarizingIds((prev) => new Set(prev).add(approvalId));
       const result = await trpcClient.project.summarizeEgressApproval.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         approvalId,
       });
@@ -184,11 +162,8 @@ function ProjectApprovalsPage() {
       approvalId?: string;
       instruction: string;
     }) => {
-      if (approvalId) {
-        setGeneratingRuleForIds((prev) => new Set(prev).add(approvalId));
-      }
+      if (approvalId) setGeneratingRuleForIds((prev) => new Set(prev).add(approvalId));
       const result = await trpcClient.project.suggestEgressRule.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         approvalId,
         instruction,
@@ -221,7 +196,6 @@ function ProjectApprovalsPage() {
     mutationFn: async () => {
       const priority = Number(newPolicyPriority || "100");
       return trpcClient.project.createEgressPolicy.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         rule: newPolicyRule,
         decision: newPolicyDecision,
@@ -238,19 +212,16 @@ function ProjectApprovalsPage() {
         queryKey: policiesQueryOptions.queryKey as readonly unknown[],
       });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to create policy");
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to create policy"),
   });
 
   const deletePolicyMutation = useMutation({
-    mutationFn: async (policyId: string) => {
-      return trpcClient.project.deleteEgressPolicy.mutate({
-        organizationSlug: params.organizationSlug,
+    mutationFn: async (policyId: string) =>
+      trpcClient.project.deleteEgressPolicy.mutate({
         projectSlug: params.projectSlug,
         policyId,
-      });
-    },
+      }),
     onSuccess: (_data, deletedPolicyId) => {
       toast.success("Policy deleted");
       if (editingPolicyId === deletedPolicyId) {
@@ -261,9 +232,8 @@ function ProjectApprovalsPage() {
         queryKey: policiesQueryOptions.queryKey as readonly unknown[],
       });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to delete policy");
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to delete policy"),
   });
 
   const updatePolicyMutation = useMutation({
@@ -271,7 +241,6 @@ function ProjectApprovalsPage() {
       if (!editingPolicyId) throw new Error("No policy selected");
       const priority = Number(newPolicyPriority || "100");
       return trpcClient.project.updateEgressPolicy.mutate({
-        organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         policyId: editingPolicyId,
         rule: newPolicyRule,
@@ -288,9 +257,8 @@ function ProjectApprovalsPage() {
         queryKey: policiesQueryOptions.queryKey as readonly unknown[],
       });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to update policy");
-    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Failed to update policy"),
   });
 
   const clearPolicyForm = () => {
@@ -308,15 +276,6 @@ function ProjectApprovalsPage() {
     setNewPolicyPriority(String(policy.priority));
     setNewPolicyReason(policy.reason ?? "");
     setRulePrompt("");
-  };
-
-  const cancelEditing = () => {
-    setEditingPolicyId(null);
-    clearPolicyForm();
-  };
-
-  const handleToggle = (approvalId: string) => {
-    setExpandedId((current) => (current === approvalId ? null : approvalId));
   };
 
   const policies = (policiesQuery.data ?? []) as PolicyView[];
@@ -348,7 +307,7 @@ function ProjectApprovalsPage() {
               key={approval.id}
               approval={approval}
               isExpanded={expandedId === approval.id}
-              onToggle={() => handleToggle(approval.id)}
+              onToggle={() => setExpandedId((cur) => (cur === approval.id ? null : approval.id))}
               summary={summaryById[approval.id]}
               isSummarizing={summarizingIds.has(approval.id)}
               onSummarize={() => summarizeMutation.mutate(approval.id)}
@@ -390,7 +349,10 @@ function ProjectApprovalsPage() {
         onEdit={startEditingPolicy}
         onUpdate={() => updatePolicyMutation.mutate()}
         isUpdating={updatePolicyMutation.isPending}
-        onCancelEdit={cancelEditing}
+        onCancelEdit={() => {
+          setEditingPolicyId(null);
+          clearPolicyForm();
+        }}
       />
     </div>
   );
@@ -694,11 +656,9 @@ const FILTERS: Array<ApprovalStatus | "all"> = [
   "timeout",
   "all",
 ];
-
 function formatFilterLabel(value: ApprovalStatus | "all") {
   return value === "all" ? "All" : value.charAt(0).toUpperCase() + value.slice(1);
 }
-
 function formatUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -707,11 +667,9 @@ function formatUrl(url: string) {
     return url;
   }
 }
-
 function formatTimestamp(value: string) {
   return new Date(value).toLocaleString();
 }
-
 function statusColorClass(status: ApprovalStatus) {
   switch (status) {
     case "pending":

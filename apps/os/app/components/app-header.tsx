@@ -87,15 +87,18 @@ export function AppHeader({
   // Check if we're on a home page (not a sub-page)
   // Use path structure to avoid edge case where slug matches a PAGE_NAMES key
   // Org home: /orgs/{orgSlug} → 2 parts
-  // Project home: /orgs/{orgSlug}/projects/{projectSlug} → 4 parts
+  // Project home: /proj/{projectSlug} → 2 parts
   const isProjectRoute = Boolean(projectSlug);
-  const isProjectHome = isProjectRoute && pathParts.length === 4;
+  const isProjectHome = isProjectRoute && pathParts[0] === "proj" && pathParts.length === 2;
   const isOrgRoute = Boolean(organizationSlug) && !isProjectRoute;
   const isOrgHome = isOrgRoute && pathParts.length === 2;
 
-  // Check if we're on a machine detail page: /orgs/{org}/projects/{proj}/machines/{machineId}
+  // Check if we're on a machine detail page: /proj/{proj}/machines/{machineId}
   const isMachineDetailRoute =
-    isProjectRoute && pathParts[4] === "machines" && Boolean(pathParts[5]);
+    isProjectRoute &&
+    pathParts[0] === "proj" &&
+    pathParts[2] === "machines" &&
+    Boolean(pathParts[3]);
 
   // Get the current page name (only if we're on a sub-page, not a home page)
   // This prevents slugs matching PAGE_NAMES keys from being treated as sub-pages
@@ -199,10 +202,7 @@ export function AppHeader({
                         <BreadcrumbPage>Project: {projectName || projectSlug}</BreadcrumbPage>
                       ) : (
                         <BreadcrumbLink asChild>
-                          <Link
-                            to="/orgs/$organizationSlug/projects/$projectSlug"
-                            params={{ organizationSlug, projectSlug }}
-                          >
+                          <Link to="/proj/$projectSlug" params={{ projectSlug }}>
                             Project: {projectName || projectSlug}
                           </Link>
                         </BreadcrumbLink>
@@ -230,7 +230,6 @@ export function AppHeader({
                     <MachineBreadcrumbDropdown
                       currentName={currentMachineName || currentMachineId}
                       currentId={currentMachineId}
-                      organizationSlug={organizationSlug}
                       projectSlug={projectSlug}
                       items={machines}
                       isCurrentPage={true}

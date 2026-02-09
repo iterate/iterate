@@ -17,6 +17,7 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { googleApp } from "./integrations/google/google.ts";
 import { resendApp } from "./integrations/resend/resend.ts";
+import { webchatApp } from "./integrations/webchat/webchat.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
@@ -28,11 +29,29 @@ import { captureServerException } from "./lib/posthog.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
+import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 
 export type { Variables };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+app.use("*", async (c, next) => {
+  initializeOtel(c.env as Record<string, unknown>);
+  return withExtractedTraceContext(c.req.raw.headers, next);
+});
+
+app.get("/api/observability", (c) => {
+  return c.json({
+    otel: getOtelConfig(c.env as Record<string, unknown>),
+    traceViewer: {
+      name: "jaeger",
+      port: 16686,
+      path: "/",
+      note: "Viewer runs inside the sandbox",
+    },
+  });
+});
 
 app.use(
   cors({
@@ -123,6 +142,7 @@ app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/google", googleApp);
 app.route("/api/integrations/resend", resendApp);
+app.route("/api/integrations/webchat", webchatApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
 app.route("/api", egressApprovalsApp);

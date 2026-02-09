@@ -54,7 +54,7 @@ describe("agents router", () => {
       "http://localhost:3001/api/opencode/sessions/new-session",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: expect.any(Headers),
         body: JSON.stringify({ type: "prompt", message: "hello" }),
       },
     );
@@ -69,5 +69,35 @@ describe("agents router", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid agent path" });
+  });
+
+  it("proxies GET requests to the active route destination", async () => {
+    getOrCreateAgent.mockResolvedValue({
+      route: { destination: "/opencode/sessions/new-session" },
+      wasCreated: false,
+    });
+
+    fetchSpy.mockResolvedValue(
+      new Response('data: {"type":"session.status"}\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+
+    const response = await agentsRouter.request("/api/agents/slack/thread-123", {
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain("session.status");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "http://localhost:3001/api/opencode/sessions/new-session",
+      {
+        method: "GET",
+        headers: expect.any(Headers),
+        body: undefined,
+      },
+    );
   });
 });

@@ -303,11 +303,22 @@ export const trpcRouter = createTRPCRouter({
         });
       }
 
-      const { route: routePath } = (await createResponse.json()) as { route: string };
+      const { route: routePath, sessionId } = (await createResponse.json()) as {
+        route: string;
+        sessionId?: string;
+      };
+
+      const routeMetadata =
+        typeof sessionId === "string"
+          ? ({
+              provider: routePath.startsWith("/opencode/") ? "opencode" : "unknown",
+              sessionId,
+            } satisfies Record<string, unknown>)
+          : undefined;
 
       const newRoute = db
         .update(schema.agentRoutes)
-        .set({ destination: routePath, updatedAt: new Date() })
+        .set({ destination: routePath, metadata: routeMetadata, updatedAt: new Date() })
         .where(eq(schema.agentRoutes.id, result.pendingRoute.id))
         .returning()
         .get();

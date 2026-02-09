@@ -14,6 +14,6 @@ export default iterateConfig({
    */
   defaultModel: {
     providerID: "anthropic",
-    modelID: "claude-opus-4-5",
+    modelID: "claude-opus-4-6",
   },
 });

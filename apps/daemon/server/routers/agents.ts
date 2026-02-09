@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { extractAgentPathFromUrl } from "../utils/agent-path.ts";
@@ -10,7 +10,13 @@ const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 // Headers to forward from upstream response (excluding hop-by-hop headers)
-const FORWARDED_HEADERS = ["content-type", "cache-control", "x-request-id", "x-correlation-id"];
+const FORWARDED_HEADERS = [
+  "content-type",
+  "cache-control",
+  "x-request-id",
+  "x-correlation-id",
+  "transfer-encoding",
+];
 
 const ROUTE_READY_MAX_ATTEMPTS = 40;
 const ROUTE_READY_DELAY_MS = 250;
@@ -50,14 +56,17 @@ async function waitForReadyRoute(
   return initialRoute;
 }
 
-agentsRouter.post("/*", async (c) => {
+async function forwardAgentRequest(c: Context): Promise<Response> {
   const agentPath = extractAgentPathFromUrl(c.req.path, "/api/agents");
 
   if (!agentPath) {
     return c.json({ error: "Invalid agent path" }, 400);
   }
 
-  const payload = await c.req.json();
+  const method = c.req.method;
+  if (method !== "GET" && method !== "POST") {
+    return c.json({ error: `Method not allowed: ${method}` }, 405);
+  }
 
   const caller = trpcRouter.createCaller({});
   const { route } = await caller.getOrCreateAgent({
@@ -81,10 +90,17 @@ agentsRouter.post("/*", async (c) => {
     ? readyRoute.destination
     : `${DAEMON_BASE_URL}/api${readyRoute.destination}`;
 
+  const upstreamHeaders = new Headers();
+  const accept = c.req.header("accept");
+  if (accept) upstreamHeaders.set("Accept", accept);
+  if (method === "POST") {
+    upstreamHeaders.set("Content-Type", "application/json");
+  }
+
   const upstreamResponse = await fetch(destination, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    method,
+    headers: upstreamHeaders,
+    body: method === "POST" ? JSON.stringify(await c.req.json()) : undefined,
   });
 
   // Forward relevant headers from upstream
@@ -114,4 +130,8 @@ agentsRouter.post("/*", async (c) => {
   }
 
   return c.body(null);
-});
+}
+
+agentsRouter.get("/*", async (c) => forwardAgentRequest(c));
+
+agentsRouter.post("/*", async (c) => forwardAgentRequest(c));

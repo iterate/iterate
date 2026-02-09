@@ -30,6 +30,87 @@ function getReplicateClient() {
   return new Replicate({ auth: token });
 }
 
+/**
+ * Webchat client — thin HTTP wrapper over the daemon's local webchat endpoints.
+ * Analogous to how `@slack/web-api` WebClient wraps the Slack API, but much simpler.
+ */
+interface WebchatAttachment {
+  fileName: string;
+  filePath: string;
+  mimeType?: string;
+  size?: number;
+}
+
+interface WebchatClient {
+  postMessage(params: {
+    threadId: string;
+    text?: string;
+    attachments?: WebchatAttachment[];
+  }): Promise<{ success: boolean; threadId: string; messageId: string; eventId: string }>;
+  addReaction(params: {
+    threadId: string;
+    messageId: string;
+    reaction: string;
+  }): Promise<{ success: boolean; eventId: string }>;
+  removeReaction(params: {
+    threadId: string;
+    messageId: string;
+    reaction: string;
+  }): Promise<{ success: boolean; eventId: string }>;
+  getThreadMessages(params: { threadId: string }): Promise<{
+    threadId: string;
+    messages: Array<{
+      threadId: string;
+      messageId: string;
+      role: string;
+      text: string;
+      createdAt: number;
+    }>;
+  }>;
+  listThreads(): Promise<{
+    threads: Array<{
+      threadId: string;
+      title: string;
+      messageCount: number;
+      lastMessageAt: number;
+    }>;
+  }>;
+}
+
+function getWebchatClient(): WebchatClient {
+  const baseUrl = "http://localhost:3001/api/integrations/webchat";
+
+  async function post(path: string, body: Record<string, unknown>) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Webchat API error ${response.status}: ${text}`);
+    }
+    return response.json();
+  }
+
+  async function get(path: string) {
+    const response = await fetch(`${baseUrl}${path}`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Webchat API error ${response.status}: ${text}`);
+    }
+    return response.json();
+  }
+
+  return {
+    postMessage: (params) => post("/postMessage", params),
+    addReaction: (params) => post("/addReaction", params),
+    removeReaction: (params) => post("/removeReaction", params),
+    getThreadMessages: (params) => get(`/threads/${encodeURIComponent(params.threadId)}/messages`),
+    listThreads: () => get("/threads"),
+  };
+}
+
 export const toolsRouter = t.router({
   slack: t.procedure
     .meta({ description: "Run arbitrary Slack API code" })
@@ -150,6 +231,33 @@ export const toolsRouter = t.router({
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
       const _execute = new AsyncFunction("replicate", "require", input.code);
       const result = await _execute(getReplicateClient(), require);
+      return result;
+    }),
+  webchat: t.procedure
+    .meta({ description: "Run webchat API code" })
+    .input(
+      z.object({
+        code: z.string().meta({ positional: true }).describe(dedent`
+          A JavaScript script that uses a webchat client named \`webchat\`. For example:
+
+          await webchat.postMessage({
+            threadId: "THREAD_ID",
+            text: "Hello from the agent!",
+          });
+
+          await webchat.addReaction({
+            threadId: "THREAD_ID",
+            messageId: "MESSAGE_ID",
+            reaction: "eyes",
+          });
+        `),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const require = createRequire(import.meta.url);
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const _execute = new AsyncFunction("webchat", "require", input.code);
+      const result = await _execute(getWebchatClient(), require);
       return result;
     }),
   printenv: t.procedure

@@ -3,11 +3,6 @@
  *
  * Handles incoming Slack webhooks forwarded from the OS backend.
  * Routes per Slack thread and forwards formatted messages.
- *
- * Message cases:
- * 1. New thread @mention - Bot mentioned at the start of a new thread
- * 2. Mid-thread @mention - Bot mentioned in an existing thread (joining conversation)
- * 3. FYI message - No mention, but agent already exists for this thread
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -22,23 +17,12 @@ import type {
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
+import { registerSlackWork } from "../services/slack-stream-consumer.ts";
 
 const logger = console;
 
 export const slackRouter = new Hono();
 
-// Middleware to log request and response bodies
-slackRouter.use("*", async (c, next) => {
-  const reqBody = await c.req.raw.clone().text();
-  console.log(`[daemon/slack] REQ ${c.req.method} ${c.req.path}`, reqBody);
-
-  await next();
-
-  const resBody = await c.res.clone().text();
-  console.log(`[daemon/slack] RES ${c.res.status}`, resBody);
-});
-
-// Slack webhook envelope structure
 interface SlackWebhookPayload {
   token?: string;
   team_id?: string;
@@ -78,28 +62,33 @@ interface ParsedMessage {
 interface ParsedReaction {
   case: "reaction_added" | "reaction_removed";
   event: ReactionAddedEvent | ReactionRemovedEvent;
-  /** The ts of the message that was reacted to (need to look up thread_ts) */
   itemTs: string;
   channel: string;
 }
 
+slackRouter.use("*", async (c, next) => {
+  const reqBody = await c.req.raw.clone().text();
+  logger.log(`[daemon/slack] REQ ${c.req.method} ${c.req.path}`, reqBody);
+
+  await next();
+
+  const resBody = await c.res.clone().text();
+  logger.log(`[daemon/slack] RES ${c.res.status}`, resBody);
+});
+
 slackRouter.post("/webhook", async (c) => {
+  const requestId = c.req.header("x-iterate-request-id") ?? `daemon-${nanoid(10)}`;
   const payload = (await c.req.json()) as SlackWebhookPayload;
-
-  console.log(`[daemon/slack] Received payload`, payload);
-
-  // Store the raw event for later inspection
   const slackEventId = payload.event_id;
-  const eventId = await storeEvent(payload, slackEventId);
 
+  const eventId = await storeEvent(payload, slackEventId);
   const parsed = parseWebhookPayload(payload);
 
-  // Handle ignored cases
   if (parsed.case === "ignored") {
-    return c.json({ success: true, message: parsed.reason, eventId });
+    return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  // Handle reaction events - need to look up the thread_ts from the original message
+  // Reaction events: lookup the parent thread, then forward to the existing agent if present.
   if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
     try {
       const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
@@ -108,40 +97,65 @@ slackRouter.post("/webhook", async (c) => {
           success: true,
           message: "Ignored: could not find thread for reacted message",
           eventId,
+          requestId,
         });
       }
 
       const agentPath = getAgentPath(threadTs);
       const hasAgent = await activeAgentExists(agentPath);
-
       if (!hasAgent) {
         return c.json({
           success: true,
           message: "Ignored: no agent for this thread",
           eventId,
+          requestId,
         });
       }
 
+      await registerSlackWork({
+        agentPath,
+        channel: parsed.channel,
+        threadTs,
+        emojiTimestamp: threadTs,
+        emoji: "eyes",
+        requestId,
+      });
+
       const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
       await sendToAgentGateway(agentPath, { type: "prompt", message });
-      return c.json({ success: true, agentPath, created: false, case: parsed.case, eventId });
+      return c.json({
+        success: true,
+        agentPath,
+        created: false,
+        case: parsed.case,
+        eventId,
+        requestId,
+      });
     } catch (error) {
       logger.error("[Slack Webhook] Failed to handle reaction event", error);
-      return c.json({ error: "Internal server error" }, 500);
+      return c.json({ error: "Internal server error", requestId }, 500);
     }
   }
 
-  // From here on, parsed is a ParsedMessage (not a reaction)
-  const { event, threadTs } = parsed as ParsedMessage;
+  const messageParsed = parsed as ParsedMessage;
+  const { event, threadTs } = messageParsed;
   const agentPath = getAgentPath(threadTs);
 
   try {
     const hasAgent = await activeAgentExists(agentPath);
 
-    // Case 1: New thread @mention - create agent and start fresh conversation
-    if (parsed.case === "new_thread_mention") {
+    if (messageParsed.case === "new_thread_mention") {
+      const messageTs = event.ts || threadTs;
+      await registerSlackWork({
+        agentPath,
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "eyes",
+        requestId,
+      });
+
       if (hasAgent) {
-        // Rare: agent already exists for what we think is a new thread
         const message = formatMidThreadMentionMessage(event, threadTs, eventId);
         await sendToAgentGateway(agentPath, { type: "prompt", message });
         return c.json({
@@ -150,6 +164,7 @@ slackRouter.post("/webhook", async (c) => {
           created: false,
           case: "mid_thread_mention",
           eventId,
+          requestId,
         });
       }
 
@@ -161,11 +176,21 @@ slackRouter.post("/webhook", async (c) => {
         created: true,
         case: "new_thread_mention",
         eventId,
+        requestId,
       });
     }
 
-    // Case 2: Mid-thread @mention - create agent if needed, join existing conversation
-    if (parsed.case === "mid_thread_mention") {
+    if (messageParsed.case === "mid_thread_mention") {
+      const messageTs = event.ts || threadTs;
+      await registerSlackWork({
+        agentPath,
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "eyes",
+        requestId,
+      });
+
       const message = formatMidThreadMentionMessage(event, threadTs, eventId);
       await sendToAgentGateway(agentPath, { type: "prompt", message });
       return c.json({
@@ -174,18 +199,28 @@ slackRouter.post("/webhook", async (c) => {
         created: !hasAgent,
         case: "mid_thread_mention",
         eventId,
+        requestId,
       });
     }
 
-    // Case 3: FYI message - only forward if agent already exists
-    if (parsed.case === "fyi_message") {
+    if (messageParsed.case === "fyi_message") {
       if (!hasAgent) {
         return c.json({
           success: true,
           message: "Ignored: no mention and no existing agent",
           eventId,
+          requestId,
         });
       }
+
+      await registerSlackWork({
+        agentPath,
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: threadTs,
+        emoji: "thinking_face",
+        requestId,
+      });
 
       const message = formatFyiMessage(event, threadTs, eventId);
       await sendToAgentGateway(agentPath, { type: "prompt", message });
@@ -195,33 +230,27 @@ slackRouter.post("/webhook", async (c) => {
         created: false,
         case: "fyi_message",
         eventId,
+        requestId,
       });
     }
 
-    // Should never reach here
-    return c.json({ error: "Unknown message case" }, 500);
+    return c.json({ error: "Unknown message case", requestId }, 500);
   } catch (error) {
     logger.error("[Slack Webhook] Failed to handle webhook", error);
-    return c.json({ error: "Internal server error" }, 500);
+    return c.json({ error: "Internal server error", requestId }, 500);
   }
 });
 
-/**
- * Parse webhook payload and determine the message case.
- */
 function parseWebhookPayload(
   payload: SlackWebhookPayload,
 ): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
 
-  // Handle reaction events
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
-    // Only handle reactions on messages
     if (event.item.type !== "message") {
       return { case: "ignored", reason: "Ignored: reaction not on message" };
     }
-    // Ignore the bot's own reactions
     if (event.user === botUserId) {
       return { case: "ignored", reason: "Ignored: bot's own reaction" };
     }
@@ -233,7 +262,6 @@ function parseWebhookPayload(
     };
   }
 
-  // Ignore bot messages (our own responses echoed back)
   if ("bot_profile" in event && event.bot_profile) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
@@ -241,37 +269,18 @@ function parseWebhookPayload(
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
-  // Ignore regular message events when the bot is mentioned - app_mention handles those
-  // Slack sends both app_mention and message events for the same @mention
-  if (event.type === "message" && "text" in event && event.text && botUserId) {
-    const mentionPattern = new RegExp(`<@${botUserId}>`);
-    if (mentionPattern.test(event.text)) {
-      // actually maybe it doesn't.
-      // todo: smart deduplication - check if this is actually a duplicate of an app_mention event
-      // return { case: "ignored", reason: "Ignored: duplicate of app_mention event" };
-    }
-  }
-
-  // Ignore messages without bot authorization
   if (!botUserId) {
     return { case: "ignored", reason: "Ignored: no bot user recipient" };
   }
 
-  // Determine thread timestamp
-  // If it's a reply, use thread_ts (parent message timestamp)
-  // Otherwise use ts (this message becomes the thread root)
   const threadTs = event.thread_ts || event.ts;
   if (!threadTs) {
     return { case: "ignored", reason: "Ignored: no thread timestamp" };
   }
 
-  // Is this a new thread or a reply to an existing thread?
   const isNewThread = !event.thread_ts;
-
-  // Is the bot mentioned?
   const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
 
-  // Determine case
   let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
@@ -288,10 +297,6 @@ function parseWebhookPayload(
   };
 }
 
-/**
- * Sanitize Slack timestamp for use as a path segment.
- * Slack timestamps: "1234567890.123456" → "1234567890-123456"
- */
 function sanitizeThreadId(ts: string): string {
   return ts.replace(/\./g, "-");
 }
@@ -300,12 +305,7 @@ function getAgentPath(threadTs: string): string {
   return `/slack/${sanitizeThreadId(threadTs)}`;
 }
 
-/**
- * Store the raw webhook event in SQLite for later inspection.
- * Uses Slack's event_id for deduplication - if already stored, returns existing ID.
- */
 async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): Promise<string> {
-  // Check for existing event with same Slack event_id (dedup)
   if (slackEventId) {
     const existing = await db
       .select()
@@ -328,10 +328,14 @@ async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): 
   return eventId;
 }
 
-/**
- * Format message for a new thread @mention.
- * This is a fresh conversation - provide full context.
- */
+function formatFileLines(files: GenericMessageEvent["files"] | AppMentionEvent["files"]): string[] {
+  if (!files) return [];
+  return files.map((file) => {
+    if ("url_private" in file) return `File url_private: ${file.url_private}`;
+    return `File id: ${file.id}`;
+  });
+}
+
 function formatNewThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
@@ -344,19 +348,16 @@ function formatNewThreadMentionMessage(
 
   return [
     `[Agent: ${agentSlug}] New Slack thread started.`,
-    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
+    "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
     `channel=${channel} thread_ts=${threadTs} eventId=${eventId}`,
   ].join("\n");
 }
 
-/**
- * Format message for a mid-thread @mention.
- * Bot is being called into an existing conversation.
- */
 function formatMidThreadMentionMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
@@ -370,14 +371,14 @@ function formatMidThreadMentionMessage(
 
   const lines = [
     `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,
-    `Refer to SLACK.md for how to respond via \`iterate tool slack\`.`,
+    "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
   ];
 
-  // Only show message_ts if different from thread_ts (i.e., this is a reply, not the root)
   if (messageTs !== threadTs) {
     lines.push(
       `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
@@ -389,10 +390,6 @@ function formatMidThreadMentionMessage(
   return lines.join("\n");
 }
 
-/**
- * Format message for FYI (no mention but agent exists).
- * Another message in a thread the agent is participating in.
- */
 function formatFyiMessage(
   event: AppMentionEvent | GenericMessageEvent,
   threadTs: string,
@@ -408,10 +405,10 @@ function formatFyiMessage(
     "",
     `From: ${user}`,
     `Message: ${text}`,
+    ...formatFileLines(event.files),
     "",
   ];
 
-  // Only show message_ts if different from thread_ts
   if (messageTs !== threadTs) {
     lines.push(
       `channel=${channel} thread_ts=${threadTs} message_ts=${messageTs} eventId=${eventId}`,
@@ -423,9 +420,6 @@ function formatFyiMessage(
   return lines.join("\n");
 }
 
-/**
- * Format message for reaction events.
- */
 function formatReactionMessage(
   event: ReactionAddedEvent | ReactionRemovedEvent,
   reactionCase: "reaction_added" | "reaction_removed",
@@ -443,7 +437,6 @@ function formatReactionMessage(
     `From: ${user}`,
   ];
 
-  // Only show message_ts if different from thread_ts
   if (messageTs !== threadTs) {
     lines.push(`On message: ${messageTs}`);
   }
@@ -460,16 +453,10 @@ function formatReactionMessage(
   return lines.join("\n");
 }
 
-/**
- * Look up the thread_ts for a message by querying stored events.
- * Reactions only give us the message ts, but we need the thread_ts to find the agent.
- */
 async function lookupThreadTsForMessage(
   channel: string,
   messageTs: string,
 ): Promise<string | null> {
-  // Search for a stored event that matches this channel and message ts
-  // The message could be the thread root (ts === thread_ts) or a reply (has thread_ts)
   const events = await db
     .select()
     .from(schema.events)
@@ -480,18 +467,14 @@ async function lookupThreadTsForMessage(
     if (!payload?.event) continue;
 
     const event = payload.event;
-
-    // Skip reaction events
     if (event.type === "reaction_added" || event.type === "reaction_removed") continue;
 
-    // Check if this event matches our channel and ts
     if (
       "channel" in event &&
       event.channel === channel &&
       "ts" in event &&
       event.ts === messageTs
     ) {
-      // Found the message - return its thread_ts (or ts if it's the root)
       return "thread_ts" in event && event.thread_ts ? event.thread_ts : messageTs;
     }
   }

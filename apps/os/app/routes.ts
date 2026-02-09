@@ -16,6 +16,18 @@ export const routes = rootRoute("root.tsx", [
     // User settings
     route("/user/settings", "user/settings.tsx"),
 
+    // Simplified project routes (project slugs are globally unique)
+    route("/proj/$projectSlug", "proj/layout.tsx", [
+      index("proj/index.tsx"),
+      route("/access-tokens", "proj/access-tokens.tsx"),
+      route("/machines", "proj/machines.tsx"),
+      route("/machines/$machineId", "proj/machine-detail.tsx"),
+      route("/connectors", "proj/connectors.tsx"),
+      route("/env-vars", "proj/env-vars.tsx"),
+      route("/approvals", "proj/approvals.tsx"),
+      route("/settings", "proj/settings.tsx"),
+    ]),
+
     // Organization routes
     route("/orgs/$organizationSlug", "org/layout.tsx", [
       // Org dashboard
@@ -26,18 +38,6 @@ export const routes = rootRoute("root.tsx", [
       route("/team", "org/team.tsx"),
       route("/billing", "org/billing.tsx"),
       route("/new-project", "org/new-project.tsx"),
-
-      // Project routes
-      route("/projects/$projectSlug", "org/project/layout.tsx", [
-        index("org/project/index.tsx"),
-        route("/access-tokens", "org/project/access-tokens.tsx"),
-        route("/machines", "org/project/machines.tsx"),
-        route("/machines/$machineId", "org/project/machine-detail.tsx"),
-        route("/connectors", "org/project/connectors.tsx"),
-        route("/env-vars", "org/project/env-vars.tsx"),
-        route("/approvals", "org/project/approvals.tsx"),
-        route("/settings", "org/project/settings.tsx"),
-      ]),
     ]),
 
     // Admin routes

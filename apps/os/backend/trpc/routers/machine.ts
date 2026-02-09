@@ -239,7 +239,7 @@ export const machineRouter = router({
           env: ctx.env,
           projectId: ctx.project.id,
           organizationId: ctx.organization.id,
-          organizationSlug: input.organizationSlug,
+          organizationSlug: ctx.organization.slug,
           projectSlug: input.projectSlug,
           name: input.name,
           type: input.type,
