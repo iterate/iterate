@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
@@ -11,6 +11,7 @@ import {
   Filter,
   X,
 } from "lucide-react";
+import { z } from "zod/v4";
 import { ms, parse as msParse } from "ms";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
@@ -19,7 +20,26 @@ import { Input } from "../../components/ui/input.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { cn } from "@/lib/utils.ts";
 
+const Filters = z.object({
+  sort: z.enum(["asc", "desc"]).optional().catch("desc"),
+  event: z.string().optional(),
+  consumer: z.string().optional(),
+  status: z.enum(["pending", "success", "retrying", "failed"]).optional(),
+  statusMode: z.enum(["some", "all"]).optional().catch("some"),
+  ageMin: z.string().optional(),
+  ageMax: z.string().optional(),
+  readMin: z.string().optional(),
+  readMax: z.string().optional(),
+  resMin: z.string().optional(),
+  resMax: z.string().optional(),
+  payload: z.string().optional(),
+  page: z.number().optional().catch(0),
+});
+
+type Filters = z.infer<typeof Filters>;
+
 export const Route = createFileRoute("/_auth/admin/outbox")({
+  validateSearch: Filters,
   component: OutboxPage,
 });
 
@@ -91,60 +111,32 @@ function aggregateStatus(consumers: QueueMessage[]): ConsumerStatus {
 
 // --- Filter state ---
 
-type Filters = {
-  sortDirection: "asc" | "desc";
-  eventName: string;
-  consumerName: string;
-  consumerStatus: ConsumerStatus | "";
-  statusMode: "some" | "all";
-  ageMin: string;
-  ageMax: string;
-  readCountMin: string;
-  readCountMax: string;
-  resolutionMin: string;
-  resolutionMax: string;
-  payloadJson: string;
-};
-
-const DEFAULT_FILTERS: Filters = {
-  sortDirection: "desc",
-  eventName: "",
-  consumerName: "",
-  consumerStatus: "",
-  statusMode: "some",
-  ageMin: "",
-  ageMax: "",
-  readCountMin: "",
-  readCountMax: "",
-  resolutionMin: "",
-  resolutionMax: "",
-  payloadJson: "",
-};
+const DEFAULT_FILTERS: Filters = Filters.parse({});
 
 /** Convert UI filter state to server input params */
 function filtersToInput(filters: Filters) {
-  const ageMinMs = parseMsDuration(filters.ageMin);
-  const ageMaxMs = parseMsDuration(filters.ageMax);
-  const readCountMin = filters.readCountMin ? parseInt(filters.readCountMin, 10) : undefined;
-  const readCountMax = filters.readCountMax ? parseInt(filters.readCountMax, 10) : undefined;
-  const resolutionMinMs = parseMsDuration(filters.resolutionMin);
-  const resolutionMaxMs = parseMsDuration(filters.resolutionMax);
+  const ageMinMs = filters.ageMin ? parseMsDuration(filters.ageMin) : undefined;
+  const ageMaxMs = filters.ageMax ? parseMsDuration(filters.ageMax) : undefined;
+  const readCountMin = filters.readMin ? parseInt(filters.readMin, 10) : undefined;
+  const readCountMax = filters.readMax ? parseInt(filters.readMax, 10) : undefined;
+  const resolutionMinMs = filters.resMin ? parseMsDuration(filters.resMin) : undefined;
+  const resolutionMaxMs = filters.resMax ? parseMsDuration(filters.resMax) : undefined;
 
   let payloadContains: string | undefined;
-  if (filters.payloadJson.trim()) {
+  if (filters.payload?.trim()) {
     try {
-      JSON.parse(filters.payloadJson.trim());
-      payloadContains = filters.payloadJson.trim();
+      JSON.parse(filters.payload.trim());
+      payloadContains = filters.payload.trim();
     } catch {
       // invalid JSON, don't send
     }
   }
 
   return {
-    sortDirection: filters.sortDirection,
-    eventName: filters.eventName || undefined,
-    consumerName: filters.consumerName || undefined,
-    consumerStatus: (filters.consumerStatus || undefined) as ConsumerStatus | undefined,
+    sortDirection: filters.sort,
+    eventName: filters.event || undefined,
+    consumerName: filters.consumer || undefined,
+    consumerStatus: filters.status || undefined,
     statusMode: filters.statusMode,
     ageMinMs: ageMinMs ?? undefined,
     ageMaxMs: ageMaxMs ?? undefined,
@@ -301,12 +293,12 @@ function FilterBar({
             onClick={() =>
               onChange({
                 ...filters,
-                sortDirection: filters.sortDirection === "desc" ? "asc" : "desc",
+                sort: filters.sort === "desc" ? "asc" : "desc",
               })
             }
           >
             <ArrowUpDown className="h-3 w-3 mr-1.5" />
-            {filters.sortDirection === "desc" ? "Newest first" : "Oldest first"}
+            {filters.sort === "desc" ? "Newest first" : "Oldest first"}
           </Button>
         </div>
 
@@ -315,8 +307,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Event</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.eventName}
-            onChange={(e) => onChange({ ...filters, eventName: e.target.value })}
+            value={filters.event ?? ""}
+            onChange={(e) => onChange({ ...filters, event: e.target.value || undefined })}
           >
             <option value="">All events</option>
             {eventNames.map((n) => (
@@ -332,8 +324,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Consumer</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.consumerName}
-            onChange={(e) => onChange({ ...filters, consumerName: e.target.value })}
+            value={filters.consumer ?? ""}
+            onChange={(e) => onChange({ ...filters, consumer: e.target.value || undefined })}
           >
             <option value="">All consumers</option>
             {consumerNames.map((n) => (
@@ -361,9 +353,12 @@ function FilterBar({
           </label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.consumerStatus}
+            value={filters.status ?? ""}
             onChange={(e) =>
-              onChange({ ...filters, consumerStatus: e.target.value as ConsumerStatus | "" })
+              onChange({
+                ...filters,
+                status: (e.target.value || undefined) as ConsumerStatus | undefined,
+              })
             }
           >
             <option value="">Any status</option>
@@ -381,15 +376,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min e.g. 5m"
-              value={filters.ageMin}
-              onChange={(e) => onChange({ ...filters, ageMin: e.target.value })}
+              value={filters.ageMin ?? ""}
+              onChange={(e) => onChange({ ...filters, ageMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max e.g. 2d"
-              value={filters.ageMax}
-              onChange={(e) => onChange({ ...filters, ageMax: e.target.value })}
+              value={filters.ageMax ?? ""}
+              onChange={(e) => onChange({ ...filters, ageMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -403,8 +398,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="min"
-              value={filters.readCountMin}
-              onChange={(e) => onChange({ ...filters, readCountMin: e.target.value })}
+              value={filters.readMin ?? ""}
+              onChange={(e) => onChange({ ...filters, readMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
@@ -412,8 +407,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="max"
-              value={filters.readCountMax}
-              onChange={(e) => onChange({ ...filters, readCountMax: e.target.value })}
+              value={filters.readMax ?? ""}
+              onChange={(e) => onChange({ ...filters, readMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -425,15 +420,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min"
-              value={filters.resolutionMin}
-              onChange={(e) => onChange({ ...filters, resolutionMin: e.target.value })}
+              value={filters.resMin ?? ""}
+              onChange={(e) => onChange({ ...filters, resMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max"
-              value={filters.resolutionMax}
-              onChange={(e) => onChange({ ...filters, resolutionMax: e.target.value })}
+              value={filters.resMax ?? ""}
+              onChange={(e) => onChange({ ...filters, resMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -446,8 +441,8 @@ function FilterBar({
           <Input
             className="h-8 text-xs font-mono"
             placeholder='{"machineId": "..."}'
-            value={filters.payloadJson}
-            onChange={(e) => onChange({ ...filters, payloadJson: e.target.value })}
+            value={filters.payload ?? ""}
+            onChange={(e) => onChange({ ...filters, payload: e.target.value || undefined })}
           />
         </div>
       </div>
@@ -459,9 +454,14 @@ function FilterBar({
 
 function OutboxPage() {
   const queryClient = useQueryClient();
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
-  const [page, setPage] = useState(0);
+  const navigate = useNavigate({ from: Route.fullPath });
+  const filters = useSearch({ from: "/_auth/admin/outbox" });
+  const page = filters.page ?? 0;
   const pageSize = 25;
+
+  const setFilters = (newFilters: Filters) => {
+    navigate({ search: newFilters, replace: true });
+  };
 
   const serverInput = useMemo(
     () => ({
@@ -513,8 +513,7 @@ function OutboxPage() {
 
   // Reset page when filters change
   const handleFilterChange = (newFilters: Filters) => {
-    setFilters(newFilters);
-    setPage(0);
+    setFilters({ ...newFilters, page: 0 });
   };
 
   return (
@@ -566,7 +565,7 @@ function OutboxPage() {
               size="sm"
               className="h-7 text-xs"
               disabled={page === 0}
-              onClick={() => setPage((p) => p - 1)}
+              onClick={() => setFilters({ ...filters, page: page - 1 })}
             >
               Prev
             </Button>
@@ -575,7 +574,7 @@ function OutboxPage() {
               size="sm"
               className="h-7 text-xs"
               disabled={page >= totalPages - 1}
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setFilters({ ...filters, page: page + 1 })}
             >
               Next
             </Button>
