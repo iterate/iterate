@@ -1,8 +1,8 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq, and, lt, or } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineProvider } from "../providers/index.ts";
+
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -16,6 +16,7 @@ import { decrypt } from "../utils/encryption.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
+import { outboxClient } from "../outbox/client.ts";
 
 /** Initial context provided by the handler */
 export type ORPCContext = RequestHeadersPluginContext & {
@@ -148,76 +149,29 @@ export const reportStatus = os.machines.reportStatus
       daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
     };
 
-    // If machine is in 'starting' state and daemon reports ready, activate it
-    // This detaches any existing active machine and promotes this one to active
+    // If machine is in 'starting' state and daemon reports ready, verify it
+    // actually works before activating. The readiness probe runs async via outbox.
     if (status === "ready" && machineWithOrg.state === "starting") {
-      // Use transaction to ensure atomic activation - prevents race conditions
-      // if two machines report ready simultaneously
-      const detachedMachines = await db.transaction(async (tx) => {
-        // Detach all currently active machines for this project
-        const activeMachines = await tx.query.machine.findMany({
-          where: and(
-            eq(schema.machine.projectId, machineWithOrg.projectId),
-            eq(schema.machine.state, "active"),
-          ),
-        });
+      const verifyingMetadata = {
+        ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "verifying",
+        daemonStatusMessage: "Running readiness probe...",
+        daemonReadyAt: null,
+      };
 
-        for (const activeMachine of activeMachines) {
-          // Detach in DB (within transaction)
-          await tx
-            .update(schema.machine)
-            .set({ state: "detached" })
-            .where(eq(schema.machine.id, activeMachine.id));
-
-          logger.info("Detached existing active machine", { machineId: activeMachine.id });
-        }
-
-        // Promote this machine to active
+      // Set verifying status and emit event in one transaction
+      await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
         await tx
           .update(schema.machine)
-          .set({ state: "active", metadata: updatedMetadata })
+          .set({ metadata: verifyingMetadata })
           .where(eq(schema.machine.id, machine.id));
 
-        logger.info("Machine activated", { machineId: machine.id });
-
-        return activeMachines;
-      });
-
-      // Cleanup old detached machines (older than 48h) after handoff.
-      // Run this opportunistically here to keep flow simple for now.
-      // TODO: Add scheduled/outbox cleanup across projects so detached machines
-      // from inactive projects also get archived.
-      const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-      const staleDetachedMachines = await db.query.machine.findMany({
-        where: and(
-          eq(schema.machine.projectId, machineWithOrg.projectId),
-          eq(schema.machine.state, "detached"),
-          lt(schema.machine.updatedAt, detachedCleanupCutoff),
-        ),
-      });
-
-      for (const detachedMachine of staleDetachedMachines) {
-        const provider = await createMachineProvider({
-          type: detachedMachine.type,
-          env,
-          externalId: detachedMachine.externalId,
-          metadata: (detachedMachine.metadata as Record<string, unknown>) ?? {},
-          buildProxyUrl: () => "",
-        });
-        await provider.archive();
-
-        await db
-          .update(schema.machine)
-          .set({ state: "archived" })
-          .where(eq(schema.machine.id, detachedMachine.id));
-
-        logger.info("Archived stale detached machine", { machineId: detachedMachine.id });
-      }
-
-      logger.info("Machine handoff complete", {
-        activatedMachineId: machine.id,
-        detachedCount: detachedMachines.length,
-        archivedDetachedCount: staleDetachedMachines.length,
+        return {
+          payload: {
+            machineId: machine.id,
+            projectId: machineWithOrg.projectId,
+          },
+        };
       });
     } else {
       // Just update metadata

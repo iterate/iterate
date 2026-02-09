@@ -26,12 +26,16 @@ import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 
 export type { Variables };
+
+// Register outbox consumers at module load time
+registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
