@@ -15,6 +15,7 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "verifyMachineReadiness",
     on: "machine:verify-readiness",
+    visibilityTimeout: 180, // probe polls for up to 120s, give extra headroom
     retry: (job) => {
       // The probe itself already polls for up to 120s, so retries here
       // cover transient infra failures (e.g. worker restarted mid-probe).
