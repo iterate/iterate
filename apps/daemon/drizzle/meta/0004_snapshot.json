@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b6237a8a-d267-4c7a-ad5f-25568fd5409c",
-  "prevId": "5d30fb52-e611-42f0-9bf6-38dda8d2f28a",
+  "id": "c07bafd2-78ef-46cb-abbc-5d2c2aef37d8",
+  "prevId": "b6237a8a-d267-4c7a-ad5f-25568fd5409c",
   "tables": {
     "agent_routes": {
       "name": "agent_routes",
@@ -98,6 +98,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "created_at": {

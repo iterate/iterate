@@ -8,6 +8,8 @@ const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 const CONSUMER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_RECONNECT_ATTEMPTS = 12;
 
 interface SlackRunContext {
   id: string;
@@ -50,8 +52,8 @@ export async function registerSlackWork(params: {
 
   state.runs.set(run.id, run);
   touch(state);
-
-  await acknowledge(run);
+  // Never block webhook forwarding on Slack API side effects.
+  void acknowledge(run);
 }
 
 function getOrCreateConsumer(agentPath: string): SlackConsumerState {
@@ -97,7 +99,16 @@ async function runConsumerLoop(state: SlackConsumerState): Promise<void> {
 
       if (!response.ok || !response.body) {
         state.reconnectAttempts += 1;
-        await sleep(RECONNECT_DELAY_MS);
+        if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          logger.warn("[slack-consumer] giving up after repeated connect failures", {
+            agentPath: state.agentPath,
+            reconnectAttempts: state.reconnectAttempts,
+          });
+          await settleAllRuns(state);
+          shutdown(state);
+          return;
+        }
+        await sleep(getReconnectDelayMs(state.reconnectAttempts));
         continue;
       }
 
@@ -111,6 +122,15 @@ async function runConsumerLoop(state: SlackConsumerState): Promise<void> {
           reconnectAttempts: state.reconnectAttempts,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          logger.warn("[slack-consumer] giving up after repeated stream errors", {
+            agentPath: state.agentPath,
+            reconnectAttempts: state.reconnectAttempts,
+          });
+          await settleAllRuns(state);
+          shutdown(state);
+          return;
+        }
       }
     } finally {
       state.abortController = null;
@@ -122,7 +142,7 @@ async function runConsumerLoop(state: SlackConsumerState): Promise<void> {
       return;
     }
 
-    await sleep(RECONNECT_DELAY_MS);
+    await sleep(getReconnectDelayMs(state.reconnectAttempts));
   }
 }
 
@@ -307,6 +327,11 @@ function shutdown(state: SlackConsumerState): void {
   state.abortController?.abort();
   state.abortController = null;
   consumers.delete(state.agentPath);
+}
+
+function getReconnectDelayMs(attempts: number): number {
+  const delay = RECONNECT_DELAY_MS * 2 ** Math.max(0, attempts - 1);
+  return Math.min(delay, MAX_RECONNECT_DELAY_MS);
 }
 
 async function runSlackCommand(code: string, requestId?: string): Promise<void> {

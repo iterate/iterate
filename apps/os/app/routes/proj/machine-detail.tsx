@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ExternalLink, Trash2, RefreshCw, Server, Code2, Terminal, Copy, Bot } from "lucide-react";
+import { Trash2, RefreshCw, Copy, Globe, TerminalSquare } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -10,15 +10,21 @@ import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 import { TypeId } from "../../components/type-id.tsx";
+import { Spinner } from "../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
 });
 
-const SERVICE_ICONS: Record<string, typeof Server> = {
-  "iterate-daemon": Server,
-  opencode: Code2,
-};
+/** Pidnap-managed processes — mirrors apps/os/sandbox/pidnap.config.ts */
+const PIDNAP_PROCESSES = [
+  "daemon-backend",
+  "daemon-frontend",
+  "opencode",
+  "egress-proxy",
+  "trace-viewer",
+  "task-install-jaeger",
+] as const;
 
 function MachineDetailPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
@@ -112,7 +118,7 @@ function MachineDetailPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const { data: agentsData } = useQuery(
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(
     trpc.machine.listAgents.queryOptions(
       {
         projectSlug: params.projectSlug,
@@ -129,30 +135,37 @@ function MachineDetailPage() {
     (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
   );
 
-  const formatAgentTime = (dateStr: string | null) => {
-    if (!dateStr) return "";
-    const date = new Date(dateStr);
-    const now = new Date();
-    const hoursAgo = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    if (hoursAgo > 12) {
-      const dateFormatted = date.toLocaleDateString([], { month: "short", day: "numeric" });
-      return `${dateFormatted} ${time}`;
-    }
-    return time;
-  };
-
   const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
+  const daemonBaseUrl = iterateDaemonService?.options[0]?.url;
+  const opencodeService = services.find((s) => s.id === "opencode");
+  const opencodeBaseUrl = opencodeService?.options[0]?.url;
 
-  const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
+  const buildTerminalUrl = (command: string) => {
+    if (!daemonBaseUrl) return "#";
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
-  const getAgentAttachCommand = (destination?: string | null) => {
+  const extractSessionId = (destination?: string | null) => {
     if (!destination) return null;
     const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
-    if (!match) return null;
-    return `opencode attach 'http://localhost:4096' --session ${match[1]}`;
+    return match?.[1] ?? null;
+  };
+
+  const getAgentAttachCommand = (destination?: string | null, workingDirectory?: string | null) => {
+    const sessionId = extractSessionId(destination);
+    if (!sessionId) return null;
+    const cmd = `opencode attach 'http://localhost:4096' --session ${sessionId}`;
+    return workingDirectory ? `${cmd} --dir ${workingDirectory}` : cmd;
+  };
+
+  /** Build OpenCode web UI deep link: {base}/{base64(dir)}/session/{id} */
+  const buildOpencodeWebUrl = (
+    sessionId: string | null,
+    workingDirectory?: string | null,
+  ): string | null => {
+    if (!sessionId || !opencodeBaseUrl || !workingDirectory) return null;
+    const encodedDir = btoa(workingDirectory).replace(/=+$/, "");
+    return `${opencodeBaseUrl}/${encodedDir}/session/${sessionId}`;
   };
 
   return (
@@ -265,142 +278,167 @@ function MachineDetailPage() {
       </div>
 
       {machine.state !== "archived" && (
-        <div className="space-y-2">
-          {services.map((service) => {
-            const Icon = SERVICE_ICONS[service.id] ?? Server;
-            return (
-              <div
-                key={service.id}
-                className="flex items-center justify-between rounded-lg border bg-card p-3"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{service.name}</div>
-                    <div className="font-mono text-xs text-muted-foreground">:{service.port}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  {service.options.map((option, index) => (
-                    <a
-                      key={index}
-                      href={option.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      {option.label}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-
-          {iterateDaemonService && (
-            <div className="flex items-center justify-between rounded-lg border bg-card p-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Shell</div>
-                  <div className="text-xs text-muted-foreground">Terminal access</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                {iterateDaemonService.options.map((option, index) => (
+        <div className="space-y-4">
+          {/* Services */}
+          <div>
+            <h3 className="mb-1 text-xs font-medium text-muted-foreground">Services</h3>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+              {services.flatMap((service) =>
+                service.options.map((option, i) => (
                   <a
-                    key={index}
-                    href={`${option.url}/terminal`}
+                    key={`${service.id}-${i}`}
+                    href={option.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+                    className="truncate text-foreground hover:underline"
                   >
-                    <ExternalLink className="h-4 w-4" />
-                    {option.label}
+                    {service.name}{" "}
+                    <span className="text-xs text-muted-foreground">:{service.port}</span>
+                  </a>
+                )),
+              )}
+              {daemonBaseUrl && (
+                <a
+                  href={`${daemonBaseUrl}/terminal`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="truncate text-foreground hover:underline"
+                >
+                  Shell
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Pidnap Logs */}
+          {daemonBaseUrl && (
+            <div>
+              <h3 className="mb-1 text-xs font-medium text-muted-foreground">Pidnap Logs</h3>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+                {PIDNAP_PROCESSES.map((proc) => (
+                  <a
+                    key={proc}
+                    href={buildTerminalUrl(`tail -n 200 -f /var/log/pidnap/process/${proc}.log`)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate text-foreground hover:underline"
+                  >
+                    {proc}
                   </a>
                 ))}
               </div>
             </div>
           )}
 
-          {commands.length > 0 && iterateDaemonService && (
-            <>
-              <div className="border-t pt-4">
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Commands</h3>
+          {/* Commands */}
+          {commands.length > 0 && daemonBaseUrl && (
+            <div>
+              <h3 className="mb-1 text-xs font-medium text-muted-foreground">Commands</h3>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+                {commands.map((cmd, i) => (
+                  <a
+                    key={i}
+                    href={buildTerminalUrl(cmd.command)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate text-foreground hover:underline"
+                  >
+                    {cmd.label}
+                  </a>
+                ))}
               </div>
-              {commands.map((cmd, index) => (
-                <div
-                  key={index}
-                  className="flex items-center justify-between rounded-lg border bg-card p-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Terminal className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{cmd.label}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {iterateDaemonService.options.map((option, optIndex) => (
-                      <a
-                        key={optIndex}
-                        href={buildAgentTerminalUrl(option.url, cmd.command)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-md px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        {option.label}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
+            </div>
           )}
 
+          {/* Agents */}
+          {agentsLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner />
+              Loading agents...
+            </div>
+          )}
           {agents.length > 0 && (
-            <>
-              <div className="border-t pt-4">
-                <h3 className="mb-2 text-sm font-medium text-muted-foreground">Agents</h3>
-              </div>
-              {agents.map((agent) => (
-                <div
-                  key={agent.path}
-                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{agent.path}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatAgentTime(agent.updatedAt)} · {agent.workingDirectory}
+            <div>
+              <h3 className="mb-1 text-xs font-medium text-muted-foreground">
+                Agents ({agents.length})
+              </h3>
+              <div className="grid grid-cols-1 gap-2">
+                {agents.map((agent) => {
+                  const sessionId = extractSessionId(agent.activeRoute?.destination);
+                  const attachCmd = getAgentAttachCommand(
+                    agent.activeRoute?.destination,
+                    agent.workingDirectory,
+                  );
+                  const webUrl = buildOpencodeWebUrl(sessionId, agent.workingDirectory);
+                  return (
+                    <div key={agent.path} className="rounded-lg border bg-card p-3">
+                      <div className="min-w-0">
+                        <div
+                          className="truncate text-sm font-medium"
+                          style={{
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                          }}
+                        >
+                          /agents{agent.path}
+                        </div>
+                        {agent.activeRoute?.destination && (
+                          <div
+                            className="mt-0.5 truncate text-sm text-muted-foreground"
+                            style={{
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            }}
+                          >
+                            &rarr; {agent.activeRoute.destination}
+                          </div>
+                        )}
+                        <div className="mt-1 truncate text-xs text-muted-foreground">
+                          Working directory:{" "}
+                          <span
+                            className="text-xs"
+                            style={{
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            }}
+                          >
+                            {agent.workingDirectory}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          Last changed:{" "}
+                          {agent.updatedAt
+                            ? formatDistanceToNow(new Date(agent.updatedAt), { addSuffix: true })
+                            : "—"}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center justify-end gap-1.5">
+                        {webUrl && (
+                          <Button variant="outline" size="sm" asChild className="shadow-sm">
+                            <a href={webUrl} target="_blank" rel="noopener noreferrer">
+                              <Globe className="h-3.5 w-3.5" />
+                              Web
+                            </a>
+                          </Button>
+                        )}
+                        {attachCmd && daemonBaseUrl && (
+                          <Button variant="outline" size="sm" asChild className="shadow-sm">
+                            <a
+                              href={buildTerminalUrl(attachCmd)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <TerminalSquare className="h-3.5 w-3.5" />
+                              Attach
+                            </a>
+                          </Button>
+                        )}
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {iterateDaemonService?.options
-                      .map((option, index) => {
-                        const command = getAgentAttachCommand(agent.activeRoute?.destination);
-                        if (!command) return null;
-                        return (
-                          <a
-                            key={index}
-                            href={buildAgentTerminalUrl(option.url, command)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center justify-center gap-1 whitespace-nowrap text-sm font-medium h-8 px-3 rounded-md hover:bg-accent hover:text-accent-foreground"
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                            {option.label}
-                          </a>
-                        );
-                      })
-                      .filter(Boolean)}
-                  </div>
-                </div>
-              ))}
-            </>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
       )}

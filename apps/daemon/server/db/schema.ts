@@ -12,9 +12,11 @@ export const events = sqliteTable("events", {
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 
+/** An agent is a logical unit of work identified by a URL path (e.g. `/agent/slack/ts/abc`). */
 export const agents = sqliteTable("agents", {
   path: text().primaryKey(),
   workingDirectory: text("working_directory").notNull(),
+  metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
   archivedAt: integer("archived_at", { mode: "timestamp" }),
@@ -23,6 +25,11 @@ export const agents = sqliteTable("agents", {
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;
 
+/**
+ * Maps an agent path to a destination URL. Typically routes to a path on the
+ * same HTTP server (e.g. `/opencode/sessions/xyz`), but the destination can
+ * be any base URL.
+ */
 export const agentRoutes = sqliteTable(
   "agent_routes",
   {

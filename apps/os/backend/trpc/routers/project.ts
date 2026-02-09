@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import * as arctic from "arctic";
 import {
@@ -444,13 +444,64 @@ export const projectRouter = router({
         });
       }
 
-      // Transfer the connection to the new project
-      await ctx.db
-        .update(projectConnection)
-        .set({
-          projectId: ctx.project.id,
-        })
-        .where(eq(projectConnection.id, existingConnection.id));
+      const sourceProjectId = existingConnection.projectId;
+      const targetProjectId = ctx.project.id;
+      const encryptedAccessToken = (
+        existingConnection.providerData as { encryptedAccessToken?: string } | null
+      )?.encryptedAccessToken;
+
+      // Keep connection and secret in sync when moving Slack workspaces between projects.
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .update(projectConnection)
+          .set({
+            projectId: targetProjectId,
+          })
+          .where(eq(projectConnection.id, existingConnection.id));
+
+        if (!encryptedAccessToken) return;
+
+        const targetSecret = await tx.query.secret.findFirst({
+          where: and(
+            eq(schema.secret.projectId, targetProjectId),
+            eq(schema.secret.key, "slack.access_token"),
+            isNull(schema.secret.userId),
+          ),
+        });
+
+        if (targetSecret) {
+          await tx
+            .update(schema.secret)
+            .set({
+              encryptedValue: encryptedAccessToken,
+              organizationId: ctx.organization.id,
+              egressProxyRule: `$contains(url.hostname, 'slack.com')`,
+              lastSuccessAt: new Date(),
+            })
+            .where(eq(schema.secret.id, targetSecret.id));
+        } else {
+          await tx.insert(schema.secret).values({
+            key: "slack.access_token",
+            encryptedValue: encryptedAccessToken,
+            organizationId: ctx.organization.id,
+            projectId: targetProjectId,
+            egressProxyRule: `$contains(url.hostname, 'slack.com')`,
+            lastSuccessAt: new Date(),
+          });
+        }
+
+        if (sourceProjectId !== targetProjectId) {
+          await tx
+            .delete(schema.secret)
+            .where(
+              and(
+                eq(schema.secret.projectId, sourceProjectId),
+                eq(schema.secret.key, "slack.access_token"),
+                isNull(schema.secret.userId),
+              ),
+            );
+        }
+      });
 
       return {
         success: true,

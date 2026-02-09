@@ -88,158 +88,178 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  // Reaction events: lookup the parent thread, then forward to the existing agent if present.
   if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
-    try {
-      const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
-      if (!threadTs) {
-        return c.json({
-          success: true,
-          message: "Ignored: could not find thread for reacted message",
-          eventId,
-          requestId,
-        });
-      }
-
-      const agentPath = getAgentPath(threadTs);
-      const hasAgent = await activeAgentExists(agentPath);
-      if (!hasAgent) {
-        return c.json({
-          success: true,
-          message: "Ignored: no agent for this thread",
-          eventId,
-          requestId,
-        });
-      }
-
-      await registerSlackWork({
-        agentPath,
-        channel: parsed.channel,
-        threadTs,
-        emojiTimestamp: threadTs,
-        emoji: "eyes",
-        requestId,
-      });
-
-      const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
+    const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
+    if (!threadTs) {
       return c.json({
         success: true,
-        agentPath,
-        created: false,
-        case: parsed.case,
+        message: "Ignored: could not find thread for reacted message",
         eventId,
         requestId,
       });
-    } catch (error) {
-      logger.error("[Slack Webhook] Failed to handle reaction event", error);
-      return c.json({ error: "Internal server error", requestId }, 500);
     }
+
+    const hasAgent = await activeAgentExists(getAgentPath(threadTs));
+    if (!hasAgent) {
+      return c.json({
+        success: true,
+        message: "Ignored: no agent for this thread",
+        eventId,
+        requestId,
+      });
+    }
+
+    void handleSlackWebhookAsync({
+      parsed,
+      eventId,
+      requestId,
+      precomputedThreadTs: threadTs,
+      precomputedHasAgent: hasAgent,
+    }).catch((error) => {
+      logger.error("[Slack Webhook] Failed to handle webhook", { error, eventId, requestId });
+    });
+    return c.json({
+      success: true,
+      queued: true,
+      created: false,
+      case: parsed.case,
+      eventId,
+      requestId,
+    });
+  }
+
+  const hasAgent = await activeAgentExists(getAgentPath(parsed.threadTs));
+  if (parsed.case === "fyi_message" && !hasAgent) {
+    return c.json({
+      success: true,
+      message: "Ignored: no mention and no existing agent",
+      eventId,
+      requestId,
+    });
+  }
+
+  const responseCase =
+    parsed.case === "new_thread_mention" && hasAgent ? "mid_thread_mention" : parsed.case;
+  const created =
+    parsed.case === "new_thread_mention" ? !hasAgent : parsed.case !== "fyi_message" && !hasAgent;
+
+  // Process asynchronously so OS webhook forwarding does not time out.
+  void handleSlackWebhookAsync({
+    parsed,
+    eventId,
+    requestId,
+    precomputedHasAgent: hasAgent,
+  }).catch((error) => {
+    logger.error("[Slack Webhook] Failed to handle webhook", { error, eventId, requestId });
+  });
+  return c.json({
+    success: true,
+    queued: true,
+    created,
+    case: responseCase,
+    eventId,
+    requestId,
+  });
+});
+
+async function handleSlackWebhookAsync(params: {
+  parsed: ParsedMessage | ParsedReaction;
+  eventId: string;
+  requestId: string;
+  precomputedThreadTs?: string;
+  precomputedHasAgent?: boolean;
+}): Promise<void> {
+  const { parsed, eventId, requestId, precomputedThreadTs, precomputedHasAgent } = params;
+
+  // Reaction events: lookup the parent thread, then forward to the existing agent if present.
+  if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
+    const threadTs =
+      precomputedThreadTs ?? (await lookupThreadTsForMessage(parsed.channel, parsed.itemTs));
+    if (!threadTs) {
+      logger.log("[Slack Webhook] Ignored reaction: thread not found", { eventId, requestId });
+      return;
+    }
+
+    const agentPath = getAgentPath(threadTs);
+    const hasAgent = precomputedHasAgent ?? (await activeAgentExists(agentPath));
+    if (!hasAgent) {
+      logger.log("[Slack Webhook] Ignored reaction: no agent", { agentPath, eventId, requestId });
+      return;
+    }
+
+    await registerSlackWork({
+      agentPath,
+      channel: parsed.channel,
+      threadTs,
+      emojiTimestamp: threadTs,
+      emoji: "eyes",
+      requestId,
+    });
+
+    const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    return;
   }
 
   const messageParsed = parsed as ParsedMessage;
   const { event, threadTs } = messageParsed;
   const agentPath = getAgentPath(threadTs);
+  const hasAgent = precomputedHasAgent ?? (await activeAgentExists(agentPath));
 
-  try {
-    const hasAgent = await activeAgentExists(agentPath);
+  if (messageParsed.case === "new_thread_mention") {
+    const messageTs = event.ts || threadTs;
+    await registerSlackWork({
+      agentPath,
+      channel: event.channel || "",
+      threadTs,
+      emojiTimestamp: messageTs,
+      emoji: "eyes",
+      requestId,
+    });
 
-    if (messageParsed.case === "new_thread_mention") {
-      const messageTs = event.ts || threadTs;
-      await registerSlackWork({
-        agentPath,
-        channel: event.channel || "",
-        threadTs,
-        emojiTimestamp: messageTs,
-        emoji: "eyes",
-        requestId,
-      });
-
-      if (hasAgent) {
-        const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-        await sendToAgentGateway(agentPath, { type: "prompt", message });
-        return c.json({
-          success: true,
-          agentPath,
-          created: false,
-          case: "mid_thread_mention",
-          eventId,
-          requestId,
-        });
-      }
-
-      const message = formatNewThreadMentionMessage(event, threadTs, eventId);
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
-      return c.json({
-        success: true,
-        agentPath,
-        created: true,
-        case: "new_thread_mention",
-        eventId,
-        requestId,
-      });
-    }
-
-    if (messageParsed.case === "mid_thread_mention") {
-      const messageTs = event.ts || threadTs;
-      await registerSlackWork({
-        agentPath,
-        channel: event.channel || "",
-        threadTs,
-        emojiTimestamp: messageTs,
-        emoji: "eyes",
-        requestId,
-      });
-
-      const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
-      return c.json({
-        success: true,
-        agentPath,
-        created: !hasAgent,
-        case: "mid_thread_mention",
-        eventId,
-        requestId,
-      });
-    }
-
-    if (messageParsed.case === "fyi_message") {
-      if (!hasAgent) {
-        return c.json({
-          success: true,
-          message: "Ignored: no mention and no existing agent",
-          eventId,
-          requestId,
-        });
-      }
-
-      await registerSlackWork({
-        agentPath,
-        channel: event.channel || "",
-        threadTs,
-        emojiTimestamp: threadTs,
-        emoji: "thinking_face",
-        requestId,
-      });
-
-      const message = formatFyiMessage(event, threadTs, eventId);
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
-      return c.json({
-        success: true,
-        agentPath,
-        created: false,
-        case: "fyi_message",
-        eventId,
-        requestId,
-      });
-    }
-
-    return c.json({ error: "Unknown message case", requestId }, 500);
-  } catch (error) {
-    logger.error("[Slack Webhook] Failed to handle webhook", error);
-    return c.json({ error: "Internal server error", requestId }, 500);
+    const message = hasAgent
+      ? formatMidThreadMentionMessage(event, threadTs, eventId)
+      : formatNewThreadMentionMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    return;
   }
-});
+
+  if (messageParsed.case === "mid_thread_mention") {
+    const messageTs = event.ts || threadTs;
+    await registerSlackWork({
+      agentPath,
+      channel: event.channel || "",
+      threadTs,
+      emojiTimestamp: messageTs,
+      emoji: "eyes",
+      requestId,
+    });
+
+    const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    return;
+  }
+
+  if (messageParsed.case === "fyi_message") {
+    if (!hasAgent) {
+      logger.log("[Slack Webhook] Ignored FYI: no existing agent", { eventId, requestId });
+      return;
+    }
+
+    await registerSlackWork({
+      agentPath,
+      channel: event.channel || "",
+      threadTs,
+      emojiTimestamp: threadTs,
+      emoji: "thinking_face",
+      requestId,
+    });
+
+    const message = formatFyiMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    return;
+  }
+}
 
 function parseWebhookPayload(
   payload: SlackWebhookPayload,
