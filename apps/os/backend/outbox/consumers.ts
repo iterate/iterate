@@ -32,6 +32,17 @@ export const registerConsumers = () => {
       });
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
+      // Guard against duplicate probes — only probe machines still in "starting" state.
+      // A concurrent reportStatus or a duplicate outbox delivery could fire this again
+      // after the machine has already been activated or archived.
+      if (machine.state !== "starting") {
+        logger.info("[outbox] Skipping readiness probe, machine no longer starting", {
+          machineId,
+          state: machine.state,
+        });
+        return `skipped: machine state is ${machine.state}`;
+      }
+
       const probeResult = await probeMachineReadiness(machine, env);
 
       if (!probeResult.ok) {

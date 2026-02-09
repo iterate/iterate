@@ -145,6 +145,10 @@ export const opencodeHarness: AgentHarness = {
       async () => {
         const client = createClient({ directory: params.workingDirectory });
         const config = getConfig();
+        if (config.defaultModel && typeof config.defaultModel !== "function") {
+          console.warn("defaultModel is not a function, deleting");
+          delete config.defaultModel;
+        }
 
         // Track session for acknowledgment lifecycle
         await withSpan(
