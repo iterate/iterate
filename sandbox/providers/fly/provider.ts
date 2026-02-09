@@ -17,6 +17,7 @@ const MAX_WAIT_TIMEOUT_SECONDS = 60;
 const DEFAULT_WEB_INTERNAL_PORT = 3000;
 const DEFAULT_SERVICE_PORTS = [3001, 4096, 7777, 9876];
 const DEFAULT_FLY_ORG = "iterate";
+const DEFAULT_FLY_REGION = "lhr";
 const DEFAULT_FLY_IMAGE = "registry.fly.io/iterate-sandbox-image:main";
 const DEFAULT_FLY_MACHINE_CPUS = 2;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
@@ -28,15 +29,11 @@ const LIST_APPS_PAGE_SIZE = 100;
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
   FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
-  FLY_REGION: z.string().default("ord"),
-  FLY_IMAGE: z.string().default(DEFAULT_FLY_IMAGE),
-  SANDBOX_FLY_MACHINE_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
-  SANDBOX_FLY_MACHINE_MEMORY_MB: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(DEFAULT_FLY_MACHINE_MEMORY_MB),
-  SANDBOX_FLY_APP_NAME: z.string(),
+  FLY_DEFAULT_REGION: z.string().default(DEFAULT_FLY_REGION),
+  FLY_DEFAULT_IMAGE: z.string().default(DEFAULT_FLY_IMAGE),
+  FLY_DEFAULT_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
+  FLY_DEFAULT_MEMORY_MB: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_MEMORY_MB),
+  FLY_APP_NAME_PREFIX: z.string(),
   FLY_NETWORK: z.string().optional(),
   FLY_BASE_DOMAIN: z.string().default("fly.dev"),
 });
@@ -112,16 +109,6 @@ const FLY_ORG_APPS_QUERY = `
   }
 `;
 
-function withFlyToken(env: Record<string, string | undefined>): Record<string, string | undefined> {
-  if (env.FLY_API_TOKEN || !env.FLY_API_KEY) {
-    return env;
-  }
-  return {
-    ...env,
-    FLY_API_TOKEN: env.FLY_API_KEY,
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -184,8 +171,8 @@ function buildSandboxAppName(params: { prefix: string; base: string; suffix: str
 
 function isSandboxAppName(params: { env: FlyEnv; appName: string }): boolean {
   const { env, appName } = params;
-  const legacyName = env.SANDBOX_FLY_APP_NAME;
-  return appName === legacyName || appName.startsWith(`${legacyName}-`);
+  const appNamePrefix = env.FLY_APP_NAME_PREFIX;
+  return appName === appNamePrefix || appName.startsWith(`${appNamePrefix}-`);
 }
 
 async function flyApi<T = unknown>(params: {
@@ -443,7 +430,7 @@ export class FlySandbox extends Sandbox {
     this.providerId = encodeProviderId(this.appName, this.machineId);
   }
 
-  async getPreviewUrl(opts: { port: number }): Promise<string> {
+  async getBaseUrl(opts: { port: number }): Promise<string> {
     return buildPreviewUrl({
       baseDomain: this.env.FLY_BASE_DOMAIN,
       appName: this.appName,
@@ -608,11 +595,11 @@ export class FlyProvider extends SandboxProvider {
 
   constructor(rawEnv: Record<string, string | undefined>) {
     super(rawEnv);
-    this.parseEnv(withFlyToken(rawEnv));
+    this.parseEnv(rawEnv);
   }
 
   get defaultSnapshotId(): string {
-    return this.env.FLY_IMAGE;
+    return this.env.FLY_DEFAULT_IMAGE;
   }
 
   async create(opts: CreateSandboxOptions): Promise<FlySandbox> {
@@ -627,13 +614,14 @@ export class FlyProvider extends SandboxProvider {
     };
 
     const appName = buildSandboxAppName({
-      prefix: this.env.SANDBOX_FLY_APP_NAME,
+      prefix: this.env.FLY_APP_NAME_PREFIX,
       base,
       suffix,
     });
 
     await ensureFlyAppExists({ env: this.env, appName });
     await ensureFlyIngress({ env: this.env, appName });
+    const flyRegion = this.env.FLY_DEFAULT_REGION;
 
     const createPayload = await flyApi<unknown>({
       env: this.env,
@@ -641,15 +629,15 @@ export class FlyProvider extends SandboxProvider {
       path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
       body: {
         name: `sandbox-${base}-${suffix}`.slice(0, 63),
-        region: this.env.FLY_REGION,
+        region: flyRegion,
         skip_launch: false,
         config: {
           image: opts.providerSnapshotId ?? this.defaultSnapshotId,
           env: envVars,
           guest: {
             cpu_kind: "shared",
-            cpus: this.env.SANDBOX_FLY_MACHINE_CPUS,
-            memory_mb: this.env.SANDBOX_FLY_MACHINE_MEMORY_MB,
+            cpus: this.env.FLY_DEFAULT_CPUS,
+            memory_mb: this.env.FLY_DEFAULT_MEMORY_MB,
           },
           restart: { policy: "always" },
           services: buildServices(),
@@ -675,7 +663,7 @@ export class FlyProvider extends SandboxProvider {
   get(providerId: string): FlySandbox | null {
     const decoded = decodeProviderId({
       providerId,
-      fallbackAppName: this.env.SANDBOX_FLY_APP_NAME,
+      fallbackAppName: this.env.FLY_APP_NAME_PREFIX,
     });
     if (!decoded) return null;
 

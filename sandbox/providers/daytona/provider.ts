@@ -22,9 +22,9 @@ import { slugify } from "../utils.ts";
 const DaytonaEnv = z.object({
   DAYTONA_API_KEY: z.string(),
   DAYTONA_ORG_ID: z.string().optional(),
-  DAYTONA_SNAPSHOT_NAME: z.string(),
-  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: z.string().optional(),
-  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: z.string().optional(),
+  DAYTONA_DEFAULT_SNAPSHOT: z.string(),
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: z.string().optional(),
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: z.string().optional(),
   APP_STAGE: z.string().optional(),
   DOPPLER_CONFIG: z.string().optional(),
 });
@@ -48,7 +48,7 @@ export class DaytonaSandbox extends Sandbox {
     this.providerId = sandboxId;
   }
 
-  async getPreviewUrl(opts: { port: number }): Promise<string> {
+  async getBaseUrl(opts: { port: number }): Promise<string> {
     return `https://${opts.port}-${this.providerId}.proxy.daytona.works`;
   }
 
@@ -150,7 +150,7 @@ export class DaytonaProvider extends SandboxProvider {
   }
 
   get defaultSnapshotId(): string {
-    return this.env.DAYTONA_SNAPSHOT_NAME;
+    return this.env.DAYTONA_DEFAULT_SNAPSHOT;
   }
 
   async create(opts: CreateSandboxOptions): Promise<DaytonaSandbox> {
@@ -168,11 +168,11 @@ export class DaytonaProvider extends SandboxProvider {
       63,
     );
 
-    const autoStopInterval = this.env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL
-      ? Number(this.env.DAYTONA_SANDBOX_AUTO_STOP_INTERVAL)
+    const autoStopInterval = this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES
+      ? Number(this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES)
       : undefined;
-    const autoDeleteInterval = this.env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL
-      ? Number(this.env.DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL)
+    const autoDeleteInterval = this.env.DAYTONA_DEFAULT_AUTO_DELETE_MINUTES
+      ? Number(this.env.DAYTONA_DEFAULT_AUTO_DELETE_MINUTES)
       : undefined;
 
     const envVars = { ...opts.envVars };

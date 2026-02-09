@@ -345,32 +345,30 @@ describe("Egress Proxy - Connector Detection", () => {
 });
 
 describe("Egress Proxy - Connect/Reauth URLs", () => {
-  test("builds connect URL with org/project context", () => {
+  test("builds connect URL with project context", () => {
     const url = getConnectUrl(CONNECTORS.slack, {
-      orgSlug: "acme",
       projectSlug: "web-app",
     });
-    expect(url).toBe("/orgs/acme/projects/web-app/connectors");
+    expect(url).toBe("/proj/web-app/connectors");
   });
 
   test("falls back to /settings/connectors without context", () => {
     expect(getConnectUrl(CONNECTORS.slack, {})).toBe("/settings/connectors");
-    expect(getConnectUrl(CONNECTORS.slack, { orgSlug: "acme" })).toBe("/settings/connectors");
   });
 
   test("builds full reauth URL with base URL", () => {
     const url = getFullReauthUrl(
       CONNECTORS.google,
-      { orgSlug: "acme", projectSlug: "web-app" },
+      { projectSlug: "web-app" },
       "https://app.iterate.com",
     );
-    expect(url).toBe("https://app.iterate.com/orgs/acme/projects/web-app/connectors");
+    expect(url).toBe("https://app.iterate.com/proj/web-app/connectors");
   });
 
   test("uses default base URL when not provided", () => {
     // GitHub goes to /repo, others go to /connectors
-    const url = getFullReauthUrl(CONNECTORS.github, { orgSlug: "acme", projectSlug: "api" });
-    expect(url).toBe("https://iterate.com/orgs/acme/projects/api/repo");
+    const url = getFullReauthUrl(CONNECTORS.github, { projectSlug: "api" });
+    expect(url).toBe("https://iterate.com/proj/api/repo");
   });
 });
 
@@ -382,7 +380,7 @@ describe("Egress Proxy - Error Response Types", () => {
     const error = {
       code: "NOT_FOUND" as const,
       message: "Slack is not connected. Please connect it first.",
-      connectUrl: "https://iterate.com/orgs/acme/projects/web/connectors",
+      connectUrl: "https://iterate.com/proj/web/connectors",
     };
 
     expect(error.code).toBe("NOT_FOUND");
@@ -407,7 +405,7 @@ describe("Egress Proxy - Error Response Types", () => {
     const error = {
       code: "REFRESH_FAILED" as const,
       message: "Authentication failed and token refresh was unsuccessful.",
-      reauthUrl: "https://iterate.com/orgs/acme/projects/web/connectors",
+      reauthUrl: "https://iterate.com/proj/web/connectors",
     };
 
     expect(error.code).toBe("REFRESH_FAILED");

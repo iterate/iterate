@@ -11,11 +11,11 @@ const repoRoot = join(__dirname, "..");
 const derivedEnvVars = getDockerEnvVars(repoRoot);
 const overrideKeys = [
   "DOCKER_COMPOSE_PROJECT_NAME",
-  "DOCKER_GIT_COMMON_DIR",
-  "DOCKER_GIT_GITDIR",
-  "DOCKER_GIT_COMMIT",
-  "DOCKER_GIT_BRANCH",
-  "DOCKER_GIT_REPO_ROOT",
+  "DOCKER_HOST_GIT_COMMON_DIR",
+  "DOCKER_HOST_GIT_DIR",
+  "DOCKER_HOST_GIT_COMMIT",
+  "DOCKER_HOST_GIT_BRANCH",
+  "DOCKER_HOST_GIT_REPO_ROOT",
 ] as const;
 const env = {
   ...process.env,

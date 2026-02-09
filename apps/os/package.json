@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "build": "doppler run -- vite build",
-    "deploy:prd": "doppler run --config prd --preserve-env=DAYTONA_SNAPSHOT_NAME,VITE_DAYTONA_SNAPSHOT_NAME -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
-    "deploy:stg": "doppler run --config stg --preserve-env=DAYTONA_SNAPSHOT_NAME,VITE_DAYTONA_SNAPSHOT_NAME -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
+    "deploy:prd": "doppler run --config prd --preserve-env=DAYTONA_DEFAULT_SNAPSHOT,VITE_DAYTONA_DEFAULT_SNAPSHOT -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
+    "deploy:stg": "doppler run --config stg --preserve-env=DAYTONA_DEFAULT_SNAPSHOT,VITE_DAYTONA_DEFAULT_SNAPSHOT -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy": "pnpm deploy:${APP_STAGE}",
     "dev": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER'",
     "dev:tunnel": "DEV_TUNNEL=1 pnpm dev",

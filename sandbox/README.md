@@ -28,7 +28,10 @@ Local build (uses current repo checkout):
 pnpm docker:build
 ```
 
-Local builds tag both `:local` and `:sha-<sha>` (or `:sha-<sha>-$ITERATE_USER-dirty` if dirty, e.g. `sha-abc123-jonas-dirty`). The `:local` tag always points at the most recent local build.
+Default local build platform is multi-arch: `linux/amd64,linux/arm64`.
+Override with `SANDBOX_BUILD_PLATFORM` (for example `linux/arm64`).
+
+For multi-platform local builds, the build is pushed to Depot registry and then the host arch image is pulled/tagged to `iterate-sandbox:local` so the Docker provider can still run it locally.
 
 Push to Fly registry via Depot build:
 
@@ -59,12 +62,12 @@ If dependencies change, run `pnpm install` inside the container.
 
 ### Env vars (compose)
 
-- `DOCKER_GIT_REPO_ROOT` (host repo root)
-- `DOCKER_GIT_GITDIR` (worktree git dir)
-- `DOCKER_GIT_COMMON_DIR` (main .git)
-- `DOCKER_IMAGE_NAME` (optional override; script prefers `:local` if present, else `:main`)
-- `DOCKER_SERVICE_TRANSPORT` (`port-map` or `cloudflare-tunnel`; default `port-map`)
-- `DOCKER_CLOUDFLARE_TUNNEL_PORTS` (optional CSV, default `3000,3001,4096,9876`)
+- `DOCKER_HOST_GIT_REPO_ROOT` (host repo root)
+- `DOCKER_HOST_GIT_DIR` (worktree git dir)
+- `DOCKER_HOST_GIT_COMMON_DIR` (main .git)
+- `DOCKER_DEFAULT_IMAGE` (optional override; script prefers `:local` if present, else `:main`)
+- `DOCKER_DEFAULT_SERVICE_TRANSPORT` (`port-map` or `cloudflare-tunnel`; default `port-map`)
+- `DOCKER_TUNNEL_PORTS` (optional CSV, default `3000,3001,4096,9876`)
 - `CLOUDFLARE_TUNNEL_HOSTNAME` (optional; if set, pidnap runs a `cloudflared` tunnel process)
 - `CLOUDFLARE_TUNNEL_URL` (optional; defaults to `http://127.0.0.1:3000`)
 
@@ -96,7 +99,7 @@ Requires `daytona` CLI (`daytona login`).
 ## Push from local
 
 ```bash
-FLY_TOKEN="${FLY_API_TOKEN:-${FLY_API_KEY:-}}"
+FLY_TOKEN="${FLY_API_TOKEN:-}"
 flyctl apps create iterate-sandbox-image -o "$FLY_ORG" -y
 flyctl auth docker -t "$FLY_TOKEN"
 
@@ -105,6 +108,41 @@ depot build --platform linux/amd64 --progress=plain --push \
   -t registry.fly.io/iterate-sandbox-image:sha-$(git rev-parse HEAD) \
   -f sandbox/Dockerfile .
 ```
+
+## Fly app bootstrap and cleanup
+
+Create/ensure env Fly apps and sync Doppler:
+
+```bash
+pnpm sandbox fly:bootstrap-apps
+```
+
+This ensures Fly apps `dev`, `stg`, `prd` exist and sets:
+
+- `os/dev`: `FLY_APP_NAME_PREFIX=dev`
+- `os/stg`: `FLY_APP_NAME_PREFIX=stg`
+- `os/prd`: `FLY_APP_NAME_PREFIX=prd`
+
+To skip Doppler writes:
+
+```bash
+pnpm sandbox fly:bootstrap-apps -- --no-update-doppler
+```
+
+Cleanup stale Fly machines (by `updated_at`):
+
+```bash
+# Usage: pnpm sandbox fly:cleanup -- [timeframe] [action] [appName]
+# Defaults: timeframe=24h, action=stop, appName=FLY_APP_NAME_PREFIX or dev
+
+# Stop stale machines in dev older than 24h (default action)
+pnpm sandbox fly:cleanup -- 24h stop dev
+
+# Delete stale machines in stg older than 7d
+pnpm sandbox fly:cleanup -- 7d delete stg
+```
+
+`fly:cleanup` is intentionally restricted to `dev` and `stg`.
 
 ## Testing
 
@@ -123,7 +161,7 @@ Default snapshot IDs:
 
 - Docker: `iterate-sandbox:local` (fallbacks to `iterate-sandbox:main`, then `registry.fly.io/iterate-sandbox-image:main`)
 - Fly: `registry.fly.io/iterate-sandbox-image:main`
-- Daytona: reads from `DAYTONA_SNAPSHOT_NAME` in Doppler
+- Daytona: reads from `DAYTONA_DEFAULT_SNAPSHOT` in Doppler
 
 ### Run Locally
 

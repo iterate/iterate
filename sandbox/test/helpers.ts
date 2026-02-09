@@ -11,7 +11,7 @@
  *   Image/snapshot override to use for tests.
  *   Default for Docker: "iterate-sandbox:local" (with fallback resolution in provider)
  *   Default for Fly: "registry.fly.io/iterate-sandbox-image:main"
- *   Default for Daytona: reads from DAYTONA_SNAPSHOT_NAME env var
+ *   Default for Daytona: reads from DAYTONA_DEFAULT_SNAPSHOT env var
  *
  * SANDBOX_TEST_BASE_DOCKER_IMAGE
  *   Base image used by provider smoke tests (docker only).
@@ -30,16 +30,16 @@
  *
  * Docker provider requires:
  *   - DOCKER_HOST (optional, defaults to tcp://127.0.0.1:2375)
- *   - DOCKER_SERVICE_TRANSPORT (optional: "port-map" | "cloudflare-tunnel")
+ *   - DOCKER_DEFAULT_SERVICE_TRANSPORT (optional: "port-map" | "cloudflare-tunnel")
  *
  * Daytona provider requires (typically from Doppler):
  *   - DAYTONA_API_KEY
  *   - DAYTONA_ORG_ID (optional)
- *   - DAYTONA_SNAPSHOT_NAME (used as default if SANDBOX_TEST_SNAPSHOT_ID not set)
+ *   - DAYTONA_DEFAULT_SNAPSHOT (used as default if SANDBOX_TEST_SNAPSHOT_ID not set)
  *
  * Fly provider requires (typically from Doppler):
- *   - FLY_API_TOKEN (or FLY_API_KEY)
- *   - FLY_IMAGE (optional, defaults to registry.fly.io/iterate-sandbox-image:main)
+ *   - FLY_API_TOKEN
+ *   - FLY_DEFAULT_IMAGE (optional, defaults to registry.fly.io/iterate-sandbox-image:main)
  *
  * ## Usage Examples
  *
@@ -313,16 +313,17 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
   // Apply snapshot ID override if set
   if (TEST_CONFIG.snapshotId) {
     if (TEST_CONFIG.provider === "docker") {
-      env.DOCKER_IMAGE_NAME = TEST_CONFIG.snapshotId;
+      env.DOCKER_DEFAULT_IMAGE = TEST_CONFIG.snapshotId;
     } else if (TEST_CONFIG.provider === "daytona") {
-      env.DAYTONA_SNAPSHOT_NAME = TEST_CONFIG.snapshotId;
+      env.DAYTONA_DEFAULT_SNAPSHOT = TEST_CONFIG.snapshotId;
     } else {
-      env.FLY_IMAGE = TEST_CONFIG.snapshotId;
+      env.FLY_DEFAULT_IMAGE = TEST_CONFIG.snapshotId;
     }
   }
 
   switch (TEST_CONFIG.provider) {
     case "docker":
+      env.DOCKER_HOST_GIT_REPO_ROOT ??= ITERATE_REPO_PATH_ON_HOST;
       return new DockerProvider(env);
     case "daytona":
       return new DaytonaProvider(env);

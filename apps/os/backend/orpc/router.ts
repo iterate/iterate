@@ -149,6 +149,28 @@ export const reportStatus = os.machines.reportStatus
     // If machine is in 'starting' state and daemon reports ready, activate it
     // This detaches any existing active machine and promotes this one to active
     if (status === "ready" && machineWithOrg.state === "starting") {
+      // If externalId is empty, provisioning hasn't completed yet — the container exists
+      // but the provisionPromise hasn't updated the DB with the container ID yet.
+      // Just record daemonStatus; the provisionPromise will activate when it finishes.
+      if (!machineWithOrg.externalId) {
+        await db
+          .update(schema.machine)
+          .set({ metadata: updatedMetadata })
+          .where(eq(schema.machine.id, machine.id));
+
+        logger.info("Machine daemon ready, awaiting provisioning to set externalId", {
+          machineId: machine.id,
+        });
+
+        executionCtx.waitUntil(
+          broadcastInvalidation(env).catch((err) => {
+            logger.error("Failed to broadcast invalidation", err);
+          }),
+        );
+
+        return { success: true };
+      }
+
       // Use transaction to ensure atomic activation - prevents race conditions
       // if two machines report ready simultaneously
       const detachedMachines = await db.transaction(async (tx) => {

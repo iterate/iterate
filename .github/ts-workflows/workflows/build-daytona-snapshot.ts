@@ -19,7 +19,7 @@ import * as utils from "../utils/index.ts";
  *   my-job:
  *     needs: [build-daytona-snapshot]
  *     env:
- *       DAYTONA_SNAPSHOT_NAME: ${{ needs.build-daytona-snapshot.outputs.snapshot_name }}
+ *       DAYTONA_DEFAULT_SNAPSHOT: ${{ needs.build-daytona-snapshot.outputs.snapshot_name }}
  */
 export default workflow({
   name: "Build Daytona Snapshot",

@@ -36,6 +36,8 @@ async function buildMachineForwardFetcher(
     logger.warn("[Slack Webhook] Failed to build forward fetcher", {
       machineId: machine.id,
       type: machine.type,
+      externalId: machine.externalId,
+      metadata,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -381,9 +383,7 @@ slackApp.get(
       }),
     );
 
-    const redirectPath =
-      callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
+    const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );

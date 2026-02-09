@@ -13,8 +13,8 @@ const REQUIRE_CLOUDFLARE_TUNNEL_TEST_SUCCESS =
 describe.runIf(RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS)("Docker Cloudflare Tunnel", () => {
   test.scoped({
     envOverrides: {
-      DOCKER_SERVICE_TRANSPORT: "cloudflare-tunnel",
-      DOCKER_CLOUDFLARE_TUNNEL_PORTS: "3000",
+      DOCKER_DEFAULT_SERVICE_TRANSPORT: "cloudflare-tunnel",
+      DOCKER_TUNNEL_PORTS: "3000",
     },
     sandboxOptions: {
       id: "docker-cloudflare-tunnel-test",
@@ -34,7 +34,7 @@ describe.runIf(RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS)("Docker Cloudflare Tunnel", (
 
     let previewUrl = "";
     try {
-      previewUrl = await sandbox.getPreviewUrl({ port: 3000 });
+      previewUrl = await sandbox.getBaseUrl({ port: 3000 });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!REQUIRE_CLOUDFLARE_TUNNEL_TEST_SUCCESS && isCloudflareRateLimitedError(message)) {

@@ -39,12 +39,12 @@ export function getProjectSandboxProviderOptions(
   }
 
   if (flyEnabled) {
-    const hasFlyToken = Boolean(env.FLY_API_TOKEN ?? env.FLY_API_KEY);
-    const hasFlyAppName = Boolean(env.SANDBOX_FLY_APP_NAME);
+    const hasFlyToken = Boolean(env.FLY_API_TOKEN);
+    const hasFlyAppName = Boolean(env.FLY_APP_NAME_PREFIX);
     const disabledReason = !hasFlyToken
-      ? "FLY_API_TOKEN (or FLY_API_KEY) not set"
+      ? "FLY_API_TOKEN not set"
       : !hasFlyAppName
-        ? "SANDBOX_FLY_APP_NAME not set"
+        ? "FLY_APP_NAME_PREFIX not set"
         : undefined;
     options.push({
       type: "fly",

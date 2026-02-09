@@ -116,7 +116,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     externalId,
     metadata,
   });
-  const baseUrl = await runtime.getPreviewUrl(portNum);
+  const baseUrl = await runtime.getBaseUrl(portNum);
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
   const pathWithQuery = url.search ? `${path}${url.search}` : path;

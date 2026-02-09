@@ -14,7 +14,7 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import type { CloudflareEnv } from "../../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
@@ -48,6 +48,12 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   projectSlug: string,
 ) {
   const metadata = (machine.metadata as Record<string, unknown>) ?? {};
+
+  // Machines still being provisioned have no externalId yet — skip provider enrichment
+  if (!machine.externalId) {
+    return { ...machine, metadata, services: [] };
+  }
+
   const buildProxyUrl = (port: number) =>
     `/org/${orgSlug}/proj/${projectSlug}/${machine.id}/proxy/${port}/`;
   const runtime = await createMachineRuntime({
@@ -60,7 +66,7 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   // Build service options for each daemon with web UI
   const services = await Promise.all(
     getDaemonsWithWebUI().map(async (daemon) => {
-      const nativeUrl = await runtime.getPreviewUrl(daemon.internalPort);
+      const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
       const proxyUrl = buildProxyUrl(daemon.internalPort);
       const options: ServiceOption[] = [];
 
@@ -248,6 +254,11 @@ export const machineRouter = router({
           metadata: input.metadata,
         });
 
+        // Provision in background — the DB record is already created
+        if (result.provisionPromise) {
+          waitUntil(result.provisionPromise);
+        }
+
         // Return apiKey for local machines - user needs this to configure their daemon
         if (result.apiKey) {
           return { ...result.machine, apiKey: result.apiKey };
@@ -381,7 +392,7 @@ export const machineRouter = router({
 
       // Call daemon's restartDaemon endpoint
       const [daemonBaseUrl, daemonFetcher] = await Promise.all([
-        runtime.getPreviewUrl(3000),
+        runtime.getBaseUrl(3000),
         runtime.getFetcher(3000),
       ]);
       const daemonClient = createDaemonTrpcClient({
@@ -497,7 +508,7 @@ export const machineRouter = router({
         metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
       });
       const [daemonBaseUrl, daemonFetcher] = await Promise.all([
-        runtime.getPreviewUrl(3000),
+        runtime.getBaseUrl(3000),
         runtime.getFetcher(3000),
       ]);
       const daemonClient = createDaemonTrpcClient({

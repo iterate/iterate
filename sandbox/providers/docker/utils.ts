@@ -95,14 +95,14 @@ export function getDockerEnvVars(repoRoot: string): Record<string, string> {
 
   const envVars: Record<string, string> = {
     DOCKER_COMPOSE_PROJECT_NAME: getComposeProjectName(gitInfo.repoRoot),
-    DOCKER_GIT_COMMON_DIR: gitInfo.commonDir,
-    DOCKER_GIT_GITDIR: gitInfo.gitDir,
-    DOCKER_GIT_COMMIT: gitInfo.commit,
-    DOCKER_GIT_REPO_ROOT: gitInfo.repoRoot,
+    DOCKER_HOST_GIT_COMMON_DIR: gitInfo.commonDir,
+    DOCKER_HOST_GIT_DIR: gitInfo.gitDir,
+    DOCKER_HOST_GIT_COMMIT: gitInfo.commit,
+    DOCKER_HOST_GIT_REPO_ROOT: gitInfo.repoRoot,
   };
 
   if (gitInfo.branch) {
-    envVars.DOCKER_GIT_BRANCH = gitInfo.branch;
+    envVars.DOCKER_HOST_GIT_BRANCH = gitInfo.branch;
   }
 
   return envVars;
@@ -118,7 +118,7 @@ export function resolveBaseImage(params: { repoRoot: string; imageName?: string 
     return imageName;
   }
 
-  const envImage = process.env.DOCKER_IMAGE_NAME;
+  const envImage = process.env.DOCKER_DEFAULT_IMAGE;
   if (envImage) {
     return envImage;
   }

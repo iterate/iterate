@@ -248,7 +248,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
 
   test("daemon accessible", async ({ sandbox, expect }) => {
     await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
-    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
 
     // Verify health endpoint from host
     await expect
@@ -269,7 +269,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
     await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
     await waitForServiceHealthy({ sandbox, process: "daemon-frontend" });
 
-    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
 
     // First verify the proxy is working by polling for health endpoint
     await expect
@@ -306,7 +306,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
 
   test("serves assets and routes correctly", async ({ sandbox, expect }) => {
     await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
-    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
     const trpc = await getDaemonClientForSandbox<TRPCRouter>(sandbox);
 
     // index.html
@@ -396,7 +396,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
     const restored = await sandbox.exec(["cat", filePath]);
     expect(restored).toBe(fileContents);
 
-    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
     await expect
       .poll(
         async () => {

@@ -5,8 +5,8 @@ set -euo pipefail
 
 ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 
-HOST_GITDIR="${DOCKER_GIT_GITDIR:-/host/gitdir}"
-HOST_COMMONDIR="${DOCKER_GIT_COMMON_DIR:-/host/commondir}"
+HOST_GITDIR="${DOCKER_HOST_GIT_DIR:-/host/gitdir}"
+HOST_COMMONDIR="${DOCKER_HOST_GIT_COMMON_DIR:-/host/commondir}"
 
 if [[ ! -d "/host/repo-checkout" ]]; then
   echo "[entry] /host/repo-checkout not found. Ensure host repo mount is configured."

@@ -20,7 +20,7 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - Daytona create timeout explicitly set to 180s in provider.
    - Daytona-only timeout-heavy tests increased to avoid false negatives from remote startup latency.
 3. Review comments closed:
-   - Docker Zod v4 default bug fixed (`DOCKER_SYNC_FROM_HOST_REPO` now `optional().transform(...)`).
+   - Docker Zod v4 default bug fixed (`DOCKER_HOST_SYNC_ENABLED` now `optional().transform(...)`).
    - Daemon client helper now supports typed generic return (no untyped `createTRPCClient` usage at callsite).
    - Fly shared-egress test now cleanly skips when `FLY_API_TOKEN` is not present.
 4. Dependency boundary docs clarified in `sandbox/README.md`:
@@ -84,10 +84,10 @@ Validate that sandbox integration tests work against Daytona provider, not just 
 6. **Docker default image mismatch (local ergonomics)**
    - Symptom: Docker provider/test defaults pointed at remote tags while local builds produce `iterate-sandbox:local`.
    - Root cause: mixed legacy default names across provider/utils/scripts/tests.
-   - Fix: unify to `iterate-sandbox:local` for local defaults, keep fallback checks for GHCR tags, and align env precedence (`DOCKER_IMAGE_NAME` first).
+   - Fix: unify to `iterate-sandbox:local` for local defaults, keep fallback checks for GHCR tags, and align env precedence (`DOCKER_DEFAULT_IMAGE` first).
 
 7. **Docker host-sync requested but silently disabled**
-   - Symptom: `DOCKER_SYNC_FROM_HOST_REPO=true` could still run unsynced if git metadata resolution failed.
+   - Symptom: `DOCKER_HOST_SYNC_ENABLED=true` could still run unsynced if git metadata resolution failed.
    - Root cause: constructor treated missing git info as `undefined` and continued.
    - Fix: fail fast in constructor when sync is explicitly requested but git info cannot be resolved.
 
@@ -113,7 +113,7 @@ Validate that sandbox integration tests work against Daytona provider, not just 
 
 ### Still Not Great / Risk
 
-1. Daytona local dev config currently does not always include `DAYTONA_SNAPSHOT_NAME`.
+1. Daytona local dev config currently does not always include `DAYTONA_DEFAULT_SNAPSHOT`.
    - Without explicit `SANDBOX_TEST_SNAPSHOT_ID`, tests fail at provider env parse.
    - CI is fine because workflows set `SANDBOX_TEST_SNAPSHOT_ID`.
 2. Docker daemon on this machine intermittently stalls under long, mixed test runs.

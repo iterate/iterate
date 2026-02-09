@@ -20,6 +20,14 @@ const SERVICE_ICONS: Record<string, typeof Server> = {
   opencode: Code2,
 };
 
+function parseFlyExternalId(externalId: string): { appName: string; machineId: string } | null {
+  const separatorIndex = externalId.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === externalId.length - 1) return null;
+  const appName = externalId.slice(0, separatorIndex);
+  const machineId = externalId.slice(separatorIndex + 1);
+  return { appName, machineId };
+}
+
 function MachineDetailPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
   const navigate = useNavigate({ from: Route.fullPath });
@@ -143,6 +151,10 @@ function MachineDetailPage() {
   };
 
   const iterateDaemonService = services.find((s) => s.id === "iterate-daemon");
+  const flyMachine = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
+  const flyMachineUrl = flyMachine
+    ? `https://fly.io/apps/${flyMachine.appName}/machines/${flyMachine.machineId}`
+    : null;
 
   const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
@@ -156,6 +168,14 @@ function MachineDetailPage() {
   return (
     <div className="space-y-6 p-4">
       <HeaderActions>
+        {flyMachineUrl && (
+          <a href={flyMachineUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Fly
+            </Button>
+          </a>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -259,6 +279,26 @@ function MachineDetailPage() {
               </button>
             </dd>
           </div>
+        )}
+        {flyMachine && (
+          <>
+            <div>
+              <dt className="text-xs text-muted-foreground">Fly App</dt>
+              <dd className="mt-1 truncate font-mono text-xs">{flyMachine.appName}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Fly Machine</dt>
+              <dd className="mt-1">
+                <button
+                  onClick={() => copyToClipboard(flyMachine.machineId)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {flyMachine.machineId}
+                  <Copy className="h-3 w-3 opacity-50" />
+                </button>
+              </dd>
+            </div>
+          </>
         )}
       </div>
 

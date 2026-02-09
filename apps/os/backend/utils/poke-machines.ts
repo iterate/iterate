@@ -38,7 +38,7 @@ async function buildDaemonTransport(
       metadata,
     });
     const [baseUrl, fetcher] = await Promise.all([
-      runtime.getPreviewUrl(3000),
+      runtime.getBaseUrl(3000),
       runtime.getFetcher(3000),
     ]);
     return { baseUrl, fetcher };

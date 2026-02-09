@@ -6,7 +6,7 @@ ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
 # Docker provider: sync host repo into container
 # In local development this behaviour can be toggled on and off in the os UI and is
 # implemented in sandbox/providers/docker/provider.ts
-if [[ -n "${DOCKER_SYNC_FROM_HOST_REPO:-}" ]]; then
+if [[ -n "${DOCKER_HOST_SYNC_ENABLED:-}" ]]; then
   bash "${ITERATE_REPO}/sandbox/providers/docker/sync-repo-from-host.sh"
 fi
 
@@ -14,7 +14,7 @@ fi
 # where we want to exec commands in the container _after_ the initial sync.
 touch /tmp/reached-entrypoint
 
-if [[ "${DOCKER_SERVICE_TRANSPORT:-port-map}" == "cloudflare-tunnel" ]]; then
+if [[ "${DOCKER_DEFAULT_SERVICE_TRANSPORT:-port-map}" == "cloudflare-tunnel" ]]; then
   bash "${ITERATE_REPO}/sandbox/providers/docker/start-cloudflare-tunnels.sh" >/tmp/cloudflare-tunnels-bootstrap.log 2>&1 &
 fi
 

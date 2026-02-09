@@ -16,7 +16,9 @@ describe
   .concurrent(`Provider Base Image (${TEST_CONFIG.provider})`, () => {
     test.scoped({
       envOverrides:
-        TEST_CONFIG.provider === "daytona" ? { DAYTONA_SNAPSHOT_NAME: TEST_BASE_SNAPSHOT_ID } : {},
+        TEST_CONFIG.provider === "daytona"
+          ? { DAYTONA_DEFAULT_SNAPSHOT: TEST_BASE_SNAPSHOT_ID }
+          : {},
       sandboxOptions: {
         id: "base-image-test",
         name: "Base Image Test",
@@ -61,7 +63,7 @@ describe
           ].join(" "),
         ]);
 
-        const baseUrl = await sandbox.getPreviewUrl({ port: previewPort });
+        const baseUrl = await sandbox.getBaseUrl({ port: previewPort });
         // Fly sandboxes can be IPv6-only in some environments, making external fetch
         // from the local test runner unreliable even when the machine is healthy.
         if (TEST_CONFIG.provider === "fly") {
@@ -82,7 +84,7 @@ describe
           return;
         }
 
-        const fetchPreview = await sandbox.getFetch({ port: previewPort });
+        const fetchPreview = await sandbox.getFetcher({ port: previewPort });
 
         await expect
           .poll(

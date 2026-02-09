@@ -6,8 +6,6 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod/v4";
 import {
   Sandbox,
@@ -17,6 +15,7 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
+import { getPidnapClientForSandbox } from "../clients.ts";
 import {
   dockerApi,
   execInContainer,
@@ -24,10 +23,7 @@ import {
   rewriteLocalhost,
   type DockerInspect,
 } from "./api.ts";
-import { getGitInfo, resolveBaseImage, type DockerGitInfo } from "./utils.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPO_ROOT = join(__dirname, "../../..");
+import { resolveBaseImage, type DockerGitInfo } from "./utils.ts";
 
 const PIDNAP_PORT = 9876;
 const LIFECYCLE_TIMEOUT_MS = 120_000;
@@ -46,14 +42,16 @@ type DockerServiceTransport = "port-map" | "cloudflare-tunnel";
  * Zod schema for Docker provider environment variables.
  */
 const DockerEnv = z.object({
-  DOCKER_IMAGE_NAME: z.string().optional(),
+  DOCKER_DEFAULT_IMAGE: z.string().optional(),
   DOCKER_COMPOSE_PROJECT_NAME: z.string().optional(),
-  DOCKER_GIT_REPO_ROOT: z.string().optional(),
-  DOCKER_GIT_GITDIR: z.string().optional(),
-  DOCKER_GIT_COMMON_DIR: z.string().optional(),
-  DOCKER_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
-  DOCKER_CLOUDFLARE_TUNNEL_PORTS: z.string().optional(),
-  DOCKER_SYNC_FROM_HOST_REPO: z
+  DOCKER_HOST_GIT_REPO_ROOT: z.string(),
+  DOCKER_HOST_GIT_DIR: z.string().optional(),
+  DOCKER_HOST_GIT_COMMON_DIR: z.string().optional(),
+  DOCKER_HOST_GIT_COMMIT: z.string().optional(),
+  DOCKER_HOST_GIT_BRANCH: z.string().optional(),
+  DOCKER_DEFAULT_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
+  DOCKER_TUNNEL_PORTS: z.string().optional(),
+  DOCKER_HOST_SYNC_ENABLED: z
     .string()
     .optional()
     .transform((v) => v === "true"),
@@ -87,6 +85,9 @@ export class DockerSandbox extends Sandbox {
   }
 
   private async ensurePortsResolved(): Promise<void> {
+    if (!this.providerId) {
+      throw new Error("Cannot resolve ports: machine is still provisioning (no container ID yet)");
+    }
     const hasAllPorts = this.internalPorts.every((internalPort) => this.ports[internalPort]);
     if (hasAllPorts) return;
     this.ports = await resolveHostPorts({
@@ -152,7 +153,7 @@ export class DockerSandbox extends Sandbox {
     );
   }
 
-  async getPreviewUrl(opts: { port: number }): Promise<string> {
+  async getBaseUrl(opts: { port: number }): Promise<string> {
     if (this.serviceTransport === "cloudflare-tunnel") {
       return this.getCloudflarePreviewUrl(opts.port);
     }
@@ -260,21 +261,31 @@ export class DockerProvider extends SandboxProvider {
   constructor(rawEnv: Record<string, string | undefined>) {
     super(rawEnv);
     this.parseEnv(rawEnv); // Must call after super() since envSchema is a field declaration
-    this.repoRoot = this.env.DOCKER_GIT_REPO_ROOT ?? DEFAULT_REPO_ROOT;
-    if (this.env.DOCKER_SYNC_FROM_HOST_REPO) {
-      this.gitInfo = getGitInfo(this.repoRoot);
-      if (!this.gitInfo) {
+    this.repoRoot = this.env.DOCKER_HOST_GIT_REPO_ROOT;
+    if (this.env.DOCKER_HOST_SYNC_ENABLED) {
+      // Git info must be resolved at build/boot time (alchemy.run.ts) and injected
+      // as env vars — execSync is not available in the workerd/Vite SSR runtime.
+      const { DOCKER_HOST_GIT_DIR, DOCKER_HOST_GIT_COMMON_DIR, DOCKER_HOST_GIT_COMMIT } = this.env;
+      if (!DOCKER_HOST_GIT_DIR || !DOCKER_HOST_GIT_COMMON_DIR) {
         throw new Error(
-          "DOCKER_SYNC_FROM_HOST_REPO=true requires a git worktree; failed to resolve host git info",
+          "DOCKER_HOST_SYNC_ENABLED=true requires DOCKER_HOST_GIT_DIR and DOCKER_HOST_GIT_COMMON_DIR env vars " +
+            "(resolved by alchemy.run.ts at boot time)",
         );
       }
+      this.gitInfo = {
+        repoRoot: this.repoRoot,
+        gitDir: DOCKER_HOST_GIT_DIR,
+        commonDir: DOCKER_HOST_GIT_COMMON_DIR,
+        commit: DOCKER_HOST_GIT_COMMIT ?? "unknown",
+        branch: this.env.DOCKER_HOST_GIT_BRANCH,
+      };
     } else {
       this.gitInfo = undefined;
     }
   }
 
   get defaultSnapshotId(): string {
-    return resolveBaseImage({ repoRoot: this.repoRoot, imageName: this.env.DOCKER_IMAGE_NAME });
+    return resolveBaseImage({ repoRoot: this.repoRoot, imageName: this.env.DOCKER_DEFAULT_IMAGE });
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
@@ -308,24 +319,22 @@ export class DockerProvider extends SandboxProvider {
       binds.push(`${this.gitInfo.commonDir}:/host/commondir:ro`);
     }
 
+    // Rewrite localhost references so the container can reach host services
+    const rewrittenEnvVars = Object.fromEntries(
+      Object.entries(opts.envVars).map(([key, value]) => [key, rewriteLocalhost(String(value))]),
+    );
+
     const dockerEnv: Record<string, string> = {
+      ...rewrittenEnvVars,
       ITERATE_DEV: "true",
-      DOCKER_SERVICE_TRANSPORT: this.env.DOCKER_SERVICE_TRANSPORT,
-      ...(this.env.DOCKER_CLOUDFLARE_TUNNEL_PORTS
-        ? { DOCKER_CLOUDFLARE_TUNNEL_PORTS: this.env.DOCKER_CLOUDFLARE_TUNNEL_PORTS }
+      DOCKER_DEFAULT_SERVICE_TRANSPORT: this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
+      ...(this.env.DOCKER_TUNNEL_PORTS
+        ? { DOCKER_TUNNEL_PORTS: this.env.DOCKER_TUNNEL_PORTS }
         : {}),
-      ...(this.gitInfo ? { DOCKER_SYNC_FROM_HOST_REPO: "true" } : {}),
+      ...(this.gitInfo ? { DOCKER_HOST_SYNC_ENABLED: "true" } : {}),
     };
 
     const envArray = sanitizeEnvVars(dockerEnv);
-
-    const iterateEnv: Record<string, string> = { ...opts.envVars };
-    if (iterateEnv.ITERATE_OS_BASE_URL) {
-      iterateEnv.ITERATE_OS_BASE_URL = rewriteLocalhost(iterateEnv.ITERATE_OS_BASE_URL);
-    }
-    if (iterateEnv.ITERATE_EGRESS_PROXY_URL) {
-      iterateEnv.ITERATE_EGRESS_PROXY_URL = rewriteLocalhost(iterateEnv.ITERATE_EGRESS_PROXY_URL);
-    }
 
     const labels: Record<string, string> = {
       "com.iterate.sandbox": "true",
@@ -367,7 +376,7 @@ export class DockerProvider extends SandboxProvider {
       containerId,
       ports,
       internalPorts,
-      this.env.DOCKER_SERVICE_TRANSPORT,
+      this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
     );
     const maxWaitMs = 30000;
 
@@ -391,36 +400,29 @@ export class DockerProvider extends SandboxProvider {
       }
     }
 
-    if (Object.keys(iterateEnv).length > 0) {
-      if (!hasEntrypointArguments) {
-        const start = Date.now();
-        while (Date.now() - start < maxWaitMs) {
-          try {
-            await sandbox.exec(["curl", "-sf", "http://localhost:9876/rpc/health"]);
-            break;
-          } catch {
-            await new Promise((r) => setTimeout(r, 500));
-          }
-        }
-
-        await waitForEntrypointSignal({ sandbox, timeoutMs: maxWaitMs });
-
-        const syncStart = Date.now();
-        while (Date.now() - syncStart < maxWaitMs) {
-          const running = await sandbox.exec([
-            "bash",
-            "-c",
-            "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
-          ]);
-          if (!running.trim()) break;
+    if (!hasEntrypointArguments) {
+      const pidnap = await getPidnapClientForSandbox(sandbox);
+      const start = Date.now();
+      while (Date.now() - start < maxWaitMs) {
+        try {
+          await pidnap.health();
+          break;
+        } catch {
           await new Promise((r) => setTimeout(r, 500));
         }
       }
 
-      for (const [key, value] of Object.entries(iterateEnv)) {
-        if (value === undefined) continue;
-        const encoded = Buffer.from(`export ${key}="${value}"\n`).toString("base64");
-        await sandbox.exec(["sh", "-c", `echo '${encoded}' | base64 -d >> ~/.iterate/.env`]);
+      await waitForEntrypointSignal({ sandbox, timeoutMs: maxWaitMs });
+
+      const syncStart = Date.now();
+      while (Date.now() - syncStart < maxWaitMs) {
+        const running = await sandbox.exec([
+          "bash",
+          "-c",
+          "pgrep -f 'sync-home-skeleton.sh|sync-repo-from-host.sh' || true",
+        ]);
+        if (!running.trim()) break;
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
 
@@ -443,7 +445,7 @@ export class DockerProvider extends SandboxProvider {
       providerId,
       knownPorts ?? {},
       internalPorts,
-      this.env.DOCKER_SERVICE_TRANSPORT,
+      this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
     );
   }
 

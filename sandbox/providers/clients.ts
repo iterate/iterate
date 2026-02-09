@@ -8,11 +8,18 @@ const DAEMON_PORT = 3000;
 
 /**
  * Build a pidnap client for sandboxes that expose pidnap on port 9876.
+ * Uses the sandbox fetcher so it works across all providers (Docker, Daytona, etc.).
  * Caller is responsible for using this only on sandboxes that actually run pidnap.
  */
 export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<PidnapClient> {
-  const previewUrl = await sandbox.getPreviewUrl({ port: PIDNAP_PORT });
-  return createPidnapClient(`${previewUrl}/rpc`);
+  const [baseUrl, fetcher] = await Promise.all([
+    sandbox.getBaseUrl({ port: PIDNAP_PORT }),
+    sandbox.getFetcher({ port: PIDNAP_PORT }),
+  ]);
+  return createPidnapClient({
+    url: `${baseUrl}/rpc`,
+    fetch: (request) => fetcher(request),
+  });
 }
 
 /**
@@ -22,9 +29,9 @@ export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<Pidna
 export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
   sandbox: Sandbox,
 ): Promise<TRPCClient<TRouter>> {
-  const previewUrl = await sandbox.getPreviewUrl({ port: DAEMON_PORT });
+  const baseUrl = await sandbox.getBaseUrl({ port: DAEMON_PORT });
   const client = createTRPCClient<AnyRouter>({
-    links: [httpLink({ url: `${previewUrl}/api/trpc` })],
+    links: [httpLink({ url: `${baseUrl}/api/trpc` })],
   });
   return client as unknown as TRPCClient<TRouter>;
 }

@@ -13,7 +13,9 @@ if (!gitInfo) {
 }
 
 const imageName =
-  process.env.DOCKER_IMAGE_NAME ?? process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
+  process.env.DOCKER_DEFAULT_IMAGE ??
+  process.env.LOCAL_DOCKER_IMAGE_NAME ??
+  "iterate-sandbox:local";
 
 const inspect = spawnSync("docker", ["image", "inspect", imageName], { stdio: "ignore" });
 if (inspect.status !== 0) {

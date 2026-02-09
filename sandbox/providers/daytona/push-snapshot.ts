@@ -210,15 +210,15 @@ if (values["update-doppler"]) {
   console.log(
     [
       `Updating Doppler (${dopplerProject}/${dopplerConfig}):`,
-      `DAYTONA_SNAPSHOT_NAME=${snapshotName}`,
-      "VITE_DAYTONA_SNAPSHOT_NAME='${DAYTONA_SNAPSHOT_NAME}'",
+      `DAYTONA_DEFAULT_SNAPSHOT=${snapshotName}`,
+      "VITE_DAYTONA_DEFAULT_SNAPSHOT='${DAYTONA_DEFAULT_SNAPSHOT}'",
     ].join(" "),
   );
   execSync(
     [
       "doppler secrets set",
-      `DAYTONA_SNAPSHOT_NAME=${snapshotName}`,
-      "VITE_DAYTONA_SNAPSHOT_NAME='${DAYTONA_SNAPSHOT_NAME}'",
+      `DAYTONA_DEFAULT_SNAPSHOT=${snapshotName}`,
+      "VITE_DAYTONA_DEFAULT_SNAPSHOT='${DAYTONA_DEFAULT_SNAPSHOT}'",
       "--project",
       dopplerProject,
       "--config",

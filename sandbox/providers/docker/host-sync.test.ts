@@ -24,8 +24,8 @@ describe
   .concurrent("Docker Host Sync", () => {
     test.scoped({
       envOverrides: {
-        DOCKER_SYNC_FROM_HOST_REPO: "true",
-        DOCKER_GIT_REPO_ROOT: ITERATE_REPO_PATH_ON_HOST,
+        DOCKER_HOST_SYNC_ENABLED: "true",
+        DOCKER_HOST_GIT_REPO_ROOT: ITERATE_REPO_PATH_ON_HOST,
       },
       sandboxOptions: {
         id: "host-sync-test",
@@ -80,8 +80,8 @@ describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
 
             await withSandbox({
               envOverrides: {
-                DOCKER_GIT_REPO_ROOT: worktree.path,
-                DOCKER_SYNC_FROM_HOST_REPO: "true",
+                DOCKER_HOST_GIT_REPO_ROOT: worktree.path,
+                DOCKER_HOST_SYNC_ENABLED: "true",
               },
               sandboxOptions: {
                 id: "worktree-test",

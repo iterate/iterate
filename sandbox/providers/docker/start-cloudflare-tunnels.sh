@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-TUNNEL_PORTS_CSV="${DOCKER_CLOUDFLARE_TUNNEL_PORTS:-3000,3001,4096,9876}"
+TUNNEL_PORTS_CSV="${DOCKER_TUNNEL_PORTS:-3000,3001,4096,9876}"
 TUNNEL_STATE_DIR="/tmp/cloudflare-tunnels"
 TUNNEL_LOG_DIR="/var/log/pidnap"
 TUNNEL_MAX_ATTEMPTS=3
@@ -18,7 +18,7 @@ for raw_port in "${ports[@]}"; do
     continue
   fi
   if [[ ! "$port" =~ ^[0-9]+$ ]]; then
-    echo "Invalid DOCKER_CLOUDFLARE_TUNNEL_PORTS value: $port" >&2
+    echo "Invalid DOCKER_TUNNEL_PORTS value: $port" >&2
     exit 1
   fi
 

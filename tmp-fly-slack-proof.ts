@@ -112,9 +112,9 @@ async function main() {
     throw new Error("SLACK_CI_BOT_TOKEN is required");
   }
 
-  const flyApiToken = process.env.FLY_API_TOKEN ?? process.env.FLY_API_KEY;
+  const flyApiToken = process.env.FLY_API_TOKEN;
   if (!flyApiToken) {
-    throw new Error("FLY_API_TOKEN or FLY_API_KEY is required");
+    throw new Error("FLY_API_TOKEN is required");
   }
 
   const marker = `FLY_EGRESS_PROOF_${Date.now()}`;
@@ -142,9 +142,9 @@ async function main() {
   const provider = new FlyProvider({
     ...process.env,
     FLY_API_TOKEN: flyApiToken,
-    SANDBOX_FLY_APP_NAME: process.env.SANDBOX_FLY_APP_NAME ?? "iterate-sandbox-fly-proof3",
-    SANDBOX_FLY_MACHINE_CPUS: process.env.SANDBOX_FLY_MACHINE_CPUS ?? "2",
-    SANDBOX_FLY_MACHINE_MEMORY_MB: process.env.SANDBOX_FLY_MACHINE_MEMORY_MB ?? "4096",
+    FLY_APP_NAME_PREFIX: process.env.FLY_APP_NAME_PREFIX ?? "iterate-sandbox-fly-proof3",
+    FLY_DEFAULT_CPUS: process.env.FLY_DEFAULT_CPUS ?? "2",
+    FLY_DEFAULT_MEMORY_MB: process.env.FLY_DEFAULT_MEMORY_MB ?? "4096",
   });
 
   const sandbox = await provider.create({
@@ -171,7 +171,7 @@ async function main() {
     await waitForHealth(sandbox);
     logStep("daemon healthy");
 
-    const baseUrl = await sandbox.getPreviewUrl({ port: 3000 });
+    const baseUrl = await sandbox.getBaseUrl({ port: 3000 });
     logStep("resolved daemon url", { baseUrl });
 
     const payload = {

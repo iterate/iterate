@@ -137,9 +137,7 @@ googleApp.get(
             });
 
             if (project) {
-              return c.redirect(
-                `/orgs/${project.organization.slug}/projects/${project.slug}/connectors?error=${errorParam}`,
-              );
+              return c.redirect(`/proj/${project.slug}/connectors?error=${errorParam}`);
             }
           }
         }
@@ -318,9 +316,7 @@ googleApp.get(
       }),
     );
 
-    const redirectPath =
-      callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
+    const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );

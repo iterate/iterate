@@ -23,7 +23,7 @@ export interface MachineRuntime {
   archive(): Promise<void>;
   delete(): Promise<void>;
   getFetcher(port: number): Promise<SandboxFetcher>;
-  getPreviewUrl(port: number): Promise<string>;
+  getBaseUrl(port: number): Promise<string>;
   getProviderState?(): Promise<ProviderState>;
 }
 
@@ -120,7 +120,7 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
   const host = typedMetadata.host ?? "localhost";
   const ports = typedMetadata.ports ?? {};
 
-  const getPreviewUrl = async (port: number): Promise<string> => {
+  const getBaseUrl = async (port: number): Promise<string> => {
     const serviceKey = LOCAL_SERVICE_KEY_BY_PORT[port];
     if (serviceKey && ports[serviceKey]) {
       return `http://${host}:${ports[serviceKey]}`;
@@ -161,10 +161,10 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
     async archive(): Promise<void> {},
     async delete(): Promise<void> {},
     async getFetcher(port: number): Promise<SandboxFetcher> {
-      const baseUrl = await getPreviewUrl(port);
+      const baseUrl = await getBaseUrl(port);
       return createUrlFetcher(baseUrl);
     },
-    getPreviewUrl,
+    getBaseUrl,
   };
 }
 
@@ -222,8 +222,8 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
     async getFetcher(port: number): Promise<SandboxFetcher> {
       return getSandbox().getFetcher({ port });
     },
-    async getPreviewUrl(port: number): Promise<string> {
-      return getSandbox().getPreviewUrl({ port });
+    async getBaseUrl(port: number): Promise<string> {
+      return getSandbox().getBaseUrl({ port });
     },
     async getProviderState(): Promise<ProviderState> {
       return getSandbox().getState();
@@ -263,10 +263,10 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
     toRawEnv({
       env,
       overrides: {
-        ...(imageName ? { DOCKER_IMAGE_NAME: imageName } : {}),
+        ...(imageName ? { DOCKER_DEFAULT_IMAGE: imageName } : {}),
         ...(syncRepo === undefined
           ? {}
-          : { DOCKER_SYNC_FROM_HOST_REPO: syncRepo ? "true" : "false" }),
+          : { DOCKER_HOST_SYNC_ENABLED: syncRepo ? "true" : "false" }),
       },
     }),
   );
@@ -294,12 +294,12 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
         Object.entries(LOCAL_SERVICE_KEY_BY_PORT)
           .filter(([port]) => Number(port) !== 9876)
           .map(async ([port, serviceKey]) => {
-            const url = await sandbox.getPreviewUrl({ port: Number(port) });
+            const url = await sandbox.getBaseUrl({ port: Number(port) });
             return [serviceKey, parsePortFromUrl(url)] as const;
           }),
       );
 
-      const pidnapUrl = await sandbox.getPreviewUrl({ port: 9876 });
+      const pidnapUrl = await sandbox.getBaseUrl({ port: 9876 });
       const ports = Object.fromEntries([
         ...daemonPortPairs,
         ["pidnap", parsePortFromUrl(pidnapUrl)],

@@ -3,19 +3,28 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import type { api } from "./contract.ts";
 
+export interface CreateClientOptions {
+  /** Full URL to the pidnap RPC endpoint (must include `/rpc` prefix). */
+  url?: string;
+  /** Custom fetch implementation (e.g. sandbox fetcher for reaching containers). */
+  fetch?: (request: Request) => Promise<Response>;
+}
+
 /**
  * Create a pidnap RPC client.
  *
- * @param url Full URL to the pidnap RPC endpoint. Must include the `/rpc` prefix
+ * @param urlOrOptions URL string or options object. URL must include the `/rpc` prefix
  *            since the server mounts all routes under that path (see cli.ts).
  *            Defaults to `http://localhost:9876/rpc`.
  */
 export function createClient(
-  url = process.env.PIDNAP_RPC_URL ?? "http://localhost:9876/rpc",
+  urlOrOptions?: string | CreateClientOptions,
 ): ContractRouterClient<typeof api> {
+  const opts = typeof urlOrOptions === "string" ? { url: urlOrOptions } : urlOrOptions;
+  const url = opts?.url ?? process.env.PIDNAP_RPC_URL ?? "http://localhost:9876/rpc";
   const authToken = process.env.PIDNAP_AUTH_TOKEN;
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
-  const link = new RPCLink({ url, headers });
+  const link = new RPCLink({ url, headers, ...(opts?.fetch ? { fetch: opts.fetch } : {}) });
   return createORPCClient(link);
 }
 

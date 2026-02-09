@@ -73,8 +73,12 @@ export abstract class Sandbox {
 
   // === Core abstraction ===
 
+  /**
+   * Get a fetcher for a specific port.
+   * Resolves relative paths against the base URL; absolute URLs pass through.
+   */
   async getFetcher(opts: { port: number }): Promise<SandboxFetcher> {
-    const baseUrl = await this.getPreviewUrl(opts);
+    const baseUrl = await this.getBaseUrl(opts);
     return (input: string | Request | URL, init?: RequestInit) => {
       const url =
         typeof input === "string" && !/^https?:\/\//.test(input) ? `${baseUrl}${input}` : input;
@@ -83,16 +87,9 @@ export abstract class Sandbox {
   }
 
   /**
-   * @deprecated use getFetcher
+   * Get the base URL for a specific port.
    */
-  async getFetch(opts: { port: number }): Promise<SandboxFetcher> {
-    return this.getFetcher(opts);
-  }
-
-  /**
-   * Get a preview URL for a specific port (for display/browser).
-   */
-  abstract getPreviewUrl(opts: { port: number }): Promise<string>;
+  abstract getBaseUrl(opts: { port: number }): Promise<string>;
 
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;

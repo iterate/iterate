@@ -50,7 +50,7 @@ DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 
 ## Daytona snapshots
 
-Build a daytona snapshot and write DAYTONA_SNAPSHOT_NAME to your daytona config (needs `brew install daytonaio/cli/daytona`)
+Build a daytona snapshot and write DAYTONA_DEFAULT_SNAPSHOT to your daytona config (needs `brew install daytonaio/cli/daytona`)
 
 ```bash
 pnpm build:daytona

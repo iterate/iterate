@@ -51,8 +51,8 @@ jobs:
           command: cd apps/os && pnpm run deploy:prd
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DAYTONA_SNAPSHOT_NAME: ${{ inputs.daytona_snapshot_name }}
-          VITE_DAYTONA_SNAPSHOT_NAME: ${{ inputs.daytona_snapshot_name }}
+          DAYTONA_DEFAULT_SNAPSHOT: ${{ inputs.daytona_snapshot_name }}
+          VITE_DAYTONA_DEFAULT_SNAPSHOT: ${{ inputs.daytona_snapshot_name }}
   deploy-iterate-com:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     if: inputs.stage == 'prd'

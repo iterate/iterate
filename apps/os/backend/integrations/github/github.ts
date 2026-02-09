@@ -267,9 +267,7 @@ githubApp.get(
       });
     });
 
-    const redirectPath =
-      callbackURL ||
-      (project ? `/orgs/${project.organization.slug}/projects/${project.slug}/connectors` : "/");
+    const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
   },
 );
@@ -736,7 +734,7 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
       const activeMachine = project.machines[0];
       const machineName = `ci-${headSha.slice(0, 7)}`;
 
-      await createMachineForProject({
+      const result = await createMachineForProject({
         db,
         env,
         projectId: project.id,
@@ -749,6 +747,9 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
           snapshotName, // Override to use the CI-built snapshot
         },
       });
+      if (result.provisionPromise) {
+        waitUntil(result.provisionPromise);
+      }
 
       logger.info("[GitHub Webhook] Created machine", {
         projectId: project.id,
@@ -855,7 +856,7 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
       const activeMachine = project.machines[0];
       const machineName = `refresh-${commitSha.slice(0, 7)}`;
 
-      await createMachineForProject({
+      const result = await createMachineForProject({
         db,
         env,
         projectId: project.id,
@@ -870,6 +871,9 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
           triggeredByUser: comment.user.login,
         },
       });
+      if (result.provisionPromise) {
+        waitUntil(result.provisionPromise);
+      }
 
       logger.info("[GitHub Webhook] Created machine from comment", {
         projectId: project.id,

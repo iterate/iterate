@@ -263,21 +263,20 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
-  VITE_DAYTONA_SNAPSHOT_NAME: Optional,
-  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
-  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
+  VITE_DAYTONA_DEFAULT_SNAPSHOT: Optional,
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: NonEmpty.default("0"), // minutes, 0 = disabled
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
   SANDBOX_MACHINE_PROVIDERS: Optional,
   FLY_API_TOKEN: Optional,
-  FLY_API_KEY: Optional,
   FLY_ORG: Optional,
-  FLY_REGION: Optional,
-  FLY_IMAGE: Optional,
-  SANDBOX_FLY_APP_NAME: Optional,
+  FLY_DEFAULT_REGION: Optional,
+  FLY_DEFAULT_IMAGE: Optional,
+  FLY_APP_NAME_PREFIX: Optional,
   FLY_NETWORK: Optional,
   FLY_BASE_DOMAIN: Optional,
   GOOGLE_CLIENT_ID: Required,
@@ -478,45 +477,48 @@ const domains = [`${subdomain}.iterate.com`];
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
   const dockerEnvVars = isDevelopment ? getDockerEnvVars(repoRoot) : {};
 
-  // Docker provider env vars
+  // Docker provider env vars — git info is resolved here (where execSync works)
+  // and injected as env bindings for the worker (where execSync is unavailable).
   const dockerBindings = {
-    DOCKER_IMAGE_NAME: "",
+    DOCKER_DEFAULT_IMAGE: "",
     DOCKER_COMPOSE_PROJECT_NAME: "",
-    DOCKER_GIT_REPO_ROOT: "",
-    DOCKER_GIT_GITDIR: "",
-    DOCKER_GIT_COMMON_DIR: "",
+    DOCKER_HOST_GIT_REPO_ROOT: "",
+    DOCKER_HOST_GIT_DIR: "",
+    DOCKER_HOST_GIT_COMMON_DIR: "",
+    DOCKER_HOST_GIT_COMMIT: "",
+    DOCKER_HOST_GIT_BRANCH: "",
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
-    LOCAL_DOCKER_GIT_REPO_ROOT: "",
-    LOCAL_DOCKER_GIT_GITDIR: "",
-    LOCAL_DOCKER_GIT_COMMON_DIR: "",
     LOCAL_DOCKER_REPO_CHECKOUT: "",
   };
   if (isDevelopment) {
     const composeProjectName =
       process.env.DOCKER_COMPOSE_PROJECT_NAME ?? dockerEnvVars.DOCKER_COMPOSE_PROJECT_NAME ?? "";
     const repoCheckout =
-      process.env.DOCKER_GIT_REPO_ROOT ?? dockerEnvVars.DOCKER_GIT_REPO_ROOT ?? "";
-    const gitDir = process.env.DOCKER_GIT_GITDIR ?? dockerEnvVars.DOCKER_GIT_GITDIR ?? "";
+      process.env.DOCKER_HOST_GIT_REPO_ROOT ?? dockerEnvVars.DOCKER_HOST_GIT_REPO_ROOT ?? "";
+    const gitDir = process.env.DOCKER_HOST_GIT_DIR ?? dockerEnvVars.DOCKER_HOST_GIT_DIR ?? "";
     const commonDir =
-      process.env.DOCKER_GIT_COMMON_DIR ?? dockerEnvVars.DOCKER_GIT_COMMON_DIR ?? "";
+      process.env.DOCKER_HOST_GIT_COMMON_DIR ?? dockerEnvVars.DOCKER_HOST_GIT_COMMON_DIR ?? "";
+    const gitCommit =
+      process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
+    const gitBranch =
+      process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
     const imageName =
-      process.env.DOCKER_IMAGE_NAME ??
+      process.env.DOCKER_DEFAULT_IMAGE ??
       process.env.LOCAL_DOCKER_IMAGE_NAME ??
       "iterate-sandbox:local";
 
     Object.assign(dockerBindings, {
-      DOCKER_IMAGE_NAME: imageName,
+      DOCKER_DEFAULT_IMAGE: imageName,
       DOCKER_COMPOSE_PROJECT_NAME: composeProjectName,
-      DOCKER_GIT_REPO_ROOT: repoCheckout,
-      DOCKER_GIT_GITDIR: gitDir,
-      DOCKER_GIT_COMMON_DIR: commonDir,
+      DOCKER_HOST_GIT_REPO_ROOT: repoCheckout,
+      DOCKER_HOST_GIT_DIR: gitDir,
+      DOCKER_HOST_GIT_COMMON_DIR: commonDir,
+      DOCKER_HOST_GIT_COMMIT: gitCommit,
+      DOCKER_HOST_GIT_BRANCH: gitBranch,
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
         process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,
-      LOCAL_DOCKER_GIT_REPO_ROOT: process.env.LOCAL_DOCKER_GIT_REPO_ROOT ?? repoCheckout,
-      LOCAL_DOCKER_GIT_GITDIR: process.env.LOCAL_DOCKER_GIT_GITDIR ?? gitDir,
-      LOCAL_DOCKER_GIT_COMMON_DIR: process.env.LOCAL_DOCKER_GIT_COMMON_DIR ?? commonDir,
       LOCAL_DOCKER_REPO_CHECKOUT: process.env.LOCAL_DOCKER_REPO_CHECKOUT ?? repoCheckout,
     });
   }
@@ -620,7 +622,7 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 
   // Start Docker containers (postgres, neon-proxy) before migrations
-  // docker-compose.ts handles DOCKER_COMPOSE_PROJECT_NAME and DOCKER_GIT_* env vars
+  // docker-compose.ts handles DOCKER_COMPOSE_PROJECT_NAME and SANDBOX_DOCKER_HOST_GIT_* env vars
   // --wait flag ensures postgres healthcheck passes before returning
   console.log("Starting Docker containers...");
   execSync("pnpm docker:up", {

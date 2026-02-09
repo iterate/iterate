@@ -295,7 +295,7 @@ async function resolveSecret(
 ): Promise<SecretResult> {
   // Determine if this is a connector request based on the URL
   const connector = getConnectorForUrl(context.originalUrl);
-  const urlContext = { orgSlug: context.orgSlug, projectSlug: context.projectSlug };
+  const urlContext = { projectSlug: context.projectSlug };
 
   // Look up the secret (uses request-scoped cache if provided)
   logger.debug("Looking up secret", {
