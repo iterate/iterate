@@ -122,7 +122,6 @@ export default workflow({
             SANDBOX_BUILD_PLATFORM:
               "${{ inputs.docker_platform || (runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64') }}",
             SANDBOX_USE_DEPOT_REGISTRY: "true",
-            SANDBOX_LOAD_AND_SAVE: "true",
             SANDBOX_DEPOT_SAVE_TAG:
               "iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}",
           },

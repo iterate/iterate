@@ -27,7 +27,6 @@ const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8"
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM ?? "linux/amd64";
 const builtBy = process.env.ITERATE_USER ?? "unknown";
 const useDepotRegistry = process.env.SANDBOX_USE_DEPOT_REGISTRY === "true";
-const loadAndSaveToDepotRegistry = process.env.SANDBOX_LOAD_AND_SAVE === "true";
 const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
 
 // Detect multi-platform builds (comma-separated platforms)
@@ -157,11 +156,6 @@ if (useDepotRegistry && isMultiPlatform) {
   process.exit(1);
 }
 
-if (loadAndSaveToDepotRegistry && !useDepotRegistry) {
-  console.error("Error: SANDBOX_LOAD_AND_SAVE requires SANDBOX_USE_DEPOT_REGISTRY=true");
-  process.exit(1);
-}
-
 if (useDepotRegistry && !depotSaveTag) {
   console.error("Error: SANDBOX_DEPOT_SAVE_TAG is required when SANDBOX_USE_DEPOT_REGISTRY=true");
   console.error("Example: SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-ci-1234");
@@ -170,16 +164,13 @@ if (useDepotRegistry && !depotSaveTag) {
 
 // Determine output mode:
 // - --load for local daemon (default, needed by Daytona and local dev)
-// - --load + --save for local daemon plus Depot Registry in one build
-// - --save for Depot Registry (optional publish path for single-platform builds)
+// - --load + --save for local daemon plus Depot Registry in one build when enabled
 // - --push for explicit registry image names (multi-platform builds)
 const outputArgs = isMultiPlatform
   ? ["--push", "-t", registryImageName!]
-  : loadAndSaveToDepotRegistry
+  : useDepotRegistry
     ? ["--load", "-t", localImageName, "--save", "--save-tag", depotSaveTag!]
-    : useDepotRegistry
-      ? ["--save", "--save-tag", depotSaveTag!]
-      : ["--load", "-t", localImageName];
+    : ["--load", "-t", localImageName];
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
@@ -234,10 +225,7 @@ writeFileSync(
   buildInfoPath,
   JSON.stringify(
     {
-      localImageName:
-        isMultiPlatform || (useDepotRegistry && !loadAndSaveToDepotRegistry)
-          ? null
-          : localImageName,
+      localImageName: isMultiPlatform ? null : localImageName,
       registryImageName: isMultiPlatform ? registryImageName : null,
       depotRegistryImageName,
       depotSaveTag: useDepotRegistry ? depotSaveTag : null,
@@ -247,7 +235,6 @@ writeFileSync(
       buildPlatform,
       isMultiPlatform,
       useDepotRegistry,
-      loadAndSaveToDepotRegistry,
     },
     null,
     2,
