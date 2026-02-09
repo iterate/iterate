@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { eq, and, or, gt, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import {
   createMachineRuntime,
   type MachineRuntime,
@@ -20,11 +21,13 @@ import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
 
-function createDaemonTrpcClient(baseUrl: string) {
+function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
+  const { baseUrl, fetcher } = params;
   return createTRPCClient<DaemonTRPCRouter>({
     links: [
       httpBatchLink({
         url: `${baseUrl}/api/trpc`,
+        ...(fetcher ? { fetch: fetcher } : {}),
       }),
     ],
   });
@@ -228,7 +231,6 @@ export const machineRouter = router({
     .input(
       z.object({
         name: z.string().min(1).max(100),
-        type: z.enum(schema.MachineType).default("daytona"),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }),
     )
@@ -242,12 +244,11 @@ export const machineRouter = router({
           organizationSlug: ctx.organization.slug,
           projectSlug: ctx.project.slug,
           name: input.name,
-          type: input.type,
           metadata: input.metadata,
         });
 
         // Return apiKey for local machines - user needs this to configure their daemon
-        if (input.type === "local" && result.apiKey) {
+        if (result.apiKey) {
           return { ...result.machine, apiKey: result.apiKey };
         }
 
@@ -378,8 +379,14 @@ export const machineRouter = router({
       });
 
       // Call daemon's restartDaemon endpoint
-      const daemonBaseUrl = await runtime.getPreviewUrl(3000);
-      const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
+      const [daemonBaseUrl, daemonFetcher] = await Promise.all([
+        runtime.getPreviewUrl(3000),
+        runtime.getFetcher(3000),
+      ]);
+      const daemonClient = createDaemonTrpcClient({
+        baseUrl: daemonBaseUrl,
+        fetcher: daemonFetcher,
+      });
       await daemonClient.restartDaemon.mutate().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -528,8 +535,14 @@ export const machineRouter = router({
         externalId: machineRecord.externalId,
         metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
       });
-      const daemonBaseUrl = await runtime.getPreviewUrl(3000);
-      const daemonClient = createDaemonTrpcClient(daemonBaseUrl);
+      const [daemonBaseUrl, daemonFetcher] = await Promise.all([
+        runtime.getPreviewUrl(3000),
+        runtime.getFetcher(3000),
+      ]);
+      const daemonClient = createDaemonTrpcClient({
+        baseUrl: daemonBaseUrl,
+        fetcher: daemonFetcher,
+      });
       const [agents, serverInfo] = await Promise.all([
         daemonClient.listAgents.query(),
         daemonClient.getServerCwd.query(),

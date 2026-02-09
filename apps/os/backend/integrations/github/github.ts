@@ -744,7 +744,6 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
         organizationSlug: project.organization.slug,
         projectSlug: project.slug,
         name: machineName,
-        type: activeMachine.type,
         metadata: {
           ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
           snapshotName, // Override to use the CI-built snapshot
@@ -864,7 +863,6 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
         organizationSlug: project.organization.slug,
         projectSlug: project.slug,
         name: machineName,
-        type: activeMachine.type,
         metadata: {
           ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
           snapshotName,

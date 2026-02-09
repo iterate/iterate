@@ -65,7 +65,6 @@ export type CreateMachineParams = {
   organizationSlug: string;
   projectSlug: string;
   name: string;
-  type: (typeof schema.MachineType)[number];
   metadata?: Record<string, unknown>;
 };
 
@@ -78,19 +77,19 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
   machine: typeof schema.machine.$inferSelect;
   apiKey?: string;
 }> {
-  const {
-    db,
-    env,
-    projectId,
-    organizationId,
-    organizationSlug,
-    projectSlug,
-    name,
-    type,
-    metadata,
-  } = params;
+  const { db, env, projectId, organizationId, organizationSlug, projectSlug, name, metadata } =
+    params;
 
   const machineId = typeid("mach").toString();
+
+  const projectRecord = await db.query.project.findFirst({
+    where: eq(schema.project.id, projectId),
+  });
+
+  if (!projectRecord) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  const type = projectRecord.sandboxProvider;
 
   // Get or create the project-level access token
   const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);

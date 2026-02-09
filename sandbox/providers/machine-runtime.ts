@@ -1,7 +1,7 @@
 import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
-import type { MachineType, ProviderState, Sandbox } from "./types.ts";
+import type { MachineType, ProviderState, Sandbox, SandboxFetcher } from "./types.ts";
 
 export interface CreateMachineConfig {
   machineId: string;
@@ -22,6 +22,7 @@ export interface MachineRuntime {
   restart(): Promise<void>;
   archive(): Promise<void>;
   delete(): Promise<void>;
+  getFetcher(port: number): Promise<SandboxFetcher>;
   getPreviewUrl(port: number): Promise<string>;
   getProviderState?(): Promise<ProviderState>;
 }
@@ -106,6 +107,14 @@ function toRawEnv(params: {
   };
 }
 
+function createUrlFetcher(baseUrl: string): SandboxFetcher {
+  return async (input: string | Request | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string" && !/^https?:\/\//.test(input) ? `${baseUrl}${input}` : input;
+    return fetch(url, init);
+  };
+}
+
 function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
   const typedMetadata = metadata as LocalMetadata;
   const host = typedMetadata.host ?? "localhost";
@@ -151,6 +160,10 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
     async restart(): Promise<void> {},
     async archive(): Promise<void> {},
     async delete(): Promise<void> {},
+    async getFetcher(port: number): Promise<SandboxFetcher> {
+      const baseUrl = await getPreviewUrl(port);
+      return createUrlFetcher(baseUrl);
+    },
     getPreviewUrl,
   };
 }
@@ -205,6 +218,9 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
     },
     async delete(): Promise<void> {
       await getSandbox().delete();
+    },
+    async getFetcher(port: number): Promise<SandboxFetcher> {
+      return getSandbox().getFetcher({ port });
     },
     async getPreviewUrl(port: number): Promise<string> {
       return getSandbox().getPreviewUrl({ port });

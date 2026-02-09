@@ -1,6 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -8,23 +9,25 @@ import { logger } from "../tag-logger.ts";
 
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 
-function createDaemonTrpcClient(baseUrl: string) {
+function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
+  const { baseUrl, fetcher } = params;
   return createTRPCClient<TRPCRouter>({
     links: [
       httpBatchLink({
         url: `${baseUrl}/api/trpc`,
+        ...(fetcher ? { fetch: fetcher } : {}),
       }),
     ],
   });
 }
 
 /**
- * Build the daemon tRPC base URL for a machine using the provider.
+ * Build the daemon tRPC transport for a machine using the provider.
  */
-async function buildDaemonBaseUrl(
+async function buildDaemonTransport(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<string | null> {
+): Promise<{ baseUrl: string; fetcher: SandboxFetcher } | null> {
   const metadata = machine.metadata as Record<string, unknown>;
 
   try {
@@ -34,9 +37,13 @@ async function buildDaemonBaseUrl(
       externalId: machine.externalId,
       metadata,
     });
-    return await runtime.getPreviewUrl(3000);
+    const [baseUrl, fetcher] = await Promise.all([
+      runtime.getPreviewUrl(3000),
+      runtime.getFetcher(3000),
+    ]);
+    return { baseUrl, fetcher };
   } catch (err) {
-    logger.warn("[poke-machines] Failed to build daemon URL", {
+    logger.warn("[poke-machines] Failed to build daemon transport", {
       machineId: machine.id,
       type: machine.type,
       error: err instanceof Error ? err.message : String(err),
@@ -53,15 +60,15 @@ async function pokeMachineToRefresh(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
 ): Promise<void> {
-  const daemonBaseUrl = await buildDaemonBaseUrl(machine, env);
-  if (!daemonBaseUrl) {
-    logger.warn("[poke-machines] Could not build daemon URL for machine", {
+  const daemonTransport = await buildDaemonTransport(machine, env);
+  if (!daemonTransport) {
+    logger.warn("[poke-machines] Could not build daemon transport for machine", {
       machineId: machine.id,
     });
     return;
   }
 
-  const client = createDaemonTrpcClient(daemonBaseUrl);
+  const client = createDaemonTrpcClient(daemonTransport);
 
   try {
     await client.platform.refreshEnv.mutate();

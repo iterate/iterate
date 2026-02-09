@@ -242,6 +242,10 @@ export const project = pgTable(
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
+    sandboxProvider: t
+      .text({ enum: [...MachineType] })
+      .notNull()
+      .default("daytona"),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],

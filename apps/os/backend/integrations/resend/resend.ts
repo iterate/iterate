@@ -148,13 +148,12 @@ function parseRecipientLocal(to: string): string {
 }
 
 /**
- * Build URL to forward webhooks to a machine's daemon.
+ * Build a provider-backed fetcher for forwarding webhooks to a machine daemon.
  */
-async function buildMachineForwardUrl(
+async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
-  path: string,
   env: CloudflareEnv,
-): Promise<string | null> {
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
@@ -164,10 +163,9 @@ async function buildMachineForwardUrl(
       externalId: machine.externalId,
       metadata: metadata ?? {},
     });
-    const baseUrl = await runtime.getPreviewUrl(3000);
-    return `${baseUrl}${path}`;
+    return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[Resend Webhook] Failed to build forward URL", {
+    logger.warn("[Resend Webhook] Failed to build forward fetcher", {
       machineId: machine.id,
       type: machine.type,
       error: err instanceof Error ? err.message : String(err),
@@ -184,12 +182,12 @@ export async function forwardEmailWebhookToMachine(
   payload: Record<string, unknown>,
   env: CloudflareEnv,
 ): Promise<{ success: boolean; error?: string }> {
-  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/email/webhook", env);
-  if (!targetUrl) {
-    return { success: false, error: "Could not build forward URL" };
+  const fetcher = await buildMachineForwardFetcher(machine, env);
+  if (!fetcher) {
+    return { success: false, error: "Could not build forward fetcher" };
   }
   try {
-    const resp = await fetch(targetUrl, {
+    const resp = await fetcher("/api/integrations/email/webhook", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -198,7 +196,6 @@ export async function forwardEmailWebhookToMachine(
     if (!resp.ok) {
       logger.error("[Resend Webhook] Forward failed", {
         machine,
-        targetUrl,
         status: resp.status,
         text: await resp.text(),
       });

@@ -1,5 +1,10 @@
 import type { z } from "zod/v4";
 
+export type SandboxFetcher = (
+  input: string | Request | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
 /**
  * Provider types supported by the sandbox system.
  */
@@ -68,16 +73,20 @@ export abstract class Sandbox {
 
   // === Core abstraction ===
 
-  /**
-   * Get a fetch function configured for a specific port.
-   * The returned fetch has the base URL and any required headers baked in.
-   */
-  async getFetch(opts: { port: number }): Promise<typeof fetch> {
+  async getFetcher(opts: { port: number }): Promise<SandboxFetcher> {
     const baseUrl = await this.getPreviewUrl(opts);
     return (input: string | Request | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? `${baseUrl}${input}` : input;
+      const url =
+        typeof input === "string" && !/^https?:\/\//.test(input) ? `${baseUrl}${input}` : input;
       return fetch(url, init);
     };
+  }
+
+  /**
+   * @deprecated use getFetcher
+   */
+  async getFetch(opts: { port: number }): Promise<SandboxFetcher> {
+    return this.getFetcher(opts);
   }
 
   /**

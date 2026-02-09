@@ -22,15 +22,97 @@ import { describe } from "vitest";
 import type { TRPCRouter } from "../../apps/daemon/server/trpc/router.ts";
 import { getDaemonClientForSandbox, getPidnapClientForSandbox } from "../providers/clients.ts";
 import type { Sandbox } from "../providers/types.ts";
-import {
-  test,
-  ITERATE_REPO_PATH,
-  RUN_SANDBOX_TESTS,
-  POLL_DEFAULTS,
-  TEST_CONFIG,
-} from "./helpers.ts";
+import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./helpers.ts";
 
 class TerminalProcessStateError extends Error {}
+
+type WaitForRunningInput = {
+  target: string | number;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  includeLogs?: boolean;
+  logTailLines?: number;
+};
+
+type WaitForRunningResponse = {
+  state: string;
+  logs?: string;
+};
+
+type GetProcessInput = {
+  target: string | number;
+  includeEffectiveEnv?: boolean;
+};
+
+type GetProcessResponse = {
+  state: string;
+  effectiveEnv?: Record<string, string>;
+};
+
+type PidnapLikeClient = {
+  processes: {
+    waitForRunning(input: WaitForRunningInput): Promise<WaitForRunningResponse>;
+    get(input: GetProcessInput): Promise<GetProcessResponse>;
+  };
+};
+
+async function callPidnapViaSandbox<T>(params: {
+  sandbox: Sandbox;
+  action: "waitForRunning" | "get";
+  input: WaitForRunningInput | GetProcessInput;
+}): Promise<T> {
+  const encodedInput = Buffer.from(JSON.stringify(params.input)).toString("base64");
+  const script = [
+    `import { createClient } from "${ITERATE_REPO_PATH}/packages/pidnap/src/api/client.ts";`,
+    'const client = createClient("http://127.0.0.1:9876/rpc");',
+    "const action = process.env.PIDNAP_ACTION;",
+    'const input = JSON.parse(Buffer.from(process.env.PIDNAP_INPUT_B64 ?? "", "base64").toString("utf8"));',
+    "const result =",
+    '  action === "waitForRunning"',
+    "    ? await client.processes.waitForRunning(input)",
+    "    : await client.processes.get(input);",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join("\n");
+  const encodedScript = Buffer.from(script).toString("base64");
+  const output = await params.sandbox.exec([
+    "sh",
+    "-c",
+    `PIDNAP_ACTION='${params.action}' PIDNAP_INPUT_B64='${encodedInput}' tsx -e "$(echo '${encodedScript}' | base64 -d)"`,
+  ]);
+  const line = output
+    .trim()
+    .split("\n")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .at(-1);
+  if (!line) {
+    throw new Error("Missing pidnap response payload");
+  }
+  return JSON.parse(line) as T;
+}
+
+async function getPidnapClient(sandbox: Sandbox): Promise<PidnapLikeClient> {
+  if (sandbox.type !== "fly") {
+    return (await getPidnapClientForSandbox(sandbox)) as unknown as PidnapLikeClient;
+  }
+
+  return {
+    processes: {
+      waitForRunning: (input) =>
+        callPidnapViaSandbox<WaitForRunningResponse>({
+          sandbox,
+          action: "waitForRunning",
+          input,
+        }),
+      get: (input) =>
+        callPidnapViaSandbox<GetProcessResponse>({
+          sandbox,
+          action: "get",
+          input,
+        }),
+    },
+  };
+}
 
 async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Response | null> {
   try {
@@ -80,7 +162,7 @@ async function waitForServiceHealthy(params: {
   while (Date.now() - start < timeoutMs) {
     const remainingMs = timeoutMs - (Date.now() - start);
     try {
-      const client = await getPidnapClientForSandbox(sandbox);
+      const client = await getPidnapClient(sandbox);
       const status = await client.processes.waitForRunning({
         target: process,
         timeoutMs: Math.min(10_000, remainingMs),
@@ -107,11 +189,11 @@ async function waitForServiceHealthy(params: {
 
 // ============ Pidnap-Specific Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")("Pidnap Integration", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
   describe("Env Var Hot Reload", () => {
     test("dynamically added env var available in shell and pidnap", async ({ sandbox, expect }) => {
       await waitForServiceHealthy({ sandbox, process: "daemon-backend", timeoutMs: 30000 });
-      const client = await getPidnapClientForSandbox(sandbox);
+      const client = await getPidnapClient(sandbox);
 
       // Step 1: Add a new env var to ~/.iterate/.env via exec
       // Using dotenv format (KEY=value) which works for both shell sourcing and dotenv parsing
@@ -143,7 +225,7 @@ describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")("Pidnap Inte
   describe("Process Management", () => {
     test("processes.get returns running state for daemon-backend", async ({ sandbox, expect }) => {
       await waitForServiceHealthy({ sandbox, process: "daemon-backend" });
-      const client = await getPidnapClientForSandbox(sandbox);
+      const client = await getPidnapClient(sandbox);
       const result = await client.processes.get({ target: "daemon-backend" });
       expect(result.state).toBe("running");
       await expect(client.processes.get({ target: "nonexistent" })).rejects.toThrow(
@@ -298,7 +380,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
 
 // ============ Container Restart Tests ============
 
-describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider !== "fly")("Container Restart", () => {
+describe.runIf(RUN_SANDBOX_TESTS)("Container Restart", () => {
   test("filesystem persists and daemon restarts", async ({ sandbox, expect }) => {
     const filePath = "/home/iterate/.iterate/persist-test.txt";
     const fileContents = `persist-${Date.now()}`;

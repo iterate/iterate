@@ -97,6 +97,10 @@ function ProjectSettingsPage() {
               <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
               <Input id="project-slug" value={project.slug} disabled />
             </Field>
+            <Field>
+              <FieldLabel htmlFor="project-sandbox-provider">Sandbox provider</FieldLabel>
+              <Input id="project-sandbox-provider" value={project.sandboxProvider} disabled />
+            </Field>
           </FieldSet>
           <Field orientation="horizontal">
             <Button

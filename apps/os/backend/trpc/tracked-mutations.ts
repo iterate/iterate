@@ -41,10 +41,9 @@ registerTrackedMutation("organization.create", {
 registerTrackedMutation("machine.create", {
   eventName: "machine_created",
   extractProperties: (input: unknown) => {
-    const typed = input as { name?: string; type?: string };
+    const typed = input as { name?: string };
     return {
       machine_name: typed.name,
-      machine_type: typed.type,
     };
   },
 });

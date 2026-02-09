@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
 import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
@@ -118,6 +119,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const baseUrl = await runtime.getPreviewUrl(portNum);
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
+  const pathWithQuery = url.search ? `${path}${url.search}` : path;
 
   // For Daytona, we need special auth handling
   if (machineRecord.type === "daytona") {
@@ -161,7 +163,8 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   }
 
   // For non-Daytona machines (docker, fly, local), simple proxy without auth
-  const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
+  const fetcher = await runtime.getFetcher(portNum);
+  const response = await proxyWithFetcher(c.req.raw, pathWithQuery, fetcher);
   return rewriteHTMLUrls(response, proxyBasePath);
 });
 
@@ -259,11 +262,15 @@ async function proxyDaytonaWebSocket(
 }
 
 /**
- * Proxy request to local Docker container (no auth needed)
+ * Proxy request via provider-specific fetcher (no auth needed)
  */
-async function proxyLocalDocker(request: Request, targetUrl: string): Promise<Response> {
+async function proxyWithFetcher(
+  request: Request,
+  targetPath: string,
+  fetcher: SandboxFetcher,
+): Promise<Response> {
   if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-    return proxyLocalDockerWebSocket(request, targetUrl);
+    return proxyWebSocketWithFetcher(request, targetPath, fetcher);
   }
 
   const headers = new Headers();
@@ -273,10 +280,7 @@ async function proxyLocalDocker(request: Request, targetUrl: string): Promise<Re
     }
   });
 
-  const url = new URL(targetUrl);
-  headers.set("Host", url.host);
-
-  const response = await fetch(targetUrl, {
+  const response = await fetcher(targetPath, {
     method: request.method,
     headers,
     body: request.body,
@@ -298,8 +302,11 @@ async function proxyLocalDocker(request: Request, targetUrl: string): Promise<Re
   });
 }
 
-async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): Promise<Response> {
-  const url = new URL(targetUrl);
+async function proxyWebSocketWithFetcher(
+  request: Request,
+  targetPath: string,
+  fetcher: SandboxFetcher,
+): Promise<Response> {
   const headers = new Headers();
 
   request.headers.forEach((value, key) => {
@@ -314,9 +321,7 @@ async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): P
     }
   });
 
-  headers.set("Host", url.host);
-
-  return fetch(targetUrl, {
+  return fetcher(targetPath, {
     method: request.method,
     headers,
     body: request.body,
