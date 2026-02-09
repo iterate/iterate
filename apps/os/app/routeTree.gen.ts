@@ -21,6 +21,7 @@ import { Route as projLayoutRouteImport } from './routes/proj/layout.tsx'
 import { Route as orgLayoutRouteImport } from './routes/org/layout.tsx'
 import { Route as adminTrpcToolsRouteImport } from './routes/admin/trpc-tools.tsx'
 import { Route as adminSessionInfoRouteImport } from './routes/admin/session-info.tsx'
+import { Route as adminOutboxRouteImport } from './routes/admin/outbox.tsx'
 import { Route as projIndexRouteImport } from './routes/proj/index.tsx'
 import { Route as orgIndexRouteImport } from './routes/org/index.tsx'
 import { Route as projSettingsRouteImport } from './routes/proj/settings.tsx'
@@ -92,6 +93,11 @@ const adminTrpcToolsRoute = adminTrpcToolsRouteImport.update({
 const adminSessionInfoRoute = adminSessionInfoRouteImport.update({
   id: '/session-info',
   path: '/session-info',
+  getParentRoute: () => adminLayoutRoute,
+} as any)
+const adminOutboxRoute = adminOutboxRouteImport.update({
+  id: '/outbox',
+  path: '/outbox',
   getParentRoute: () => adminLayoutRoute,
 } as any)
 const projIndexRoute = projIndexRouteImport.update({
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
   '/slack-conflict': typeof slackConflictRoute
+  '/admin/outbox': typeof adminOutboxRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -191,6 +198,7 @@ export interface FileRoutesByTo {
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
   '/slack-conflict': typeof slackConflictRoute
+  '/admin/outbox': typeof adminOutboxRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/user/settings': typeof userSettingsRoute
@@ -217,6 +225,7 @@ export interface FileRoutesById {
   '/_auth/': typeof indexRoute
   '/_auth/admin': typeof adminLayoutRouteWithChildren
   '/_auth/slack-conflict': typeof slackConflictRoute
+  '/_auth/admin/outbox': typeof adminOutboxRoute
   '/_auth/admin/session-info': typeof adminSessionInfoRoute
   '/_auth/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/_auth/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -245,6 +254,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/slack-conflict'
+    | '/admin/outbox'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/orgs/$organizationSlug'
@@ -270,6 +280,7 @@ export interface FileRouteTypes {
     | '/logout'
     | '/'
     | '/slack-conflict'
+    | '/admin/outbox'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/user/settings'
@@ -295,6 +306,7 @@ export interface FileRouteTypes {
     | '/_auth/'
     | '/_auth/admin'
     | '/_auth/slack-conflict'
+    | '/_auth/admin/outbox'
     | '/_auth/admin/session-info'
     | '/_auth/admin/trpc-tools'
     | '/_auth/orgs/$organizationSlug'
@@ -408,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminSessionInfoRouteImport
       parentRoute: typeof adminLayoutRoute
     }
+    '/_auth/admin/outbox': {
+      id: '/_auth/admin/outbox'
+      path: '/outbox'
+      fullPath: '/admin/outbox'
+      preLoaderRoute: typeof adminOutboxRouteImport
+      parentRoute: typeof adminLayoutRoute
+    }
     '/_auth/proj/$projectSlug/': {
       id: '/_auth/proj/$projectSlug/'
       path: '/'
@@ -503,12 +522,14 @@ declare module '@tanstack/react-router' {
 }
 
 interface adminLayoutRouteChildren {
+  adminOutboxRoute: typeof adminOutboxRoute
   adminSessionInfoRoute: typeof adminSessionInfoRoute
   adminTrpcToolsRoute: typeof adminTrpcToolsRoute
   adminIndexRoute: typeof adminIndexRoute
 }
 
 const adminLayoutRouteChildren: adminLayoutRouteChildren = {
+  adminOutboxRoute: adminOutboxRoute,
   adminSessionInfoRoute: adminSessionInfoRoute,
   adminTrpcToolsRoute: adminTrpcToolsRoute,
   adminIndexRoute: adminIndexRoute,

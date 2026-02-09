@@ -26,6 +26,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       git \
       inotify-tools \
       jq \
+      less \
       locales \
       make \
       openssh-client \
@@ -154,8 +155,9 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
     sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
     sudo update-ca-certificates
 
-# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
-RUN opencode run "Hello" || true
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
+# Use a free model — no API keys are available at build time.
+RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
 
 # === Git directory and metadata (MUST be last - changes every commit) ===
 # Copy a minimal .git directory with packed objects for HEAD.

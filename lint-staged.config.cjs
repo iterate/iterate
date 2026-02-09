@@ -16,6 +16,10 @@ const isAgent =
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["prettier --write --ignore-unknown"],
+  "skills/**": [
+    () => "pnpm -C apps/iterate-com skills:generate",
+    "git add apps/iterate-com/backend/generated/skills-registry.ts",
+  ],
 };
 
 /** @type {import('lint-staged').Configuration} */

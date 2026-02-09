@@ -44,12 +44,17 @@ export const setupRepo = [
 ] as const satisfies Step[];
 
 type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
+export const installDopplerCli = {
+  name: "Install Doppler CLI",
+  run: [
+    'for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
+    "doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }",
+  ].join("\n"),
+} as const satisfies Step;
+
 export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
   [
-    {
-      name: "Install Doppler CLI",
-      uses: "dopplerhq/cli-action@v2",
-    },
+    installDopplerCli,
     {
       name: "Setup Doppler",
       run: `doppler setup --config ${config} --project os`,
