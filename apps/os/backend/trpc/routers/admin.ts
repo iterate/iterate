@@ -1,10 +1,12 @@
 import { z } from "zod/v4";
-import { and, eq, ilike } from "drizzle-orm";
+import { and, eq, ilike, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { user, billingAccount } from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 export const adminRouter = router({
   // Impersonate a user (creates a session as that user)
@@ -254,4 +256,64 @@ export const adminRouter = router({
         role: input.role,
       };
     }),
+
+  outbox: {
+    poke: adminProcedure
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.db.transaction(async (tx) => {
+          const result = await tx.execute(sql`select now()::text as now`);
+          const rows = Array.isArray(result)
+            ? result
+            : (result as { rows: { now: string }[] }).rows;
+          const dbtime = rows[0]?.now ?? new Date().toISOString();
+          const reply = `You used ${input.message.split(" ").length} words, well done.`;
+          return ctx.sendTrpc(tx, { dbtime, reply });
+        });
+      }),
+    pokeOutboxClientDirectly: adminProcedure
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
+          const result = await tx.execute(sql`select now()::text as now`);
+          const rows = Array.isArray(result)
+            ? result
+            : (result as { rows: { now: string }[] }).rows;
+          const dbtime = String(rows[0]?.now ?? new Date().toISOString());
+          return {
+            payload: { dbtime, message: `${input.message} at ${new Date().toISOString()}` },
+          };
+        });
+        return { done: true };
+      }),
+    peek: adminProcedure
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekQueue(ctx.db, input);
+      }),
+    peekArchive: adminProcedure
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekArchive(ctx.db, input);
+      }),
+    process: adminProcedure.mutation(async ({ ctx }) => {
+      return await queuer.processQueue(ctx.db);
+    }),
+  },
 });
