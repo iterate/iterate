@@ -126,6 +126,7 @@ rm -rf "$TMP_DIR"
       },
       envOptions: {
         inheritGlobalEnv: false,
+        reloadDelay: false,
       },
     },
     {
