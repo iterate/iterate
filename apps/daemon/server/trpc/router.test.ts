@@ -8,6 +8,7 @@ sqlite.exec(`
   CREATE TABLE agents (
     path text PRIMARY KEY NOT NULL,
     working_directory text NOT NULL,
+    metadata text,
     created_at integer DEFAULT (unixepoch()),
     updated_at integer DEFAULT (unixepoch()),
     archived_at integer

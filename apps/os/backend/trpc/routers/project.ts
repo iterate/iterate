@@ -453,11 +453,11 @@ export const projectRouter = router({
       // Keep connection and secret in sync when moving Slack workspaces between projects.
       await ctx.db.transaction(async (tx) => {
         await tx
-          .update(projectConnection)
+          .update(schema.projectConnection)
           .set({
             projectId: targetProjectId,
           })
-          .where(eq(projectConnection.id, existingConnection.id));
+          .where(eq(schema.projectConnection.id, existingConnection.id));
 
         if (!encryptedAccessToken) return;
 

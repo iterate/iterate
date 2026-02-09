@@ -10,13 +10,7 @@ const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 // Headers to forward from upstream response (excluding hop-by-hop headers)
-const FORWARDED_HEADERS = [
-  "content-type",
-  "cache-control",
-  "x-request-id",
-  "x-correlation-id",
-  "transfer-encoding",
-];
+const FORWARDED_HEADERS = ["content-type", "cache-control", "x-request-id", "x-correlation-id"];
 
 const ROUTE_READY_MAX_ATTEMPTS = 40;
 const ROUTE_READY_DELAY_MS = 250;

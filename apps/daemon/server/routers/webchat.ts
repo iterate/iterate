@@ -153,7 +153,11 @@ webchatRouter.post("/webhook", async (c) => {
     isFirstMessageInThread: !existedBefore,
   });
 
-  await sendToAgentGateway(agentPath, { type: "prompt", message: formattedMessage });
+  void sendToAgentGateway(agentPath, { type: "prompt", message: formattedMessage }).catch(
+    (error) => {
+      logger.error(`[webchat] sendToAgentGateway failed for ${threadId}/${messageId}`, error);
+    },
+  );
 
   return c.json({
     success: true,
@@ -258,26 +262,23 @@ function createThreadId(): string {
   return `thread-${Date.now().toString(36)}-${nanoid(8)}`;
 }
 
-function sanitizeForSlug(value: string): string {
+function sanitizeForSegment(value: string, maxLength: number): string {
   return (
     value
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "")
-      .slice(0, 50) || "thread"
+      .slice(0, maxLength) || "thread"
   );
 }
 
+function sanitizeForSlug(value: string): string {
+  return sanitizeForSegment(value, 50);
+}
+
 function sanitizeForPathSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 80) || "thread"
-  );
+  return sanitizeForSegment(value, 80);
 }
 
 function agentSlugForThread(threadId: string): string {

@@ -26,13 +26,15 @@ const { slackRouter } = await import("./slack.ts");
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   const now = new Date();
+  const { metadata, ...rest } = overrides;
   return {
     path: "/slack/123",
     workingDirectory: "/home/iterate/src/github.com/iterate/iterate",
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
-    ...overrides,
+    metadata: metadata ?? null,
+    ...rest,
   };
 }
 

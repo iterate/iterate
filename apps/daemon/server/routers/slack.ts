@@ -66,6 +66,10 @@ interface ParsedReaction {
   channel: string;
 }
 
+function isParsedReaction(parsed: ParsedMessage | ParsedReaction): parsed is ParsedReaction {
+  return parsed.case === "reaction_added" || parsed.case === "reaction_removed";
+}
+
 slackRouter.use("*", async (c, next) => {
   const reqBody = await c.req.raw.clone().text();
   logger.log(`[daemon/slack] REQ ${c.req.method} ${c.req.path}`, reqBody);
@@ -88,7 +92,7 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
+  if (isParsedReaction(parsed)) {
     const threadTs = await lookupThreadTsForMessage(parsed.channel, parsed.itemTs);
     if (!threadTs) {
       return c.json({
@@ -172,7 +176,7 @@ async function handleSlackWebhookAsync(params: {
   const { parsed, eventId, requestId, precomputedThreadTs, precomputedHasAgent } = params;
 
   // Reaction events: lookup the parent thread, then forward to the existing agent if present.
-  if (parsed.case === "reaction_added" || parsed.case === "reaction_removed") {
+  if (isParsedReaction(parsed)) {
     const threadTs =
       precomputedThreadTs ?? (await lookupThreadTsForMessage(parsed.channel, parsed.itemTs));
     if (!threadTs) {
@@ -201,7 +205,7 @@ async function handleSlackWebhookAsync(params: {
     return;
   }
 
-  const messageParsed = parsed as ParsedMessage;
+  const messageParsed = parsed;
   const { event, threadTs } = messageParsed;
   const agentPath = getAgentPath(threadTs);
   const hasAgent = precomputedHasAgent ?? (await activeAgentExists(agentPath));
