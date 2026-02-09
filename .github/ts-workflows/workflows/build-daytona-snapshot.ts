@@ -122,9 +122,10 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: [
-            // Install CLI
+            // Install CLI (with retries for transient network failures)
             'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
-            'curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"',
+            'for i in 1 2 3; do curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH" && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
+            "test -f daytona || { echo 'Failed to download Daytona CLI after 3 attempts'; exit 1; }",
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
             // Configure CLI with API key (CLI doesn't use env vars, needs config file)
