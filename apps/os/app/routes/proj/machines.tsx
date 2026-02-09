@@ -450,10 +450,10 @@ function ProjectMachinesPage() {
       {previousMachines.length > 0 && (
         <section className="space-y-3">
           <div>
-            <h2 className="text-sm font-medium">Previous Machines</h2>
+            <h2 className="text-sm font-medium">Inactive Machines</h2>
             <p className="text-xs text-muted-foreground">
               Starting, detached, or archived machines. A new machine becomes active once it reports
-              ready.
+              ready. Detached machines will be archived after 48 hours.
             </p>
           </div>
           <MachineTable
