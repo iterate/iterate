@@ -349,6 +349,9 @@ importers:
       '@xterm/addon-ligatures':
         specifier: 0.11.0-beta.103
         version: 0.11.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/addon-search':
+        specifier: 0.17.0-beta.103
+        version: 0.17.0-beta.103(@xterm/xterm@6.1.0-beta.103)
       '@xterm/addon-serialize':
         specifier: 0.15.0-beta.103
         version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
@@ -6287,6 +6290,11 @@ packages:
   '@xterm/addon-ligatures@0.11.0-beta.103':
     resolution: {integrity: sha512-+Nyq0CUJ6ZKj82D/6KGD3xnsgqEmnbaS3Jh/dFKBZxlICzGiJjQ8zlUCWabbdpgwQyCg4BHGuM+qC8P9FF9rsA==}
     engines: {node: '>8.0.0'}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.103
+
+  '@xterm/addon-search@0.17.0-beta.103':
+    resolution: {integrity: sha512-dG7GnhFWoRG1etFRk6J4J1mVJIyoY/kRQx3pxE4eHsuW5X+BhIxbbOAiniPZwFdGCkZx5aehnuVx2SM+O0FFBQ==}
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.103
 
@@ -17883,6 +17891,10 @@ snapshots:
       '@xterm/xterm': 6.1.0-beta.103
       lru-cache: 6.0.0
       opentype.js: 0.8.0
+
+  '@xterm/addon-search@0.17.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.103
 
   '@xterm/addon-serialize@0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)':
     dependencies:
