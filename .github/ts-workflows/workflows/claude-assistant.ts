@@ -56,13 +56,7 @@ export default workflow({
           name: "Install dependencies",
           run: "pnpm install",
         },
-        {
-          name: "Install Doppler CLI",
-          run: [
-            'for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
-            "doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }",
-          ].join("\n"),
-        },
+        utils.installDopplerCli,
         {
           name: "Fetch secrets from Doppler",
           id: "doppler",

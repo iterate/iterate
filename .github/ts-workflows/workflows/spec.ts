@@ -26,17 +26,7 @@ export default workflow({
         },
         { run: "pnpm install" },
         { run: "pnpm docker:up" },
-        {
-          name: "Install Doppler CLI",
-          run: [
-            'for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
-            "doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }",
-          ].join("\n"),
-        },
-        {
-          name: "Setup Doppler",
-          run: "doppler setup --project os --config dev_test",
-        },
+        ...utils.setupDoppler({ config: "dev_test" }),
         {
           name: "Install Playwright browsers",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
