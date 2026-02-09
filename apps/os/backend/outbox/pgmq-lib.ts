@@ -122,24 +122,22 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     const results: Array<string | void> = [];
     for (const _job of jobQueueMessages.rows) {
       const parsed = ConsumerJobQueueMessage.safeParse(_job);
-      if (!parsed.success) {
-        const err = z.prettifyError(parsed.error);
-        logger.warn(`[outbox] invalid message: ${err}`, { job: _job });
-        continue;
-      }
-      const job = parsed.data;
-      const matchingConsumer =
-        consumers[`eventName:${job.message.event_name}`]?.[
-          `consumerName:${job.message.consumer_name}`
-        ];
-      if (!matchingConsumer) {
-        logger.warn(
-          `[outbox] no consumer found for ${JSON.stringify(job, null, 2)}. It may have been deleted?`,
-        );
-        continue;
-      }
-      const consumer = matchingConsumer;
+      let job: ConsumerJobQueueMessage | undefined;
+      let consumer: ConsumerDefinition<{}> | undefined;
       try {
+        if (!parsed.success) {
+          throw new Error(`[outbox] invalid message: ${z.prettifyError(parsed.error)}`);
+        }
+        job = parsed.data;
+        consumer =
+          consumers[`eventName:${job.message.event_name}`]?.[
+            `consumerName:${job.message.consumer_name}`
+          ];
+        if (!consumer) {
+          throw new Error(
+            `[outbox] no consumer found for event=${job.message.event_name} consumer=${job.message.consumer_name}`,
+          );
+        }
         logger.info(`[outbox] START msg_id=${job.msg_id} consumer=${consumer.name}`);
         const result = await consumer.handler({
           eventId: job.message.event_id,
@@ -162,7 +160,11 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         `);
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
-        const retry = consumer.retry(job);
+        if (!job) {
+          logger.error(`[outbox] unparseable message, skipping`, { job: _job, error: e });
+          continue;
+        }
+        const retry = (consumer?.retry ?? defaultRetryFn)(job);
         const retryMessage = Object.entries(retry)
           .map(([k, v]) => `${k}: ${v}`)
           .join(". ");
