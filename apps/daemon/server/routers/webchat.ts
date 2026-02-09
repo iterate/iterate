@@ -178,7 +178,9 @@ webchatRouter.post("/webhook", async (c) => {
   });
 
   // Fire-and-forget to agent (like Slack/email). Agent posts back via CLI tool.
-  await appendToAgent(existingAgent, formattedMessage, {
+  // Do NOT await — appendToAgent blocks until the full LLM run completes,
+  // which would keep the HTTP connection open for minutes and cause timeouts.
+  appendToAgent(existingAgent, formattedMessage, {
     workingDirectory,
     acknowledge: async () => logger.log(`[webchat] Processing ${threadId}/${messageId}`),
     unacknowledge: async () => {
@@ -188,6 +190,8 @@ webchatRouter.post("/webhook", async (c) => {
     setStatus: async (status) => {
       threadStatuses.set(threadId, status);
     },
+  }).catch((error) => {
+    logger.error(`[webchat] appendToAgent failed for ${threadId}/${messageId}`, error);
   });
 
   return c.json({

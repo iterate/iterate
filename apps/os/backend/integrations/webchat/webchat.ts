@@ -169,7 +169,12 @@ export async function forwardWebchatWebhookToMachine(
     });
 
     if (!response.ok) {
-      return { success: false, error: `HTTP ${response.status}` };
+      const body = await response.text().catch(() => "<no body>");
+      logger.warn("[webchat] Webhook forward failed", {
+        status: response.status,
+        body: body.slice(0, 500),
+      });
+      return { success: false, error: `HTTP ${response.status}: ${body.slice(0, 200)}` };
     }
 
     const parsed = WebchatWebhookResponse.safeParse(await response.json());
@@ -278,7 +283,7 @@ webchatApp.post("/webhook", async (c) => {
       messageId: parsedInput.data.messageId ?? crypto.randomUUID(),
       text: parsedInput.data.text,
       userId: user.id,
-      userName: user.name ?? user.email,
+      userName: user.name || user.email,
       projectId: project.id,
       projectSlug: project.slug,
       attachments: parsedInput.data.attachments,

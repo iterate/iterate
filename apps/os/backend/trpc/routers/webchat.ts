@@ -97,7 +97,7 @@ export const webchatRouter = router({
         messageId: input.messageId ?? crypto.randomUUID(),
         text: input.text,
         userId: ctx.user.id,
-        userName: ctx.user.name ?? ctx.user.email,
+        userName: ctx.user.name || ctx.user.email,
         projectId: ctx.project.id,
         projectSlug: ctx.project.slug,
         attachments: input.attachments,
