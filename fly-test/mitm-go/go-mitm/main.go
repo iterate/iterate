@@ -28,13 +28,16 @@ func main() {
 		configDir = "/data/proxify"
 	}
 
+	if err := certs.LoadCerts(configDir); err != nil {
+		log.Fatal(err)
+	}
+
 	target, err := url.Parse(handlerURL)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := certs.LoadCerts(configDir); err != nil {
-		log.Fatal(err)
-	}
+
+	log.Printf("starting go tls-terminator listen_port=%s handler_url=%s", port, target.String())
 
 	proxy, err := proxify.NewProxy(&proxify.Options{
 		ListenAddrHTTP: fmt.Sprintf("0.0.0.0:%s", port),

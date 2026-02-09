@@ -38,11 +38,21 @@ SANDBOX_HOST_PORT=38080 EGRESS_VIEWER_HOST_PORT=38081 TARGET_URL=https://example
 - sandbox URL: `http://127.0.0.1:38080`
 - egress URL: `http://127.0.0.1:38081`
 
+WebSocket POC:
+
+1. Open sandbox UI at `http://127.0.0.1:38080`.
+2. In `Sandbox WebSocket Client`, keep target `ws://ws-upstream:19090/ws`.
+3. Set `Drop Contains=OFFENDING`, `Rewrite Server From=server-secret`, `Rewrite Server To=REDACTED`.
+4. Click `Connect`.
+5. Send `OFFENDING should be dropped` then send `normal hello`.
+6. Confirm sandbox WS events show drop marker and rewritten server messages (`REDACTED: ...`).
+
 Tail logs:
 
 ```bash
 docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f sandbox-ui
 docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f egress-proxy
+docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f ws-upstream
 ```
 
 Shutdown:

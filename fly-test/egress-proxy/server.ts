@@ -1,210 +1,66 @@
-import fs from "node:fs";
+import {
+  handleHealthz,
+  handleHome,
+  handleTail,
+  handleTransform,
+  handleWsClose,
+  handleWsMessage,
+  handleWsOpen,
+  handleWsUpgrade,
+} from "./routes.ts";
+import { createLogger, deriveTarget, nextRequestId } from "./utils.ts";
+import type { ProxySocketData } from "./utils.ts";
 
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
-const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
+const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "I was inserted by the egress proxy lol\n";
 const TRANSFORM_TIMEOUT_MS = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
+
 const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));
+const WS_DEFAULTS = {
+  target: process.env.WS_DEFAULT_TARGET ?? "wss://echo.websocket.events",
+};
 
-const HOP_BY_HOP = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "proxy-connection",
-  "proxy-authentication",
-]);
+const logger = createLogger(LOG_PATH);
+logger.appendLog(`BOOT pid=${process.pid} viewer_port=${VIEWER_PORT}`);
 
-function appendLog(message: string): void {
-  const line = `${new Date().toISOString()} ${message}`;
-  process.stdout.write(`${line}\n`);
-  fs.appendFileSync(LOG_PATH, `${line}\n`);
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-function sanitizeInboundHeaders(input: Headers): Headers {
-  const headers = new Headers();
-  for (const [key, value] of input.entries()) {
-    const lower = key.toLowerCase();
-    if (HOP_BY_HOP.has(lower)) continue;
-    if (lower === "host") continue;
-    if (lower === "content-length") continue;
-    if (lower === "forwarded") continue;
-    if (lower === "x-forwarded-for") continue;
-    if (lower === "x-forwarded-host") continue;
-    if (lower === "x-forwarded-proto") continue;
-    if (lower === "x-forwarded-port") continue;
-    if (lower === "x-proxy-target-url") continue;
-    headers.append(key, value);
-  }
-  headers.set("accept-encoding", "identity");
-  return headers;
-}
-
-function sanitizeOutboundHeaders(input: Headers): Headers {
-  const headers = new Headers();
-  for (const [key, value] of input.entries()) {
-    const lower = key.toLowerCase();
-    if (HOP_BY_HOP.has(lower)) continue;
-    if (lower === "content-length") continue;
-    headers.append(key, value);
-  }
-  return headers;
-}
-
-function isTextLike(contentType: string): boolean {
-  const value = contentType.toLowerCase();
-  return (
-    value.startsWith("text/") ||
-    value.includes("json") ||
-    value.includes("xml") ||
-    value.includes("javascript")
-  );
-}
-
-function getTail(maxLines: number): string {
-  if (!fs.existsSync(LOG_PATH)) return "";
-  const lines = fs
-    .readFileSync(LOG_PATH, "utf8")
-    .split("\n")
-    .filter((line) => line.length > 0);
-  return `${lines.slice(-maxLines).join("\n")}\n`;
-}
-
-function deriveTarget(request: Request): string | null {
-  const header = (request.headers.get("x-proxy-target-url") ?? "").trim();
-  if (header.length === 0) return null;
-  try {
-    const parsed = new URL(header);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
-async function handleTransform(request: Request, target: string): Promise<Response> {
-  const method = request.method.toUpperCase();
-  let parsed: URL;
-  try {
-    parsed = new URL(target);
-  } catch {
-    return json({ error: "invalid url" }, 400);
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return json({ error: "unsupported protocol" }, 400);
-  }
-
-  appendLog(`MITM_REQUEST method=${method} target="${target}"`);
-
-  if (parsed.hostname === "iterate.com" || parsed.hostname.endsWith(".iterate.com")) {
-    appendLog(`POLICY_BLOCK method=${method} target="${target}"`);
-    return new Response("policy violation\n", {
-      status: 451,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "cache-control": "no-store",
-      },
-    });
-  }
-
-  const init: RequestInit = {
-    method,
-    headers: sanitizeInboundHeaders(request.headers),
-    redirect: "manual",
-    signal: AbortSignal.timeout(
-      Number.isFinite(TRANSFORM_TIMEOUT_MS) ? TRANSFORM_TIMEOUT_MS : 5000,
-    ),
-  };
-  if (method !== "GET" && method !== "HEAD") init.body = request.body;
-
-  const startedAt = Date.now();
-  try {
-    const upstream = await fetch(target, init);
-    const contentType = upstream.headers.get("content-type") ?? "";
-    const headers = sanitizeOutboundHeaders(upstream.headers);
-
-    let bodyOut: BodyInit | null = upstream.body;
-    if (method === "HEAD") {
-      bodyOut = null;
-    } else if (isTextLike(contentType)) {
-      const raw = await upstream.text();
-      bodyOut = `${PROOF_PREFIX}${raw}`;
-    }
-
-    appendLog(
-      `TRANSFORM_OK method=${method} target="${target}" status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
-    );
-
-    return new Response(bodyOut, {
-      status: upstream.status,
-      headers,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    appendLog(
-      `TRANSFORM_ERROR method=${method} target="${target}" duration_ms=${Date.now() - startedAt} err="${message}"`,
-    );
-    return json({ error: message }, 502);
-  }
-}
-
-fs.mkdirSync("/tmp", { recursive: true });
-fs.appendFileSync(LOG_PATH, "");
-appendLog(`BOOT pid=${process.pid} viewer_port=${VIEWER_PORT}`);
-
-Bun.serve({
+Bun.serve<ProxySocketData>({
   port: VIEWER_PORT,
   hostname: "::",
-  async fetch(request: Request): Promise<Response> {
+  fetch(request, server) {
     const url = new URL(request.url);
-    const target = deriveTarget(request);
-    if (target !== null) {
-      return handleTransform(request, target);
-    }
 
-    if (url.pathname === "/") {
-      return new Response(INDEX_HTML, {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store",
-        },
+    const transformTarget = deriveTarget(request);
+    if (transformTarget !== null) {
+      const requestId = nextRequestId("http");
+      return handleTransform(request, transformTarget, requestId, logger, {
+        proofPrefix: PROOF_PREFIX,
+        transformTimeoutMs: TRANSFORM_TIMEOUT_MS,
       });
     }
 
-    if (url.pathname === "/healthz") {
-      return new Response("ok\n", {
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
-    }
-
-    if (url.pathname === "/api/tail") {
-      const requested = Number(url.searchParams.get("lines") ?? "300");
-      const lines = Number.isFinite(requested) ? Math.max(1, Math.min(1000, requested)) : 300;
-      return new Response(getTail(lines), {
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      });
-    }
+    if (url.pathname === "/") return handleHome(INDEX_HTML);
+    if (url.pathname === "/healthz") return handleHealthz();
+    if (url.pathname === "/api/tail") return handleTail(url, logger);
+    if (url.pathname === "/api/ws/proxy")
+      return handleWsUpgrade(request, server, url, logger, WS_DEFAULTS);
 
     return new Response("not found\n", {
       status: 404,
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   },
+  websocket: {
+    open(ws) {
+      handleWsOpen(ws, logger);
+    },
+    message(ws, message) {
+      handleWsMessage(ws, message, logger);
+    },
+    close(ws, code, reason) {
+      handleWsClose(ws, code, reason, logger);
+    },
+  },
 });
 
-appendLog(`VIEWER_LISTEN port=${VIEWER_PORT}`);
+logger.appendLog(`VIEWER_LISTEN port=${VIEWER_PORT}`);
