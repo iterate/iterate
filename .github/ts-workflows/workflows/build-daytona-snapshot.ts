@@ -30,7 +30,6 @@ export default workflow({
   on: {
     // DISABLED: PR builds are still relatively slow because Daytona snapshots currently
     // require a local Docker image in the runner daemon.
-    // We now use Depot Registry save+pull (faster than --load), but still need local pull.
     // TODO: Re-enable when Daytona supports registry-based snapshot creation
     // pull_request: {
     //   types: ["opened", "synchronize"],
@@ -149,7 +148,6 @@ export default workflow({
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             // Daytona requires AMD64 images regardless of runner architecture
             SANDBOX_BUILD_PLATFORM: "linux/amd64",
-            // Avoid direct builder->daemon transfer; save then pull via Depot Registry.
             SANDBOX_USE_DEPOT_REGISTRY: "true",
             SANDBOX_DEPOT_SAVE_TAG:
               "iterate-sandbox-daytona-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -157,30 +155,6 @@ export default workflow({
           run: [
             "echo '::group::Build timing'",
             "time pnpm os docker:build",
-            "echo '::endgroup::'",
-          ].join("\n"),
-        },
-        // Pull saved image from Depot Registry into local Docker daemon for Daytona CLI.
-        {
-          name: "Pull sandbox image from Depot Registry",
-          env: {
-            IMAGE_NAME: "iterate-sandbox:ci",
-          },
-          run: [
-            "echo '::group::Pull timing'",
-            'build_info_path=".cache/depot-build-info.json"',
-            'depot_project_id="$(jq -r \'.depotProjectId\' "$build_info_path")"',
-            'depot_save_tag="$(jq -r \'.depotSaveTag\' "$build_info_path")"',
-            'image_ref="$(jq -r \'.depotRegistryImageName\' "$build_info_path")"',
-            'if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then',
-            '  echo "Missing Depot registry metadata in $build_info_path" >&2',
-            "  exit 1",
-            "fi",
-            // Daytona snapshots must always be AMD64.
-            'time depot pull --platform "linux/amd64" --project "$depot_project_id" "$depot_save_tag"',
-            'docker image inspect "$image_ref" > /dev/null',
-            'docker tag "$image_ref" "$IMAGE_NAME"',
-            "echo 'Pulled image: $image_ref'",
             "echo '::endgroup::'",
           ].join("\n"),
         },

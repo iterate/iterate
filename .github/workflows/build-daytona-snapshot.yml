@@ -88,24 +88,6 @@ jobs:
           echo '::group::Build timing'
           time pnpm os docker:build
           echo '::endgroup::'
-      - name: Pull sandbox image from Depot Registry
-        env:
-          IMAGE_NAME: iterate-sandbox:ci
-        run: |-
-          echo '::group::Pull timing'
-          build_info_path=".cache/depot-build-info.json"
-          depot_project_id="$(jq -r '.depotProjectId' "$build_info_path")"
-          depot_save_tag="$(jq -r '.depotSaveTag' "$build_info_path")"
-          image_ref="$(jq -r '.depotRegistryImageName' "$build_info_path")"
-          if [ "$depot_project_id" = "null" ] || [ "$depot_save_tag" = "null" ] || [ "$image_ref" = "null" ]; then
-            echo "Missing Depot registry metadata in $build_info_path" >&2
-            exit 1
-          fi
-          time depot pull --platform "linux/amd64" --project "$depot_project_id" "$depot_save_tag"
-          docker image inspect "$image_ref" > /dev/null
-          docker tag "$image_ref" "$IMAGE_NAME"
-          echo 'Pulled image: $image_ref'
-          echo '::endgroup::'
       - id: push
         name: Push Daytona snapshot
         uses: nick-fields/retry@v3

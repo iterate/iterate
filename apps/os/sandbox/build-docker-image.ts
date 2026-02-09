@@ -29,14 +29,8 @@ const builtBy = process.env.ITERATE_USER ?? "unknown";
 const useDepotRegistry = process.env.SANDBOX_USE_DEPOT_REGISTRY === "true";
 const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
 
-// Detect multi-platform builds (comma-separated platforms)
-const isMultiPlatform = buildPlatform.includes(",");
-
 // Local tag for Docker daemon (used by local-docker provider and tests)
 const localImageName = process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local";
-
-// Registry image name for multi-platform builds (can't --load multiple platforms)
-const registryImageName = process.env.REGISTRY_IMAGE_NAME;
 
 function readDepotProjectId(): string {
   const depotConfigPath = join(repoRoot, "depot.json");
@@ -143,19 +137,6 @@ function createMinimalGitDir(): string {
 const minimalGitDir = createMinimalGitDir();
 console.log(`Minimal .git directory: ${minimalGitDir}`);
 
-// Multi-platform builds require pushing to a registry (can't --load multiple platforms)
-if (isMultiPlatform && !registryImageName) {
-  console.error("Error: Multi-platform builds require REGISTRY_IMAGE_NAME environment variable");
-  console.error("Example: REGISTRY_IMAGE_NAME=ghcr.io/iterate/sandbox:latest");
-  process.exit(1);
-}
-
-if (useDepotRegistry && isMultiPlatform) {
-  console.error("Error: SANDBOX_USE_DEPOT_REGISTRY is only supported for single-platform builds");
-  console.error("Use REGISTRY_IMAGE_NAME for multi-platform builds.");
-  process.exit(1);
-}
-
 if (useDepotRegistry && !depotSaveTag) {
   console.error("Error: SANDBOX_DEPOT_SAVE_TAG is required when SANDBOX_USE_DEPOT_REGISTRY=true");
   console.error("Example: SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-ci-1234");
@@ -163,14 +144,13 @@ if (useDepotRegistry && !depotSaveTag) {
 }
 
 // Determine output mode:
-// - --load for local daemon (default, needed by Daytona and local dev)
-// - --save for Depot Registry (single-platform CI fast path)
-// - --push for explicit registry image names (multi-platform builds)
-const outputArgs = isMultiPlatform
-  ? ["--push", "-t", registryImageName!]
-  : useDepotRegistry
-    ? ["--save", "--save-tag", depotSaveTag!]
-    : ["--load", "-t", localImageName];
+// - Always --load to the local daemon.
+// - If SANDBOX_BUILD_PLATFORM is comma-separated (e.g. linux/amd64,linux/arm64),
+//   Depot/BuildKit resolves --load to the local runner architecture image.
+// - Optionally add --save in the same build when SANDBOX_USE_DEPOT_REGISTRY=true.
+const outputArgs = useDepotRegistry
+  ? ["--load", "-t", localImageName, "--save", "--save-tag", depotSaveTag!]
+  : ["--load", "-t", localImageName];
 
 // Use depot build for persistent layer caching
 // depot build accepts the same parameters as docker build
@@ -196,10 +176,8 @@ const buildArgs = [
 const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
 const buildCommand = buildArgs.map(quoteArg).join(" ");
 
-if (isMultiPlatform) {
-  console.log(`Multi-platform build: ${buildPlatform}`);
-  console.log(`Registry image: ${registryImageName}`);
-} else if (useDepotRegistry) {
+if (useDepotRegistry) {
+  console.log(`Local image tag: ${localImageName}`);
   console.log(`Depot registry image: ${depotRegistryImageName}`);
   console.log(`Depot save tag: ${depotSaveTag}`);
   console.log(`Platform: ${buildPlatform}`);
@@ -225,15 +203,14 @@ writeFileSync(
   buildInfoPath,
   JSON.stringify(
     {
-      localImageName: isMultiPlatform || useDepotRegistry ? null : localImageName,
-      registryImageName: isMultiPlatform ? registryImageName : null,
+      localImageName,
+      registryImageName: null,
       depotRegistryImageName,
       depotSaveTag: useDepotRegistry ? depotSaveTag : null,
       depotProjectId,
       gitSha,
       builtBy,
       buildPlatform,
-      isMultiPlatform,
       useDepotRegistry,
     },
     null,
@@ -243,9 +220,5 @@ writeFileSync(
 console.log(`Build info written to: ${buildInfoPath}`);
 
 // Output the image name for CI to use
-const outputImageName = isMultiPlatform
-  ? registryImageName!
-  : useDepotRegistry
-    ? depotRegistryImageName!
-    : localImageName;
+const outputImageName = useDepotRegistry ? depotRegistryImageName! : localImageName;
 console.log(`image_name=${outputImageName}`);

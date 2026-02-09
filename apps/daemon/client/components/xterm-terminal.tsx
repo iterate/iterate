@@ -15,6 +15,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { SearchAddon } from "@xterm/addon-search";
 import { useIsMobile } from "@/hooks/use-mobile.ts";
 import { MobileKeyboardToolbar } from "@/components/mobile-keyboard-toolbar.tsx";
 
@@ -49,10 +50,38 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
-    const mobileInputRef = useRef<HTMLInputElement>(null);
-    const [termSize, setTermSize] = useState({ cols: 80, rows: 24 });
     const [ctrlActive, setCtrlActive] = useState(false);
+    const [keyboardVisible, setKeyboardVisible] = useState(false);
+    const searchAddonRef = useRef<SearchAddon | null>(null);
     const isMobile = useIsMobile();
+    const isMobileRef = useRef(isMobile);
+    useEffect(() => {
+      isMobileRef.current = isMobile;
+    }, [isMobile]);
+
+    // Detect keyboard visibility via VisualViewport on mobile.
+    // On iOS, programmatic .focus() on a textarea does NOT open the keyboard,
+    // but fires the "focus" event — so focus/blur is unreliable. Instead we
+    // compare visualViewport.height to window.innerHeight; a significant drop
+    // (>100px) indicates the virtual keyboard is open.
+    useEffect(() => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const KEYBOARD_THRESHOLD = 100; // px
+      const update = () => {
+        setKeyboardVisible(window.innerHeight - vv.height > KEYBOARD_THRESHOLD);
+      };
+      vv.addEventListener("resize", update);
+      // Set initial state
+      update();
+      return () => vv.removeEventListener("resize", update);
+    }, []);
+
+    // Ref so the onData handler (set up once) can read current modifier state
+    const ctrlActiveRef = useRef(false);
+    useEffect(() => {
+      ctrlActiveRef.current = ctrlActive;
+    }, [ctrlActive]);
 
     const wsUrl = useMemo(() => {
       const baseUri = new URL(document.baseURI);
@@ -76,49 +105,21 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
     const connectionStatus = READY_STATE_MAP[socket.readyState] ?? "disconnected";
 
-    // Handle mobile keyboard input
-    const handleMobileInput = useCallback(
-      (e: React.ChangeEvent<HTMLInputElement>) => {
-        const value = e.target.value;
-        if (value && socket.readyState === WebSocket.OPEN) {
-          if (ctrlActive && value.length === 1) {
-            // Convert letter to Ctrl code (A=1, B=2, etc.)
-            const code = value.toUpperCase().charCodeAt(0) - 64;
-            if (code >= 1 && code <= 26) {
-              socket.send(String.fromCharCode(code));
-            } else {
-              // Non-letter character, send as-is
-              socket.send(value);
-            }
-          } else {
-            socket.send(value);
-          }
-        }
-        // Always reset Ctrl state after any input
-        setCtrlActive(false);
-        e.target.value = "";
-      },
-      [socket, ctrlActive],
-    );
-
-    // Handle key presses from the mobile toolbar
+    // Handle key presses from the mobile toolbar and snippets panel
     const handleToolbarKeyPress = useCallback(
       (key: string) => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(key);
         }
-        // Reset Ctrl state after any toolbar key press (consistent with other input handlers)
+        // Reset modifier after any key press
         setCtrlActive(false);
+        // Re-focus terminal so cursor stays active and keyboard stays open
+        termRef.current?.focus();
+        const ta = containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+        ta?.focus();
       },
       [socket],
     );
-
-    // Focus mobile input to trigger keyboard on mobile devices
-    const focusMobileInput = useCallback(() => {
-      if (isMobile && mobileInputRef.current) {
-        mobileInputRef.current.focus();
-      }
-    }, [isMobile]);
 
     useImperativeHandle(ref, () => ({
       sendText: (text: string) => {
@@ -137,7 +138,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const container = containerRef.current;
 
       const terminal = new Terminal({
-        fontSize: 14,
+        fontSize: isMobileRef.current ? 10 : 14,
         cursorBlink: true,
         fontFamily:
           '"JetBrainsMono Nerd Font", "JetBrains Mono", Monaco, Menlo, "Courier New", monospace',
@@ -161,7 +162,23 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminal.loadAddon(new UnicodeGraphemesAddon());
       terminal.loadAddon(new ClipboardAddon());
 
+      const searchAddon = new SearchAddon();
+      terminal.loadAddon(searchAddon);
+      searchAddonRef.current = searchAddon;
+
       terminal.open(container);
+
+      // Suppress autocorrect/predictive text on xterm's internal textarea
+      // and hide the native blinking caret (terminal renders its own cursor)
+      const helperTextarea = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+      if (helperTextarea) {
+        helperTextarea.setAttribute("autocorrect", "off");
+        helperTextarea.setAttribute("autocomplete", "off");
+        helperTextarea.setAttribute("autocapitalize", "none");
+        helperTextarea.setAttribute("spellcheck", "false");
+        helperTextarea.style.caretColor = "transparent";
+      }
+
       // IMPORTANT: LigaturesAddon must be loaded after the terminal is opened
       terminal.loadAddon(new LigaturesAddon());
 
@@ -181,15 +198,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       const sendResize = () => {
         const { cols, rows } = terminal;
-        setTermSize({ cols, rows });
         sendControl({ type: "resize", cols, rows });
       };
 
       requestAnimationFrame(() => {
         fitAddon.fit();
         sendResize();
+        // Focus immediately so the cursor blinks on first render
+        terminal.focus();
       });
 
+      // Let Shift+PageUp/Down pass through to the browser
       terminal.attachCustomKeyEventHandler((event) => {
         if (event.shiftKey && (event.key === "PageUp" || event.key === "PageDown")) {
           return false;
@@ -204,10 +223,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           sendResize();
         });
         terminal.focus();
-        // On mobile, also focus the hidden input to trigger keyboard
-        if (mobileInputRef.current) {
-          // Small delay to ensure terminal is ready
-          setTimeout(() => mobileInputRef.current?.focus(), 100);
+        // On mobile, explicitly focus the xterm textarea with a small delay
+        // so iOS opens the virtual keyboard (it treats the websocket-open
+        // callback as close-enough to a user gesture on initial page load)
+        if (isMobileRef.current && helperTextarea) {
+          setTimeout(() => helperTextarea.focus(), 100);
         }
       };
 
@@ -253,9 +273,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       socket.addEventListener("close", handleClose);
 
       const dataDisposable = terminal.onData((data: string) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(data);
+        if (socket.readyState !== WebSocket.OPEN) return;
+
+        // Ctrl modifier: convert letter to control character, clear on any input
+        if (ctrlActiveRef.current && data.length === 1) {
+          setCtrlActive(false);
+          if (/[a-zA-Z]/.test(data)) {
+            const code = data.toLowerCase().charCodeAt(0) - 96;
+            socket.send(String.fromCharCode(code));
+            return;
+          }
+          // Non-letter: clear modifier, send normally
         }
+
+        socket.send(data);
       });
 
       const resizeDisposable = terminal.onResize(() => sendResize());
@@ -295,61 +326,60 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     }, [socket, onParamsChange]);
 
     return (
-      <div className="absolute inset-0 bg-[#1e1e1e] p-4">
-        <div className="absolute top-6 right-6 z-10 rounded bg-black/50 px-2 py-1 font-mono text-xs text-zinc-400">
-          {termSize.cols}x{termSize.rows}
-        </div>
-        {/* Terminal container - leave space at bottom on mobile for toolbar */}
-        <div className="relative h-full w-full overflow-hidden">
+      <div className="flex h-full w-full flex-col bg-[#1e1e1e]">
+        {/* Mobile toolbar at top */}
+        {isMobile && (
+          <div className="shrink-0">
+            <MobileKeyboardToolbar
+              onKeyPress={handleToolbarKeyPress}
+              ctrlActive={ctrlActive}
+              onCtrlToggle={() => {
+                setCtrlActive((prev) => !prev);
+                termRef.current?.focus();
+              }}
+              keyboardVisible={keyboardVisible}
+              onToggleKeyboard={() => {
+                const ta =
+                  containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+                if (keyboardVisible) {
+                  ta?.blur();
+                } else {
+                  ta?.focus();
+                }
+              }}
+              onSearch={(query) => {
+                searchAddonRef.current?.findNext(query);
+              }}
+              onSearchNext={(query) => {
+                searchAddonRef.current?.findNext(query);
+              }}
+              onSearchPrev={(query) => {
+                searchAddonRef.current?.findPrevious(query);
+              }}
+              onSearchClose={() => {
+                searchAddonRef.current?.clearDecorations();
+              }}
+            />
+          </div>
+        )}
+
+        {/* Terminal fills remaining space */}
+        <div className="relative min-h-0 flex-1">
           <div
             ref={containerRef}
             data-testid="terminal-container"
             data-connection-status={connectionStatus}
-            className={`absolute inset-x-0 top-0 ${isMobile ? "bottom-24" : "bottom-0"}`}
-            onClick={() => {
+            className="absolute inset-0"
+            onClick={() => termRef.current?.focus()}
+            onTouchStart={() => {
               termRef.current?.focus();
-              focusMobileInput();
+              // On iOS, terminal.focus() alone may not open the keyboard.
+              // Explicitly focus the textarea in the user-gesture context.
+              const ta = containerRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea");
+              ta?.focus();
             }}
           />
-          {/* Hidden input for mobile keyboard - captures typed text */}
-          {isMobile && (
-            <input
-              ref={mobileInputRef}
-              type="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              className="absolute opacity-0 pointer-events-none"
-              style={{ top: -9999, left: -9999 }}
-              onChange={handleMobileInput}
-              onKeyDown={(e) => {
-                // Handle special keys that don't produce input events
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (socket.readyState === WebSocket.OPEN) {
-                    socket.send("\r");
-                  }
-                  setCtrlActive(false);
-                } else if (e.key === "Backspace") {
-                  e.preventDefault();
-                  if (socket.readyState === WebSocket.OPEN) {
-                    socket.send("\x7f");
-                  }
-                  setCtrlActive(false);
-                }
-              }}
-            />
-          )}
         </div>
-        {/* Mobile keyboard toolbar */}
-        {isMobile && (
-          <MobileKeyboardToolbar
-            onKeyPress={handleToolbarKeyPress}
-            ctrlActive={ctrlActive}
-            onCtrlToggle={() => setCtrlActive((prev) => !prev)}
-          />
-        )}
       </div>
     );
   },
