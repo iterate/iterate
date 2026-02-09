@@ -18,13 +18,6 @@ function contentTypeFor(pathname: string): string {
   return "text/plain; charset=utf-8";
 }
 
-app.get("*", async (c, next) => {
-  if (c.req.header("Host") === "iterate.com") {
-    return c.redirect("https://www.iterate.com", 301);
-  }
-  return next();
-});
-
 app.get(WELL_KNOWN_SKILLS_PREFIX, (c) => {
   return c.redirect(`${WELL_KNOWN_SKILLS_PREFIX}/index.json`, 302);
 });
@@ -52,6 +45,15 @@ app.get(`${WELL_KNOWN_SKILLS_PREFIX}/*`, (c) => {
       "cache-control": "public, max-age=300",
     },
   });
+});
+
+app.get("*", async (c, next) => {
+  if (c.req.header("Host") === "iterate.com") {
+    const url = new URL(c.req.url);
+    url.host = "www.iterate.com";
+    return c.redirect(url.toString(), 301);
+  }
+  return next();
 });
 
 // PostHog proxy routes (order matters - most specific first)
