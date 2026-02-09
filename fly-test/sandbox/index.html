@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sandbox Outbound Fetch</title>
+    <title>Sandbox Outbound Tools</title>
     <style>
       :root {
         color-scheme: light;
@@ -20,7 +20,7 @@
         color: #0f172a;
       }
       main {
-        max-width: 900px;
+        max-width: 980px;
         margin: 24px auto;
         padding: 0 16px 24px;
       }
@@ -30,6 +30,9 @@
         border-radius: 12px;
         padding: 16px;
       }
+      .panel + .panel {
+        margin-top: 16px;
+      }
       h1 {
         margin: 0 0 8px;
         font-size: 20px;
@@ -37,6 +40,71 @@
       p {
         margin: 0;
         color: #334155;
+      }
+      .guide {
+        border: 1px solid #f7d7ac;
+        background: #fff7ea;
+      }
+      .guide h1 {
+        font-size: 22px;
+      }
+      .steps {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: #433120;
+      }
+      .steps li + li {
+        margin-top: 6px;
+      }
+      .open-link {
+        display: inline-block;
+        margin-top: 10px;
+        border: 1px solid #d7deea;
+        background: #ffffff;
+        border-radius: 8px;
+        padding: 8px 10px;
+        color: #0f172a;
+        text-decoration: none;
+        font-size: 13px;
+      }
+      .proof-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .probe {
+        border-radius: 10px;
+        border: 1px solid #d7deea;
+        background: #f8fafc;
+        padding: 10px;
+        font-size: 13px;
+      }
+      .probe.pass {
+        border-color: #86efac;
+        background: #f0fdf4;
+        color: #14532d;
+      }
+      .probe.fail {
+        border-color: #fca5a5;
+        background: #fef2f2;
+        color: #7f1d1d;
+      }
+      .probe.idle {
+        border-color: #d7deea;
+        background: #f8fafc;
+        color: #334155;
+      }
+      .hint {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #475569;
+      }
+      code {
+        background: #eef2ff;
+        border: 1px solid #dbe3ff;
+        border-radius: 6px;
+        padding: 1px 4px;
       }
       label {
         display: block;
@@ -62,12 +130,21 @@
         margin-top: 12px;
         flex-wrap: wrap;
       }
+      .row > * {
+        flex: 1 1 220px;
+        min-width: 0;
+      }
       button {
         border: 1px solid #c9d4e5;
         border-radius: 8px;
         background: #eff5ff;
         color: #0f172a;
-        padding: 8px 12px;
+        padding: 10px 12px;
+        min-height: 40px;
+        line-height: 1.2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-align: center;
         cursor: pointer;
       }
       button.primary {
@@ -82,37 +159,232 @@
         border-radius: 10px;
         padding: 12px;
         font-size: 12px;
-        max-height: 420px;
+        max-height: 360px;
         overflow: auto;
         white-space: pre-wrap;
       }
-      #status {
+      .status {
         margin-top: 12px;
         font-size: 13px;
         color: #334155;
+      }
+      #ws-events {
+        max-height: 300px;
+      }
+      .action-row > button {
+        flex: 1 1 160px;
+      }
+      .send-row > input {
+        flex: 1 1 220px;
+      }
+      .send-row > button {
+        flex: 0 1 140px;
       }
     </style>
   </head>
   <body>
     <main>
+      <section class="panel guide">
+        <h1>Proof Checklist</h1>
+        <p>
+          This page is running inside a sandbox machine. The sandbox cannot access the internet
+          directly; all outbound traffic goes through an egress proxy on another machine that does
+          TLS MITM and traffic inspection. Use this page to generate sandbox-originated traffic,
+          then check egress logs in another tab:
+          <code>https://iterate-ws-egress-02091918.fly.dev/</code>.
+        </p>
+        <a
+          class="open-link"
+          href="https://iterate-ws-egress-02091918.fly.dev/"
+          target="_blank"
+          rel="noopener noreferrer"
+          >Open Egress Log Page</a
+        >
+        <ol class="steps">
+          <li>
+            Click <code>Example.com</code> then <code>Fetch</code>. On this page, the response body
+            should start with <code>I was inserted by the egress proxy lol</code>.
+          </li>
+          <li>
+            Click <code>Held example.com?review=1</code> then <code>Fetch</code>. It should pause
+            for ~4s before returning (simulated human review in egress).
+          </li>
+          <li>
+            Click <code>Blocked iterate.com</code> then <code>Fetch</code>. Request should be
+            blocked.
+          </li>
+          <li>
+            In WS panel, click <code>Connect</code>, then send <code>dropme please</code>, then send
+            <code>reviewme hello</code> and observe a ~30s delay before delivery.
+          </li>
+          <li>
+            In egress logs, verify request + payload visibility and transforms:
+            <code>&lt;http-...&gt; Received proxied ...</code>,
+            <code>&lt;http-...&gt; Upstream response ...</code>,
+            <code>&lt;ws-...&gt; Forwarding client message ...</code>,
+            <code>Dropping client message ...</code>,
+            <code>Holding client message for 30000ms ...</code>,
+            <code>Review wait complete ... sending held message onwards ...</code>.
+          </li>
+        </ol>
+        <div class="proof-grid">
+          <div id="probe-http-proof" class="probe idle">HTTP proof marker: waiting</div>
+          <div id="probe-http-hold" class="probe idle">HTTP hold-for-review: waiting</div>
+          <div id="probe-http-block" class="probe idle">HTTP policy block: waiting</div>
+          <div id="probe-ws-egress" class="probe idle">
+            WS checks: watch egress page for forwarding/drop/hold/release lines (with &lt;ws-...&gt;
+            IDs)
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <h1>Sandbox Outbound Fetch</h1>
-        <p>Run outbound requests from sandbox through egress MITM.</p>
+        <p>Run outbound HTTP requests from sandbox through egress MITM.</p>
+        <div class="hint">
+          What to look for: proxy prepends <code>I was inserted by the egress proxy lol</code> and
+          egress logs show request lifecycle lines with matching <code>&lt;http-...&gt;</code> IDs.
+        </div>
         <label for="target">Target URL</label>
         <input id="target" type="url" />
-        <div class="row">
+        <div class="row action-row">
           <button id="btn-example">Example.com</button>
+          <button id="btn-held">Held example.com?review=1</button>
           <button id="btn-blocked">Blocked iterate.com</button>
           <button id="btn-run" class="primary">Fetch</button>
         </div>
-        <div id="status">Ready.</div>
-        <pre id="output">No request yet.</pre>
+        <div id="fetch-status" class="status">Ready.</div>
+        <pre id="fetch-output">No request yet.</pre>
+      </section>
+
+      <section class="panel">
+        <h1>Sandbox WebSocket Client</h1>
+        <p>Sandbox process opens WS through egress proxy and shows received frames/events.</p>
+        <div class="hint">
+          Moderation policy is fixed in egress (not configurable here): drop words
+          <code>offending</code>/<code>dropme</code>; hold word <code>reviewme</code> for 30s, then
+          release.
+        </div>
+
+        <label for="ws-target">Upstream WS Target</label>
+        <input id="ws-target" type="url" placeholder="ws://ws-upstream:19090/ws" />
+
+        <div class="row action-row">
+          <button id="btn-ws-connect" class="primary">Connect</button>
+          <button id="btn-ws-disconnect">Disconnect</button>
+          <button id="btn-ws-fill-drop">Fill Drop Msg</button>
+          <button id="btn-ws-fill-review">Fill Review Msg</button>
+        </div>
+
+        <label for="ws-message">Send Message</label>
+        <div class="row send-row">
+          <input id="ws-message" type="text" value="normal hello" />
+          <button id="btn-ws-send">Send</button>
+        </div>
+
+        <div id="ws-status" class="status">WS state: unknown</div>
+        <pre id="ws-events">No websocket events yet.</pre>
       </section>
     </main>
+
     <script>
       const targetInput = document.getElementById("target");
-      const output = document.getElementById("output");
-      const statusEl = document.getElementById("status");
+      const fetchOutput = document.getElementById("fetch-output");
+      const fetchStatusEl = document.getElementById("fetch-status");
+
+      const wsTargetInput = document.getElementById("ws-target");
+      const wsMessageInput = document.getElementById("ws-message");
+      const wsStatusEl = document.getElementById("ws-status");
+      const wsEventsEl = document.getElementById("ws-events");
+
+      const probeHttpProofEl = document.getElementById("probe-http-proof");
+      const probeHttpHoldEl = document.getElementById("probe-http-hold");
+      const probeHttpBlockEl = document.getElementById("probe-http-block");
+      const probeWsEgressEl = document.getElementById("probe-ws-egress");
+
+      let wsPollTimer = null;
+
+      function setProbeState(el, state, text) {
+        el.classList.remove("idle", "pass", "fail");
+        el.classList.add(state);
+        el.textContent = text;
+      }
+
+      function formatRawHttpOutput(data, responseStatus) {
+        const statusCode =
+          Number(data?.statusCode ?? data?.status ?? responseStatus) || Number(responseStatus) || 0;
+        const body =
+          typeof data?.body === "string" && data.body.length > 0
+            ? data.body
+            : typeof data?.error === "string"
+              ? data.error
+              : "";
+        return `${statusCode}\n\n${body}`;
+      }
+
+      function updateHttpProbes(url, data, responseStatus, elapsedMs) {
+        const body = typeof data?.body === "string" ? data.body : "";
+        const insertedDetected = body.includes("I was inserted by the egress proxy lol");
+        const blockedDetected =
+          String(data?.statusCode ?? data?.status ?? responseStatus ?? "") === "451";
+
+        if (url.includes("iterate.com")) {
+          if (blockedDetected) {
+            setProbeState(probeHttpBlockEl, "pass", "HTTP policy block: PASS (451 observed)");
+          } else {
+            setProbeState(
+              probeHttpBlockEl,
+              "fail",
+              "HTTP policy block: expected 451 for iterate.com",
+            );
+          }
+          return;
+        }
+
+        if (url.includes("review=1")) {
+          if (elapsedMs >= 3500) {
+            setProbeState(
+              probeHttpHoldEl,
+              "pass",
+              `HTTP hold-for-review: PASS (~${Math.round(elapsedMs / 1000)}s delay observed)`,
+            );
+          } else {
+            setProbeState(
+              probeHttpHoldEl,
+              "fail",
+              `HTTP hold-for-review: expected ~4s delay (saw ${Math.round(elapsedMs / 1000)}s)`,
+            );
+          }
+          return;
+        }
+
+        if (insertedDetected) {
+          setProbeState(
+            probeHttpProofEl,
+            "pass",
+            'HTTP insert marker: PASS ("I was inserted by the egress proxy lol" seen)',
+          );
+        } else {
+          setProbeState(
+            probeHttpProofEl,
+            "fail",
+            'HTTP insert marker: expected "I was inserted by the egress proxy lol"',
+          );
+        }
+      }
+
+      async function postJson(path, body) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body ?? {}),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(String(data.error ?? `status=${response.status}`));
+        }
+        return data;
+      }
 
       async function loadConfig() {
         try {
@@ -122,12 +394,16 @@
           if (typeof data.defaultTargetUrl === "string" && data.defaultTargetUrl.length > 0) {
             targetInput.value = data.defaultTargetUrl;
           }
+          if (typeof data.wsDefaultTarget === "string" && data.wsDefaultTarget.length > 0) {
+            wsTargetInput.value = data.wsDefaultTarget;
+          }
         } catch {}
       }
 
       async function runFetch(url) {
-        statusEl.textContent = "Fetching...";
-        output.textContent = "Running...";
+        fetchStatusEl.textContent = "Fetching...";
+        fetchOutput.textContent = "Running...";
+        const startedAt = Date.now();
         try {
           const response = await fetch("/api/fetch", {
             method: "POST",
@@ -135,30 +411,116 @@
             body: JSON.stringify({ url, method: "GET", body: "" }),
           });
           const data = await response.json();
-          statusEl.textContent = `Done. http=${response.status} ok=${Boolean(data.ok)}`;
-          output.textContent = JSON.stringify(data, null, 2);
+          const elapsedMs = Date.now() - startedAt;
+          fetchStatusEl.textContent = `Done in ${elapsedMs}ms. http=${response.status} ok=${Boolean(data.ok)}`;
+          fetchOutput.textContent = formatRawHttpOutput(data, response.status);
+          updateHttpProbes(url, data, response.status, elapsedMs);
         } catch (error) {
-          statusEl.textContent = "Request failed.";
-          output.textContent = String(error);
+          fetchStatusEl.textContent = "Request failed.";
+          fetchOutput.textContent = String(error);
+        }
+      }
+
+      function renderWsState(state) {
+        if (!state || typeof state !== "object") return;
+        wsStatusEl.textContent = `WS state: ${state.readyState} connected=${Boolean(state.connected)} target=${state.target ?? ""}`;
+        const events = Array.isArray(state.events) ? state.events : [];
+        wsEventsEl.textContent = events.length > 0 ? events.join("\n") : "No websocket events yet.";
+        wsEventsEl.scrollTop = wsEventsEl.scrollHeight;
+      }
+
+      async function loadWsState() {
+        try {
+          const response = await fetch("/api/ws/state", { cache: "no-store" });
+          if (!response.ok) return;
+          renderWsState(await response.json());
+        } catch {}
+      }
+
+      async function connectWs() {
+        wsStatusEl.textContent = "WS connecting...";
+        try {
+          const state = await postJson("/api/ws/connect", {
+            target: wsTargetInput.value.trim(),
+          });
+          renderWsState(state);
+        } catch (error) {
+          wsStatusEl.textContent = `WS connect failed: ${String(error)}`;
+        }
+      }
+
+      async function disconnectWs() {
+        try {
+          renderWsState(await postJson("/api/ws/disconnect", {}));
+        } catch (error) {
+          wsStatusEl.textContent = `WS disconnect failed: ${String(error)}`;
+        }
+      }
+
+      async function sendWsMessage(message) {
+        try {
+          renderWsState(await postJson("/api/ws/send", { message }));
+        } catch (error) {
+          wsStatusEl.textContent = `WS send failed: ${String(error)}`;
         }
       }
 
       document.getElementById("btn-example").addEventListener("click", () => {
         targetInput.value = "https://example.com/";
       });
+
+      document.getElementById("btn-held").addEventListener("click", () => {
+        targetInput.value = "https://example.com/?review=1";
+      });
+
       document.getElementById("btn-blocked").addEventListener("click", () => {
         targetInput.value = "https://iterate.com/";
       });
+
       document.getElementById("btn-run").addEventListener("click", () => {
         const value = targetInput.value.trim();
         if (!value) {
-          statusEl.textContent = "Enter a URL first.";
+          fetchStatusEl.textContent = "Enter a URL first.";
           return;
         }
         void runFetch(value);
       });
 
+      document.getElementById("btn-ws-connect").addEventListener("click", () => {
+        void connectWs();
+      });
+
+      document.getElementById("btn-ws-disconnect").addEventListener("click", () => {
+        void disconnectWs();
+      });
+
+      document.getElementById("btn-ws-fill-drop").addEventListener("click", () => {
+        wsMessageInput.value = "dropme please";
+      });
+      document.getElementById("btn-ws-fill-review").addEventListener("click", () => {
+        wsMessageInput.value = "reviewme hello";
+      });
+
+      document.getElementById("btn-ws-send").addEventListener("click", () => {
+        const message = wsMessageInput.value;
+        if (!message.trim()) {
+          wsStatusEl.textContent = "Enter WS message first.";
+          return;
+        }
+        void sendWsMessage(message);
+      });
+
+      setProbeState(
+        probeWsEgressEl,
+        "idle",
+        "WS checks: watch egress page for forwarding/drop/hold/release lines (with <ws-...> IDs)",
+      );
+
       void loadConfig();
+      void loadWsState();
+      wsPollTimer = setInterval(() => {
+        void loadWsState();
+      }, 1000);
     </script>
   </body>
 </html>

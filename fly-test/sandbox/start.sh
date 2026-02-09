@@ -49,11 +49,7 @@ export GIT_SSL_CAINFO="/usr/local/share/ca-certificates/iterate-fly-test-ca.crt"
 
 log "proxy_env=${EGRESS_PROXY_URL}"
 
-PROOF_PREFIX_VALUE="${PROOF_PREFIX:-__ITERATE_MITM_PROOF__\\n}"
-PROOF_PREFIX="$(printf '%b' "$PROOF_PREFIX_VALUE")"
-
 SANDBOX_PORT="$SANDBOX_PORT" \
-PROOF_PREFIX="$PROOF_PREFIX" \
 bun run /proof/sandbox/server.ts >>"$INIT_LOG" 2>&1 &
 APP_PID="$!"
 log "app_pid=$APP_PID"

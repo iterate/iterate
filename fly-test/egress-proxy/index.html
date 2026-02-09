@@ -30,6 +30,13 @@
         border-radius: 12px;
         padding: 16px;
       }
+      .panel + .panel {
+        margin-top: 14px;
+      }
+      .guide {
+        border-color: #f7d7ac;
+        background: #fff7ea;
+      }
       h1 {
         margin: 0 0 8px;
         font-size: 20px;
@@ -37,6 +44,14 @@
       p {
         margin: 0;
         color: #334155;
+      }
+      .steps {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: #433120;
+      }
+      .steps li + li {
+        margin-top: 6px;
       }
       .row {
         display: flex;
@@ -71,10 +86,104 @@
         overflow: auto;
         white-space: pre-wrap;
       }
+      .proof-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .probe {
+        border-radius: 10px;
+        border: 1px solid #d7deea;
+        background: #f8fafc;
+        padding: 10px;
+        font-size: 13px;
+      }
+      .probe.pass {
+        border-color: #86efac;
+        background: #f0fdf4;
+        color: #14532d;
+      }
+      .probe.fail {
+        border-color: #fca5a5;
+        background: #fef2f2;
+        color: #7f1d1d;
+      }
+      .probe.idle {
+        border-color: #d7deea;
+        background: #f8fafc;
+        color: #334155;
+      }
+      code {
+        background: #eef2ff;
+        border: 1px solid #dbe3ff;
+        border-radius: 6px;
+        padding: 1px 4px;
+      }
     </style>
   </head>
   <body>
     <main>
+      <section class="panel guide">
+        <h1>What To Look For</h1>
+        <p>
+          This page is source-of-truth for what the proxy saw and changed. Drive traffic from
+          sandbox UI:
+          <code>https://iterate-ws-sandbox-02091918.fly.dev/</code>
+        </p>
+        <p style="margin-top: 8px">
+          Active HTTP policy: block <code>iterate.com</code>; hold
+          <code>example.com?review=1</code> for <code>4s</code> (simulated human review) then
+          continue.
+        </p>
+        <p style="margin-top: 8px">
+          Active WS policy: drop words <code>offending</code>/<code>dropme</code>; hold word
+          <code>reviewme</code> for <code>30s</code> (simulated human review) then release.
+        </p>
+        <p style="margin-top: 8px">
+          Each log line starts with a request ID like <code>&lt;http-000123&gt;</code> or
+          <code>&lt;ws-000124&gt;</code> so related events are easy to follow.
+        </p>
+        <ol class="steps">
+          <li>
+            Sandbox <code>Example.com</code> fetch should produce a response containing
+            <code>I was inserted by the egress proxy lol</code>.
+          </li>
+          <li>
+            Sandbox <code>Held example.com?review=1</code> fetch should pause for ~4s. You should
+            see <code>Holding HTTP request for 4000ms ...</code> then
+            <code>HTTP review wait complete after 4000ms ...</code> with the same
+            <code>&lt;http-...&gt;</code> ID.
+          </li>
+          <li>
+            Here you should then see human-readable entries like
+            <code>Received proxied ... request</code> and <code>Upstream response ...</code> for the
+            same <code>&lt;http-...&gt;</code> ID.
+          </li>
+          <li>
+            Sandbox blocked fetch should produce a line like <code>Blocked by policy ...</code> with
+            an <code>&lt;http-...&gt;</code> ID.
+          </li>
+          <li>
+            WS tests should show payload visibility and moderation. Your exact sent payload should
+            appear in logs like <code>Forwarding client message ...</code>,
+            <code>Dropping client message ...</code>,
+            <code>Holding client message for 30000ms ...</code>, and
+            <code>Review wait complete ... sending held message onwards ...</code>.
+          </li>
+        </ol>
+        <div class="proof-grid">
+          <div id="probe-mitm-request" class="probe idle">MITM request line seen: waiting</div>
+          <div id="probe-transform" class="probe idle">HTTP transform success seen: waiting</div>
+          <div id="probe-http-hold" class="probe idle">HTTP hold/release lines seen: waiting</div>
+          <div id="probe-policy" class="probe idle">HTTP policy block seen: waiting</div>
+          <div id="probe-ws-c2u" class="probe idle">WS client payload line seen: waiting</div>
+          <div id="probe-ws-drop" class="probe idle">WS drop line seen: waiting</div>
+          <div id="probe-ws-hold" class="probe idle">WS hold line seen: waiting</div>
+          <div id="probe-ws-release" class="probe idle">WS release line seen: waiting</div>
+        </div>
+      </section>
+
       <section class="panel">
         <h1>Egress Proxy Log Tail</h1>
         <p>Polling <code>/api/tail</code> every second.</p>
@@ -98,8 +207,84 @@
       const output = document.getElementById("output");
       const statusEl = document.getElementById("status");
       const pauseBtn = document.getElementById("pause");
+
+      const probeMitmRequestEl = document.getElementById("probe-mitm-request");
+      const probeTransformEl = document.getElementById("probe-transform");
+      const probeHttpHoldEl = document.getElementById("probe-http-hold");
+      const probePolicyEl = document.getElementById("probe-policy");
+      const probeWsC2uEl = document.getElementById("probe-ws-c2u");
+      const probeWsDropEl = document.getElementById("probe-ws-drop");
+      const probeWsHoldEl = document.getElementById("probe-ws-hold");
+      const probeWsReleaseEl = document.getElementById("probe-ws-release");
+
       let paused = false;
       let timer = null;
+
+      function setProbeState(el, state, text) {
+        el.classList.remove("idle", "pass", "fail");
+        el.classList.add(state);
+        el.textContent = text;
+      }
+
+      function updateProbes(logText) {
+        const hasMitmRequest = /<http-\d+> Received proxied/.test(logText);
+        const hasTransform = /<http-\d+> Upstream response/.test(logText);
+        const hasHttpHold = /<http-\d+> Holding HTTP request for 4000ms/.test(logText);
+        const hasHttpRelease = /<http-\d+> HTTP review wait complete after 4000ms/.test(logText);
+        const hasPolicy = /<http-\d+> Blocked by policy/.test(logText);
+        const hasWsC2uPayload =
+          /<ws-\d+> Forwarding client message to upstream websocket server/.test(logText);
+        const hasWsDrop = /<ws-\d+> Dropping client message/.test(logText);
+        const hasWsHold = /<ws-\d+> Holding client message for 30000ms/.test(logText);
+        const hasWsRelease = /<ws-\d+> Review wait complete after 30000ms/.test(logText);
+
+        setProbeState(
+          probeMitmRequestEl,
+          hasMitmRequest ? "pass" : "idle",
+          hasMitmRequest
+            ? "Proxy received-request line seen: PASS"
+            : "Proxy received-request line seen: waiting",
+        );
+        setProbeState(
+          probeTransformEl,
+          hasTransform ? "pass" : "idle",
+          hasTransform
+            ? "HTTP upstream-response line seen: PASS"
+            : "HTTP upstream-response line seen: waiting",
+        );
+        setProbeState(
+          probeHttpHoldEl,
+          hasHttpHold && hasHttpRelease ? "pass" : "idle",
+          hasHttpHold && hasHttpRelease
+            ? "HTTP hold/release lines seen: PASS"
+            : "HTTP hold/release lines seen: waiting",
+        );
+        setProbeState(
+          probePolicyEl,
+          hasPolicy ? "pass" : "idle",
+          hasPolicy ? "HTTP policy block line seen: PASS" : "HTTP policy block line seen: waiting",
+        );
+        setProbeState(
+          probeWsC2uEl,
+          hasWsC2uPayload ? "pass" : "idle",
+          hasWsC2uPayload ? "WS forwarding line seen: PASS" : "WS forwarding line seen: waiting",
+        );
+        setProbeState(
+          probeWsDropEl,
+          hasWsDrop ? "pass" : "idle",
+          hasWsDrop ? "WS drop line seen: PASS" : "WS drop line seen: waiting",
+        );
+        setProbeState(
+          probeWsHoldEl,
+          hasWsHold ? "pass" : "idle",
+          hasWsHold ? "WS hold line seen: PASS" : "WS hold line seen: waiting",
+        );
+        setProbeState(
+          probeWsReleaseEl,
+          hasWsRelease ? "pass" : "idle",
+          hasWsRelease ? "WS release line seen: PASS" : "WS release line seen: waiting",
+        );
+      }
 
       async function loadLogs() {
         if (paused) return;
@@ -112,7 +297,9 @@
             },
           );
           if (!response.ok) throw new Error(`status=${response.status}`);
-          output.textContent = await response.text();
+          const text = await response.text();
+          output.textContent = text;
+          updateProbes(text);
           statusEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
         } catch (error) {
           statusEl.textContent = `Error: ${String(error)}`;
