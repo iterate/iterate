@@ -20,7 +20,7 @@ export type SpinnerWaiterOptions = SpinnerWaiterSettings;
 const defaultSelectors = [
   `[aria-label="Loading"]`,
   `[data-spinner='true']`,
-  `:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  `:text-matches("(loading|pending|creating|verifying|starting|processing|syncing)\\.\\.\\.$", "i")`,
 ];
 
 const defaults: Required<SpinnerWaiterSettings> = {
