@@ -104,20 +104,6 @@ iterate tool slack 'await slack.conversations.replies({
 })'
 ```
 
-**Set thread status**
-
-When you think you'll need to perform some long running work, or when you're struggling with a task/it's taking a few extra attempts, update the thread status first so the slack user knows you're working on it:
-
-```bash
-iterate tool slack 'await slack.assistant.threads.setStatus({
-  channel_id: "CHANNEL_ID",
-  thread_ts: "THREAD_TS",
-  status: "Parsing the file with foobar_tool...",
-})'
-```
-
-You can use any method from the Slack Web API. The `slack` object is an instance of `@slack/web-api` WebClient.
-
 ## Inspecting Raw Events
 
 The raw Slack webhook payload is stored in SQLite. To inspect it (useful for files, attachments, reactions, etc.):
@@ -137,6 +123,5 @@ If a message contains files or attachments, query the raw event to get file URLs
 
 1. **Be concise**: Slack messages should be shorter than typical coding responses. Sacrifice grammar for sake of concision.
 2. **FYI messages**: If a message doesn't @mention you but you're in the thread, only respond if it's clearly a direct question to you.
-3. **Set status**: If you're taking more than a couple of seconds to send a reply message, or if a tool call fails, use `assistant.threads.setStatus` so the user knows you're working on it.
 
-Note: The :eyes: reaction is managed automatically - it's added when you receive a message and removed when your turn ends. You don't need to manage it manually.
+Note: The :eyes: reaction and thread status are managed automatically. You don't need to manage them manually.

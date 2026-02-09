@@ -211,6 +211,10 @@ export const opencodeHarness: AgentHarness = {
 interface SessionTracking {
   sessionId: string;
   unacknowledgeCallbacks: Array<() => Promise<void>>;
+  setStatus?: (
+    status: string,
+    context: { tool: string; input: Record<string, unknown> },
+  ) => Promise<void>;
   workingDirectory: string;
   startedAtMs: number;
   firstBusyAtMs?: number;
@@ -416,6 +420,30 @@ function handleEvent(event: OpencodeRuntimeEvent): void {
     logger.log(`[opencode] Session ${sessionId} became idle`);
     void stopTracking(sessionId);
   }
+
+  // Handle tool call events — update status when a tool starts running
+  if (event.type === "message.part.updated" && tracking) {
+    const part = event.properties.part;
+    if (part.type === "tool") {
+      const state = part.state as {
+        status?: string;
+        title?: string;
+        input?: Record<string, unknown>;
+      };
+      if (state.status === "running" || state.status === "completed") {
+        // title may arrive late (populated on completion or in a later running update)
+        // fall back to input.description (common for Bash/Edit tools), then tool name
+        const input = (state.input ?? {}) as Record<string, unknown>;
+        const description = typeof input.description === "string" ? input.description : undefined;
+        const status = (state.title || description || part.tool || "Working").slice(0, 30);
+        if (tracking.setStatus) {
+          tracking.setStatus(status, { tool: part.tool ?? "", input }).catch((error) => {
+            logger.error(`[opencode] Error calling setStatus:`, error);
+          });
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -480,6 +508,7 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
   const existing = trackedSessions.get(sessionId);
   if (existing) {
     existing.unacknowledgeCallbacks.push(params.unacknowledge);
+    existing.setStatus = params.setStatus;
     existing.workingDirectory = params.workingDirectory;
     existing.parentContext = context.active();
     logger.log(`[opencode] Updated tracking session ${sessionId}`, {
@@ -489,6 +518,7 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
     trackedSessions.set(sessionId, {
       sessionId,
       unacknowledgeCallbacks: [params.unacknowledge],
+      setStatus: params.setStatus,
       workingDirectory: params.workingDirectory,
       startedAtMs: Date.now(),
       parentContext: context.active(),

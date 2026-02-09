@@ -27,6 +27,7 @@ import type {
 import { z } from "zod/v4";
 import { x } from "tinyexec";
 import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
+import type { AppendParams } from "../agents/types.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
@@ -62,45 +63,87 @@ async function runSlackCommand(code: string, requestId?: string): Promise<void> 
   }
 }
 
-function createAcknowledge(channel: string, timestamp: string, emoji: string, requestId?: string) {
-  return async () => {
-    try {
-      await runSlackCommand(
-        `await slack.reactions.add(${JSON.stringify({ channel, timestamp, name: emoji })})`,
-        requestId,
-      );
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!msg.includes("already_reacted")) {
-        logger.error(`[slack] Failed to add :${emoji}:`, { error, channel, timestamp, requestId });
-      }
-    }
-  };
-}
+/**
+ * Build the acknowledge/unacknowledge/setStatus callbacks for a Slack thread.
+ *
+ * - `acknowledge`: adds an emoji reaction to `emojiTimestamp`
+ * - `unacknowledge`: removes that emoji and clears the thread status
+ * - `setStatus`: updates the assistant thread status (max ~30 chars)
+ */
+function createSlackCallbacks(params: {
+  channel: string;
+  threadTs: string;
+  /** Message timestamp to add/remove the emoji on (often `event.ts`, sometimes `threadTs`) */
+  emojiTimestamp: string;
+  emoji: string;
+  requestId?: string;
+}): Pick<AppendParams, "acknowledge" | "unacknowledge" | "setStatus"> {
+  const { channel, threadTs, emojiTimestamp, emoji, requestId } = params;
 
-function createUnacknowledge(
-  channel: string,
-  timestamp: string,
-  emoji: string,
-  requestId?: string,
-) {
-  return async () => {
-    try {
-      await runSlackCommand(
-        `await slack.reactions.remove(${JSON.stringify({ channel, timestamp, name: emoji })})`,
-        requestId,
-      );
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!msg.includes("no_reaction")) {
-        logger.error(`[slack] Failed to remove :${emoji}:`, {
-          error,
-          channel,
-          timestamp,
+  return {
+    acknowledge: async () => {
+      try {
+        await runSlackCommand(
+          `await slack.reactions.add(${JSON.stringify({ channel, timestamp: emojiTimestamp, name: emoji })})`,
           requestId,
-        });
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes("already_reacted")) {
+          logger.error(`[slack] Failed to add :${emoji}:`, {
+            error,
+            channel,
+            timestamp: emojiTimestamp,
+            requestId,
+          });
+        }
       }
-    }
+    },
+
+    unacknowledge: async () => {
+      try {
+        await runSlackCommand(
+          `await slack.reactions.remove(${JSON.stringify({ channel, timestamp: emojiTimestamp, name: emoji })})`,
+          requestId,
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes("no_reaction")) {
+          logger.error(`[slack] Failed to remove :${emoji}:`, {
+            error,
+            channel,
+            timestamp: emojiTimestamp,
+            requestId,
+          });
+        }
+      }
+      // Clear thread status
+      try {
+        await runSlackCommand(
+          `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status: "" })})`,
+          requestId,
+        );
+      } catch {
+        // Non-critical
+      }
+    },
+
+    setStatus: async (
+      status: string,
+      { input }: { tool: string; input: Record<string, unknown> },
+    ) => {
+      // Skip — the agent is already talking to Slack directly via this tool call
+      const command = typeof input.command === "string" ? input.command : "";
+      if (command.includes("iterate tool slack")) return;
+      try {
+        await runSlackCommand(
+          `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status })})`,
+          requestId,
+        );
+      } catch (error) {
+        logger.error(`[slack] Failed to set thread status:`, { error, requestId });
+      }
+    },
   };
 }
 
@@ -364,12 +407,20 @@ slackRouter.post("/webhook", async (c) => {
         }
 
         const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+        const { setStatus } = createSlackCallbacks({
+          channel: parsed.channel,
+          threadTs,
+          emojiTimestamp: threadTs,
+          emoji: "eyes",
+          requestId: correlation.requestId,
+        });
         await appendToAgent(existingAgent, message, {
           workingDirectory: await getCustomerRepoPath(),
           acknowledge: async () =>
             logger.log(`[slack] Processing reaction in ${parsed.channel}/${threadTs}`),
           unacknowledge: async () =>
             logger.log(`[slack] Finished processing reaction in ${parsed.channel}/${threadTs}`),
+          setStatus,
         });
         span.setAttribute("daemon.result", parsed.case);
         return c.json({
@@ -427,11 +478,14 @@ slackRouter.post("/webhook", async (c) => {
         const workingDirectory = await getCustomerRepoPath();
         if (existingAgent) {
           const message = formatMidThreadMentionMessage(event, threadTs, eventId, agentSlug);
-          await appendToAgent(existingAgent, message, {
-            workingDirectory,
-            acknowledge: createAcknowledge(channel, event.ts, "eyes", correlation.requestId),
-            unacknowledge: createUnacknowledge(channel, event.ts, "eyes", correlation.requestId),
+          const callbacks = createSlackCallbacks({
+            channel,
+            threadTs,
+            emojiTimestamp: event.ts,
+            emoji: "eyes",
+            requestId: correlation.requestId,
           });
+          await appendToAgent(existingAgent, message, { workingDirectory, ...callbacks });
           span.setAttribute("daemon.result", "mid_thread_mention");
           return c.json({
             success: true,
@@ -452,11 +506,14 @@ slackRouter.post("/webhook", async (c) => {
         });
 
         const message = formatNewThreadMentionMessage(event, threadTs, eventId, newAgentSlug);
-        await appendToAgent(agent, message, {
-          workingDirectory,
-          acknowledge: createAcknowledge(channel, event.ts, "eyes", correlation.requestId),
-          unacknowledge: createUnacknowledge(channel, event.ts, "eyes", correlation.requestId),
+        const callbacks = createSlackCallbacks({
+          channel,
+          threadTs,
+          emojiTimestamp: event.ts,
+          emoji: "eyes",
+          requestId: correlation.requestId,
         });
+        await appendToAgent(agent, message, { workingDirectory, ...callbacks });
         span.setAttribute("daemon.result", "new_thread_mention");
         return c.json({
           success: true,
@@ -486,11 +543,14 @@ slackRouter.post("/webhook", async (c) => {
         }
 
         const message = formatMidThreadMentionMessage(event, threadTs, eventId, finalAgentSlug);
-        await appendToAgent(agent, message, {
-          workingDirectory,
-          acknowledge: createAcknowledge(channel, event.ts, "eyes", correlation.requestId),
-          unacknowledge: createUnacknowledge(channel, event.ts, "eyes", correlation.requestId),
+        const callbacks = createSlackCallbacks({
+          channel,
+          threadTs,
+          emojiTimestamp: event.ts,
+          emoji: "eyes",
+          requestId: correlation.requestId,
         });
+        await appendToAgent(agent, message, { workingDirectory, ...callbacks });
         span.setAttribute("daemon.result", "mid_thread_mention");
         return c.json({
           success: true,
@@ -514,15 +574,16 @@ slackRouter.post("/webhook", async (c) => {
         }
 
         const message = formatFyiMessage(event, threadTs, eventId);
+        const callbacks = createSlackCallbacks({
+          channel,
+          threadTs,
+          emojiTimestamp: threadTs,
+          emoji: "thinking_face",
+          requestId: correlation.requestId,
+        });
         await appendToAgent(existingAgent, message, {
           workingDirectory: await getCustomerRepoPath(),
-          acknowledge: createAcknowledge(channel, threadTs, "thinking_face", correlation.requestId),
-          unacknowledge: createUnacknowledge(
-            channel,
-            threadTs,
-            "thinking_face",
-            correlation.requestId,
-          ),
+          ...callbacks,
         });
         span.setAttribute("daemon.result", "fyi_message");
         return c.json({
