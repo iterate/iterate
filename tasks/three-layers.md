@@ -2,105 +2,113 @@
 
 > **Document rules**
 >
-> - Sacrifice grammar for concision
-> - This is a working document — notes, open questions, rough edges are fine
-> - Clean up once all open questions resolved
-> - ASCII diagrams only, keep them light
+> - Sacrifice grammar for concision, not information
+> - This is a working document. Notes, open questions, rough edges are fine
+> - Clean up once open questions are resolved
+> - Topology diagrams: ASCII and light. Request flow diagrams: Mermaid sequence OK
 
 ## Overview
 
 ```
           INGRESS                                          EGRESS
-            │                                                ▲
-            ▼                                                │
-┌────────────────────────────────────┐                       │
-│  OS Layer (Cloudflare)             │                       │
-│                                    │                       │
-│  ┌──────────────────────────────┐  │                       │
-│  │  Ingress Worker (skinny)     │  │                       │
-│  │  • resolve project from host |  │                       │
-│  │  • auth / verify webhook sig │  │                       │
-│  │  • forward via CF tunnel     │  │                       │
-│  └──────────────┬───────────────┘  │                       │
-│                 │                  │                       │
-│           Cloudflare Tunnel        │                       │
-│            (only way in)           │                       │
-└─────────────────┬──────────────────┘                       │
-                  │                                          │
-                  ▼                                          │
-┌────────────────────────────────────────────────────────────┼───┐
-│  Project  (misha.iterate.app)                              │   │
-│                                                            │   │
-│  ┌──────────────────────────────────────────────────────┐  │   │
-│  │  Project Machine (trusted)                           │  │   │
-│  │  • sees real secrets                                 │  │   │
-│  │  • terminates TLS                                    │  │   │
-│  │  • runs HITL approval                                │  │   │
-│  │  • injects secrets into egress                       │  │   │
-│  │  • ingress routing to agent machines                 │──┘   │
-│  │  • egress proxy (only exit for agent machines)       │      │
-│  │  • webapp, SQLite, Doppler sync                      │      │
-│  └─────────────┬──────────────────────▲─────────────────┘      │
-│                │                      │                        │
-│          only way in            only way out                   │
-│                │                      │                        │
-│                ▼                      │                        │
-│  ┌────────────────────────────────────┼─────────────────────┐  │
-│  │  Agent Machine(s) (untrusted)      │                     │  │
-│  │  • agents run here (with root)                           │  │
-│  │  • PTY / terminal                                        │  │
-│  │  • NO secrets in memory, ever                            │  │
-│  │  • no direct internet access                             │  │
-│  │  • all ingress/egress via project machine                │  │
-│  │  • currently 1, designed for N                           │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
+            |                                                ^
+            v                                                |
++------------------------------------+                       |
+|  OS Layer (Cloudflare)             |                       |
+|                                    |                       |
+|  +------------------------------+  |                       |
+|  |  Ingress Worker (skinny)     |  |                       |
+|  |  - resolve project from host |  |                       |
+|  |  - auth / verify webhook sig |  |                       |
+|  |  - forward via CF tunnel     |  |                       |
+|  +--------------+---------------+  |                       |
+|                 |                  |                       |
+|           Cloudflare Tunnel        |                       |
++-----------------+------------------+                       |
+                 (only way in)                               |
+                  |                                          |
+                  v                                          |
++------------------------------------------------------------+---+
+|  Project  (misha.iterate.app)                              |   |
+|                                                            |   |
+|  +------------------------------------------------------+  |   |
+|  |  Project (trusted)                                   |  |   |
+|  |  - sees real secrets                                 |  |   |
+|  |  - runs human-in-the-loop approval (HITL)            |  |   |
+|  |  - injects secrets into egress                       |  |   |
+|  |  - ingress routing to machine daemons                |--+   |
+|  |  - egress proxy (only exit for machine daemons)      |      |
+|  |  - webapp, SQLite, Doppler sync                      |      |
+|  +-------------+----------------------+------------------+      |
+|                |                      |                         |
+|          only way in            only way out                    |
+|                |                      |                         |
+|                v                      |                         |
+|  +------------------------------------+---------------------+   |
+|  |  Machine Layer (untrusted)         |                     |   |
+|  |  - machine daemon + agents (root)                        |   |
+|  |  - NO secrets in memory, ever                            |   |
+|  |  - env vars carry secret refs (example: get_iterate_secret), not raw creds |
+|  |  - no external ingress except via project                |   |
+|  |  - all egress via project egress proxy                   |   |
+|  |  - currently 1 machine, designed for N                   |   |
+|  +----------------------------------------------------------+   |
++----------------------------------------------------------------+
 ```
 
-**Auth model:** The OS edge does ALL authentication. By the time a request arrives at the project machine via the tunnel, it's already authenticated. The project machine is unauthenticated by default — the tunnel IS the access control. Two auth scenarios at the edge:
+**Auth model:** OS edge does all external authentication. By the time a request reaches project via tunnel, it is authenticated and scoped.
 
-1. **Browser/API request** — OS checks cookies, access tokens, shared secrets. Adds auth header (JWT or similar).
-2. **Webhook** — OS verifies webhook signature (e.g. Slack signing secret). Extracts external ID (Slack team ID) to resolve project.
+1. **Browser/API request**: OS checks cookies, access tokens, shared secrets; adds auth context.
+2. **Webhook**: OS verifies provider signature (Slack/GitHub/etc), extracts external ID, resolves project.
+
+Hard invariant for externally-originated traffic:
+
+- Browser/webhook traffic enters at OS first
+- OS authenticates external caller
+- OS forwards to project
+- Project routing decides machine target
+- Machine daemon dispatches to agent runtime
+- No direct external ingress path to machine daemons
 
 ## API surface at a glance
 
 ### Hosts
 
-| Host                                       | Layer         | What                                                          |
-| ------------------------------------------ | ------------- | ------------------------------------------------------------- |
-| `os.iterate.com`                           | OS            | Webapp (Better Auth, billing UI), tRPC, skinny ingress worker |
-| `{project}.iterate.app`                    | Project       | Project ingress via Cloudflare tunnel → project machine       |
-| `{port}--{machine}--{project}.iterate.app` | Agent Machine | Service on a specific port of a specific agent machine        |
+| Host                                       | Layer   | What                                                                              |
+| ------------------------------------------ | ------- | --------------------------------------------------------------------------------- |
+| `os.iterate.com`                           | OS      | Webapp (Better Auth, billing UI), tRPC, skinny ingress worker                     |
+| `{project}.iterate.app`                    | Project | Project ingress via Cloudflare tunnel -> project                                  |
+| `{port}--{machine}--{project}.iterate.app` | Machine | Routed by project to specific machine/port (no direct browser ingress to machine) |
 
 ### Hostname scheme
 
-One wildcard cert for `*.iterate.app`. All routing info is encoded in the subdomain prefix. The project machine knows its own base URL (e.g. `misha.iterate.app`) and parses incoming hostnames relative to that.
+One wildcard cert for `*.iterate.app`. Routing info is in subdomain prefix. Project knows its base URL (example: `misha.iterate.app`) and parses incoming hostnames relative to that.
 
 ```
-misha.iterate.app                        → project machine (default route)
-3000--misha.iterate.app                  → project machine port 3000
-3000--mach_abc--misha.iterate.app        → agent machine mach_abc, port 3000
+misha.iterate.app                        -> project (default route)
+3000--misha.iterate.app                  -> project port 3000
+3000--mach_abc--misha.iterate.app        -> machine mach_abc port 3000 (via project router)
 ```
 
-The pattern: `{port}--{machineId}--{project}.iterate.app`
+Pattern: `{port}--{machineId}--{project}.iterate.app`
 
-- If just `{project}` → project machine, default route
-- If `{port}--{project}` → project machine, specific port
-- If `{port}--{machineId}--{project}` → agent machine, specific port
+- `{project}` -> project default route
+- `{port}--{project}` -> project specific port
+- `{port}--{machineId}--{project}` -> machine specific port, selected by project router
 
-The project machine parses the prefix, resolves the target machine + port, and proxies. The OS ingress worker doesn't need to understand this — it just forwards everything for `*.iterate.app` to the right project's tunnel. The project machine does the rest.
+Project parses prefix, resolves target machine + port, proxies. OS ingress worker does not parse machine routes; it forwards `*.iterate.app` to the right project tunnel.
 
-**Standalone / bring-your-own-domain:** The same prefix parsing works with any base domain. A user running `npx iterate` locally could use `localhost:8000` as their base URL, and the project machine would parse `3000--mach_abc--localhost:8000` the same way. Or they bring their own domain: `3000--mach_abc--myproject.example.com`. The project just needs to know its base URL.
+**Standalone / BYO domain:** same prefix parsing works with any base domain. `npx iterate` can use `localhost:8000`. BYO example: `3000--mach_abc--myproject.example.com`.
 
-### OS Layer — `os.iterate.com`
+### OS Layer - `os.iterate.com`
 
 ```
 tRPC  /api/trpc/*
   user, organization, project, billing, accessToken
 
 oRPC  /api/orpc/*
-  project.reportStatus     (project machine → OS)
-  TBD — OS only talks to projects, never directly to machines
+  project.reportStatus     (project -> OS)
+  TBD - OS only talks to projects, never directly to machines
 
 REST
   /api/auth/*              Auth (Better Auth)
@@ -108,14 +116,14 @@ REST
   /api/integrations/github/{callback,webhook}
   /api/integrations/google/callback
   /api/integrations/stripe/webhook
-  Webhook handler extracts external ID (e.g. Slack team ID)
-    → looks up project → forwards to project ingress
+  Webhook handler extracts external ID (example: Slack team ID)
+    -> looks up project -> forwards to project ingress
 
 Skinny worker
-  Ingress worker:  resolves project from hostname → forwards via tunnel
+  Ingress worker: resolve project from hostname -> auth -> forward via tunnel
 ```
 
-### Project Layer — project machine (trusted)
+### Project Layer - project (trusted)
 
 ```
 oRPC  /api/orpc/*
@@ -123,22 +131,22 @@ oRPC  /api/orpc/*
   envVars.list, envVars.set, envVars.delete
   approvals.list, approvals.get, approvals.approve, approvals.reject
   machines.list, machines.health
-  TBD — project lifecycle, routing config
+  TBD - project lifecycle, routing config
 
 REST
   /api/integrations/*/webhook    Receives forwarded webhooks from OS
-    → routes to correct agent machine
-  /api/egress-proxy              Egress proxy for agent machines
-    → HITL check → inject secrets → forward to internet
+    -> routes to correct machine daemon
+  /api/egress-proxy              Egress proxy for machine daemons
+    -> HITL check -> inject secrets -> forward to internet
 
 React webapp (SPA)
-  Full-stack app, hits project oRPC + agent machine oRPC
-  Includes /terminal UI (xterm) — but PTY websocket is on agent machine
+  Full-stack app, hits project oRPC + machine oRPC
+  Includes terminal UI (xterm.js); PTY websocket endpoint is on machine
 ```
 
-**Storage:** SQLite per project (self-contained, no external DB dependency)
+**Storage:** SQLite per project, self-contained, no external DB dependency.
 
-### Agent Machine Layer — agent daemon (untrusted)
+### Machine Layer - machine daemon (untrusted)
 
 ```
 oRPC  /api/orpc/*
@@ -154,325 +162,516 @@ REST
 
 ## Layer 1: OS Layer
 
-Cloudflare Workers. Skinny, idiomatic, edge-native. **Optional** — projects can run without it.
+Cloudflare Workers. Skinny, edge-native. Optional: projects can run without it.
 
 **Owns:**
 
-- Billing & metering
+- Billing and metering
 - Project topology (which projects exist, where they live)
 - Authentication of external requests to projects
-- **Iterate-owned OAuth clients** (Slack, Gmail, GitHub, etc.) — shared across all projects
-- **Webhook multiplexing** — receives webhooks from third parties, extracts external ID (Slack team ID, GitHub installation ID, etc.), routes to correct project
-- Supplies OAuth client credentials to project machines as env vars / secrets
-- Creates Cloudflare tunnels via API on project creation → gives access token to project machine
-- Supervision / health monitoring
+- Iterate-owned OAuth clients (Slack/GitHub/Google/etc), shared across projects
+- Webhook multiplexing by external integration IDs
+- Supplies OAuth client credentials to projects as env vars/secrets
+- Creates Cloudflare tunnels on project creation and gives access token to project
+- Supervision and health monitoring
 
 **Does NOT own:**
 
-- Machines — the OS layer does not know about individual machines. It only knows projects.
-- Secrets management at runtime — it supplies credentials, but the project machine manages them
-- HITL — that's project-layer
-- Egress — the project machine talks directly to the internet. No OS-layer egress proxy.
+- Machine topology details (OS knows projects, not machines)
+- Runtime secrets management (project manages runtime secret use)
+- HITL (project layer)
+- Egress proxying (project talks directly to internet)
 
 **One skinny worker:**
 
-- **Ingress worker** — resolves project from hostname, auths request, forwards via Cloudflare tunnel to project machine
+- Ingress worker: resolves project from hostname, auths request, forwards via Cloudflare tunnel to project
 
 **Hosts:** `os.iterate.com`
 
-**Key implementation:** Durable Objects for per-project state (tunnel lifecycle, project config)
+**Key implementation:** stateless worker at edge, not Durable Object proxy.
 
 ## Layer 2: Project Layer
 
-Runs on the **Project Machine** (trusted). This is the core of the system — most "business logic" lives here. Machine-resident, not Cloudflare-resident.
+Runs on the **Project** host (trusted). Core business logic lives here.
 
 **Owns:**
 
-- Secrets storage and injection (OAuth tokens, API keys, env vars)
-- HITL approval queue and enforcement (SQLite table)
-- Egress proxy — intercepts outbound requests from agent machines, does HITL + secret injection, forwards directly to internet
-- Ingress routing — HTTP lookup table mapping routes to agent machines + ports
-- Cloudflare tunnel client (receives access token from OS layer as env var, establishes tunnel)
-- **Full-stack React webapp** — the primary UI for interacting with the project
-  - Hits project oRPC router (secrets, env vars, approvals)
-  - Hits agent machine oRPC routers (agent CRUD, conversations)
-  - Includes terminal UI (xterm.js) — renders locally, connects to PTY WebSocket on agent machine
-- Metering data collection → reports to OS layer
-- Integration webhook routing — receives webhooks from OS, routes to correct agent machine
+- Secrets storage/injection (OAuth tokens, API keys, env vars)
+- HITL approval queue and enforcement (SQLite)
+- Egress proxy for machine daemon outbound traffic
+- Ingress routing table mapping routes to machine daemons + ports
+- Cloudflare tunnel client (hosted mode)
+- Full-stack React webapp
+- Metering data collection and report to OS
+- Integration webhook routing from OS to correct machine daemon
 
 **Does NOT own:**
 
-- Billing (that's OS layer)
-- OAuth client registration (OS layer holds the shared clients)
-- Agent orchestration (that's agent machine layer)
+- Billing (OS)
+- OAuth client registration (OS owns shared clients)
+- Agent orchestration internals (machine layer)
 
-**Storage:** SQLite per project. Self-contained. No external database dependency. (Currently PlanetScale — migrating to SQLite.)
+**Storage:** SQLite per project.
 
-**Hosts:** `{project}.iterate.app` (via Cloudflare tunnel)
+**Hosts:** `{project}.iterate.app` via Cloudflare tunnel (hosted) or local/BYO in standalone.
 
-**Trust model:** Trusted. Users do not get shell access. Secrets can live in memory. This machine runs our code only.
+**Trust model:** trusted host. Users do not get shell access. Secrets can live in memory.
 
-## Layer 3: Agent Machine
+## Layer 3: Machine
 
-Where agents actually run. Agents have root. **Assume hostile to secrets — no raw credentials in memory, ever.**
+Where machine daemon + agents run. Agents have root.
+
+**Assumption:** hostile to secrets. No raw long-lived credentials in machine/agent memory.
 
 **Owns:**
 
-- Agent lifecycle (create, start, stop, destroy)
+- Agent lifecycle (create/start/stop/destroy)
 - Agent conversations and tool execution
-- PTY/terminal WebSocket (`/api/pty/ws`)
+- PTY websocket (`/api/pty/ws`)
 - File system access (`/api/files/*`)
 - Health reporting
 
 **Does NOT own:**
 
-- Secrets (must request through project machine egress proxy)
+- Secrets (must request through project egress proxy)
 - HITL decisions
-- Ingress routing
-- Any database
+- External ingress routing
+- Shared database
 
-**Hosts:** `{port}--{machine}--{project}.iterate.app`
+**Hosts:** `{port}--{machine}--{project}.iterate.app` (resolved/proxied by project ingress router)
 
-**Trust model:** Untrusted. Agents have root and may try to exfiltrate secrets. All network egress goes through the project machine's egress proxy. No direct internet access.
+**Trust model:** untrusted. Agents may attempt exfiltration. Egress must go through project egress proxy.
 
-**Codebase:** Same monorepo, both project machine and agent machine run PIDNAP but with different app configurations. Different daemon entrypoints.
+**Codebase:** same monorepo; OS/project/machine are different runtime configs/entrypoints.
 
-Currently: 1 project machine + 1 agent machine per project. Designed for N agent machines.
+Current state: 1 project + 1 machine per project. Design target: N machines and N agents per machine.
 
-## Ingress path
+## Ingress + egress stories
 
-### Browser → project webapp
-
-```
-Browser → GET misha.iterate.app/
-  │
-  ▼
-OS Layer (skinny ingress worker)
-  ├─ resolve project "misha"
-  ├─ auth request (cookies / access token / shared secret)
-  ├─ add auth header
-  └─ forward via Cloudflare tunnel
-        │
-        ▼
-      Project Machine
-        ├─ ingress routing table
-        │   GET / → project webapp (local, port 3000)
-        └─ serve React app
-```
-
-### Webhook → agent
+### Browser -> project webapp
 
 ```
-Slack → POST os.iterate.com/api/integrations/slack/webhook
-  │
-  ▼
+Browser -> GET misha.iterate.app/
+  |
+  v
+OS ingress worker
+  - resolve project "misha"
+  - auth request
+  - add auth context
+  - forward via tunnel
+        |
+        v
+      Project
+        - ingress table route GET / to webapp
+        - serve React app
+```
+
+### Browser -> terminal PTY
+
+```
+Browser loads project webapp from misha.iterate.app
+  |
+  v
+OS ingress worker -> auth -> tunnel -> Project
+  |
+  v
+Project serves React app with xterm.js
+  |
+  +-- xterm opens PTY session via project route
+      /api/pty/ws?machineId=mach_abc
+        |
+        v
+      Project ingress routing table
+        -> proxy websocket to machine daemon /api/pty/ws
+              |
+              v
+            Machine daemon -> attached agent shell
+```
+
+### Webhook -> agent
+
+```
+Slack/GitHub/etc -> POST os.iterate.com/api/integrations/.../webhook
+  |
+  v
 OS Layer
-  ├─ extract Slack team ID from payload
-  ├─ look up project for this team ID
-  └─ forward to project ingress via tunnel
-        │
-        ▼
-      Project Machine
-        ├─ route webhook to correct agent machine
-        └─ forward to agent machine
-              │
-              ▼
-            Agent Machine → agent handles webhook
+  - verify webhook signature
+  - extract provider external ID
+  - resolve project
+  - forward via tunnel
+        |
+        v
+      Project
+        - route to correct machine daemon
+        - forward webhook
+              |
+              v
+            Machine daemon -> agent handles webhook
 ```
 
-### Browser → agent API
+### Browser -> agent API call
 
 ```
-Browser → POST misha.iterate.app/agents/banana-king
-  │
-  ▼
-OS Layer (skinny ingress worker)
-  └─ forward via tunnel (same as above)
-        │
-        ▼
-      Project Machine
-        ├─ ingress routing table
-        │   POST /agents/* → agent machine
-        └─ proxy to agent machine oRPC/API
-              │
-              ▼
-            Agent Machine → daemon handles request
+Browser -> POST misha.iterate.app/agents/banana-king
+  |
+  v
+OS ingress worker -> auth -> tunnel -> Project
+  |
+  v
+Project ingress routing
+  - POST /agents/* -> machine
+  - proxy to machine oRPC/API
+        |
+        v
+      Machine daemon -> handles request
 ```
 
-## Egress path
+### Agent egress with HITL + secret injection
 
 ```
-Agent process → HTTP request to api.stripe.com
-  │
-  ▼
-Agent Machine (no direct internet)
-  └─ routed to project machine egress proxy
-        │
-        ▼
-      Project Machine (egress proxy)
-        ├─ HITL check (block / allow / ask user via approval queue)
-        ├─ inject secrets (e.g. replace placeholder with real API key)
-        ├─ meter request
-        └─ forward directly to internet
-              │
-              ▼
-            api.stripe.com
+Agent process -> HTTP intent
+  |
+  v
+Machine daemon (no direct internet by policy)
+  -> project egress proxy
+        |
+        v
+      Project egress proxy
+        - HITL check (block/allow/ask)
+        - inject secrets
+        - meter request
+        - forward to internet
+              |
+              v
+            External API
+```
+
+### Sequence diagram: external ingress
+
+```mermaid
+sequenceDiagram
+  participant B as Browser / Third Party
+  participant O as OS ingress worker
+  participant P as Project
+  participant M as Machine daemon
+  participant A as Agent runtime
+
+  B->>O: HTTP request / webhook
+  O->>O: Authenticate + verify signature
+  O->>P: Forward via tunnel + auth context
+  P->>P: Route by host/path/machineId
+  P->>M: Proxy to machine endpoint
+  M->>A: Dispatch tool/webhook/PTY input
+  A-->>M: Result/output
+  M-->>P: Response stream
+  P-->>O: Response
+  O-->>B: Response
+```
+
+### Sequence diagram: egress with HITL + secrets
+
+```mermaid
+sequenceDiagram
+  participant A as Agent runtime
+  participant M as Machine daemon
+  participant P as Project egress proxy
+  participant H as HITL queue
+  participant X as External API
+
+  A->>M: Outbound HTTP intent
+  M->>P: Proxy request
+  P->>H: Policy check
+  alt Requires approval
+    H-->>P: pending/approved/rejected
+  end
+  P->>P: Inject secret values
+  P->>X: Forward outbound request
+  X-->>P: Response
+  P-->>M: Response
+  M-->>A: Response
 ```
 
 ## Key design principles
 
-1. **Standalone-first.** A project (project machine + agent machines) must work without the OS layer. OS adds billing, auth, webhook mux — not runtime capability.
+1. **Standalone-first.** A project (project + machine) must work without OS.
+2. **Machine-agnostic.** Linux hosts with network access. No provider lock-in.
+3. **Secrets never touch machine daemons.** Project injects secrets at egress.
+4. **OS is thin.** Auth/webhook mux/billing/tunnel provisioning, not heavy runtime logic.
+5. **OS does not know machine topology internals.** OS knows projects.
+6. **N agents per machine, N machines per project.** Current 1:1:1 does not constrain future scale.
+7. **`npx iterate` must work.** No hard dependency on `iterate.app` or Cloudflare.
+8. **Prefixed opaque IDs.** `proj_*`, `mach_*`, `agnt_*`; no slug assumptions.
+9. **External ingress always OS -> Project -> Machine -> Agent.**
 
-2. **Machine-agnostic.** Machines are Linux environments with a network connection. Currently Fly.io. Architecture must not depend on any provider.
+## Machine providers and lifecycle
 
-3. **Secrets never touch agent machines.** Project machine holds and injects secrets. Agent machines are assumed compromised.
+Provider is replaceable. Project talks to provider adapter, not Fly/Docker directly.
 
-4. **OS layer is thin.** Skinny Cloudflare workers. No heavy compute. Webhook multiplexing, auth, billing, tunnel provisioning.
+Ownership boundary:
 
-5. **OS doesn't know about machines.** OS knows about projects. Project machine manages its own agent machines internally.
+- Project owns machine lifecycle (create/start/stop/delete/list/health)
+- OS layer and CLI may provision bootstrap env vars, but lifecycle API calls originate from project
+- Provider credentials are injected via env vars (OS bootstrap, Doppler, or local `.env`)
 
-6. **N agents per machine, N machines per project.** Currently 1:1:1. Architecture must not prevent scaling either dimension.
+Core machine provider interface:
 
-7. **`npx iterate` must work.** It must be possible to run a project locally with your own domain (or localhost). No dependency on `iterate.app`, Cloudflare, or the OS layer. Bring your own domain, bring your own everything.
+- `createProject(spec)` -> project host + metadata
+- `createMachine(projectId, spec)` -> machine host + metadata
+- `startMachine(machineId)` / `stopMachine(machineId)` / `deleteMachine(machineId)`
+- `getMachineStatus(machineId)` -> healthy/unhealthy + endpoint data
+- `listMachines(projectId)` -> current topology
+- `streamMachineLogs(machineId)` (optional)
 
-8. **Prefixed opaque IDs.** All database IDs are prefixed by entity type (e.g. `proj_abc123`, `mach_def456`, `agnt_ghi789`). IDs are opaque strings — never rely on slugs being stable. Prefixes prevent cross-entity confusion across layers.
+Lifecycle:
+
+1. Project created (OS in hosted, CLI in standalone/dev)
+2. Provider creates project host
+3. Provider creates at least one machine host
+4. Project writes routing entries for machines
+5. Project monitors health and updates routing
+6. Scale by add/remove machine through provider adapter
+7. Destroy project tears down project + machine hosts
 
 ## Deployment configurations
 
-Three ways to run iterate. Each uses the same project machine + agent machine architecture. What changes is who provisions machines and where they run.
+Three run modes, same architecture. Differences are provisioning and ownership.
 
-### Config 1: Hosted platform (production)
+### Config 1: Hosted Iterate
 
-The full stack. Customers pay us. OS layer runs in Cloudflare.
+Full stack. Customers pay us. OS runs at cloud edge.
 
 ```
-OS Layer (Cloudflare)  →  Project Machine (Fly.io)  →  Agent Machine (Fly.io)
+OS Layer (cloud edge) -> Project (trusted host) -> Machine (untrusted host)
 ```
 
-**What the customer gets:**
+**Customer gets:**
 
-- We set up OAuth clients (Slack, GitHub, Gmail, etc.) — shared across all projects
-- Webhook multiplexing — webhooks just work, no customer config
-- Pass-through billing for LLM usage, compute, etc.
-- Web UI for project management, secrets, HITL approvals
-- Tunnel-based ingress — project gets `{project}.iterate.app` automatically
-- Doppler-managed secrets — customer sets secrets in UI, they sync to project machine
+- Iterate-owned OAuth clients
+- Webhook multiplexing
+- Billing
+- UI for project/secrets/HITL
+- Tunnel-based ingress (`{project}.iterate.app`)
+- No public inbound ports on project/machine. Project opens outbound Cloudflare tunnel only
+- Doppler-managed secrets
 
-**What the customer doesn't do:**
+**Customer does not do:**
 
-- No Docker, no Fly account, no infra management
-- No OAuth app registration with third parties
-- No DNS config
+- Docker/provider infra management
+- OAuth app registration with third parties
+- DNS setup
 
-### Config 2: `npx iterate` (self-hosted / local)
+### Config 2: Homebrew Hacker (`npx iterate`)
 
-User runs a project locally. No OS layer. No Cloudflare. Everything runs on their machine.
+User runs project themselves. No mandatory OS. No mandatory Cloudflare.
 
 ```
 npx iterate
-  ├─ install Docker (or use Fly.io if user has a key)
-  ├─ run project machine (container or Fly)
-  ├─ run agent machine (container or Fly)
-  └─ open project UI at localhost
+  - choose provider (local container or remote provider adapter)
+  - run project
+  - run machine
+  - open project UI
 ```
 
-**Two paths on first run:**
+Two first-run paths:
 
-1. **Existing customer** — `npx iterate login` → OAuth with `os.iterate.com` → pick project → CLI points at the hosted project. Gives you local access to a deployed project.
-2. **New / local-only** — `npx iterate init` → creates `iterate.config.ts` + `.env` → spins up project machine + agent machine in Docker → project UI at `localhost:8000`.
+1. Existing customer: `npx iterate login` -> OAuth with `os.iterate.com` -> pick project
+2. New local-only: `npx iterate init` -> generate config + `.env` -> run project + machine
 
-**What works:**
+What works:
 
-- HITL approval — project machine runs it locally, UI in project webapp
-- Secrets — user provides own `.env`, no Doppler needed
-- Egress proxy — project machine proxies agent traffic, injects secrets
-- Webhooks — user configures their own webhook URLs pointing at their machine (or uses a tunnel tool like ngrok)
-- OAuth — user registers their own OAuth apps with third parties, provides client ID/secret in `.env`
+- HITL local in project
+- Secrets from local `.env` (no Doppler required)
+- Project egress proxy + secret injection
+- Webhooks via user-managed ingress tunnel/proxy (cloudflared/ngrok/Caddy/etc)
+- OAuth with user-owned apps in `.env`
 
-**What the user brings:**
+What user brings:
 
-- Their own env vars / secrets (`.env` file)
-- Their own OAuth clients (if they want integrations)
-- Their own domain or just use localhost
-- Docker or a Fly.io account
+- Env vars/secrets
+- OAuth clients (if integrations enabled)
+- Domain or localhost
+- Ingress tunnel/proxy choice
+- Machine provider implementation
 
-**Upsell path:** CLI can prompt "want us to handle OAuth, webhooks, billing? Sign up for hosted iterate."
+### Config 3: Iterate Dev
 
-### Config 3: Iterate engineers (development)
-
-Full platform running locally for development. Used by iterate engineers working on the platform itself.
+Engineers run full platform locally for development.
 
 ```
-OS Layer (miniflare / wrangler dev)  →  Project Machine (Docker)  →  Agent Machine (Docker)
+OS Layer (miniflare/wrangler dev) -> Project (local) -> Machine (local)
 ```
 
-**What this looks like:**
-
-- `pnpm dev` runs the OS worker locally via wrangler/miniflare
-- Can provision new projects → spins up project machine + agent machine in local Docker (or Fly.io)
-- Full end-to-end testing of the three-layer stack
+- `pnpm dev` runs OS worker locally
+- Can provision projects -> spins project + machine via provider adapters
+- End-to-end testing of full stack
 - Uses `doppler run --config dev` for dev secrets
-
-**Future:** Dockerize the miniflare OS worker so the entire stack runs in `docker compose up`.
 
 ## Tunnel lifecycle
 
-1. OS layer creates a Cloudflare tunnel via API when a project is created
-2. OS gives the tunnel access token to the project machine (as env var)
-3. Project machine uses the token to establish the tunnel
-4. **THE ONLY WAY to reach the project from outside is through this tunnel**
-5. OS ingress worker routes `{project}.iterate.app` requests through the tunnel
+1. OS creates Cloudflare tunnel when project is created
+2. OS gives tunnel access token to project (bootstrap env var)
+3. Project establishes outbound-only tunnel session to Cloudflare
+4. The only external path to project in hosted mode is this tunnel
+5. OS ingress routes `{project}.iterate.app` through tunnel
+6. Token rotation: OS updates bootstrap secret, project reconnects, old token revoked
+7. Tunnel failure: OS health checks mark degraded; ingress returns explicit unavailable response
 
-## Clarity checklist
+## Work in progress: scalability + performance
 
-- [ ] **Third-party integration with external IDs.** When Slack sends a webhook, the OS layer extracts the Slack team ID from the payload and looks up which project this belongs to. Same pattern for GitHub (installation ID), Google, etc. The OS layer is a webhook multiplexer keyed by external integration IDs.
-- [ ] **OAuth client ownership.** Iterate owns the OAuth clients (Slack app, GitHub app, etc.). These are shared across all projects. The OS layer stores the client ID + secret. It supplies them to project machines so they can make authenticated API calls.
-- [ ] **Secret flow.** OS supplies integration credentials → project machine stores them + other user secrets → project machine injects them into agent egress requests. Agent never sees raw values.
-- [ ] **Two webapps.** OS layer has a skinny React app (Better Auth, billing, org/project management). Project machine has a full React app (agent interaction, terminal, secrets management, HITL approvals).
-- [ ] **PTY split.** Terminal UI (xterm.js) lives in the project webapp. PTY WebSocket endpoint lives on the agent machine. The project webapp connects to the agent machine's `/api/pty/ws` directly (proxied through project machine).
-- [ ] **SQLite per project.** Each project machine has its own SQLite database for HITL approvals, secrets, env vars, routing config. No shared external database.
-- [ ] **Same codebase, different apps.** Project machine and agent machine both run PIDNAP with different app configurations/entrypoints.
+- Deliberately thin edge: no heavy compute/state at OS edge
+- Request proxy path is stateless worker, not Durable Object
+- Current reality: project host is single point of success per project; each machine is its own failure domain
+- Scale path exists:
+  - multiple machines per project
+  - health-aware routing over tunnel/machine endpoints
+  - project-side registry + synchronization strategy for machine metadata
+  - eventual extraction of discovery/routing registry out of a single daemon
+- Goal: keep edge simple + low latency now, keep explicit upgrade path for reliability/perf later
 
-## Open questions
+## Security
 
-- [ ] **Standalone ingress.** Without Cloudflare tunnel, project machine exposes ports directly (or user brings ngrok/cloudflared). Needs to be documented per deployment config.
-- [ ] **Agent machine internet access.** Fully blocked except through project machine? Or some direct access with monitoring? How is this enforced at the network level?
-- [ ] **Auth between project machine and agent machines.** What's the internal auth model? mTLS? Shared secret? Network isolation only?
-- [ ] **Machine topology control.** Can the project machine add/remove its own agent machines? Or does this go through the OS layer? (If standalone-first, projects need to self-manage.)
-- [ ] **OS-layer egress in future?** Currently no egress worker. If we ever need OS-level egress policy (rate limiting, billing metering, IP allowlisting), we'd add a skinny egress worker. For now, project machine goes directly to internet.
-- [ ] **Project machine naming.** Currently "Project Machine." Other options: "Gateway," "Coordinator," "Hub." The document uses "Project Machine" throughout.
-- [ ] **Browser → agent machine direct path.** For PTY WebSocket and oRPC calls from the project webapp to agent machines — does this go through the project machine as a proxy? Or does the browser connect more directly? Latency matters for terminals.
-- [ ] **OS layer naming.** Document currently uses "OS Layer." Confirm this is final — it matches existing codebase (`apps/os/*`).
+### Threat model A: evil/prompt-injected agent on untrusted machine
 
-## Secrets delivery: Doppler
+Attacker capability:
 
-Two categories of env vars:
+- Arbitrary code execution as root in machine guest
+- Reads machine memory/filesystem
+- Attempts policy bypass, secret exfiltration, direct internet calls, audit tampering
 
-1. **Bootstrap env vars** — set at machine provisioning time by OS layer (via Fly API, or manually for standalone). Tiny set: `DOPPLER_TOKEN`, tunnel access token, machine addresses.
+Primary defenses:
 
-2. **User-managed secrets** — Slack bot token, Stripe API key, OAuth tokens, etc. Managed via Doppler. Synced periodically to `.env` on disk.
+- No long-lived raw secrets in machine/agent memory by design; secrets injected at project egress only
+- External ingress never terminates on machine; OS/project boundaries are enforced first
+- Provider-level network policy restricts machine egress to project egress endpoint(s) + required control-plane endpoints
+- HITL + project-side egress policy before outbound request leaves trusted boundary
+- Metering/logging at project egress path, not only in machine guest
 
-The only thing a project machine needs from its parent is a `DOPPLER_TOKEN`. Everything else flows from that.
+Residual risk / limits:
+
+- Agent can exfiltrate data intentionally provided by user (prompt/context/files)
+- Provider policy misconfiguration can allow egress bypass
+- In-guest controls only (example: iptables inside guest) are insufficient against root attacker
+- V1 has no project<->machine app-layer auth; isolation failure implies lateral access risk
+
+### Threat model B: internet attacker targeting public edge
+
+Attacker capability:
+
+- Forged webhooks, replay attempts, path fuzzing, auth bypass attempts
+- Attempts to route traffic to wrong project or hit machine endpoints directly
+- Attempts to abuse OS ingress worker for cross-project actions
+
+Primary defenses:
+
+- OS performs external auth before forwarding to project
+- Webhook signatures verified at OS before routing
+- Routing keyed by validated project context + provider external IDs
+- No direct external ingress to machine daemons
+- Project endpoints behind tunnel and scoped OS forwarding path
+
+Residual risk / limits:
+
+- Stolen client tokens/cookies are out of scope for network architecture alone
+- Replay defense specifics (timestamp window, nonce storage) are per-integration implementation work
+
+### Threat model C: control-plane/provider misconfiguration
+
+Attacker capability:
+
+- Mis-scoped security groups, open ports, bad routes, leaked provider keys
+
+Primary defenses:
+
+- Provider adapter contract centralizes lifecycle + network policy application
+- Project-owned lifecycle avoids split ownership and unclear control paths
+- Bootstrap env contract makes required credentials explicit and auditable
+- Health checks + explicit degraded behavior reduce silent exposure
+
+Residual risk / limits:
+
+- Architecture doc is not enough; provider policy conformance tests are required per adapter
+
+## Decided invariants
+
+- External ID webhook mux is at OS
+- OAuth client ownership is at OS
+- Secret flow is OS/bootstrap -> project store -> project egress injection
+- OS webapp stays skinny (auth/billing/org/project)
+- Project webapp stays full app (agents/terminal/secrets/HITL)
+- PTY split: xterm.js in project webapp, PTY endpoint on machine, browser reaches PTY through OS->project routing
+- SQLite per project, no shared external DB required
+- Same monorepo, different runtime configs
+- No direct external ingress to machine daemon
+- Standalone ingress is user-managed
+- Machine egress enforcement is provider-level outside guest
+- Project owns machine lifecycle
+- Project <-> machine internal auth (v1): none; trust boundary is provider network isolation only
+
+### External ID mapping examples
+
+| Provider | External ID extracted by OS              | Project lookup key                                   |
+| -------- | ---------------------------------------- | ---------------------------------------------------- |
+| Slack    | `team_id`                                | `integration_external_id(slack, team_id)`            |
+| GitHub   | `installation.id`                        | `integration_external_id(github, installation_id)`   |
+| Google   | `sub` / tenant ID (integration-specific) | `integration_external_id(google, subject_or_tenant)` |
+| Stripe   | `account` / endpoint account context     | `integration_external_id(stripe, account_id)`        |
+
+## Parked questions (need decisions later)
+
+- Future OS-level egress worker:
+  - trigger: centralized rate limits
+  - trigger: egress IP allowlisting
+  - trigger: cross-project billing instrumentation
+- Naming follow-up:
+  - keep `OS Layer` for now
+  - optional future rename to `Platform Edge` if scope expands
+
+## Secrets delivery model + Doppler implementation
+
+### Abstract model (provider-agnostic)
+
+1. Bootstrap env vars are required so project can boot infra + secret sync
+2. User-managed secrets cover integration tokens, API keys, OAuth tokens, tool env vars
+
+Flow:
 
 ```
-OS webapp → user sets secret "STRIPE_KEY"
-  │
-  ▼
-OS layer → writes to Doppler (one config per customer project)
-
-
-Project machine (has DOPPLER_TOKEN as bootstrap env var)
-  └─ periodic sync: doppler pull → .env on disk
-  └─ secrets are plain env vars, easy to debug
-  └─ survives Doppler outage (cached .env)
+secret source (OS UI / CLI / file) -> project secret store -> egress injection at project
 ```
 
-**Standalone:** user just writes `.env` manually. No Doppler needed. Project machine reads env vars from environment, doesn't care where they came from.
+Machine/agent sees request shapes, never long-lived raw credential values.
 
-- [ ] **Doppler at scale.** Check pricing. Confirm API supports creating configs per customer project programmatically.
+### Bootstrap env contract (minimum)
+
+| Var                                      | Scope         | Purpose                                          |
+| ---------------------------------------- | ------------- | ------------------------------------------------ |
+| `PROJECT_ID`                             | project       | stable project identity                          |
+| `PROJECT_BASE_URL`                       | project       | hostname parsing + canonical links               |
+| `PROJECT_INGRESS_TOKEN`                  | OS -> project | tunnel ingress authorization context             |
+| `PROJECT_EGRESS_BIND`                    | project       | egress proxy bind/advertise address for machines |
+| `MACHINE_PROVIDER`                       | project       | provider adapter selector (`fly`, `docker`, ...) |
+| `MACHINE_PROVIDER_CONFIG`                | project       | provider credentials/config payload reference    |
+| `DOPPLER_TOKEN` (optional in standalone) | project       | fetch user-managed secrets from Doppler          |
+
+### Doppler implementation note (hosted mode)
+
+```
+OS layer -> writes project-scoped secret config in Doppler
+  |
+  v
+Project (has DOPPLER_TOKEN bootstrap var)
+  - periodic sync: doppler pull -> .env on disk
+  - cached .env allows degraded operation during Doppler outage
+```
+
+### Standalone mode
+
+User writes `.env` manually or passes env at runtime. Project consumes same contract. No Doppler dependency.
 
 ## Raw notes (still to process)
 
-- Platform worker ingress pattern: `return getFetcher(req)(req)` — skinny worker resolves a fetcher per request then delegates
-- Gateway operates at L2/3 of network stack for ingress/egress interception
-- Auth options at OS layer: cookies, access tokens from static list, future OAuth, shared secrets between user and third party
+- Platform worker ingress pattern: `return getFetcher(req)(req)`
+- Auth options at OS layer: cookies, access tokens, OAuth, shared secrets
+- Future: extract machine discovery/routing registry out of any single machine daemon
+- Candidate: project-owned discovery service with health + capacity awareness
+- Result target: cleaner scale-out, faster failover, less routing coupling to one daemon
