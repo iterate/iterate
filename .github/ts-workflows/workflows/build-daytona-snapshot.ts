@@ -148,6 +148,10 @@ export default workflow({
             LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
             // Daytona requires AMD64 images regardless of runner architecture
             SANDBOX_BUILD_PLATFORM: "linux/amd64",
+            SANDBOX_USE_DEPOT_REGISTRY: "true",
+            SANDBOX_LOAD_AND_SAVE: "true",
+            SANDBOX_DEPOT_SAVE_TAG:
+              "iterate-sandbox-daytona-${{ github.run_id }}-${{ github.run_attempt }}",
           },
           run: [
             "echo '::group::Build timing'",
