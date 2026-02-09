@@ -45,6 +45,7 @@ export const routes = rootRoute("root.tsx", [
       index("admin/index.tsx"),
       route("/trpc-tools", "admin/trpc-tools.tsx"),
       route("/session-info", "admin/session-info.tsx"),
+      route("/outbox", "admin/outbox.tsx"),
     ]),
   ]),
 ]);

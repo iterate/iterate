@@ -846,6 +846,9 @@ importers:
       minimatch:
         specifier: ^10.1.1
         version: 10.1.1
+      ms:
+        specifier: 4.0.0-nightly.202508271359
+        version: 4.0.0-nightly.202508271359
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -955,6 +958,9 @@ importers:
       '@tanstack/react-router-devtools':
         specifier: ^1.149.0
         version: 1.149.0(@tanstack/react-router@1.147.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(@tanstack/router-core@1.147.1)(csstype@3.2.3)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@types/ms':
+        specifier: ^2.1.0
+        version: 2.1.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.1

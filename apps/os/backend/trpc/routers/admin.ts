@@ -315,5 +315,202 @@ export const adminRouter = router({
     process: adminProcedure.mutation(async ({ ctx }) => {
       return await queuer.processQueue(ctx.db);
     }),
+    listEvents: adminProcedure
+      .input(
+        z
+          .object({
+            limit: z.number().min(1).max(200).default(25),
+            offset: z.number().min(0).default(0),
+            sortDirection: z.enum(["asc", "desc"]).default("desc"),
+            eventName: z.string().optional(),
+            consumerName: z.string().optional(),
+            consumerStatus: z.enum(["pending", "success", "retrying", "failed"]).optional(),
+            statusMode: z.enum(["some", "all"]).default("some"),
+            ageMinMs: z.number().optional(),
+            ageMaxMs: z.number().optional(),
+            readCountMin: z.number().optional(),
+            readCountMax: z.number().optional(),
+            resolutionMinMs: z.number().optional(),
+            resolutionMaxMs: z.number().optional(),
+            payloadContains: z
+              .string()
+              .transform((val, ctx) => {
+                try {
+                  JSON.parse(val) as {};
+                  return val;
+                } catch {
+                  ctx.addIssue({ code: "custom", message: "Invalid JSON" });
+                  return z.NEVER;
+                }
+              })
+              .optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        const limit = input?.limit ?? 25;
+        const offset = input?.offset ?? 0;
+        const sortDir = input?.sortDirection ?? "desc";
+
+        // Build WHERE clauses for the event
+        const eventWheres: ReturnType<typeof sql>[] = [];
+        if (input?.eventName) {
+          eventWheres.push(sql`e.name = ${input.eventName}`);
+        }
+        if (input?.payloadContains) {
+          eventWheres.push(sql`e.payload @> ${input.payloadContains}::jsonb`);
+        }
+        if (input?.ageMinMs) {
+          eventWheres.push(
+            sql`e.created_at <= now() - interval '1 millisecond' * ${input.ageMinMs}`,
+          );
+        }
+        if (input?.ageMaxMs) {
+          eventWheres.push(
+            sql`e.created_at >= now() - interval '1 millisecond' * ${input.ageMaxMs}`,
+          );
+        }
+
+        // Consumer-level filters: we filter events that have matching consumers
+        const hasConsumerFilters =
+          input?.consumerName ||
+          input?.consumerStatus ||
+          input?.readCountMin !== undefined ||
+          input?.readCountMax !== undefined ||
+          input?.resolutionMinMs !== undefined ||
+          input?.resolutionMaxMs !== undefined;
+
+        if (hasConsumerFilters) {
+          const consumerWheres: ReturnType<typeof sql>[] = [];
+          if (input?.consumerName) {
+            consumerWheres.push(sql`cm.message->>'consumer_name' = ${input.consumerName}`);
+          }
+          if (input?.consumerStatus) {
+            consumerWheres.push(
+              sql`coalesce(cm.message->>'status', 'pending') = ${input.consumerStatus}`,
+            );
+          }
+          if (input?.readCountMin !== undefined) {
+            consumerWheres.push(sql`cm.read_ct >= ${input.readCountMin}`);
+          }
+          if (input?.readCountMax !== undefined) {
+            consumerWheres.push(sql`cm.read_ct <= ${input.readCountMax}`);
+          }
+          if (input?.resolutionMinMs !== undefined) {
+            consumerWheres.push(
+              sql`(cm.message->>'status' in ('success', 'failed') and extract(epoch from (cm.vt - cm.enqueued_at)) * 1000 >= ${input.resolutionMinMs})`,
+            );
+          }
+          if (input?.resolutionMaxMs !== undefined) {
+            consumerWheres.push(
+              sql`(cm.message->>'status' in ('success', 'failed') and extract(epoch from (cm.vt - cm.enqueued_at)) * 1000 <= ${input.resolutionMaxMs})`,
+            );
+          }
+
+          const consumerWhereSql = consumerWheres.length
+            ? sql.join(consumerWheres, sql` and `)
+            : sql`true`;
+          const quantifier = input?.statusMode === "all" ? sql`not exists` : sql`exists`;
+          const subqueryCondition =
+            input?.statusMode === "all"
+              ? sql`
+                select 1 from all_consumers cm
+                where (cm.message->>'event_id')::bigint = e.id
+                  and not (${consumerWhereSql})
+              `
+              : sql`
+                select 1 from all_consumers cm
+                where (cm.message->>'event_id')::bigint = e.id
+                  and ${consumerWhereSql}
+              `;
+
+          eventWheres.push(sql`${quantifier} (${subqueryCondition})`);
+        }
+
+        const whereSql = eventWheres.length
+          ? sql`where ${sql.join(eventWheres, sql` and `)}`
+          : sql``;
+
+        const orderSql = sortDir === "asc" ? sql`order by e.id asc` : sql`order by e.id desc`;
+
+        const allConsumersSql = sql`
+          select msg_id, enqueued_at, vt, read_ct, message
+          from pgmq.q_consumer_job_queue
+          union all
+          select msg_id, enqueued_at, vt, read_ct, message
+          from pgmq.a_consumer_job_queue
+        `;
+
+        // Main query: get events with their consumer messages as a JSON array
+        const rows = (await ctx.db.execute(sql`
+          with all_consumers as (${allConsumersSql})
+          select
+            e.id,
+            e.name,
+            e.payload,
+            e.created_at as "createdAt",
+            e.updated_at as "updatedAt",
+            coalesce(
+              (
+                select json_agg(
+                  json_build_object(
+                    'msg_id', ac.msg_id,
+                    'enqueued_at', ac.enqueued_at,
+                    'vt', ac.vt,
+                    'read_ct', ac.read_ct,
+                    'message', ac.message
+                  )
+                  order by ac.msg_id
+                )
+                from all_consumers ac
+                where (ac.message->>'event_id')::bigint = e.id
+              ),
+              '[]'::json
+            ) as consumers
+          from outbox_event e
+          ${whereSql}
+          ${orderSql}
+          limit ${limit}
+          offset ${offset}
+        `)) as {
+          id: number;
+          name: string;
+          payload: Record<string, unknown>;
+          createdAt: string;
+          updatedAt: string;
+          consumers: Array<{
+            msg_id: number | string;
+            enqueued_at: string;
+            vt: string;
+            read_ct: number;
+            message: Record<string, unknown>;
+          }>;
+        }[];
+
+        // Also get a total count for pagination
+        const countResult = (await ctx.db.execute(sql`
+          with all_consumers as (${allConsumersSql})
+          select count(*)::int as total from outbox_event e ${whereSql}
+        `)) as { total: number }[];
+        const total = countResult[0]?.total ?? 0;
+
+        // Get distinct event names for filter dropdowns
+        const eventNamesResult = (await ctx.db.execute(
+          sql`select distinct name from outbox_event order by name`,
+        )) as { name: string }[];
+        const eventNames = eventNamesResult.map((r) => r.name);
+
+        // Get distinct consumer names
+        const consumerNamesResult = (await ctx.db.execute(sql`
+          with all_consumers as (${allConsumersSql})
+          select distinct message->>'consumer_name' as name
+          from all_consumers
+          where message->>'consumer_name' is not null
+          order by name
+        `)) as { name: string }[];
+        const consumerNames = consumerNamesResult.map((r) => r.name);
+
+        return { events: rows, total, eventNames, consumerNames };
+      }),
   },
 });
