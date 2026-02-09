@@ -8,6 +8,8 @@ import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { waitUntil } from "../../env.ts";
+import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 
@@ -68,7 +70,10 @@ export const t = initTRPC.context<Context>().create({
 
 // Base router and procedure helpers
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+/** Outbox plugin - injects `ctx.sendTrpc(tx, output)` into every procedure */
+const eventsProcedure = createPostProcedureConsumerPlugin(queuer, { waitUntil });
+export const publicProcedure = t.procedure.concat(eventsProcedure);
 
 /** Protected procedure that requires authentication */
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
