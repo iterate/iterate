@@ -33,10 +33,11 @@
     "zod": "4.1.12"
   },
   "scripts": {
-    "dev:website": "doppler run -- vite dev",
-    "build": "doppler run -- vite build",
+    "skills:generate": "node ./scripts/generate-skills-registry.mjs",
+    "dev:website": "pnpm skills:generate && doppler run -- vite dev",
+    "build": "pnpm skills:generate && doppler run -- vite build",
     "typecheck": "tsgo -build",
-    "deploy": "doppler run --config prd -- vite build && doppler run --config prd -- wrangler deploy",
+    "deploy": "pnpm skills:generate && doppler run --config prd -- vite build && doppler run --config prd -- wrangler deploy",
     "test:e2e:vitest": "VITEST_RUN_E2E=true pnpm vitest run --passWithNoTests"
   },
   "devDependencies": {

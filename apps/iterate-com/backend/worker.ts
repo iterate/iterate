@@ -1,6 +1,7 @@
 import { createRequestHandler } from "react-router";
 import { proxy } from "hono/proxy";
 import { Hono } from "hono";
+import { wellKnownSkillsRegistry } from "./generated/skills-registry.ts";
 
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
@@ -8,12 +9,49 @@ const requestHandler = createRequestHandler(
 );
 
 const app = new Hono();
+const WELL_KNOWN_SKILLS_PREFIX = "/.well-known/skills";
+
+function contentTypeFor(pathname: string): string {
+  if (pathname.endsWith(".json")) return "application/json; charset=utf-8";
+  if (pathname.endsWith(".md")) return "text/markdown; charset=utf-8";
+  if (pathname.endsWith(".txt")) return "text/plain; charset=utf-8";
+  return "text/plain; charset=utf-8";
+}
 
 app.get("*", async (c, next) => {
   if (c.req.header("Host") === "iterate.com") {
     return c.redirect("https://www.iterate.com", 301);
   }
   return next();
+});
+
+app.get(WELL_KNOWN_SKILLS_PREFIX, (c) => {
+  return c.redirect(`${WELL_KNOWN_SKILLS_PREFIX}/index.json`, 302);
+});
+
+app.get(`${WELL_KNOWN_SKILLS_PREFIX}/`, (c) => {
+  return c.redirect(`${WELL_KNOWN_SKILLS_PREFIX}/index.json`, 302);
+});
+
+app.get(`${WELL_KNOWN_SKILLS_PREFIX}/index.json`, (c) => {
+  return c.json({ skills: wellKnownSkillsRegistry.skills });
+});
+
+app.get(`${WELL_KNOWN_SKILLS_PREFIX}/*`, (c) => {
+  const rawPath = c.req.path.slice(`${WELL_KNOWN_SKILLS_PREFIX}/`.length);
+  const filePath = decodeURIComponent(rawPath);
+  const content = wellKnownSkillsRegistry.fileContents[filePath];
+
+  if (!content) {
+    return c.notFound();
+  }
+
+  return new Response(content, {
+    headers: {
+      "content-type": contentTypeFor(filePath),
+      "cache-control": "public, max-age=300",
+    },
+  });
 });
 
 // PostHog proxy routes (order matters - most specific first)
