@@ -127,6 +127,13 @@
       "when": 1770415000000,
       "tag": "0017_rename_local_docker_to_docker",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1770645196380,
+      "tag": "0018_old_satana",
+      "breakpoints": true
     }
   ]
 }
