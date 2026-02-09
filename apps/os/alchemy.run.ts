@@ -474,12 +474,19 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const proxyWorker = await Worker("proxy", {
     name: isProduction ? "os-proxy" : isStaging ? "os-proxy-staging" : undefined,
     entrypoint: "./proxy/worker.ts",
+    compatibility: "node",
     bindings: {
       PROJECT_INGRESS_PROXY,
       PROXY_ROOT_DOMAIN,
+      DAYTONA_API_KEY: envSecrets.DAYTONA_API_KEY,
       ...dbConfig,
     },
     adopt: true,
+    bundle: {
+      define: {
+        "import.meta.env.VITE_APP_STAGE": JSON.stringify(app.stage),
+      },
+    },
   });
 
   const worker = await TanStackStart("os", {

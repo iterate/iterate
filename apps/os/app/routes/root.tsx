@@ -31,6 +31,7 @@ import { getEnvLogo } from "../lib/env-logo.ts";
 
 // Check if PostHog should be enabled (when key is configured)
 const shouldEnablePostHog = () => {
+  if (import.meta.env.DEV) return false;
   if (typeof window === "undefined") return false;
   if (!import.meta.env.VITE_POSTHOG_PUBLIC_KEY) return false;
   return true;

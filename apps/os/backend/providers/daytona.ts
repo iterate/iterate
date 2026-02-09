@@ -66,7 +66,7 @@ export function createDaytonaProvider(config: DaytonaProviderConfig): MachinePro
         envVars: machineConfig.envVars,
         autoStopInterval,
         autoDeleteInterval,
-        public: true,
+        public: false,
       });
       return { externalId: sandbox.id, metadata: { snapshotName, sandboxName } };
     },

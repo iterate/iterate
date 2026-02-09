@@ -2,6 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { Daytona } from "@daytonaio/sdk";
 import { createMachineProvider } from "../providers/index.ts";
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
@@ -180,6 +181,32 @@ export const reportStatus = os.machines.reportStatus
 
         return activeMachines;
       });
+
+      // Store preview token for Daytona machines (same token works for all ports)
+      if (machineWithOrg.type === "daytona") {
+        try {
+          const daytona = new Daytona({ apiKey: env.DAYTONA_API_KEY });
+          const sandbox = await daytona.get(machineWithOrg.externalId);
+          // Token is per-machine, not per-port. Use port 0 as placeholder.
+          const previewInfo = await sandbox.getPreviewLink(3000);
+
+          await db
+            .insert(schema.daytonaPreviewToken)
+            .values({
+              machineId: machine.id,
+              port: "0",
+              token: previewInfo.token,
+            })
+            .onConflictDoUpdate({
+              target: [schema.daytonaPreviewToken.machineId, schema.daytonaPreviewToken.port],
+              set: { token: previewInfo.token, updatedAt: new Date() },
+            });
+
+          logger.info("Stored Daytona preview token", { machineId: machine.id });
+        } catch (err) {
+          logger.error("Failed to store Daytona preview token", { machineId: machine.id, err });
+        }
+      }
 
       // Archive via provider AFTER transaction commits
       // This is intentional - we want DB state to be consistent first,
