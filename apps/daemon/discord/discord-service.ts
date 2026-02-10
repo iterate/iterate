@@ -349,7 +349,10 @@ export class DiscordService {
         content: `Error executing command: ${error instanceof Error ? error.message : String(error)}`,
       });
     } finally {
-      await message.reactions.cache.get("⏳")?.remove();
+      await message.reactions.cache
+        .get("⏳")
+        ?.users.remove(this.client.user!.id)
+        .catch(() => null);
     }
   }
 

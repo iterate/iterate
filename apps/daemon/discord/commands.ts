@@ -71,7 +71,7 @@ async function handleAttachCommand(
   const { sessionID, directory } = mapping;
 
   if (choice === "web") {
-    const encodedDir = Buffer.from(directory).toString("base64").replace(/=+$/, "");
+    const encodedDir = Buffer.from(directory).toString("base64url");
     const url = `${config.OPENCODE_PUBLIC_URL}/${encodedDir}/session/${sessionID}`;
     await interaction.reply({
       content: `[Open in OpenCode Web](<${url}>)`,
