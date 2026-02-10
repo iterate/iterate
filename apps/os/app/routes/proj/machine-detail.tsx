@@ -63,6 +63,13 @@ function MachineDetailPage() {
   };
 
   const { commands, services } = machine;
+  const isDockerMachine = machine.type === "docker" || machine.type === "local-docker";
+  const dockerContainerRef = metadata.containerName ?? metadata.containerId ?? machine.externalId;
+
+  const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const dockerTailLogsCommand = dockerContainerRef
+    ? `docker logs -f --tail 200 ${quoteShellArg(dockerContainerRef)}`
+    : null;
 
   const restartMachine = useMutation({
     mutationFn: async () => {
@@ -145,6 +152,11 @@ function MachineDetailPage() {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
+  const getServiceAccessLabel = (option: { label: string; url: string }) => {
+    if (option.label === "Open" && option.url.startsWith("/")) return "Proxy";
+    return option.label;
+  };
+
   const extractSessionId = (destination?: string | null) => {
     if (!destination) return null;
     const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
@@ -171,6 +183,17 @@ function MachineDetailPage() {
   return (
     <div className="space-y-6 p-4">
       <HeaderActions>
+        {isDockerMachine && dockerTailLogsCommand && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => copyToClipboard(dockerTailLogsCommand)}
+            disabled={machine.state === "archived"}
+          >
+            <Copy className="h-4 w-4" />
+            Tail logs
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -286,7 +309,7 @@ function MachineDetailPage() {
               {services.flatMap((service) =>
                 service.options.map((option, i) => (
                   <a
-                    key={`${service.id}-${i}`}
+                    key={`${service.id}-${i}-${option.url}`}
                     href={option.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -294,6 +317,10 @@ function MachineDetailPage() {
                   >
                     {service.name}{" "}
                     <span className="text-xs text-muted-foreground">:{service.port}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {" "}
+                      ({getServiceAccessLabel(option)})
+                    </span>
                   </a>
                 )),
               )}

@@ -120,6 +120,20 @@
       "when": 1770297200000,
       "tag": "0016_globally_unique_project_slugs",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1770681014363,
+      "tag": "0017_pgmq",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1770681014364,
+      "tag": "0018_consumer_job_queue",
+      "breakpoints": true
     }
   ]
 }

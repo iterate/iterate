@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
+import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
@@ -156,6 +157,23 @@ app.route("", egressProxyApp);
 
 // oRPC handler for machine status (called by daemon to report ready)
 const orpcHandler = new RPCHandler(workerRouter, {
+  interceptors: [
+    onError((error) => {
+      const maybeStatus =
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
+
+      if (!maybeStatus || maybeStatus >= 500) {
+        logger.error(`oRPC Error ${maybeStatus ?? "unknown"}: ${(error as Error).message}`, error);
+      } else {
+        logger.warn(`oRPC Error ${maybeStatus}: ${(error as Error).message}`, error);
+      }
+    }),
+  ],
   plugins: [new RequestHeadersPlugin()],
 });
 app.all("/api/orpc/*", async (c) => {
