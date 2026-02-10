@@ -35,10 +35,9 @@ jobs:
   build-image:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
-      image_name: ${{ steps.metadata.outputs.image_name }}
+      image_tag: ${{ steps.metadata.outputs.image_tag }}
       git_sha: ${{ steps.metadata.outputs.git_sha }}
-      registry_image_name: ${{ steps.metadata.outputs.registry_image_name }}
-      fly_registry_image_name: ${{ steps.metadata.outputs.fly_registry_image_name }}
+      fly_image_tag: ${{ steps.metadata.outputs.fly_image_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,34 +62,26 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Setup Depot CLI
         uses: depot/setup-action@v1
-      - name: Build multi-platform Docker image with Depot
+      - name: Build sandbox image
+        env:
+          SANDBOX_BUILD_PLATFORM: linux/amd64,linux/arm64
+          SANDBOX_UPDATE_DOPPLER: "false"
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
-          set -euo pipefail
-          depot_project_id="$(jq -r '.id' depot.json)"
-          if [ "$depot_project_id" = "null" ] || [ -z "$depot_project_id" ]; then
-            echo "Missing depot project id in depot.json" >&2
-            exit 1
-          fi
-          export REGISTRY_IMAGE_NAME="registry.depot.dev/$depot_project_id:iterate-sandbox-test-${{ github.run_id }}-${{ github.run_attempt }}"
-          export SANDBOX_BUILD_PLATFORM=linux/amd64,linux/arm64
-          export SANDBOX_PUSH_FLY_REGISTRY=true
-          export SANDBOX_FLY_REGISTRY_APP=iterate-sandbox-image
-          pnpm docker:build
+          echo '::group::Build sandbox image'
+          time doppler run -- pnpm sandbox build
+          echo '::endgroup::'
       - id: metadata
         name: Export build metadata
         run: |-
-          build_info_path=".cache/depot-build-info.json"
-          registry_image_name="$(jq -r ".registryImageName" "$build_info_path")"
-          fly_registry_image_name="$(jq -r ".flyRegistryImageNames[0] // empty" "$build_info_path")"
-          git_sha="$(jq -r ".gitSha" "$build_info_path")"
-          if [ "$registry_image_name" = "null" ] || [ -z "$registry_image_name" ] || [ -z "$fly_registry_image_name" ] || [ "$git_sha" = "null" ]; then
-            echo "Missing Depot build metadata in $build_info_path" >&2
-            exit 1
-          fi
-          echo "image_name=${{ inputs.image_name || "iterate-sandbox:ci" }}" >> "$GITHUB_OUTPUT"
-          echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
-          echo "registry_image_name=$registry_image_name" >> "$GITHUB_OUTPUT"
-          echo "fly_registry_image_name=$fly_registry_image_name" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          git_sha="$(git rev-parse HEAD)"
+          image_tag="iterate-sandbox:sha-${short_sha}"
+          fly_image_tag="registry.fly.io/iterate-sandbox-image:sha-${short_sha}"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "git_sha=${git_sha}" >> "$GITHUB_OUTPUT"
+          echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"
   docker-provider-tests:
     needs:
       - build-image
@@ -117,19 +108,23 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Pull built image from registry
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - name: Pull built image from Depot registry
         env:
-          IMAGE_NAME: ${{ needs.build-image.outputs.image_name }}
-          REGISTRY_IMAGE_NAME: ${{ needs.build-image.outputs.registry_image_name }}
+          IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
         run: |-
-          docker pull "$REGISTRY_IMAGE_NAME"
-          docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          depot_project_id="$(jq -r .id depot.json)"
+          depot pull "registry.depot.dev/${depot_project_id}:sha-${short_sha}"
+          docker tag "registry.depot.dev/${depot_project_id}:sha-${short_sha}" "$IMAGE_TAG"
       - name: Run Docker provider tests
         env:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: docker
-          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-image.outputs.image_name }}
-          SANDBOX_TEST_BASE_DOCKER_IMAGE: ${{ needs.build-image.outputs.image_name }}
+          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-image.outputs.image_tag }}
+          DOCKER_DEFAULT_IMAGE: ${{ needs.build-image.outputs.image_tag }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
         run: pnpm sandbox test:docker
@@ -170,8 +165,8 @@ jobs:
         env:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: fly
-          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-image.outputs.fly_registry_image_name }}
-          SANDBOX_TEST_BASE_FLY_IMAGE: ${{ needs.build-image.outputs.fly_registry_image_name }}
+          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-image.outputs.fly_image_tag }}
+          FLY_DEFAULT_IMAGE: ${{ needs.build-image.outputs.fly_image_tag }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
       - name: Upload Fly test results
@@ -209,39 +204,44 @@ jobs:
         run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Pull built image from registry
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - name: Pull built image from Depot registry
         env:
-          IMAGE_NAME: ${{ needs.build-image.outputs.image_name }}
-          REGISTRY_IMAGE_NAME: ${{ needs.build-image.outputs.registry_image_name }}
+          IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
         run: |-
-          docker pull --platform linux/amd64 "$REGISTRY_IMAGE_NAME"
-          docker tag "$REGISTRY_IMAGE_NAME" "$IMAGE_NAME"
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          depot_project_id="$(jq -r .id depot.json)"
+          depot pull --platform linux/amd64 "registry.depot.dev/${depot_project_id}:sha-${short_sha}"
+          docker tag "registry.depot.dev/${depot_project_id}:sha-${short_sha}" "$IMAGE_TAG"
       - name: Install and configure Daytona CLI
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
-          curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH"
+          for i in 1 2 3; do curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH" && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          test -f daytona || { echo 'Failed to download Daytona CLI after 3 attempts'; exit 1; }
           sudo chmod +x daytona && sudo mv daytona /usr/local/bin/
           daytona version
           mkdir -p ~/.config/daytona
           doppler run -- bash -c 'jq -n \
                         --arg apiKey "$DAYTONA_API_KEY" \
                         --arg orgId "$DAYTONA_ORG_ID" \
-                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: $apiKey}, activeOrganizationId: $orgId}]}" \
+                        "{activeProfile: \"ci\", profiles: [{id: \"ci\", name: \"ci\", api: {url: \"https://app.daytona.io/api\", key: \$apiKey}, activeOrganizationId: \$orgId}]}" \
                         > ~/.config/daytona/config.json'
           daytona snapshot list --limit 1
       - id: push
         name: Upload snapshot to Daytona
         env:
-          IMAGE_NAME: ${{ needs.build-image.outputs.image_name }}
+          IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
           CI: "true"
         run: |-
           set -euo pipefail
-          snapshot_name="iterate-sandbox-${{ needs.build-image.outputs.git_sha }}"
-          output_file=$(mktemp)
-          pnpm build:daytona --no-update-doppler --name "$snapshot_name" --image "$IMAGE_NAME" | tee "$output_file"
-          snapshot_name=$(grep -m 1 "^snapshot_name=" "$output_file" | sed "s/^snapshot_name=//")
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          snapshot_name="iterate-sandbox-sha-${short_sha}"
+          pnpm sandbox daytona:push --no-update-doppler --name "$snapshot_name" --image "$IMAGE_TAG" | tee /tmp/push-output.txt
+          snapshot_name=$(grep -m 1 "^snapshot_name=" /tmp/push-output.txt | sed "s/^snapshot_name=//")
           echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"
   daytona-provider-tests:
     needs:
@@ -275,7 +275,7 @@ jobs:
           RUN_SANDBOX_TESTS: "true"
           SANDBOX_TEST_PROVIDER: daytona
           SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}
-          SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT: ${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}
+          DAYTONA_DEFAULT_SNAPSHOT: ${{ needs.upload-daytona-snapshot.outputs.snapshot_name }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm sandbox test:daytona
       - name: Upload Daytona test results

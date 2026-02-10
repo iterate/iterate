@@ -285,12 +285,11 @@ export class DockerProvider extends SandboxProvider {
   }
 
   get defaultSnapshotId(): string {
-    return resolveBaseImage({ repoRoot: this.repoRoot, imageName: this.env.DOCKER_DEFAULT_IMAGE });
+    return resolveBaseImage({ imageName: this.env.DOCKER_DEFAULT_IMAGE });
   }
 
   async create(opts: CreateSandboxOptions): Promise<DockerSandbox> {
     const imageName = resolveBaseImage({
-      repoRoot: this.repoRoot,
       imageName: opts.providerSnapshotId ?? this.defaultSnapshotId,
     });
     const entrypointArguments = opts.entrypointArguments;

@@ -12,14 +12,15 @@ if (!gitInfo) {
   throw new Error("Failed to resolve git info for local Docker shell.");
 }
 
-const imageName =
-  process.env.DOCKER_DEFAULT_IMAGE ??
-  process.env.LOCAL_DOCKER_IMAGE_NAME ??
-  "iterate-sandbox:local";
+const imageName = process.env.DOCKER_DEFAULT_IMAGE;
+if (!imageName) {
+  console.error("DOCKER_DEFAULT_IMAGE is not set. Build an image first with: pnpm sandbox build");
+  process.exit(1);
+}
 
 const inspect = spawnSync("docker", ["image", "inspect", imageName], { stdio: "ignore" });
 if (inspect.status !== 0) {
-  throw new Error(`Image not found: ${imageName}. Run 'pnpm docker:build'.`);
+  throw new Error(`Image not found: ${imageName}. Run 'pnpm sandbox build'.`);
 }
 
 const tty = Boolean(process.stdout.isTTY && process.stdin.isTTY);

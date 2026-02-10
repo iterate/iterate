@@ -266,7 +266,7 @@ const Env = z.object({
   DAYTONA_API_KEY: Required,
   DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
-  VITE_DAYTONA_DEFAULT_SNAPSHOT: Optional,
+
   DAYTONA_DEFAULT_AUTO_STOP_MINUTES: NonEmpty.default("0"), // minutes, 0 = disabled
   DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_DAYTONA_ENABLED: BoolyString,
@@ -489,6 +489,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
+    /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
     LOCAL_DOCKER_REPO_CHECKOUT: "",
@@ -505,10 +506,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
-    const imageName =
-      process.env.DOCKER_DEFAULT_IMAGE ??
-      process.env.LOCAL_DOCKER_IMAGE_NAME ??
-      "iterate-sandbox:local";
+    const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
 
     Object.assign(dockerBindings, {
       DOCKER_DEFAULT_IMAGE: imageName,

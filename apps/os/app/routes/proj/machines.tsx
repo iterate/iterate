@@ -27,8 +27,24 @@ import { EmptyState } from "../../components/empty-state.tsx";
 import { MachineTable } from "../../components/machine-table.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 
-const DEFAULT_DAYTONA_SNAPSHOT_NAME =
-  import.meta.env.VITE_DAYTONA_DEFAULT_SNAPSHOT ?? import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
+/** Metadata key used by each provider to override the default image/snapshot */
+const SNAPSHOT_META: Record<string, { key: string; label: string; placeholder: string }> = {
+  daytona: {
+    key: "snapshotName",
+    label: "Snapshot",
+    placeholder: "iterate-sandbox-sha-<shortSha> (leave blank for default)",
+  },
+  fly: {
+    key: "snapshotName",
+    label: "Image",
+    placeholder: "registry.fly.io/iterate-sandbox-image:sha-<shortSha> (leave blank for default)",
+  },
+  docker: {
+    key: "localDocker.imageName",
+    label: "Image",
+    placeholder: "iterate-sandbox:sha-<shortSha> (leave blank for default)",
+  },
+};
 
 function dateSlug() {
   const d = new Date();
@@ -72,10 +88,14 @@ function ProjectMachinesPage() {
   );
   const sandboxProvider = project.sandboxProvider;
 
-  const [newMachineName, setNewMachineName] = useState(`${sandboxProvider}-${dateSlug()}`);
-  const [newDaytonaSnapshotName, setNewDaytonaSnapshotName] = useState(
-    DEFAULT_DAYTONA_SNAPSHOT_NAME,
+  const { data: defaultSnapshots } = useSuspenseQuery(
+    trpc.machine.getDefaultSnapshots.queryOptions({}),
   );
+  const defaultSnapshotForProvider =
+    defaultSnapshots[sandboxProvider as keyof typeof defaultSnapshots] ?? "";
+
+  const [newMachineName, setNewMachineName] = useState(`${sandboxProvider}-${dateSlug()}`);
+  const [snapshotOverride, setSnapshotOverride] = useState(defaultSnapshotForProvider);
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
     projectSlug: params.projectSlug,
@@ -101,7 +121,7 @@ function ProjectMachinesPage() {
     onSuccess: () => {
       setCreateSheetOpen(false);
       setNewMachineName(`${sandboxProvider}-${dateSlug()}`);
-      setNewDaytonaSnapshotName(DEFAULT_DAYTONA_SNAPSHOT_NAME);
+      setSnapshotOverride(sandboxProvider === "daytona" ? DEFAULT_DAYTONA_SNAPSHOT_NAME : "");
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -162,17 +182,22 @@ function ProjectMachinesPage() {
     const trimmedName = newMachineName.trim();
     if (!trimmedName) return;
 
-    if (sandboxProvider === "daytona") {
-      const snapshotName = newDaytonaSnapshotName.trim();
-      if (!snapshotName) {
-        toast.error("Snapshot name is required");
-        return;
+    const snapshot = snapshotOverride.trim();
+    const meta = SNAPSHOT_META[sandboxProvider];
+
+    // Build metadata from the snapshot override
+    let metadata: Record<string, unknown> | undefined;
+    if (snapshot && meta) {
+      if (meta.key.includes(".")) {
+        // Nested key like "localDocker.imageName"
+        const [parent, child] = meta.key.split(".");
+        metadata = { [parent]: { [child]: snapshot } };
+      } else {
+        metadata = { [meta.key]: snapshot };
       }
-      createMachine.mutate({ name: trimmedName, metadata: { snapshotName } });
-      return;
     }
 
-    createMachine.mutate({ name: trimmedName });
+    createMachine.mutate({ name: trimmedName, metadata });
   };
 
   const createSheet = (
@@ -202,17 +227,23 @@ function ProjectMachinesPage() {
               <div className="text-sm font-medium">Sandbox Provider</div>
               <div className="text-sm text-muted-foreground">{sandboxProvider}</div>
             </div>
-            {sandboxProvider === "daytona" && (
+            {SNAPSHOT_META[sandboxProvider] && (
               <div className="space-y-2">
-                <label className="text-sm font-medium">Snapshot Name</label>
+                <label className="text-sm font-medium">
+                  {SNAPSHOT_META[sandboxProvider].label}
+                </label>
                 <Input
-                  placeholder="iterate-sandbox-<sha>"
-                  value={newDaytonaSnapshotName}
-                  onChange={(e) => setNewDaytonaSnapshotName(e.target.value)}
+                  placeholder={SNAPSHOT_META[sandboxProvider].placeholder}
+                  value={snapshotOverride}
+                  onChange={(e) => setSnapshotOverride(e.target.value)}
                   disabled={createMachine.isPending}
                   autoComplete="off"
                   data-1p-ignore
                 />
+                <p className="text-xs text-muted-foreground">
+                  Override the default {SNAPSHOT_META[sandboxProvider].label.toLowerCase()}. Leave
+                  blank to use the Doppler default.
+                </p>
               </div>
             )}
           </div>

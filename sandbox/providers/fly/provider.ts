@@ -18,7 +18,6 @@ const DEFAULT_WEB_INTERNAL_PORT = 3000;
 const DEFAULT_SERVICE_PORTS = [3001, 4096, 7777, 9876];
 const DEFAULT_FLY_ORG = "iterate";
 const DEFAULT_FLY_REGION = "lhr";
-const DEFAULT_FLY_IMAGE = "registry.fly.io/iterate-sandbox-image:main";
 const DEFAULT_FLY_MACHINE_CPUS = 2;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
@@ -30,7 +29,11 @@ const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
   FLY_ORG: z.string().default(DEFAULT_FLY_ORG),
   FLY_DEFAULT_REGION: z.string().default(DEFAULT_FLY_REGION),
-  FLY_DEFAULT_IMAGE: z.string().default(DEFAULT_FLY_IMAGE),
+  FLY_DEFAULT_IMAGE: z
+    .string()
+    .describe(
+      "Fully-qualified image tag, e.g. registry.fly.io/iterate-sandbox-image:sha-abc123. Set via Doppler.",
+    ),
   FLY_DEFAULT_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
   FLY_DEFAULT_MEMORY_MB: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_MEMORY_MB),
   FLY_APP_NAME_PREFIX: z.string(),

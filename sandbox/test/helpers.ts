@@ -9,15 +9,9 @@
  *
  * SANDBOX_TEST_SNAPSHOT_ID
  *   Image/snapshot override to use for tests.
- *   Default for Docker: "iterate-sandbox:local" (with fallback resolution in provider)
- *   Default for Fly: "registry.fly.io/iterate-sandbox-image:main"
+ *   Default for Docker: uses DOCKER_DEFAULT_IMAGE env var
+ *   Default for Fly: uses FLY_DEFAULT_IMAGE env var
  *   Default for Daytona: reads from DAYTONA_DEFAULT_SNAPSHOT env var
- *
- * SANDBOX_TEST_BASE_DOCKER_IMAGE
- *   Base image used by provider smoke tests (docker only).
- *
- * SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT
- *   Base snapshot used by provider smoke tests (daytona only).
  *
  * RUN_SANDBOX_TESTS
  *   Set to "true" to enable sandbox integration tests (they're slow).
@@ -112,9 +106,9 @@ export const TEST_CONFIG = {
 } as const;
 
 const TEST_BASE_SNAPSHOTS = {
-  docker: process.env.SANDBOX_TEST_BASE_DOCKER_IMAGE ?? "iterate-sandbox:local",
-  daytona: process.env.SANDBOX_TEST_BASE_DAYTONA_SNAPSHOT ?? "daytona-small",
-  fly: process.env.SANDBOX_TEST_BASE_FLY_IMAGE ?? "registry.fly.io/iterate-sandbox-image:main",
+  docker: process.env.DOCKER_DEFAULT_IMAGE ?? "",
+  daytona: process.env.DAYTONA_DEFAULT_SNAPSHOT ?? "",
+  fly: process.env.FLY_DEFAULT_IMAGE ?? "",
 } as const;
 
 export const TEST_BASE_SNAPSHOT_ID = TEST_BASE_SNAPSHOTS[TEST_CONFIG.provider];

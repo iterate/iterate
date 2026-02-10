@@ -1,81 +1,74 @@
 /**
- * Build Docker sandbox image using Depot.
+ * Build sandbox image using Depot.
  *
- * Uses depot build for persistent layer caching across CI runs.
- * Depot handles caching automatically - no --cache-from/--cache-to needed.
+ * Pushes to Fly registry and Depot registry when tokens are available.
+ * Tags use the format: sha-{shortSha}[-dirty]
+ *
+ * Env vars:
+ *   SANDBOX_BUILD_PLATFORM    Target platform(s) (default: linux/amd64,linux/arm64)
+ *   SANDBOX_SKIP_LOAD         Skip --load into local Docker (default: false)
+ *   SANDBOX_PUSH_FLY_REGISTRY Push to Fly registry (default: auto based on FLY_API_TOKEN)
+ *   SANDBOX_UPDATE_DOPPLER    Update Doppler after build (default: true)
+ *   SANDBOX_DOPPLER_CONFIGS   Comma-separated Doppler configs to update (default: current)
  */
 import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DEFAULT_BUILD_PLATFORM = "linux/amd64,linux/arm64";
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
-const gitSha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
-const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM || DEFAULT_BUILD_PLATFORM;
+
+// --- Git info ---
+const gitShaFull = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+const gitShaShort = gitShaFull.slice(0, 7);
+const isDirty = (() => {
+  try {
+    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
+    return status.trim().length > 0;
+  } catch {
+    return false;
+  }
+})();
+
+/** Universal tag suffix: sha-{shortSha}[-dirty] */
+const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
+
+// --- Config ---
+const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM || "linux/amd64,linux/arm64";
+const isMultiPlatform = buildPlatform.includes(",");
+const skipLoad = process.env.SANDBOX_SKIP_LOAD === "true";
+const shouldUpdateDoppler = process.env.SANDBOX_UPDATE_DOPPLER !== "false";
+const dopplerConfigsToUpdate = process.env.SANDBOX_DOPPLER_CONFIGS?.split(",").filter(Boolean);
 const builtBy = process.env.ITERATE_USER ?? "unknown";
-const useDepotRegistry = process.env.SANDBOX_USE_DEPOT_REGISTRY === "true";
-const depotSaveTag = process.env.SANDBOX_DEPOT_SAVE_TAG;
+
+// --- Fly registry ---
 const flyApiToken = process.env.FLY_API_TOKEN;
-const flyOrg = process.env.FLY_ORG ?? "iterate";
 const flyRegistryApp = process.env.SANDBOX_FLY_REGISTRY_APP ?? "iterate-sandbox-image";
 const flyRegistryRepository = `registry.fly.io/${flyRegistryApp}`;
 const pushFlyRegistryEnv = process.env.SANDBOX_PUSH_FLY_REGISTRY;
-const shouldPushFlyRegistry = pushFlyRegistryEnv === "true";
-const shouldPushFlyMainTag = process.env.SANDBOX_PUSH_FLY_REGISTRY_MAIN === "true";
-const configuredFlyRegistryImageNames = shouldPushFlyRegistry
-  ? [
-      `${flyRegistryRepository}:sha-${gitSha}`,
-      ...(shouldPushFlyMainTag ? [`${flyRegistryRepository}:main`] : []),
-    ]
-  : [];
+const shouldPushFlyRegistry =
+  pushFlyRegistryEnv === "false" ? false : pushFlyRegistryEnv === "true" || Boolean(flyApiToken);
 
-// Detect multi-platform builds (comma-separated platforms)
-const isMultiPlatform = buildPlatform.includes(",");
-
-// Local tag for Docker provider and tests
-const localImageName =
-  process.env.DOCKER_DEFAULT_IMAGE ??
-  process.env.LOCAL_DOCKER_IMAGE_NAME ??
-  "iterate-sandbox:local";
-
-// Optional registry image name for multi-platform builds (when callers want push output)
-const registryImageNameFromEnv = process.env.REGISTRY_IMAGE_NAME;
-
-function runFlyctl(params: { command: string[]; token: string }): void {
-  const { command, token } = params;
-  execFileSync("flyctl", command, {
-    cwd: repoRoot,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      FLY_ACCESS_TOKEN: token,
-    },
-  });
+// --- Depot registry ---
+function readDepotProjectId(): string {
+  const config = JSON.parse(readFileSync(join(repoRoot, "depot.json"), "utf-8")) as { id?: string };
+  if (!config.id) throw new Error("Missing depot project id in depot.json");
+  return config.id;
 }
+const depotProjectId = readDepotProjectId();
 
-function flyRegistryAppExists(token: string): boolean {
-  const output = execFileSync("flyctl", ["apps", "list", "-o", flyOrg, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      FLY_ACCESS_TOKEN: token,
-    },
-  });
-  const apps = JSON.parse(output) as Array<{ Name?: string }>;
-  return apps.some((app) => app.Name === flyRegistryApp);
-}
+// --- Derived tags ---
+const localImageTag = `iterate-sandbox:${tagSuffix}`;
+const flyImageTag = `${flyRegistryRepository}:${tagSuffix}`;
+const depotImageTag = `registry.depot.dev/${depotProjectId}:${tagSuffix}`;
 
-function ensureFlyRegistryApp(token: string): void {
-  if (flyRegistryAppExists(token)) {
-    return;
-  }
-  runFlyctl({ command: ["apps", "create", flyRegistryApp, "-o", flyOrg, "-y"], token });
-}
-
-function ensureFlyDockerAuth(token: string): void {
+// --- Fly auth ---
+function ensureFlyAuth(token: string): void {
   try {
-    runFlyctl({ command: ["auth", "docker", "-t", token], token });
+    execFileSync("flyctl", ["auth", "docker", "-t", token], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: { ...process.env, FLY_ACCESS_TOKEN: token },
+    });
   } catch {
     execFileSync("docker", ["login", "registry.fly.io", "-u", "x", "--password-stdin"], {
       cwd: repoRoot,
@@ -85,165 +78,100 @@ function ensureFlyDockerAuth(token: string): void {
   }
 }
 
-function ensureFlyRegistryReady(token: string): void {
-  ensureFlyRegistryApp(token);
-  ensureFlyDockerAuth(token);
-}
+// --- Resolve push tags ---
+const pushTags: string[] = [];
 
-function readDepotProjectId(): string {
-  const depotConfigPath = join(repoRoot, "depot.json");
-  const config = JSON.parse(readFileSync(depotConfigPath, "utf-8")) as { id?: string };
-  if (!config.id) {
-    throw new Error("Missing depot project id in depot.json");
-  }
-  return config.id;
-}
-
-const depotProjectId = useDepotRegistry ? readDepotProjectId() : null;
-const depotRegistryImageName =
-  useDepotRegistry && depotSaveTag ? `registry.depot.dev/${depotProjectId}:${depotSaveTag}` : null;
-const registryImageName = registryImageNameFromEnv;
-
-// Ensure cache directory exists
-const cacheDir = join(repoRoot, ".cache");
-mkdirSync(cacheDir, { recursive: true });
-
-if (useDepotRegistry && isMultiPlatform) {
-  console.error("Error: SANDBOX_USE_DEPOT_REGISTRY is only supported for single-platform builds");
-  console.error("Use REGISTRY_IMAGE_NAME for multi-platform builds.");
-  process.exit(1);
-}
-
-if (useDepotRegistry && !depotSaveTag) {
-  console.error("Error: SANDBOX_DEPOT_SAVE_TAG is required when SANDBOX_USE_DEPOT_REGISTRY=true");
-  console.error("Example: SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-ci-1234");
-  process.exit(1);
-}
-
-let flyRegistryImageNames = configuredFlyRegistryImageNames;
-let integratedFlyPushTags: string[] = [];
-
-if (flyRegistryImageNames.length > 0) {
+if (shouldPushFlyRegistry) {
   if (!flyApiToken) {
-    const message = "Skipping Fly registry push because FLY_API_TOKEN is not set in environment";
     if (pushFlyRegistryEnv === "true") {
-      throw new Error(message);
+      throw new Error("SANDBOX_PUSH_FLY_REGISTRY=true but FLY_API_TOKEN is not set");
     }
-    console.warn(message);
-    flyRegistryImageNames = [];
-  } else if (isMultiPlatform || useDepotRegistry) {
-    ensureFlyRegistryReady(flyApiToken);
-    integratedFlyPushTags = flyRegistryImageNames;
+    console.warn("Skipping Fly registry push: FLY_API_TOKEN not set");
   } else {
-    const message =
-      "Fly registry push requires SANDBOX_USE_DEPOT_REGISTRY=true (or a multi-platform --push build)";
-    if (pushFlyRegistryEnv === "true") {
-      throw new Error(message);
-    }
-    console.warn(`Skipping Fly registry push: ${message}`);
-    flyRegistryImageNames = [];
+    ensureFlyAuth(flyApiToken);
+    pushTags.push(flyImageTag);
   }
 }
 
-const pushTagsForBuild = isMultiPlatform
-  ? [registryImageName, ...integratedFlyPushTags].filter((tag): tag is string => Boolean(tag))
-  : [];
+// --- Build ---
+const wantsLoad = !skipLoad;
+const wantsPush = pushTags.length > 0;
+
 const outputArgs: string[] = [];
-if (isMultiPlatform) {
-  outputArgs.push("--load", "-t", localImageName);
-  if (pushTagsForBuild.length > 0) {
-    outputArgs.push("--push", ...pushTagsForBuild.flatMap((tag) => ["-t", tag]));
-  }
-} else if (useDepotRegistry) {
-  outputArgs.push("--save", "--save-tag", depotSaveTag!);
-  if (integratedFlyPushTags.length > 0) {
-    outputArgs.push("--push", ...integratedFlyPushTags.flatMap((tag) => ["-t", tag]));
-  }
-} else {
-  outputArgs.push("--load", "-t", localImageName);
+// Always save to Depot registry
+outputArgs.push("--save", "--save-tag", tagSuffix);
+
+if (wantsLoad && wantsPush) {
+  outputArgs.push("--load", "--push", ...pushTags.flatMap((tag) => ["-t", tag]));
+} else if (wantsLoad && !wantsPush) {
+  outputArgs.push("--load", "-t", localImageTag);
+} else if (wantsPush) {
+  outputArgs.push("--push", ...pushTags.flatMap((tag) => ["-t", tag]));
 }
 
-// Use depot build for persistent layer caching
-// depot build accepts the same parameters as docker build
 const buildArgs = [
   "depot",
   "build",
   "--platform",
   buildPlatform,
-  "--progress=plain", // Show all layer details for cache analysis
+  "--progress=plain",
   ...outputArgs,
   "-f",
   "sandbox/Dockerfile",
   "--build-arg",
-  `GIT_SHA=${gitSha}`,
+  `GIT_SHA=${gitShaFull}`,
   "--label",
   `com.iterate.built_by=${builtBy}`,
   ".",
 ];
 
-const quoteArg = (arg: string) => (/\s/.test(arg) ? `"${arg}"` : arg);
-const buildCommand = buildArgs.map(quoteArg).join(" ");
+console.log(`Tag suffix: ${tagSuffix}${isDirty ? " (dirty)" : ""}`);
+console.log(`Platform: ${buildPlatform}`);
+console.log(`Local image: ${localImageTag}`);
+console.log(`Depot registry: ${depotImageTag}`);
+if (pushTags.length > 0) console.log(`Push tags: ${pushTags.join(", ")}`);
+if (wantsLoad) console.log("Loading into local Docker daemon");
 
-if (isMultiPlatform) {
-  console.log(`Multi-platform build: ${buildPlatform}`);
-  console.log(`Local image tag: ${localImageName}`);
-  if (registryImageName) {
-    console.log(`Registry image: ${registryImageName}`);
-  }
-} else if (useDepotRegistry) {
-  console.log(`Depot registry image: ${depotRegistryImageName}`);
-  console.log(`Depot save tag: ${depotSaveTag}`);
-  console.log(`Platform: ${buildPlatform}`);
-} else {
-  console.log(`Local image tag: ${localImageName}`);
-  console.log(`Platform: ${buildPlatform}`);
-}
-if (flyRegistryImageNames.length > 0) {
-  console.log(`Fly registry push (integrated depot push): ${flyRegistryImageNames.join(", ")}`);
-}
-console.log("Build command:");
-console.log(buildCommand);
-
-// 15-minute timeout for depot build (fails fast instead of GitHub's 6-hour default)
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
-
 execFileSync(buildArgs[0], buildArgs.slice(1), {
   cwd: repoRoot,
   stdio: "inherit",
   timeout: BUILD_TIMEOUT_MS,
 });
 
-const pushedFlyImages = integratedFlyPushTags;
+// When --load + --push were combined, the loaded tag is the push tag — re-tag locally
+if (wantsLoad && wantsPush) {
+  const loadedTag = pushTags[0];
+  console.log(`Re-tagging ${loadedTag} → ${localImageTag}`);
+  execFileSync("docker", ["tag", loadedTag, localImageTag], { cwd: repoRoot, stdio: "inherit" });
+}
 
-// Write build info for downstream scripts (push-docker-image-to-daytona.ts reads this)
-const buildInfoPath = join(cacheDir, "depot-build-info.json");
-writeFileSync(
-  buildInfoPath,
-  JSON.stringify(
-    {
-      localImageName: useDepotRegistry ? null : localImageName,
-      registryImageName: isMultiPlatform ? registryImageName : null,
-      depotRegistryImageName,
-      depotSaveTag: useDepotRegistry ? depotSaveTag : null,
-      depotProjectId,
-      gitSha,
-      builtBy,
-      buildPlatform,
-      isMultiPlatform,
-      useDepotRegistry,
-      flyRegistryImageNames: pushedFlyImages,
-      flyRegistryRepository: pushedFlyImages.length > 0 ? flyRegistryRepository : null,
-    },
-    null,
-    2,
-  ),
-);
-console.log(`Build info written to: ${buildInfoPath}`);
+// --- Update Doppler ---
+function getCurrentDopplerConfig(): string | undefined {
+  try {
+    const info = JSON.parse(
+      execSync("doppler configs get --json", { cwd: repoRoot, encoding: "utf-8" }),
+    ) as { name?: string };
+    return info.name ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
-// Output the image name for CI to use
-const outputImageName = isMultiPlatform
-  ? (registryImageName ?? localImageName)
-  : useDepotRegistry
-    ? depotRegistryImageName!
-    : localImageName;
-console.log(`image_name=${outputImageName}`);
+if (pushTags.includes(flyImageTag) && shouldUpdateDoppler) {
+  const configs = dopplerConfigsToUpdate ?? [getCurrentDopplerConfig()].filter(Boolean);
+  const dopplerProject = process.env.DOPPLER_PROJECT ?? "os";
+  for (const config of configs) {
+    if (!config) continue;
+    console.log(`Updating Doppler (${dopplerProject}/${config}): FLY_DEFAULT_IMAGE=${flyImageTag}`);
+    execSync(
+      `doppler secrets set FLY_DEFAULT_IMAGE=${flyImageTag} --project ${dopplerProject} --config ${config}`,
+      { cwd: repoRoot, stdio: "inherit" },
+    );
+  }
+}
+
+// --- Outputs ---
+console.log(`image_tag=${localImageTag}`);
+console.log(`fly_image_tag=${flyImageTag}`);
+console.log(`depot_image_tag=${depotImageTag}`);

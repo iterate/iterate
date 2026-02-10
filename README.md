@@ -15,7 +15,7 @@ pnpm install
 pnpm docker:up
 pnpm os db:migrate
 docker buildx create --name iterate --driver docker-container --use
-pnpm docker:build
+pnpm sandbox build
 pnpm os dev
 ```
 
@@ -53,5 +53,5 @@ DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 Build a daytona snapshot and write DAYTONA_DEFAULT_SNAPSHOT to your daytona config (needs `brew install daytonaio/cli/daytona`)
 
 ```bash
-pnpm build:daytona
+pnpm sandbox daytona:push
 ```

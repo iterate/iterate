@@ -1,25 +1,20 @@
 /**
  * Push local Docker sandbox image to Daytona as a snapshot.
  *
- * Usage: pnpm build:daytona [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
+ * Usage: pnpm sandbox daytona:push [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
  *
- * This script expects the image to already be built with `pnpm docker:build`,
- * which loads the image into local Docker daemon. By default, uses the most recently built :local image.
+ * Expects the image to already be built with `pnpm sandbox build`.
+ * By default derives the local image tag from git (iterate-sandbox:sha-{shortSha}[-dirty]).
  *
- * Resource limits can be set via env vars (DAYTONA_DEFAULT_SNAPSHOT_CPU, DAYTONA_DEFAULT_SNAPSHOT_MEMORY, DAYTONA_DEFAULT_SNAPSHOT_DISK)
- * or CLI args. CLI args override env vars. Defaults: cpu=2, memory=4, disk=10.
- *
- * We intentionally avoid the `--dockerfile` flow because we rely on BuildKit
- * features (buildx) and Daytona's Dockerfile builder does not support them.
+ * Snapshot name format: iterate-sandbox-sha-{shortSha}[-dirty]
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
-// Daytona CLI doesn't respect Docker contexts, so we need to set DOCKER_HOST explicitly.
-// Auto-detect OrbStack socket if DOCKER_HOST is not already set.
+// Daytona CLI doesn't respect Docker contexts — auto-detect OrbStack socket.
 if (!process.env.DOCKER_HOST) {
   const orbstackSocket = join(homedir(), ".orbstack/run/docker.sock");
   if (existsSync(orbstackSocket)) {
@@ -29,8 +24,25 @@ if (!process.env.DOCKER_HOST) {
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
-const builtBy = process.env.ITERATE_USER ?? "unknown";
+// --- Git info ---
+const gitShaShort = execSync("git rev-parse --short=7 HEAD", {
+  cwd: repoRoot,
+  encoding: "utf-8",
+}).trim();
 
+const isDirty = (() => {
+  try {
+    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
+    return status.trim().length > 0;
+  } catch {
+    return false;
+  }
+})();
+
+/** Universal tag suffix matching build-image.ts */
+const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
+
+// --- CLI args ---
 const { values } = parseArgs({
   options: {
     name: { type: "string", short: "n" },
@@ -52,13 +64,10 @@ const { values } = parseArgs({
   allowNegative: true,
 });
 
-// Ensure CI=true for non-interactive mode (Daytona CLI checks this)
+// --- Daytona CLI setup ---
 const daytonaEnv = { ...process.env, CI: "true" };
-
 execSync("daytona --version", { stdio: "ignore", env: daytonaEnv });
 
-// Authenticate with Daytona API if key is provided
-// Note: "daytona organization use" doesn't work with API key auth - org is scoped to the key
 const daytonaApiKey = process.env.DAYTONA_API_KEY ?? "";
 if (daytonaApiKey) {
   execSync(`daytona login --api-key "${daytonaApiKey}"`, {
@@ -68,57 +77,20 @@ if (daytonaApiKey) {
   });
 }
 
-// Read Depot build info to get local image name and git sha
-const depotBuildInfoPath = join(repoRoot, ".cache", "depot-build-info.json");
-let depotBuildInfo: {
-  localImageName?: string;
-  gitSha?: string;
-} = {};
+// --- Resolve local image ---
+const localImageName = values.image ?? `iterate-sandbox:${tagSuffix}`;
 
-if (existsSync(depotBuildInfoPath)) {
-  try {
-    depotBuildInfo = JSON.parse(readFileSync(depotBuildInfoPath, "utf-8"));
-  } catch {
-    console.warn("Warning: Could not parse depot-build-info.json");
-  }
-}
-
-// Get the local image name (loaded by depot build --load)
-// CLI --image flag takes precedence, then depot-build-info.json, then default
-const localImageName = values.image ?? depotBuildInfo.localImageName ?? "iterate-sandbox:local";
-
-// Verify local image exists
 try {
   execSync(`docker image inspect ${localImageName}`, { stdio: "ignore" });
 } catch {
   console.error(`Error: Local image '${localImageName}' not found.`);
-  console.error("Build the image first with: pnpm docker:build");
+  console.error("Build the image first with: pnpm sandbox build");
   process.exit(1);
 }
 console.log(`Local image: ${localImageName}`);
 
-// Generate snapshot name: iterate-sandbox-{sha} with optional -{user}-dirty suffix
-const gitSha = depotBuildInfo.gitSha ?? "unknown";
-
-// Check if repo has uncommitted changes
-const isDirty = (() => {
-  try {
-    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
-    return status.trim().length > 0;
-  } catch {
-    return false;
-  }
-})();
-
-// Format: iterate-sandbox-{sha}[-{user}][-dirty]
-let defaultName = `iterate-sandbox-${gitSha}`;
-if (builtBy !== "unknown") {
-  defaultName += `-${builtBy}`;
-}
-if (isDirty) {
-  defaultName += "-dirty";
-}
-const snapshotName = values.name ?? defaultName;
+// --- Snapshot name ---
+const snapshotName = values.name ?? `iterate-sandbox-${tagSuffix}`;
 
 if (values.name) {
   console.log(`Using snapshot name from --name: ${snapshotName}`);
@@ -130,7 +102,7 @@ console.log(`Pushing Daytona snapshot: ${snapshotName}`);
 console.log(`  image=${localImageName}`);
 console.log(`  cpu=${values.cpu}, memory=${values.memory}, disk=${values.disk}`);
 
-// Check if snapshot already exists
+// --- Check if snapshot already exists ---
 const snapshotAlreadyExists = (() => {
   try {
     const pageLimit = 100;
@@ -147,20 +119,11 @@ const snapshotAlreadyExists = (() => {
           "--page",
           String(page),
         ].join(" "),
-        {
-          cwd: repoRoot,
-          stdio: "pipe",
-          encoding: "utf-8",
-          env: daytonaEnv,
-        },
+        { cwd: repoRoot, stdio: "pipe", encoding: "utf-8", env: daytonaEnv },
       );
       const snapshots = JSON.parse(output) as Array<{ name?: string }>;
-      if (snapshots.some((snapshot) => snapshot.name === snapshotName)) {
-        return true;
-      }
-      if (snapshots.length < pageLimit) {
-        return false;
-      }
+      if (snapshots.some((s) => s.name === snapshotName)) return true;
+      if (snapshots.length < pageLimit) return false;
     }
   } catch (error) {
     console.warn("Warning: unable to list snapshots to check for conflicts.", error);
@@ -171,7 +134,6 @@ const snapshotAlreadyExists = (() => {
 if (snapshotAlreadyExists) {
   console.log("Snapshot already exists (matched by name). Skipping upload.");
 } else {
-  // Push local image to Daytona
   execSync(
     [
       "daytona",
@@ -187,20 +149,14 @@ if (snapshotAlreadyExists) {
       "--disk",
       values.disk!,
     ].join(" "),
-    {
-      cwd: repoRoot,
-      stdio: "inherit",
-      env: daytonaEnv,
-    },
+    { cwd: repoRoot, stdio: "inherit", env: daytonaEnv },
   );
 }
 
+// --- Update Doppler ---
 if (values["update-doppler"]) {
   const dopplerInfo = JSON.parse(
-    execSync("doppler configs get --json", {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    }),
+    execSync("doppler configs get --json", { cwd: repoRoot, encoding: "utf-8" }),
   ) as { name?: string; project?: string };
   const dopplerConfig = dopplerInfo.name;
   const dopplerProject = dopplerInfo.project ?? "os";
@@ -208,22 +164,10 @@ if (values["update-doppler"]) {
     throw new Error("Unable to determine Doppler config name.");
   }
   console.log(
-    [
-      `Updating Doppler (${dopplerProject}/${dopplerConfig}):`,
-      `DAYTONA_DEFAULT_SNAPSHOT=${snapshotName}`,
-      "VITE_DAYTONA_DEFAULT_SNAPSHOT='${DAYTONA_DEFAULT_SNAPSHOT}'",
-    ].join(" "),
+    `Updating Doppler (${dopplerProject}/${dopplerConfig}): DAYTONA_DEFAULT_SNAPSHOT=${snapshotName}`,
   );
   execSync(
-    [
-      "doppler secrets set",
-      `DAYTONA_DEFAULT_SNAPSHOT=${snapshotName}`,
-      "VITE_DAYTONA_DEFAULT_SNAPSHOT='${DAYTONA_DEFAULT_SNAPSHOT}'",
-      "--project",
-      dopplerProject,
-      "--config",
-      dopplerConfig,
-    ].join(" "),
+    `doppler secrets set DAYTONA_DEFAULT_SNAPSHOT=${snapshotName} --project ${dopplerProject} --config ${dopplerConfig}`,
     { cwd: repoRoot, stdio: "inherit" },
   );
 }

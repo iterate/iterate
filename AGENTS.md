@@ -40,7 +40,7 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- pnpm build:daytona
+doppler run --config dev -- pnpm sandbox daytona:push
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR
@@ -217,3 +217,4 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - Vitest patterns: `docs/vitest-patterns.md`
 - Architecture: `docs/architecture.md`
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
+- Sandbox image pipeline (build, tag, push, CI): `sandbox/README.md`

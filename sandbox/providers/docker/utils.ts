@@ -79,14 +79,6 @@ export function getComposeProjectName(repoRoot: string): string {
 }
 
 /**
- * Get default compose project name from repo root basename.
- */
-function getDefaultComposeProjectName(repoRoot: string): string {
-  const repoName = basename(repoRoot);
-  return repoName.toLowerCase().replace(/[^a-z0-9-]/g, "");
-}
-
-/**
  * Get environment variables for Docker provider.
  */
 export function getDockerEnvVars(repoRoot: string): Record<string, string> {
@@ -110,41 +102,17 @@ export function getDockerEnvVars(repoRoot: string): Record<string, string> {
 
 /**
  * Resolve the base image for Docker containers.
- * Prefers local tags, then baked main tags, then compose-derived fallback.
+ * Strict: requires explicit image name or DOCKER_DEFAULT_IMAGE env var.
  */
-export function resolveBaseImage(params: { repoRoot: string; imageName?: string }): string {
-  const { repoRoot, imageName } = params;
-  if (imageName) {
-    return imageName;
+export function resolveBaseImage(params: { repoRoot?: string; imageName?: string }): string {
+  const image = params.imageName ?? process.env.DOCKER_DEFAULT_IMAGE;
+  if (!image) {
+    throw new Error(
+      "No sandbox image specified. Set DOCKER_DEFAULT_IMAGE or pass imageName. " +
+        "Build an image with: pnpm sandbox build",
+    );
   }
-
-  const envImage = process.env.DOCKER_DEFAULT_IMAGE;
-  if (envImage) {
-    return envImage;
-  }
-
-  const localDefaults = ["iterate-sandbox:local"];
-  for (const localDefault of localDefaults) {
-    try {
-      execSync(`docker image inspect ${localDefault}`, { stdio: "ignore" });
-      return localDefault;
-    } catch {
-      // fall through
-    }
-  }
-
-  const bakedDefaults = ["iterate-sandbox:main", "registry.fly.io/iterate-sandbox-image:main"];
-  for (const bakedDefault of bakedDefaults) {
-    try {
-      execSync(`docker image inspect ${bakedDefault}`, { stdio: "ignore" });
-      return bakedDefault;
-    } catch {
-      // fall through
-    }
-  }
-
-  const baseProjectName = getDefaultComposeProjectName(repoRoot);
-  return `${baseProjectName}-sandbox`;
+  return image;
 }
 
 /**

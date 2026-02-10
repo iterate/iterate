@@ -1,17 +1,142 @@
 # Sandbox
 
-Minimal, single-image setup. Depot/Fly-registry-backed. Host sync uses rsync into the baked repo path.
+Minimal, single-image setup. Depot builds with Fly and Depot registry pushes. Host sync uses rsync into the baked repo path.
 
-## TL;DR
+## Image tagging
 
-- Image: `iterate-sandbox` (local) and `registry.fly.io/iterate-sandbox-image` (remote)
-- Tags: `main`, `sha-<sha>`, `local`
-- Repo path in container: `/home/iterate/src/github.com/iterate/iterate`
-- pnpm store: `/home/iterate/.pnpm-store` (volume `iterate-pnpm-store`)
-- Dev sync mounts (read-only):
-  - `/host/repo-checkout` (repo worktree)
-  - `/host/gitdir` (worktree git dir)
-  - `/host/commondir` (main .git)
+One universal tag format across all providers:
+
+```
+sha-{7charShortSha}[-dirty]
+```
+
+- `sha-abc1234` = clean build of that commit
+- `sha-abc1234-dirty` = built with uncommitted changes on top of that commit
+- CI builds are always clean (no `-dirty`). Local builds append `-dirty` when `git status --porcelain` is non-empty.
+
+| Provider       | Full identifier                                             |
+| -------------- | ----------------------------------------------------------- |
+| Docker local   | `iterate-sandbox:sha-abc1234`                               |
+| Fly registry   | `registry.fly.io/iterate-sandbox-image:sha-abc1234`         |
+| Depot registry | `registry.depot.dev/{depotProjectId}:sha-abc1234`           |
+| Daytona        | `iterate-sandbox-sha-abc1234` (no colons in snapshot names) |
+
+No mutable tags (`:local`, `:latest`, `:main`). Every tag is immutable and commit-based.
+
+## Registries
+
+| Registry                              | Purpose                                          |
+| ------------------------------------- | ------------------------------------------------ |
+| Local Docker daemon                   | Development — run sandboxes locally              |
+| Fly registry (`registry.fly.io`)      | Fly provider pulls images from here at runtime   |
+| Depot registry (`registry.depot.dev`) | CI artifact storage, fast pulls on Depot runners |
+| Daytona snapshots                     | Daytona provider creates sandboxes from these    |
+
+Both Fly and Depot registries are pushed to automatically when their respective tokens are available (`FLY_API_TOKEN` for Fly, Depot OIDC for Depot).
+
+## How defaults work
+
+```
+Doppler env var (per config: dev/stg/prd)
+  │
+  ▼
+Provider.defaultSnapshotId
+  │
+  ▼  (can be overridden by)
+Machine metadata (per-machine override in create-machine UI)
+  │
+  ▼
+Actual image used for sandbox creation
+```
+
+| Provider | Default env var            | Format                                              |
+| -------- | -------------------------- | --------------------------------------------------- |
+| Docker   | `DOCKER_DEFAULT_IMAGE`     | `iterate-sandbox:sha-abc1234`                       |
+| Fly      | `FLY_DEFAULT_IMAGE`        | `registry.fly.io/iterate-sandbox-image:sha-abc1234` |
+| Daytona  | `DAYTONA_DEFAULT_SNAPSHOT` | `iterate-sandbox-sha-abc1234`                       |
+
+The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` tRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
+
+## Build
+
+### Quick reference
+
+```bash
+# Build image (pushes to Fly + Depot registries when tokens available, loads locally)
+pnpm sandbox build
+
+# Build without loading into local Docker (faster, registry-only)
+SANDBOX_SKIP_LOAD=true pnpm sandbox build
+
+# Push local image to Daytona as snapshot (updates your Doppler config)
+pnpm sandbox daytona:push
+
+# Push with custom name
+pnpm sandbox daytona:push --name my-custom-snapshot
+```
+
+### Build script: `pnpm sandbox build`
+
+Runs `sandbox/providers/docker/build-image.ts` via Depot for persistent layer caching.
+
+| Env var                     | Description                               | Default                         |
+| --------------------------- | ----------------------------------------- | ------------------------------- |
+| `SANDBOX_BUILD_PLATFORM`    | Target platform(s)                        | `linux/amd64,linux/arm64`       |
+| `SANDBOX_SKIP_LOAD`         | Skip `--load` into local Docker           | `false`                         |
+| `SANDBOX_PUSH_FLY_REGISTRY` | Push to Fly registry                      | auto (based on `FLY_API_TOKEN`) |
+| `SANDBOX_UPDATE_DOPPLER`    | Update Doppler after Fly push             | `true`                          |
+| `SANDBOX_DOPPLER_CONFIGS`   | Comma-separated Doppler configs to update | current config                  |
+
+The build always saves to Depot registry (`--save`). Fly registry push happens automatically when `FLY_API_TOKEN` is available.
+
+Local builds auto-update your current Doppler config with the new `FLY_DEFAULT_IMAGE`. You can override to a different image by editing Doppler manually.
+
+### Daytona snapshot: `pnpm sandbox daytona:push`
+
+Pushes the local Docker image to Daytona as a named snapshot.
+
+```bash
+pnpm sandbox daytona:push [--name NAME] [--image IMAGE] [--cpu N] [--memory N] [--disk N] [--no-update-doppler]
+```
+
+Snapshot name format: `iterate-sandbox-sha-{shortSha}[-dirty]`.
+
+### Direct Docker build (no Depot)
+
+```bash
+docker buildx build --load -f sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
+```
+
+## CI pipeline
+
+### On PR
+
+```
+1. build-sandbox-image (push to Fly + Depot registries)
+2a. Docker sandbox tests    (needs: build-sandbox-image)
+2b. Push Daytona snapshot   (needs: build-sandbox-image)
+3.  Daytona e2e tests       (needs: push-daytona-snapshot)
+```
+
+### On main merge
+
+```
+1. build-sandbox-image (push to Fly + Depot registries)
+2. push-daytona-snapshot (needs: build-sandbox-image)
+3. Update Doppler defaults (FLY_DEFAULT_IMAGE + DAYTONA_DEFAULT_SNAPSHOT for dev/stg/prd)
+4. Deploy OS worker (needs: push-daytona-snapshot)
+```
+
+### CI workflows
+
+| Workflow              | File                        | Purpose                                          |
+| --------------------- | --------------------------- | ------------------------------------------------ |
+| Build Sandbox Image   | `build-sandbox-image.yml`   | Builds image, pushes to Fly + Depot registries   |
+| Push Daytona Snapshot | `push-daytona-snapshot.yml` | Pushes local image to Daytona                    |
+| CI                    | `ci.yml`                    | Orchestrates build → push → deploy on main merge |
+| Sandbox Tests         | `sandbox-test.yml`          | Build + test across all providers                |
+
+All CI workflows are defined as TypeScript in `.github/ts-workflows/workflows/` and generated to YAML with `pnpm workflows`.
 
 ## Dependency boundaries
 
@@ -20,196 +145,69 @@ Minimal, single-image setup. Depot/Fly-registry-backed. Host sync uses rsync int
 - `sandbox/*` must not import `apps/os/*` or `apps/daemon/*`.
 - Flow is one-way: `apps/os/backend -> @iterate-com/sandbox -> provider SDKs`.
 
-## Build
-
-Local build (uses current repo checkout):
-
-```bash
-pnpm docker:build
-```
-
-Default local build platform is multi-arch: `linux/amd64,linux/arm64`.
-Override with `SANDBOX_BUILD_PLATFORM` (for example `linux/arm64`).
-
-For multi-platform local builds, the build is pushed to Depot registry and then the host arch image is pulled/tagged to `iterate-sandbox:local` so the Docker provider can still run it locally.
-
-Push to Fly registry via Depot build:
-
-```bash
-SANDBOX_USE_DEPOT_REGISTRY=true \
-SANDBOX_DEPOT_SAVE_TAG=iterate-sandbox-local-$(date +%s) \
-SANDBOX_PUSH_FLY_REGISTRY=true \
-pnpm docker:build
-```
-
-Direct Docker build:
-
-```bash
-docker buildx build --load -f sandbox/Dockerfile -t iterate-sandbox:local --build-arg GIT_SHA=$(git rev-parse HEAD) .
-```
-
 ## Dev sync mode
 
-Local sandboxes are created by the docker provider (not docker compose).
-The container mounts:
+Local sandboxes (Docker provider) mount host directories read-only:
 
-- `/host/repo-checkout` (repo worktree, read-only)
+- `/host/repo-checkout` (repo worktree)
 - `/host/gitdir` (worktree git dir)
 - `/host/commondir` (main .git)
 
 Entry point rsyncs into `/home/iterate/src/github.com/iterate/iterate` and overlays git metadata.
-If dependencies change, run `pnpm install` inside the container.
 
-### Env vars (compose)
+### Env vars (Docker provider)
 
-- `DOCKER_HOST_GIT_REPO_ROOT` (host repo root)
-- `DOCKER_HOST_GIT_DIR` (worktree git dir)
-- `DOCKER_HOST_GIT_COMMON_DIR` (main .git)
-- `DOCKER_DEFAULT_IMAGE` (optional override; script prefers `:local` if present, else `:main`)
-- `DOCKER_DEFAULT_SERVICE_TRANSPORT` (`port-map` or `cloudflare-tunnel`; default `port-map`)
-- `DOCKER_TUNNEL_PORTS` (optional CSV, default `3000,3001,4096,9876`)
-- `CLOUDFLARE_TUNNEL_HOSTNAME` (optional; if set, pidnap runs a `cloudflared` tunnel process)
-- `CLOUDFLARE_TUNNEL_URL` (optional; defaults to `http://127.0.0.1:3000`)
+| Env var                            | Description                                   |
+| ---------------------------------- | --------------------------------------------- |
+| `DOCKER_HOST_GIT_REPO_ROOT`        | Host repo root                                |
+| `DOCKER_HOST_GIT_DIR`              | Worktree git dir                              |
+| `DOCKER_HOST_GIT_COMMON_DIR`       | Main .git dir                                 |
+| `DOCKER_DEFAULT_IMAGE`             | Image to use                                  |
+| `DOCKER_DEFAULT_SERVICE_TRANSPORT` | `port-map` or `cloudflare-tunnel`             |
+| `DOCKER_TUNNEL_PORTS`              | CSV of ports (default: `3000,3001,4096,9876`) |
 
-These env vars are set by the dev launcher (see `apps/os/alchemy.run.ts`) to keep workerd-safe.
-
-## Daytona snapshots
-
-Create snapshot directly from Dockerfile (builds on Daytona's infra):
-
-```bash
-pnpm build:daytona
-```
-
-Options:
-
-- `--name` / `-n`: Snapshot name (default: `iterate-sandbox-<sha>` or `iterate-sandbox-<sha>-$ITERATE_USER-dirty`)
-- `--cpu` / `-c`: CPU cores (default: 2)
-- `--memory` / `-m`: Memory in GB (default: 4)
-- `--disk` / `-d`: Disk in GB (default: 10)
-
-Example:
-
-```bash
-pnpm build:daytona --name my-snapshot --cpu 4 --memory 8
-```
-
-Requires `daytona` CLI (`daytona login`).
-
-## Push from local
-
-```bash
-FLY_TOKEN="${FLY_API_TOKEN:-}"
-flyctl apps create iterate-sandbox-image -o "$FLY_ORG" -y
-flyctl auth docker -t "$FLY_TOKEN"
-
-depot build --platform linux/amd64 --progress=plain --push \
-  -t registry.fly.io/iterate-sandbox-image:main \
-  -t registry.fly.io/iterate-sandbox-image:sha-$(git rev-parse HEAD) \
-  -f sandbox/Dockerfile .
-```
+Set by the dev launcher (`apps/os/alchemy.run.ts`).
 
 ## Fly app bootstrap and cleanup
 
-Create/ensure env Fly apps and sync Doppler:
-
 ```bash
+# Create/ensure env Fly apps and sync Doppler
 pnpm sandbox fly:bootstrap-apps
+
+# Cleanup stale machines
+pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
 ```
-
-This ensures Fly apps `dev`, `stg`, `prd` exist and sets:
-
-- `os/dev`: `FLY_APP_NAME_PREFIX=dev`
-- `os/stg`: `FLY_APP_NAME_PREFIX=stg`
-- `os/prd`: `FLY_APP_NAME_PREFIX=prd`
-
-To skip Doppler writes:
-
-```bash
-pnpm sandbox fly:bootstrap-apps -- --no-update-doppler
-```
-
-Cleanup stale Fly machines (by `updated_at`):
-
-```bash
-# Usage: pnpm sandbox fly:cleanup -- [timeframe] [action] [appName]
-# Defaults: timeframe=24h, action=stop, appName=FLY_APP_NAME_PREFIX or dev
-
-# Stop stale machines in dev older than 24h (default action)
-pnpm sandbox fly:cleanup -- 24h stop dev
-
-# Delete stale machines in stg older than 7d
-pnpm sandbox fly:cleanup -- 7d delete stg
-```
-
-`fly:cleanup` is intentionally restricted to `dev` and `stg`.
 
 ## Testing
 
-Sandbox integration tests verify Docker, Fly, and Daytona providers.
-
-### Environment Variables
-
-| Variable                   | Description                                   | Default            |
-| -------------------------- | --------------------------------------------- | ------------------ |
-| `RUN_SANDBOX_TESTS`        | Enable sandbox tests (set to `true`)          | (tests skipped)    |
-| `SANDBOX_TEST_PROVIDER`    | Provider to test: `docker`, `fly`, `daytona`  | `docker`           |
-| `SANDBOX_TEST_SNAPSHOT_ID` | Image/snapshot override for selected provider | See defaults below |
-| `KEEP_SANDBOX_CONTAINER`   | Keep containers after tests (for debugging)   | `false`            |
-
-Default snapshot IDs:
-
-- Docker: `iterate-sandbox:local` (fallbacks to `iterate-sandbox:main`, then `registry.fly.io/iterate-sandbox-image:main`)
-- Fly: `registry.fly.io/iterate-sandbox-image:main`
-- Daytona: reads from `DAYTONA_DEFAULT_SNAPSHOT` in Doppler
-
-### Run Locally
+| Variable                   | Description                       | Default          |
+| -------------------------- | --------------------------------- | ---------------- |
+| `RUN_SANDBOX_TESTS`        | Enable sandbox tests (`true`)     | (tests skipped)  |
+| `SANDBOX_TEST_PROVIDER`    | `docker`, `fly`, or `daytona`     | `docker`         |
+| `SANDBOX_TEST_SNAPSHOT_ID` | Image/snapshot override for tests | provider default |
+| `KEEP_SANDBOX_CONTAINER`   | Keep containers after tests       | `false`          |
 
 ```bash
-# Docker provider (requires local image build first)
-pnpm sandbox docker:build
-pnpm sandbox test:docker
+# Docker
+pnpm sandbox build && pnpm sandbox test:docker
 
-# Docker provider, Cloudflare tunnel transport
-RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
-  RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS=true \
-  pnpm sandbox test --run providers/docker/cloudflare-tunnel.test.ts
-# Optional: REQUIRE_CLOUDFLARE_TUNNEL_TEST_SUCCESS=true to fail instead of
-# soft-skipping when Cloudflare quick tunnels are rate-limited (HTTP 429/1015).
-
-# Daytona provider (requires Doppler secrets)
+# Daytona
 doppler run -- pnpm sandbox test:daytona
 
-# Fly provider (requires Doppler secrets)
+# Fly
 doppler run -- sh -c 'RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1'
-
-# With specific snapshot
-RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker \
-  SANDBOX_TEST_SNAPSHOT_ID=iterate-sandbox:sha-abc123 \
-  pnpm sandbox test
-
-# Keep containers for debugging
-KEEP_SANDBOX_CONTAINER=true pnpm sandbox test:docker
 ```
-
-### CI Workflows
-
-| Workflow           | Description                                              |
-| ------------------ | -------------------------------------------------------- |
-| `sandbox-test.yml` | Runs Docker, Fly, and Daytona provider test jobs         |
-| `daytona-test.yml` | Daytona-only provider smoke test (manual/targeted usage) |
-
-Workflows trigger on PRs/pushes to `sandbox/**`, `apps/daemon/**`.
-
-### Test Files
-
-- `sandbox/test/helpers.ts` - Test fixtures and provider factory
-- `sandbox/test/sandbox-without-daemon.test.ts` - Fast tests (no pidnap)
-- `sandbox/test/daemon-in-sandbox.test.ts` - Full integration tests
 
 ## Key files
 
-- `sandbox/Dockerfile`
-- `sandbox/entry.sh`
-- `sandbox/sync-home-skeleton.sh`
-- `sandbox/pidnap.config.ts`
+- `sandbox/Dockerfile` — image definition
+- `sandbox/entry.sh` — container entrypoint
+- `sandbox/sync-home-skeleton.sh` — dev sync setup
+- `sandbox/pidnap.config.ts` — process manager config
+- `sandbox/providers/docker/build-image.ts` — build script (Depot + Fly/Depot registry push)
+- `sandbox/providers/daytona/push-snapshot.ts` — Daytona snapshot push script
+- `sandbox/providers/docker/provider.ts` — Docker provider
+- `sandbox/providers/fly/provider.ts` — Fly provider
+- `sandbox/providers/daytona/provider.ts` — Daytona provider
+- `sandbox/providers/machine-runtime.ts` — provider abstraction used by control plane

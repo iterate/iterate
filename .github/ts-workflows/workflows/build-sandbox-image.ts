@@ -2,25 +2,21 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build sandbox Docker image using Depot.
+ * Build sandbox image using Depot and push to Fly + Depot registries.
  *
- * This is the SINGLE code path for building the sandbox Docker image.
+ * This is the SINGLE code path for building the sandbox image.
  * All other workflows should call this workflow rather than building directly.
  *
- * Features:
- * - Depot layer caching (shared between CI and local dev via project ID)
- * - Configurable platform (linux/amd64, linux/arm64, or both)
- * - Configurable ref (branch, tag, or SHA) for testing any commit
- * - OIDC authentication (no secrets needed)
+ * Tags use the format: sha-{shortSha} (no -dirty in CI since tree is always clean).
+ * Pushes to both Fly registry and Depot registry automatically.
  */
 export default workflow({
-  name: "Build Docker Image",
+  name: "Build Sandbox Image",
   permissions: {
     contents: "read",
     "id-token": "write", // Required for Depot OIDC authentication
   },
   on: {
-    // Reusable by other workflows
     workflow_call: {
       inputs: {
         ref: {
@@ -35,24 +31,11 @@ export default workflow({
           type: "string",
           default: "linux/amd64",
         },
-        image_name: {
-          description: "Docker image name/tag",
-          required: false,
-          type: "string",
-          default: "iterate-sandbox:ci",
-        },
-        use_depot_registry: {
-          description:
-            "Save image to Depot Registry and load into local Docker daemon in one build",
+        skip_load: {
+          description: "Skip --load into local Docker daemon (faster if image not needed locally)",
           required: false,
           type: "boolean",
-          default: true,
-        },
-        depot_registry_tag: {
-          description: "Optional Depot Registry tag override. Auto-generated when empty.",
-          required: false,
-          type: "string",
-          default: "",
+          default: false,
         },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
@@ -60,11 +43,27 @@ export default workflow({
           type: "string",
           default: "dev",
         },
+        update_doppler: {
+          description: "Update Doppler FLY_DEFAULT_IMAGE after Fly push",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
+        doppler_configs_to_update: {
+          description: "Comma-separated Doppler configs to update (e.g. dev,stg,prd)",
+          required: false,
+          type: "string",
+          default: "",
+        },
       },
       outputs: {
-        image_ref: {
-          description: "Built image reference",
-          value: "${{ jobs.build.outputs.image_ref }}",
+        image_tag: {
+          description: "Local image tag (iterate-sandbox:sha-{shortSha})",
+          value: "${{ jobs.build.outputs.image_tag }}",
+        },
+        fly_image_tag: {
+          description: "Fly registry image tag",
+          value: "${{ jobs.build.outputs.fly_image_tag }}",
         },
         git_sha: {
           description: "Git SHA that was built",
@@ -72,7 +71,6 @@ export default workflow({
         },
       },
     },
-    // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
         ref: {
@@ -87,30 +85,29 @@ export default workflow({
           type: "string",
           default: "linux/amd64",
         },
-        image_name: {
-          description: "Docker image name/tag",
-          required: false,
-          type: "string",
-          default: "iterate-sandbox:ci",
-        },
-        use_depot_registry: {
-          description:
-            "Save image to Depot Registry and load into local Docker daemon in one build",
+        skip_load: {
+          description: "Skip --load into local Docker daemon",
           required: false,
           type: "boolean",
-          default: true,
-        },
-        depot_registry_tag: {
-          description: "Optional Depot Registry tag override. Auto-generated when empty.",
-          required: false,
-          type: "string",
-          default: "",
+          default: false,
         },
         doppler_config: {
           description: "Doppler config (dev, stg, prd)",
           required: false,
           type: "string",
           default: "dev",
+        },
+        update_doppler: {
+          description: "Update Doppler FLY_DEFAULT_IMAGE after Fly push",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
+        doppler_configs_to_update: {
+          description: "Comma-separated Doppler configs to update (e.g. dev,stg,prd)",
+          required: false,
+          type: "string",
+          default: "",
         },
       },
     },
@@ -119,19 +116,17 @@ export default workflow({
     build: {
       ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
-        image_ref: "${{ steps.output.outputs.image_ref }}",
+        image_tag: "${{ steps.output.outputs.image_tag }}",
+        fly_image_tag: "${{ steps.output.outputs.fly_image_tag }}",
         git_sha: "${{ steps.output.outputs.git_sha }}",
       },
       steps: [
-        // Checkout with configurable ref
         {
           name: "Checkout code",
           ...uses("actions/checkout@v4", {
-            // Use input ref if provided, otherwise fall back to PR head SHA or workflow SHA
             ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
           }),
         },
-        // Setup pnpm (no Doppler here - it's in setupDoppler)
         {
           name: "Setup pnpm",
           uses: "pnpm/action-setup@v4",
@@ -148,42 +143,35 @@ export default workflow({
           name: "Install dependencies",
           run: "pnpm install",
         },
-        // Setup Doppler with configurable config
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
-        // Setup Depot CLI
         ...utils.setupDepot,
-        // Build the image
         {
           name: "Build sandbox image",
           env: {
-            LOCAL_DOCKER_IMAGE_NAME: "${{ inputs.image_name }}",
             SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
-            SANDBOX_USE_DEPOT_REGISTRY: "${{ inputs.use_depot_registry && 'true' || 'false' }}",
-            SANDBOX_DEPOT_SAVE_TAG:
-              "${{ inputs.depot_registry_tag || format('iterate-sandbox-ci-{0}-{1}', github.run_id, github.run_attempt) }}",
+            SANDBOX_SKIP_LOAD: "${{ inputs.skip_load && 'true' || 'false' }}",
+            SANDBOX_UPDATE_DOPPLER: "${{ inputs.update_doppler && 'true' || 'false' }}",
+            SANDBOX_DOPPLER_CONFIGS: "${{ inputs.doppler_configs_to_update }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: [
-            "echo '::group::Build timing'",
-            "time pnpm docker:build",
+            "echo '::group::Build sandbox image'",
+            "time doppler run -- pnpm sandbox build",
             "echo '::endgroup::'",
           ].join("\n"),
         },
-        // Export outputs
         {
           id: "output",
           name: "Export outputs",
           run: [
-            'if [ "${{ inputs.use_depot_registry }}" = "true" ]; then',
-            "  image_ref=\"$(jq -r '.depotRegistryImageName' .cache/depot-build-info.json)\"",
-            '  if [ "$image_ref" = "null" ]; then',
-            '    echo "Missing Depot registry image ref in .cache/depot-build-info.json" >&2',
-            "    exit 1",
-            "  fi",
-            '  echo "image_ref=$image_ref" >> $GITHUB_OUTPUT',
-            "else",
-            '  echo "image_ref=${{ inputs.image_name }}" >> $GITHUB_OUTPUT',
-            "fi",
-            'echo "git_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT',
+            "set -euo pipefail",
+            'git_sha="$(git rev-parse HEAD)"',
+            'short_sha="$(git rev-parse --short=7 HEAD)"',
+            'image_tag="iterate-sandbox:sha-${short_sha}"',
+            'fly_image_tag="registry.fly.io/iterate-sandbox-image:sha-${short_sha}"',
+            'echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"',
+            'echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"',
+            'echo "git_sha=${git_sha}" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
       ],

@@ -161,6 +161,10 @@ function MachineDetailPage() {
         "var-app": flyMachine.appName,
       }).toString()}`
     : null;
+  const flyLogsUrl = flyMachine ? `https://fly.io/apps/${flyMachine.appName}/monitoring` : null;
+  const flyNetworkingUrl = flyMachine
+    ? `https://fly.io/apps/${flyMachine.appName}/networking`
+    : null;
 
   const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
@@ -182,11 +186,27 @@ function MachineDetailPage() {
             </Button>
           </a>
         )}
+        {flyLogsUrl && (
+          <a href={flyLogsUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Logs
+            </Button>
+          </a>
+        )}
         {flyGrafanaUrl && (
           <a href={flyGrafanaUrl} target="_blank" rel="noopener noreferrer">
             <Button variant="outline" size="sm">
               <ExternalLink className="h-4 w-4" />
               Grafana
+            </Button>
+          </a>
+        )}
+        {flyNetworkingUrl && (
+          <a href={flyNetworkingUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Networking
             </Button>
           </a>
         )}

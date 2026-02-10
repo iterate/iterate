@@ -457,6 +457,13 @@ export const machineRouter = router({
     };
   }),
 
+  // Get default snapshot/image for each provider (used by create-machine UI)
+  getDefaultSnapshots: publicProcedure.query(({ ctx }) => ({
+    daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
+    fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
+    docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
+  })),
+
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
     const types: Array<{

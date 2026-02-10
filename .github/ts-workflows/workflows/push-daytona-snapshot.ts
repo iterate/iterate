@@ -2,39 +2,20 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build and push a Daytona snapshot.
+ * Push a pre-built sandbox image to Daytona as a snapshot.
  *
- * The Docker image is built using `pnpm docker:build` (same as build-docker-image.yml)
- * then pushed to Daytona. Both steps must run in the same job since Daytona needs
- * the image in the local Docker daemon.
+ * Requires the image to already exist in the local Docker daemon
+ * (i.e. build-sandbox-image must have run with skip_load=false first).
  *
- * Usage:
- *   build-daytona-snapshot:
- *     uses: ./.github/workflows/build-daytona-snapshot.yml
- *     secrets: inherit
- *     with:
- *       doppler_config: dev  # or prd
- *
- * Then depend on it and use the output:
- *   my-job:
- *     needs: [build-daytona-snapshot]
- *     env:
- *       DAYTONA_DEFAULT_SNAPSHOT: ${{ needs.build-daytona-snapshot.outputs.snapshot_name }}
+ * Snapshot name format: iterate-sandbox-sha-{shortSha}
  */
 export default workflow({
-  name: "Build Daytona Snapshot",
+  name: "Push Daytona Snapshot",
   permissions: {
     contents: "read",
-    "id-token": "write", // Required for Depot OIDC authentication
+    "id-token": "write",
   },
   on: {
-    // DISABLED: PR builds are still relatively slow because Daytona snapshots currently
-    // require a local Docker image in the runner daemon.
-    // TODO: Re-enable when Daytona supports registry-based snapshot creation
-    // pull_request: {
-    //   types: ["opened", "synchronize"],
-    // },
-    // Directly invokable for testing any commit
     workflow_dispatch: {
       inputs: {
         ref: {
@@ -49,9 +30,20 @@ export default workflow({
           type: "string",
           default: "dev",
         },
+        image_tag: {
+          description: "Local Docker image tag to push (from build-sandbox-image output)",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        update_doppler: {
+          description: "Update Doppler DAYTONA_DEFAULT_SNAPSHOT after push",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
       },
     },
-    // Reusable by other workflows
     workflow_call: {
       inputs: {
         ref: {
@@ -65,37 +57,40 @@ export default workflow({
           required: true,
           type: "string",
         },
+        image_tag: {
+          description: "Local Docker image tag to push (from build-sandbox-image output)",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        update_doppler: {
+          description: "Update Doppler DAYTONA_DEFAULT_SNAPSHOT after push",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
       },
       outputs: {
         snapshot_name: {
-          description: "The name of the built snapshot (iterate-sandbox-{commitSha})",
-          value: "${{ jobs.build.outputs.snapshot_name }}",
-        },
-        git_sha: {
-          description: "Git SHA that was built",
-          value: "${{ jobs.build.outputs.git_sha }}",
+          description: "The name of the pushed snapshot (iterate-sandbox-sha-{shortSha})",
+          value: "${{ jobs.push.outputs.snapshot_name }}",
         },
       },
     },
   },
   jobs: {
-    build: {
-      // Daytona requires AMD64 images; build target is enforced in SANDBOX_BUILD_PLATFORM.
-      // Use Depot runner for same-network image transfer (no 2GB download!).
+    push: {
       ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
         snapshot_name: "${{ steps.push.outputs.snapshot_name }}",
-        git_sha: "${{ steps.push.outputs.git_sha }}",
       },
       steps: [
-        // Checkout with configurable ref
         {
           name: "Checkout code",
           ...uses("actions/checkout@v4", {
             ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
           }),
         },
-        // Setup pnpm
         {
           name: "Setup pnpm",
           uses: "pnpm/action-setup@v4",
@@ -112,59 +107,33 @@ export default workflow({
           name: "Install dependencies",
           run: "pnpm install",
         },
-        // Setup Doppler
-        // For PRs, default to 'dev' config; for workflow_call/dispatch, use input
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config || 'dev' }}" }),
-        // Install and configure Daytona CLI
         {
           name: "Install and configure Daytona CLI",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: [
-            // Install CLI (with retries for transient network failures)
             'ARCH=$(uname -m); if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; elif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi',
             'for i in 1 2 3; do curl -sfLo daytona "https://download.daytona.io/cli/latest/daytona-linux-$ARCH" && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done',
             "test -f daytona || { echo 'Failed to download Daytona CLI after 3 attempts'; exit 1; }",
             "sudo chmod +x daytona && sudo mv daytona /usr/local/bin/",
             "daytona version",
-            // Configure CLI with API key (CLI doesn't use env vars, needs config file)
-            // Use jq to safely escape JSON values (prevents injection if API key contains special chars)
             "mkdir -p ~/.config/daytona",
             `doppler run -- bash -c 'jq -n \\
               --arg apiKey "$DAYTONA_API_KEY" \\
               --arg orgId "$DAYTONA_ORG_ID" \\
               "{activeProfile: \\"ci\\", profiles: [{id: \\"ci\\", name: \\"ci\\", api: {url: \\"https://app.daytona.io/api\\", key: \\$apiKey}, activeOrganizationId: \\$orgId}]}" \\
               > ~/.config/daytona/config.json'`,
-            // Verify auth works
             "daytona snapshot list --limit 1",
           ].join("\n"),
         },
-        // Setup Depot CLI
-        ...utils.setupDepot,
-        // Build sandbox image (uses same script as build-sandbox-image.yml)
-        {
-          name: "Build sandbox image",
-          env: {
-            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
-            // Daytona requires AMD64 images regardless of runner architecture
-            SANDBOX_BUILD_PLATFORM: "linux/amd64",
-          },
-          run: [
-            "echo '::group::Build timing'",
-            "time pnpm docker:build",
-            "echo '::endgroup::'",
-          ].join("\n"),
-        },
-        // Push to Daytona with retry logic (network issues can cause transient failures)
         {
           id: "push",
           name: "Push Daytona snapshot",
           uses: "nick-fields/retry@v3",
           env: {
             CI: "true",
-            LOCAL_DOCKER_IMAGE_NAME: "iterate-sandbox:ci",
-            SANDBOX_ITERATE_REPO_REF: "${{ github.sha }}",
           },
           with: {
             timeout_minutes: 10,
@@ -172,15 +141,15 @@ export default workflow({
             retry_wait_seconds: 30,
             command: [
               "set -euo pipefail",
-              "output_file=$(mktemp)",
-              "git_sha=$(git rev-parse HEAD)",
-              'snapshot_name="iterate-sandbox-${git_sha}"',
-              // CLI is configured via config file, no doppler run needed
-              // Pass --image explicitly to use the :ci tagged image (script appends :local otherwise)
-              'pnpm daytona:build --no-update-doppler --name "$snapshot_name" --image "$LOCAL_DOCKER_IMAGE_NAME" | tee "$output_file"',
-              "snapshot_name=$(grep -m 1 '^snapshot_name=' \"$output_file\" | sed 's/^snapshot_name=//')",
+              'short_sha="$(git rev-parse --short=7 HEAD)"',
+              'snapshot_name="iterate-sandbox-sha-${short_sha}"',
+              'image_tag="${{ inputs.image_tag }}"',
+              '[ -z "$image_tag" ] && image_tag="iterate-sandbox:sha-${short_sha}"',
+              'update_flag=""',
+              '${{ inputs.update_doppler }} || update_flag="--no-update-doppler"',
+              'pnpm sandbox daytona:push --name "$snapshot_name" --image "$image_tag" $update_flag | tee /tmp/push-output.txt',
+              'snapshot_name=$(grep -m 1 "^snapshot_name=" /tmp/push-output.txt | sed "s/^snapshot_name=//")',
               'echo "snapshot_name=$snapshot_name" >> "$GITHUB_OUTPUT"',
-              'echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"',
             ].join("\n"),
           },
         },

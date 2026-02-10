@@ -22,7 +22,7 @@ import { slugify } from "../utils.ts";
 const DaytonaEnv = z.object({
   DAYTONA_API_KEY: z.string(),
   DAYTONA_ORG_ID: z.string().optional(),
-  DAYTONA_DEFAULT_SNAPSHOT: z.string(),
+  DAYTONA_DEFAULT_SNAPSHOT: z.string().optional(),
   DAYTONA_DEFAULT_AUTO_STOP_MINUTES: z.string().optional(),
   DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: z.string().optional(),
   APP_STAGE: z.string().optional(),
@@ -150,6 +150,12 @@ export class DaytonaProvider extends SandboxProvider {
   }
 
   get defaultSnapshotId(): string {
+    if (!this.env.DAYTONA_DEFAULT_SNAPSHOT) {
+      throw new Error(
+        "DAYTONA_DEFAULT_SNAPSHOT is not set and no snapshot was provided. " +
+          "Either set DAYTONA_DEFAULT_SNAPSHOT or pass providerSnapshotId when creating a sandbox.",
+      );
+    }
     return this.env.DAYTONA_DEFAULT_SNAPSHOT;
   }
 
@@ -218,12 +224,13 @@ export class DaytonaProvider extends SandboxProvider {
 
   async listSnapshots(): Promise<SnapshotInfo[]> {
     // Daytona doesn't have a snapshots API accessible via SDK
-    // Return the configured snapshot as the only option
+    // Return the configured default snapshot if available
+    if (!this.env.DAYTONA_DEFAULT_SNAPSHOT) return [];
     return [
       {
         type: "daytona" as const,
-        snapshotId: this.defaultSnapshotId,
-        name: this.defaultSnapshotId,
+        snapshotId: this.env.DAYTONA_DEFAULT_SNAPSHOT,
+        name: this.env.DAYTONA_DEFAULT_SNAPSHOT,
       },
     ];
   }

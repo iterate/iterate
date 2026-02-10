@@ -52,7 +52,6 @@ export default {
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             DAYTONA_DEFAULT_SNAPSHOT: "${{ inputs.daytona_snapshot_name }}",
-            VITE_DAYTONA_DEFAULT_SNAPSHOT: "${{ inputs.daytona_snapshot_name }}",
           },
         },
       ],
