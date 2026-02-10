@@ -33,6 +33,7 @@
     "db:studio": "pnpm os db:studio",
     "db:studio:staging": "PSCALE_DATABASE_URL=$(doppler secrets --config stg get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DANGEROUS_PRODUCTION_POSTGRES_URL) pnpm db:studio",
+    "db:shell:production": "psql \"$(doppler secrets get --plain DANGEROUS_PRODUCTION_POSTGRES_URL)\"",
     "db:query": "tsx ./scripts/docker-compose.ts exec postgres psql -U postgres -d os",
     "db:query:file": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -f",
     "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",

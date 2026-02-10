@@ -318,9 +318,8 @@ webchatRouter.get("/threads/:threadId/messages", async (c) => {
     .filter((message) => message.threadId === webchatThreadId)
     .sort((a, b) => a.createdAt - b.createdAt);
 
-  const agentSessionUrl = await getThreadAgentSessionUrl(webchatThreadId);
   const status = webchatThreadStatuses.get(webchatThreadId) ?? "";
-  return c.json({ threadId: webchatThreadId, messages, agentSessionUrl, status });
+  return c.json({ threadId: webchatThreadId, messages, status });
 });
 
 function createWebchatThreadId(): string {
@@ -344,39 +343,6 @@ function sanitizeForPathSegment(value: string): string {
 
 function getAgentPathForThread(webchatThreadId: string): string {
   return `/webchat/${sanitizeForPathSegment(webchatThreadId)}`;
-}
-
-const SessionEnv = z.object({
-  ITERATE_OS_BASE_URL: z.string(),
-  ITERATE_ORG_SLUG: z.string(),
-  ITERATE_PROJECT_SLUG: z.string(),
-  ITERATE_MACHINE_ID: z.string(),
-  ITERATE_CUSTOMER_REPO_PATH: z.string(),
-});
-
-function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | null): string {
-  const env = SessionEnv.parse(process.env);
-  const dir = workingDirectory ?? env.ITERATE_CUSTOMER_REPO_PATH;
-  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${dir}`;
-  const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
-  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
-}
-
-async function getThreadAgentSessionUrl(webchatThreadId: string): Promise<string | undefined> {
-  const agentPath = getAgentPathForThread(webchatThreadId);
-  const route = await db
-    .select()
-    .from(schema.agentRoutes)
-    .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
-    .limit(1);
-
-  const destination = route[0]?.destination;
-  if (!destination) return undefined;
-
-  const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
-  if (!match) return undefined;
-
-  return buildAgentSessionUrl(match[1]);
 }
 
 async function storeEvent(
