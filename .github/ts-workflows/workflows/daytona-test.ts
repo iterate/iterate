@@ -42,7 +42,7 @@ export default workflow({
   jobs: {
     // Build step - creates Daytona snapshot
     "build-snapshot": {
-      uses: "./.github/workflows/build-daytona-snapshot.yml",
+      uses: "./.github/workflows/push-daytona-snapshot.yml",
       if: "${{ github.event.inputs.snapshot_name == '' }}",
       // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",

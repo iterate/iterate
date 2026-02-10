@@ -71,8 +71,8 @@ function ensureFlyAuth(token: string): void {
   } catch {
     execFileSync("docker", ["login", "registry.fly.io", "-u", "x", "--password-stdin"], {
       cwd: repoRoot,
-      stdio: "inherit",
       input: `${token}\n`,
+      stdio: ["pipe", "inherit", "inherit"],
     });
   }
 }

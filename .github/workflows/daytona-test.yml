@@ -25,7 +25,7 @@ on:
         type: string
 jobs:
   build-snapshot:
-    uses: ./.github/workflows/build-daytona-snapshot.yml
+    uses: ./.github/workflows/push-daytona-snapshot.yml
     if: ${{ github.event.inputs.snapshot_name == '' }}
     secrets: inherit
     with:
