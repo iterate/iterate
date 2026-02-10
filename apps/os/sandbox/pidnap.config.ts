@@ -130,6 +130,20 @@ rm -rf "$TMP_DIR"
       },
     },
     {
+      name: "daemon-discord",
+      definition: {
+        command: "tsx",
+        args: ["discord/index.ts"],
+        cwd: `${iterateRepo}/apps/daemon`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+      options: {
+        restartPolicy: "on-failure",
+      },
+    },
+    {
       name: "daemon-frontend",
       definition: {
         // Build is baked into the image.
