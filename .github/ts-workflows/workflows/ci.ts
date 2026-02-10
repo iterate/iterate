@@ -37,27 +37,18 @@ export default {
         stage: "${{ steps.get_env.outputs.stage }}",
       },
     },
-    "build-sandbox-image": {
-      needs: ["variables"],
-      if: "needs.variables.outputs.stage == 'prd'",
-      uses: "./.github/workflows/build-sandbox-image.yml",
-      // @ts-expect-error - secrets inherit
-      secrets: "inherit",
-      with: {
-        doppler_config: "prd",
-        update_doppler: true,
-        doppler_configs_to_update: "dev,stg,prd",
-      },
-    },
     "push-daytona-snapshot": {
-      needs: ["variables", "build-sandbox-image"],
+      needs: ["variables"],
       if: "needs.variables.outputs.stage == 'prd'",
       uses: "./.github/workflows/push-daytona-snapshot.yml",
       // @ts-expect-error - secrets inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
-        image_tag: "${{ needs.build-sandbox-image.outputs.image_tag }}",
+        build_image: true,
+        docker_platform: "linux/amd64",
+        update_fly_doppler: true,
+        fly_doppler_configs_to_update: "dev,stg,prd",
         update_doppler: true,
       },
     },
@@ -73,7 +64,7 @@ export default {
       },
     },
     slack_failure: {
-      needs: ["variables", "build-sandbox-image", "push-daytona-snapshot", "deploy"],
+      needs: ["variables", "push-daytona-snapshot", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },

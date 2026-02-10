@@ -2,11 +2,9 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Push a pre-built sandbox image to Daytona as a snapshot.
+ * Build sandbox image and push to Daytona as a snapshot on the same runner.
  *
- * Requires the image to already exist in the local Docker daemon
- * (i.e. build-sandbox-image must have run with skip_load=false first).
- *
+ * Can also reuse an existing local image by passing image_tag and build_image=false.
  * Snapshot name format: iterate-sandbox-sha-{shortSha}
  */
 export default workflow({
@@ -36,6 +34,30 @@ export default workflow({
           type: "string",
           default: "",
         },
+        build_image: {
+          description: "Build sandbox image in this same job before pushing snapshot",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        docker_platform: {
+          description: "Sandbox image build platform",
+          required: false,
+          type: "string",
+          default: "linux/amd64",
+        },
+        update_fly_doppler: {
+          description: "Update Doppler FLY_DEFAULT_IMAGE after build",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
+        fly_doppler_configs_to_update: {
+          description: "Comma-separated Doppler configs to update for FLY_DEFAULT_IMAGE",
+          required: false,
+          type: "string",
+          default: "",
+        },
         update_doppler: {
           description: "Update Doppler DAYTONA_DEFAULT_SNAPSHOT after push",
           required: false,
@@ -59,6 +81,30 @@ export default workflow({
         },
         image_tag: {
           description: "Local Docker image tag to push (from build-sandbox-image output)",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        build_image: {
+          description: "Build sandbox image in this same job before pushing snapshot",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        docker_platform: {
+          description: "Sandbox image build platform",
+          required: false,
+          type: "string",
+          default: "linux/amd64",
+        },
+        update_fly_doppler: {
+          description: "Update Doppler FLY_DEFAULT_IMAGE after build",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
+        fly_doppler_configs_to_update: {
+          description: "Comma-separated Doppler configs to update for FLY_DEFAULT_IMAGE",
           required: false,
           type: "string",
           default: "",
@@ -108,6 +154,23 @@ export default workflow({
           run: "pnpm install",
         },
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config || 'dev' }}" }),
+        ...utils.setupDepot,
+        {
+          if: "${{ inputs.build_image }}",
+          name: "Build sandbox image",
+          env: {
+            SANDBOX_BUILD_PLATFORM: "${{ inputs.docker_platform }}",
+            SANDBOX_SKIP_LOAD: "false",
+            SANDBOX_UPDATE_DOPPLER: "${{ inputs.update_fly_doppler && 'true' || 'false' }}",
+            SANDBOX_DOPPLER_CONFIGS: "${{ inputs.fly_doppler_configs_to_update }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: [
+            "echo '::group::Build sandbox image'",
+            "time doppler run -- pnpm sandbox build",
+            "echo '::endgroup::'",
+          ].join("\n"),
+        },
         {
           name: "Install and configure Daytona CLI",
           env: {
@@ -145,6 +208,7 @@ export default workflow({
               'snapshot_name="iterate-sandbox-sha-${short_sha}"',
               'image_tag="${{ inputs.image_tag }}"',
               '[ -z "$image_tag" ] && image_tag="iterate-sandbox:sha-${short_sha}"',
+              '[ "${{ inputs.build_image }}" = "true" ] || [ -n "${{ inputs.image_tag }}" ] || { echo "image_tag is required when build_image=false"; exit 1; }',
               'update_flag=""',
               '${{ inputs.update_doppler }} || update_flag="--no-update-doppler"',
               'pnpm sandbox daytona:push --name "$snapshot_name" --image "$image_tag" $update_flag | tee /tmp/push-output.txt',
