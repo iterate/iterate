@@ -151,13 +151,7 @@ export const reportStatus = os.machines.reportStatus
 
     // If machine is in 'starting' state and daemon reports ready, verify it
     // actually works before activating. The readiness probe runs async via outbox.
-    // Skip if already verifying — avoids enqueuing duplicate probes on daemon restarts.
-    const currentDaemonStatus = (machineWithOrg.metadata as Record<string, unknown>)?.daemonStatus;
-    if (
-      status === "ready" &&
-      machineWithOrg.state === "starting" &&
-      currentDaemonStatus !== "verifying"
-    ) {
+    if (status === "ready" && machineWithOrg.state === "starting") {
       const verifyingMetadata = {
         ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
         daemonStatus: "verifying",
