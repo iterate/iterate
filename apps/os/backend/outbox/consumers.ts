@@ -108,11 +108,12 @@ export const registerConsumers = () => {
           .set({ state: "detached" })
           .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")));
 
-        // Promote this machine to active
+        // Promote this machine to active (state guard closes TOCTOU window —
+        // if a concurrent creation detached this machine, the UPDATE is a no-op)
         await tx
           .update(schema.machine)
           .set({ state: "active", metadata: readyMetadata })
-          .where(eq(schema.machine.id, machineId));
+          .where(and(eq(schema.machine.id, machineId), eq(schema.machine.state, "starting")));
 
         logger.info("[outbox] Machine activated after readiness probe", { machineId });
 

@@ -136,29 +136,31 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     },
   });
 
-  // Detach any older machines still in "starting" state for this project.
-  // This prevents multiple concurrent readiness probes and wasted resources —
-  // the probe's state guard will skip machines that are no longer "starting".
-  await db
-    .update(schema.machine)
-    .set({ state: "detached" })
-    .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
-
-  // Create machine in DB with 'starting' state
+  // Detach older "starting" machines and insert the new one atomically.
+  // This prevents concurrent readiness probes and avoids orphaning a project
+  // if the insert were to fail after a non-transactional detach.
   const [newMachine] = await db
-    .insert(schema.machine)
-    .values({
-      id: machineId,
-      name,
-      type,
-      projectId,
-      state: "starting",
-      metadata: { ...(metadata ?? {}), ...(providerResult.metadata ?? {}) },
-      externalId: providerResult.externalId,
+    .transaction(async (tx) => {
+      await tx
+        .update(schema.machine)
+        .set({ state: "detached" })
+        .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
+
+      return tx
+        .insert(schema.machine)
+        .values({
+          id: machineId,
+          name,
+          type,
+          projectId,
+          state: "starting",
+          metadata: { ...(metadata ?? {}), ...(providerResult.metadata ?? {}) },
+          externalId: providerResult.externalId,
+        })
+        .returning();
     })
-    .returning()
     .catch(async (err) => {
-      // Cleanup: delete the provider resource if DB insert fails
+      // Cleanup: delete the provider resource if DB transaction fails
       try {
         const cleanupProvider = await createMachineProvider({
           type,
