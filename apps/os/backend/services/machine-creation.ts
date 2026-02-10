@@ -1,9 +1,11 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
-import type { CloudflareEnv } from "../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
+import { createConsumerClient, type DBLike } from "../outbox/pgmq-lib.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -67,6 +69,17 @@ export type CreateMachineParams = {
   name: string;
   metadata?: Record<string, unknown>;
 };
+
+type MachineCreationEventTypes = {
+  "machine:verify-readiness": {
+    machineId: string;
+    projectId: string;
+  };
+};
+
+const machineCreationOutbox = createConsumerClient<MachineCreationEventTypes, DBLike>(queuer, {
+  waitUntil,
+});
 
 /**
  * Build the full env var map for a new machine.
@@ -219,101 +232,70 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       });
       const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
 
-      // Read current metadata — the daemon status handler may have set daemonStatus/daemonReadyAt
-      // while provisioning was in progress. Merge to preserve those fields.
-      const currentMachine = await db.query.machine.findFirst({
+      // Read current metadata — daemon status may have changed while provisioning.
+      const latestMachine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
       });
-      const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
-      const machineMetadata = { ...currentMetadata, ...(runtimeResult.metadata ?? {}) };
+      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+      const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
+      const daemonStatus = latestMetadata.daemonStatus;
+      const shouldEnqueueDeferredReadiness =
+        latestMachine?.state === "starting" &&
+        (daemonStatus === "verifying" || daemonStatus === "ready");
 
-      // If daemon already reported ready while we were provisioning, activate now
-      // (the daemon handler defers activation when externalId is empty).
-      const daemonReady = currentMetadata.daemonStatus === "ready";
-      if (daemonReady) {
-        // Activate with machine handoff (detach old active machines) in a transaction
-        await db.transaction(async (tx) => {
-          const activeMachines = await tx.query.machine.findMany({
-            where: and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")),
-          });
+      if (shouldEnqueueDeferredReadiness) {
+        const verifyingMetadata = {
+          ...latestMachineMetadata,
+          daemonStatus: "verifying",
+          daemonStatusMessage: "Running readiness probe...",
+          daemonReadyAt: null,
+        };
 
-          for (const activeMachine of activeMachines) {
-            await tx
-              .update(schema.machine)
-              .set({ state: "detached" })
-              .where(eq(schema.machine.id, activeMachine.id));
-            logger.info("Detached existing active machine during provisioning", {
-              machineId: activeMachine.id,
-            });
-          }
-
+        await machineCreationOutbox.sendTx(db, "machine:verify-readiness", async (tx) => {
           await tx
             .update(schema.machine)
             .set({
               externalId: runtimeResult.externalId,
-              metadata: machineMetadata,
-              state: "active",
+              metadata: verifyingMetadata,
             })
             .where(eq(schema.machine.id, machineId));
+
+          return { payload: { machineId, projectId } };
+        });
+
+        logger.info("Machine provisioned, deferred readiness probe enqueued", {
+          machineId,
+          projectId,
+          type,
         });
       } else {
-        // Re-read metadata right before the write to close the stale-read window:
-        // daemon may report "ready" between the first metadata read above and this branch.
-        const latestMachine = await db.query.machine.findFirst({
-          where: eq(schema.machine.id, machineId),
-        });
-        const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
-        const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
-        const daemonBecameReady = latestMetadata.daemonStatus === "ready";
-
-        if (daemonBecameReady) {
-          await db.transaction(async (tx) => {
-            const activeMachines = await tx.query.machine.findMany({
-              where: and(
-                eq(schema.machine.projectId, projectId),
-                eq(schema.machine.state, "active"),
-              ),
-            });
-
-            for (const activeMachine of activeMachines) {
-              await tx
-                .update(schema.machine)
-                .set({ state: "detached" })
-                .where(eq(schema.machine.id, activeMachine.id));
-              logger.info("Detached existing active machine during provisioning", {
-                machineId: activeMachine.id,
-              });
-            }
-
-            await tx
-              .update(schema.machine)
-              .set({
-                externalId: runtimeResult.externalId,
-                metadata: latestMachineMetadata,
-                state: "active",
-              })
-              .where(eq(schema.machine.id, machineId));
-          });
-        } else {
-          // Daemon still hasn't reported — set externalId + merged metadata.
-          // The daemon status handler will activate when it reports ready.
-          await db
-            .update(schema.machine)
-            .set({ externalId: runtimeResult.externalId, metadata: latestMachineMetadata })
-            .where(eq(schema.machine.id, machineId));
-        }
+        await db
+          .update(schema.machine)
+          .set({
+            externalId: runtimeResult.externalId,
+            metadata: latestMachineMetadata,
+          })
+          .where(eq(schema.machine.id, machineId));
       }
 
       logger.info("Machine provisioned", { machineId, projectId, type });
     } catch (err) {
       logger.error("Machine provisioning failed", { machineId, projectId, type, err });
-      // Store provisioning error in metadata so the UI can show it
+      // Store provisioning error in metadata while preserving any concurrent daemon state updates.
+      const currentMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
+      const errorMessage = err instanceof Error ? err.message : String(err);
       await db
         .update(schema.machine)
         .set({
           metadata: {
-            ...(metadata ?? {}),
-            provisioningError: err instanceof Error ? err.message : String(err),
+            ...currentMetadata,
+            provisioningError: errorMessage,
+            daemonStatus: "error",
+            daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
+            daemonReadyAt: null,
           },
         })
         .where(eq(schema.machine.id, machineId))

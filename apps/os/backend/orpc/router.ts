@@ -152,27 +152,46 @@ export const reportStatus = os.machines.reportStatus
     // If machine is in 'starting' state and daemon reports ready, verify it
     // actually works before activating. The readiness probe runs async via outbox.
     if (status === "ready" && machineWithOrg.state === "starting") {
+      const currentMetadata = (machineWithOrg.metadata as Record<string, unknown>) ?? {};
+      const alreadyVerifying = currentMetadata.daemonStatus === "verifying";
       const verifyingMetadata = {
-        ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
+        ...currentMetadata,
         daemonStatus: "verifying",
         daemonStatusMessage: "Running readiness probe...",
         daemonReadyAt: null,
       };
 
-      // Set verifying status and emit event in one transaction
-      await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
-        await tx
+      if (!machineWithOrg.externalId) {
+        await db
           .update(schema.machine)
           .set({ metadata: verifyingMetadata })
           .where(eq(schema.machine.id, machine.id));
 
-        return {
-          payload: {
-            machineId: machine.id,
-            projectId: machineWithOrg.projectId,
-          },
-        };
-      });
+        logger.info("Deferring readiness probe until machine provisioning completes", {
+          machineId: machine.id,
+          projectId: machineWithOrg.projectId,
+        });
+      } else if (!alreadyVerifying) {
+        // Set verifying status and emit event in one transaction
+        await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
+          await tx
+            .update(schema.machine)
+            .set({ metadata: verifyingMetadata })
+            .where(eq(schema.machine.id, machine.id));
+
+          return {
+            payload: {
+              machineId: machine.id,
+              projectId: machineWithOrg.projectId,
+            },
+          };
+        });
+      } else {
+        logger.info("Readiness probe already in progress, skipping duplicate enqueue", {
+          machineId: machine.id,
+          projectId: machineWithOrg.projectId,
+        });
+      }
     } else {
       // Just update metadata
       await db
