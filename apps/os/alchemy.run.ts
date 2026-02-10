@@ -275,6 +275,8 @@ const Env = z.object({
   FLY_ORG: Optional,
   FLY_DEFAULT_REGION: Optional,
   FLY_DEFAULT_IMAGE: Optional,
+  FLY_DEFAULT_CPUS: Optional,
+  FLY_DEFAULT_MEMORY_MB: Optional,
   FLY_APP_NAME_PREFIX: Optional,
   FLY_NETWORK: Optional,
   FLY_BASE_DOMAIN: Optional,

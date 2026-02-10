@@ -257,12 +257,51 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
             .where(eq(schema.machine.id, machineId));
         });
       } else {
-        // Daemon hasn't reported yet — just set externalId and metadata.
-        // The daemon handler will activate when it reports ready.
-        await db
-          .update(schema.machine)
-          .set({ externalId: runtimeResult.externalId, metadata: machineMetadata })
-          .where(eq(schema.machine.id, machineId));
+        // Re-read metadata right before the write to close the stale-read window:
+        // daemon may report "ready" between the first metadata read above and this branch.
+        const latestMachine = await db.query.machine.findFirst({
+          where: eq(schema.machine.id, machineId),
+        });
+        const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+        const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
+        const daemonBecameReady = latestMetadata.daemonStatus === "ready";
+
+        if (daemonBecameReady) {
+          await db.transaction(async (tx) => {
+            const activeMachines = await tx.query.machine.findMany({
+              where: and(
+                eq(schema.machine.projectId, projectId),
+                eq(schema.machine.state, "active"),
+              ),
+            });
+
+            for (const activeMachine of activeMachines) {
+              await tx
+                .update(schema.machine)
+                .set({ state: "detached" })
+                .where(eq(schema.machine.id, activeMachine.id));
+              logger.info("Detached existing active machine during provisioning", {
+                machineId: activeMachine.id,
+              });
+            }
+
+            await tx
+              .update(schema.machine)
+              .set({
+                externalId: runtimeResult.externalId,
+                metadata: latestMachineMetadata,
+                state: "active",
+              })
+              .where(eq(schema.machine.id, machineId));
+          });
+        } else {
+          // Daemon still hasn't reported — set externalId + merged metadata.
+          // The daemon status handler will activate when it reports ready.
+          await db
+            .update(schema.machine)
+            .set({ externalId: runtimeResult.externalId, metadata: latestMachineMetadata })
+            .where(eq(schema.machine.id, machineId));
+        }
       }
 
       logger.info("Machine provisioned", { machineId, projectId, type });
