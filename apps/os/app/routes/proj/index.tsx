@@ -149,7 +149,7 @@ function ProjectHomePage() {
       projectSlug: params.projectSlug,
       threadId: selectedThreadId,
     }),
-    refetchInterval: selectedThreadId ? 10000 : false,
+    refetchInterval: selectedThreadId ? 3000 : false,
   });
 
   const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
