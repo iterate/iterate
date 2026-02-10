@@ -102,18 +102,30 @@ export const registerConsumers = () => {
       }
 
       await cc.sendTx(db, "machine:activated", async (tx) => {
+        // Re-check state inside the transaction to close the TOCTOU window.
+        // If a concurrent creation detached this machine, skip everything.
+        const current = await tx.query.machine.findFirst({
+          where: eq(schema.machine.id, machineId),
+        });
+        if (current?.state !== "starting") {
+          logger.info("[outbox] Skipping activation inside tx, state changed", {
+            machineId,
+            state: current?.state,
+          });
+          return { payload: { machineId, projectId } };
+        }
+
         // Bulk-detach all active machines for this project
         await tx
           .update(schema.machine)
           .set({ state: "detached" })
           .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")));
 
-        // Promote this machine to active (state guard closes TOCTOU window —
-        // if a concurrent creation detached this machine, the UPDATE is a no-op)
+        // Promote this machine to active
         await tx
           .update(schema.machine)
           .set({ state: "active", metadata: readyMetadata })
-          .where(and(eq(schema.machine.id, machineId), eq(schema.machine.state, "starting")));
+          .where(eq(schema.machine.id, machineId));
 
         logger.info("[outbox] Machine activated after readiness probe", { machineId });
 
