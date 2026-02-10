@@ -509,7 +509,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
-    const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
+    const imageName = process.env.DOCKER_DEFAULT_IMAGE || "iterate-sandbox:local";
 
     const hostSyncEnabled = repoCheckout && gitDir && commonDir ? "true" : "";
     Object.assign(dockerBindings, {
