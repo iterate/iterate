@@ -34,6 +34,32 @@ No mutable tags (`:local`, `:latest`, `:main`). Every tag is immutable and commi
 
 Both Fly and Depot registries are pushed to automatically when their respective tokens are available (`FLY_API_TOKEN` for Fly, Depot OIDC for Depot).
 
+## Fly naming model
+
+Two separate concepts:
+
+1. Machine app names (runtime):
+   - Controlled by `FLY_APP_NAME_PREFIX` (per Doppler config)
+   - Expected values:
+     - `dev`: `dev-sandboxes`
+     - `stg`: `stg-sandboxes`
+     - `prd`: `prd-sandboxes`
+   - Actual app names are generated as `<prefix>-<machineBase>-<suffix>`, so many machine apps can exist per environment.
+2. Image registry app (build/push):
+   - Controlled by `SANDBOX_FLY_REGISTRY_APP`
+   - Shared across all environments
+   - Expected value: `iterate-sandbox-image`
+   - Image tags look like `registry.fly.io/iterate-sandbox-image:sha-abc1234`
+
+Why split:
+
+- runtime isolation by environment (`*-sandboxes`)
+- one shared image artifact source (`iterate-sandbox-image`)
+- simpler CI image build/push flow
+
+If `SANDBOX_FLY_REGISTRY_APP` points to a missing Fly app, image push fails with:
+`POST https://registry.fly.io/v2/<app>/blobs/uploads/: 404 Not Found`.
+
 ## How defaults work
 
 ```
@@ -83,6 +109,7 @@ Runs `sandbox/providers/docker/build-image.ts` via Depot for persistent layer ca
 | --------------------------- | ----------------------------------------- | ------------------------------- |
 | `SANDBOX_BUILD_PLATFORM`    | Target platform(s)                        | `linux/amd64,linux/arm64`       |
 | `SANDBOX_SKIP_LOAD`         | Skip `--load` into local Docker           | `false`                         |
+| `SANDBOX_FLY_REGISTRY_APP`  | Fly registry app used for image pushes    | `iterate-sandbox-image`         |
 | `SANDBOX_PUSH_FLY_REGISTRY` | Push to Fly registry                      | auto (based on `FLY_API_TOKEN`) |
 | `SANDBOX_UPDATE_DOPPLER`    | Update Doppler after Fly push             | `true`                          |
 | `SANDBOX_DOPPLER_CONFIGS`   | Comma-separated Doppler configs to update | current config                  |
@@ -171,12 +198,14 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 ## Fly app bootstrap and cleanup
 
 ```bash
-# Create/ensure env Fly apps and sync Doppler
+# Create/ensure Fly apps and sync Doppler
+# - shared image app: iterate-sandbox-image
+# - machine app prefixes: dev-sandboxes, stg-sandboxes, prd-sandboxes
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
-pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- 24h stop dev-sandboxes    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- 7d delete stg-sandboxes   # delete machines idle >7d
 ```
 
 ## Testing

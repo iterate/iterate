@@ -2,11 +2,11 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLocalDockerComposeProjectName } from "../apps/os/sandbox/test/helpers.ts";
+import { getComposeProjectName } from "../sandbox/providers/docker/utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
-const projectName = getLocalDockerComposeProjectName(repoRoot);
+const projectName = getComposeProjectName(repoRoot);
 const projectLabel = `com.docker.compose.project=${projectName}`;
 
 const psResult = spawnSync("docker", ["ps", "-aq", "--filter", `label=${projectLabel}`], {
