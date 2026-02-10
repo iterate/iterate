@@ -9,14 +9,14 @@ const APP_BY_DOPPLER_CONFIG = {
   prd: "prd",
 } as const;
 
-const EnvSchema = z.object({
+const Env = z.object({
   FLY_API_TOKEN: z.string().optional(),
   FLY_ORG: z.string().default("iterate"),
   FLY_NETWORK: z.string().optional(),
   DOPPLER_PROJECT: z.string().default("os"),
 });
 
-type Env = z.infer<typeof EnvSchema>;
+type Env = z.infer<typeof Env>;
 
 function resolveFlyToken(env: Env): string {
   return env.FLY_API_TOKEN ?? "";
@@ -62,7 +62,7 @@ function updateDopplerSecret(params: { project: string; config: string; appName:
 }
 
 async function main(): Promise<void> {
-  const env = EnvSchema.parse(process.env);
+  const env = Env.parse(process.env);
   const token = resolveFlyToken(env);
   if (!token) {
     throw new Error("Missing FLY_API_TOKEN.");

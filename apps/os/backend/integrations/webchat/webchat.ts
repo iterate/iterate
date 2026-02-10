@@ -1,11 +1,11 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod/v4";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
-import { createMachineProvider } from "../../providers/index.ts";
 
 const WebchatAttachment = z.object({
   fileName: z.string(),
@@ -89,14 +89,14 @@ async function buildMachineForwardUrl(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineRuntime({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata: metadata ?? {},
-      buildProxyUrl: () => "",
     });
-    return `${provider.previewUrl}${path}`;
+    const baseUrl = await runtime.getBaseUrl(3000);
+    return `${baseUrl}${path}`;
   } catch (error) {
     logger.warn("[webchat] Failed to build machine forward URL", {
       machineId: machine.id,
