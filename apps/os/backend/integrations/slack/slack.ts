@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -11,7 +12,6 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { withSpan } from "../../utils/otel.ts";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
