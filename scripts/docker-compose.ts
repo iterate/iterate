@@ -28,6 +28,34 @@ const env = {
 const args = process.argv.slice(2);
 if (args[0] === "--") args.shift();
 
-const cmd = ["docker", "compose", ...args];
-const result = spawnSync(cmd[0], cmd.slice(1), { env, stdio: "inherit" });
+function runDockerCompose(composeArgs: string[]) {
+  const result = spawnSync("docker", ["compose", ...composeArgs], {
+    env,
+    encoding: "utf-8",
+    stdio: ["inherit", "pipe", "pipe"],
+  });
+
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+
+  return result;
+}
+
+const isUpCommand = args[0] === "up";
+let result = runDockerCompose(args);
+
+if ((result.status ?? 1) !== 0 && isUpCommand) {
+  const combinedOutput = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const shouldRetry =
+    combinedOutput.includes("No such container") ||
+    combinedOutput.includes("dependency failed to start") ||
+    combinedOutput.includes("is unhealthy");
+
+  if (shouldRetry) {
+    console.error("docker compose up failed with transient startup error; retrying once...");
+    spawnSync("sleep", ["1"], { stdio: "inherit" });
+    result = runDockerCompose(args);
+  }
+}
+
 process.exit(result.status ?? 1);
