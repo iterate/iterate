@@ -37,7 +37,7 @@ const SNAPSHOT_META: Record<string, { key: string; label: string; placeholder: s
   fly: {
     key: "snapshotName",
     label: "Image",
-    placeholder: "registry.fly.io/iterate-sandbox-image:sha-<shortSha> (leave blank for default)",
+    placeholder: "registry.fly.io/iterate-sandbox:sha-<shortSha> (leave blank for default)",
   },
   docker: {
     key: "localDocker.imageName",

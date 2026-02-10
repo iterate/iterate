@@ -17,7 +17,7 @@ sha-{7charShortSha}[-dirty]
 | Provider       | Full identifier                                             |
 | -------------- | ----------------------------------------------------------- |
 | Docker local   | `iterate-sandbox:sha-abc1234`                               |
-| Fly registry   | `registry.fly.io/iterate-sandbox-image:sha-abc1234`         |
+| Fly registry   | `registry.fly.io/iterate-sandbox:sha-abc1234`               |
 | Depot registry | `registry.depot.dev/{depotProjectId}:sha-abc1234`           |
 | Daytona        | `iterate-sandbox-sha-abc1234` (no colons in snapshot names) |
 
@@ -44,17 +44,18 @@ Two separate concepts:
      - `dev`: `dev-sandboxes`
      - `stg`: `stg-sandboxes`
      - `prd`: `prd-sandboxes`
-   - Actual app names are generated as `<prefix>-<machineBase>-<suffix>`, so many machine apps can exist per environment.
+   - Current behavior: each environment uses exactly one Fly app (all machines in that stage share the same app).
+   - This is temporary and may be changed later.
 2. Image registry app (build/push):
    - Controlled by `SANDBOX_FLY_REGISTRY_APP`
    - Shared across all environments
-   - Expected value: `iterate-sandbox-image`
-   - Image tags look like `registry.fly.io/iterate-sandbox-image:sha-abc1234`
+   - Expected value: `iterate-sandbox`
+   - Image tags look like `registry.fly.io/iterate-sandbox:sha-abc1234`
 
 Why split:
 
 - runtime isolation by environment (`*-sandboxes`)
-- one shared image artifact source (`iterate-sandbox-image`)
+- one shared image artifact source (`iterate-sandbox`)
 - simpler CI image build/push flow
 
 If `SANDBOX_FLY_REGISTRY_APP` points to a missing Fly app, image push fails with:
@@ -75,11 +76,11 @@ Machine metadata (per-machine override in create-machine UI)
 Actual image used for sandbox creation
 ```
 
-| Provider | Default env var            | Format                                              |
-| -------- | -------------------------- | --------------------------------------------------- |
-| Docker   | `DOCKER_DEFAULT_IMAGE`     | `iterate-sandbox:sha-abc1234`                       |
-| Fly      | `FLY_DEFAULT_IMAGE`        | `registry.fly.io/iterate-sandbox-image:sha-abc1234` |
-| Daytona  | `DAYTONA_DEFAULT_SNAPSHOT` | `iterate-sandbox-sha-abc1234`                       |
+| Provider | Default env var            | Format                                        |
+| -------- | -------------------------- | --------------------------------------------- |
+| Docker   | `DOCKER_DEFAULT_IMAGE`     | `iterate-sandbox:sha-abc1234`                 |
+| Fly      | `FLY_DEFAULT_IMAGE`        | `registry.fly.io/iterate-sandbox:sha-abc1234` |
+| Daytona  | `DAYTONA_DEFAULT_SNAPSHOT` | `iterate-sandbox-sha-abc1234`                 |
 
 The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` tRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
 
@@ -109,10 +110,12 @@ Runs `sandbox/providers/docker/build-image.ts` via Depot for persistent layer ca
 | --------------------------- | ----------------------------------------- | ------------------------------- |
 | `SANDBOX_BUILD_PLATFORM`    | Target platform(s)                        | `linux/amd64,linux/arm64`       |
 | `SANDBOX_SKIP_LOAD`         | Skip `--load` into local Docker           | `false`                         |
-| `SANDBOX_FLY_REGISTRY_APP`  | Fly registry app used for image pushes    | `iterate-sandbox-image`         |
+| `SANDBOX_FLY_REGISTRY_APP`  | Fly registry app used for image pushes    | required (`iterate-sandbox`)    |
 | `SANDBOX_PUSH_FLY_REGISTRY` | Push to Fly registry                      | auto (based on `FLY_API_TOKEN`) |
 | `SANDBOX_UPDATE_DOPPLER`    | Update Doppler after Fly push             | `true`                          |
 | `SANDBOX_DOPPLER_CONFIGS`   | Comma-separated Doppler configs to update | current config                  |
+
+`SANDBOX_FLY_REGISTRY_APP` is required. There is no code fallback.
 
 The build always saves to Depot registry (`--save`). Fly registry push happens automatically when `FLY_API_TOKEN` is available.
 
@@ -199,7 +202,7 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 
 ```bash
 # Create/ensure Fly apps and sync Doppler
-# - shared image app: iterate-sandbox-image
+# - shared image app: iterate-sandbox
 # - machine app prefixes: dev-sandboxes, stg-sandboxes, prd-sandboxes
 pnpm sandbox fly:bootstrap-apps
 

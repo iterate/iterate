@@ -8,7 +8,7 @@ const APP_BY_DOPPLER_CONFIG = {
   stg: "stg-sandboxes",
   prd: "prd-sandboxes",
 } as const;
-const SHARED_IMAGE_REGISTRY_APP = "iterate-sandbox-image";
+const SHARED_IMAGE_REGISTRY_APP = "iterate-sandbox";
 
 const Env = z.object({
   FLY_API_TOKEN: z.string().optional(),
