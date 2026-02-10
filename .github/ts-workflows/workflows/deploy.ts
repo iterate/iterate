@@ -15,8 +15,15 @@ export default {
         },
         daytona_snapshot_name: {
           description: "The Daytona snapshot name to deploy with (iterate-sandbox-{commitSha})",
-          required: true,
+          required: false,
           type: "string",
+          default: "",
+        },
+        deploy_iterate_com: {
+          description: "Whether to deploy apps/iterate-com",
+          required: false,
+          type: "boolean",
+          default: true,
         },
       },
       outputs: {
@@ -47,11 +54,17 @@ export default {
             max_attempts: 3,
             // This sometimes flakes: db:migrate currently uses unpooled postgres client and can exhaust
             // PlanetScale connection slots transiently. Retry smooths over that until migration path is fixed.
-            command: "cd apps/os && pnpm run deploy:prd",
+            command: [
+              "set -euo pipefail",
+              'if [ -n "${{ inputs.daytona_snapshot_name }}" ]; then',
+              '  export DAYTONA_DEFAULT_SNAPSHOT="${{ inputs.daytona_snapshot_name }}"',
+              "fi",
+              "cd apps/os",
+              "pnpm run deploy:prd",
+            ].join("\n"),
           },
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            DAYTONA_DEFAULT_SNAPSHOT: "${{ inputs.daytona_snapshot_name }}",
           },
         },
       ],
@@ -59,7 +72,7 @@ export default {
     "deploy-iterate-com": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      if: "inputs.stage == 'prd'",
+      if: "inputs.stage == 'prd' && inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
