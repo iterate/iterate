@@ -137,10 +137,9 @@ async function buildMachineEnvVars(params: {
  * Create a machine for a project.
  * This is the core machine creation logic shared between tRPC and webhooks.
  *
- * For "local" machines, creation is instant and fully synchronous.
- * For provider-backed machines (docker, daytona, fly), the DB record is created
- * immediately and a `provisionPromise` is returned for background provisioning.
- * Callers should pass this to `waitUntil()` or `await` it directly.
+ * The DB record is created immediately and a `provisionPromise` is returned
+ * for background provisioning. Callers should pass this to `waitUntil()` or
+ * `await` it directly.
  */
 export async function createMachineForProject(params: CreateMachineParams): Promise<{
   machine: typeof schema.machine.$inferSelect;
@@ -176,36 +175,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     apiKey,
   });
 
-  // Local machines are instant — create synchronously
-  if (type === "local") {
-    const runtime = await createMachineRuntime({
-      type,
-      env,
-      externalId: "",
-      metadata: metadata ?? {},
-    });
-    const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
-    const machineMetadata = { ...(metadata ?? {}), ...(runtimeResult.metadata ?? {}) };
-
-    const [newMachine] = await db
-      .insert(schema.machine)
-      .values({
-        id: machineId,
-        name,
-        type,
-        projectId,
-        state: "starting",
-        metadata: machineMetadata,
-        externalId: runtimeResult.externalId,
-      })
-      .returning();
-
-    if (!newMachine) throw new Error("Failed to create machine");
-    logger.info("Machine created", { machineId, projectId, type });
-    return { machine: newMachine, apiKey };
-  }
-
-  // Provider-backed machines: create DB record first, provision in background
+  // Create DB record first, provision in background
   const [newMachine] = await db
     .insert(schema.machine)
     .values({

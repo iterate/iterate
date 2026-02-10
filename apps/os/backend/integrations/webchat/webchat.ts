@@ -81,11 +81,10 @@ type WebchatMessagesResponse = z.infer<typeof WebchatMessagesResponse>;
 
 export const webchatApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
-async function buildMachineForwardUrl(
+async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
-  path: string,
   env: CloudflareEnv,
-): Promise<string | null> {
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
@@ -95,10 +94,9 @@ async function buildMachineForwardUrl(
       externalId: machine.externalId,
       metadata: metadata ?? {},
     });
-    const baseUrl = await runtime.getBaseUrl(3000);
-    return `${baseUrl}${path}`;
+    return await runtime.getFetcher(3000);
   } catch (error) {
-    logger.warn("[webchat] Failed to build machine forward URL", {
+    logger.warn("[webchat] Failed to build machine forward fetcher", {
       machineId: machine.id,
       type: machine.type,
       error: error instanceof Error ? error.message : String(error),
@@ -155,13 +153,13 @@ export async function forwardWebchatWebhookToMachine(
   payload: Record<string, unknown>,
   env: CloudflareEnv,
 ): Promise<{ success: true; data: WebchatWebhookResponse } | { success: false; error: string }> {
-  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/webchat/webhook", env);
-  if (!targetUrl) {
-    return { success: false, error: "Could not build forward URL" };
+  const fetcher = await buildMachineForwardFetcher(machine, env);
+  if (!fetcher) {
+    return { success: false, error: "Could not build forward fetcher" };
   }
 
   try {
-    const response = await fetch(targetUrl, {
+    const response = await fetcher("/api/integrations/webchat/webhook", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -195,13 +193,13 @@ export async function listWebchatThreadsFromMachine(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
 ): Promise<{ success: true; data: WebchatThreadsResponse } | { success: false; error: string }> {
-  const targetUrl = await buildMachineForwardUrl(machine, "/api/integrations/webchat/threads", env);
-  if (!targetUrl) {
-    return { success: false, error: "Could not build forward URL" };
+  const fetcher = await buildMachineForwardFetcher(machine, env);
+  if (!fetcher) {
+    return { success: false, error: "Could not build forward fetcher" };
   }
 
   try {
-    const response = await fetch(targetUrl, {
+    const response = await fetcher("/api/integrations/webchat/threads", {
       method: "GET",
       signal: AbortSignal.timeout(15000),
     });
@@ -229,20 +227,19 @@ export async function listWebchatMessagesFromMachine(
   threadId: string,
   env: CloudflareEnv,
 ): Promise<{ success: true; data: WebchatMessagesResponse } | { success: false; error: string }> {
-  const targetUrl = await buildMachineForwardUrl(
-    machine,
-    `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`,
-    env,
-  );
-  if (!targetUrl) {
-    return { success: false, error: "Could not build forward URL" };
+  const fetcher = await buildMachineForwardFetcher(machine, env);
+  if (!fetcher) {
+    return { success: false, error: "Could not build forward fetcher" };
   }
 
   try {
-    const response = await fetch(targetUrl, {
-      method: "GET",
-      signal: AbortSignal.timeout(15000),
-    });
+    const response = await fetcher(
+      `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`,
+      {
+        method: "GET",
+        signal: AbortSignal.timeout(15000),
+      },
+    );
 
     if (!response.ok) {
       return { success: false, error: `HTTP ${response.status}` };

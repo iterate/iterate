@@ -13,6 +13,8 @@ import {
 import { typeid } from "typeid-js";
 import { relations, sql } from "drizzle-orm";
 import { MachineType as SandboxMachineType } from "@iterate-com/sandbox/providers/types";
+import type { SlackEvent } from "@slack/web-api";
+import { PROJECT_SANDBOX_PROVIDER } from "../utils/sandbox-providers.ts";
 
 // Slug constraint: alphanumeric and hyphens only, must contain at least one letter, max 50 chars, not reserved
 const slugCheck = (columnName: string, constraintName: string) =>
@@ -20,7 +22,6 @@ const slugCheck = (columnName: string, constraintName: string) =>
     constraintName,
     sql`${sql.identifier(columnName)} ~ '^[a-z0-9-]+$' AND ${sql.identifier(columnName)} ~ '[a-z]' AND length(${sql.identifier(columnName)}) <= 50 AND ${sql.identifier(columnName)} NOT IN ('prj', 'org')`,
   );
-import type { SlackEvent } from "@slack/web-api";
 
 // Organization roles: owner, admin, member (simplified from OS)
 export const UserRole = ["member", "admin", "owner"] as const;
@@ -244,7 +245,7 @@ export const project = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     sandboxProvider: t
-      .text({ enum: [...MachineType] })
+      .text({ enum: [...PROJECT_SANDBOX_PROVIDER] })
       .notNull()
       .default("daytona"),
     ...withTimestamps,

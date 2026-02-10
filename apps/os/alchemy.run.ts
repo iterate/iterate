@@ -484,6 +484,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const dockerBindings = {
     DOCKER_DEFAULT_IMAGE: "",
     DOCKER_COMPOSE_PROJECT_NAME: "",
+    DOCKER_HOST_SYNC_ENABLED: "",
     DOCKER_HOST_GIT_REPO_ROOT: "",
     DOCKER_HOST_GIT_DIR: "",
     DOCKER_HOST_GIT_COMMON_DIR: "",
@@ -508,9 +509,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
     const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
 
+    const hostSyncEnabled = repoCheckout && gitDir && commonDir ? "true" : "";
     Object.assign(dockerBindings, {
       DOCKER_DEFAULT_IMAGE: imageName,
       DOCKER_COMPOSE_PROJECT_NAME: composeProjectName,
+      DOCKER_HOST_SYNC_ENABLED: process.env.DOCKER_HOST_SYNC_ENABLED ?? hostSyncEnabled,
       DOCKER_HOST_GIT_REPO_ROOT: repoCheckout,
       DOCKER_HOST_GIT_DIR: gitDir,
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
