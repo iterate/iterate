@@ -15,3 +15,7 @@ export async function startDiscordIfDefined() {
   const discord = new DiscordService(db, opencode);
   return { discord, db, opencode };
 }
+
+if (import.meta.main) {
+  startDiscordIfDefined().catch(console.error);
+}
