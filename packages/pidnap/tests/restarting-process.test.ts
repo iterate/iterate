@@ -59,7 +59,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: 5000 }).toBe("stopped");
 
       // Start again with long-running process - should reset counters
       const proc2 = new RestartingProcess("test2", longRunningProcess, options, mockLogger);

@@ -30,6 +30,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       locales \
       make \
       openssh-client \
+      ripgrep \
       rsync \
       sqlite3 \
       sudo \

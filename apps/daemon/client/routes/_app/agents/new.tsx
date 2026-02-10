@@ -1,126 +1,18 @@
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2Icon } from "lucide-react";
-import type { AgentType } from "@server/db/schema.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select.tsx";
-import { AgentTypeIcon } from "@/components/agent-type-icons.tsx";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
-
-const adjectives = [
-  "swift",
-  "bright",
-  "calm",
-  "bold",
-  "keen",
-  "warm",
-  "cool",
-  "wild",
-  "soft",
-  "sharp",
-  "quick",
-  "quiet",
-  "brave",
-  "fair",
-  "kind",
-  "wise",
-  "free",
-  "pure",
-  "true",
-  "clear",
-  "fresh",
-  "light",
-  "dark",
-  "deep",
-  "high",
-  "low",
-  "wide",
-  "thin",
-  "vast",
-  "dense",
-  "rare",
-  "rich",
-  "slim",
-  "trim",
-  "loud",
-  "mild",
-  "pale",
-  "pink",
-  "gold",
-  "jade",
-];
-
-const nouns = [
-  "fox",
-  "owl",
-  "oak",
-  "river",
-  "peak",
-  "cloud",
-  "stone",
-  "wave",
-  "leaf",
-  "spark",
-  "wind",
-  "rain",
-  "snow",
-  "fire",
-  "star",
-  "moon",
-  "sun",
-  "tree",
-  "lake",
-  "hill",
-  "bird",
-  "fish",
-  "bear",
-  "deer",
-  "wolf",
-  "hawk",
-  "crow",
-  "frog",
-  "moth",
-  "swan",
-  "rose",
-  "fern",
-  "pine",
-  "elm",
-  "ash",
-  "bay",
-  "cove",
-  "glen",
-  "vale",
-  "ridge",
-];
-
-function generateRandomName(): string {
-  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  const num = Math.floor(Math.random() * 1000);
-  return `${adj}-${noun}-${num}`;
-}
 
 export const Route = createFileRoute("/_app/agents/new")({
   validateSearch: (search: Record<string, unknown>) => ({
-    name: typeof search.name === "string" ? search.name : undefined,
+    path: typeof search.path === "string" ? search.path : undefined,
   }),
   component: NewAgentPage,
 });
-
-const agentTypeOptions: { value: AgentType; label: string }[] = [
-  { value: "claude-code", label: "Claude Code" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "pi", label: "Pi" },
-];
 
 function NewAgentPage() {
   return (
@@ -138,106 +30,76 @@ function NewAgentPage() {
   );
 }
 
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/[\s_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+function normalizeAgentPath(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const withoutLeadingSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  const segments = withoutLeadingSlash
+    .split("/")
+    .map((segment) =>
+      segment
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, ""),
+    )
+    .filter(Boolean);
+
+  if (segments.length === 0) return "";
+  return `/${segments.join("/")}`;
 }
 
 function NewAgentForm() {
   const navigate = useNavigate();
-  const { name: initialName } = Route.useSearch();
+  const { path: initialPath } = Route.useSearch();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const { data: serverInfo } = useSuspenseQuery(trpc.getServerCwd.queryOptions());
-  const { cwd: defaultCwd, homeDir } = serverInfo;
 
-  const [slug, setSlug] = useState(initialName ?? "");
-  const [harnessType, setHarnessType] = useState<AgentType>("claude-code");
-  const [workingDirectory, setWorkingDirectory] = useState(defaultCwd);
-
-  useEffect(() => {
-    if (!initialName && !slug) {
-      setSlug(generateRandomName());
-    }
-  }, [initialName, slug]);
-
-  const displayPath = (path: string) =>
-    path.startsWith(homeDir) ? path.replace(homeDir, "~") : path;
-
-  const expandPath = (path: string) => (path.startsWith("~") ? path.replace("~", homeDir) : path);
+  const [path, setPath] = useState(initialPath ?? "");
+  const normalizedPath = normalizeAgentPath(path);
 
   const createAgent = useMutation({
     mutationFn: () =>
-      trpcClient.createAgent.mutate({
-        slug: slugify(slug),
-        harnessType,
-        workingDirectory,
+      trpcClient.getOrCreateAgent.mutate({
+        agentPath: normalizedPath,
+        createWithEvents: [],
       }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
-      navigate({ to: "/agents/$slug", params: { slug: result.slug } });
+      navigate({
+        to: "/agents/$slug",
+        params: { slug: encodeURIComponent(result.agent.path) },
+      });
     },
   });
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!slug.trim()) return;
+    if (!normalizedPath) return;
     createAgent.mutate();
   }
 
-  const slugPreview = slugify(slug);
+  const pathPreview = normalizedPath;
 
   return (
     <form onSubmit={handleSubmit} className="grid gap-4 max-w-md">
       <div className="grid gap-2">
-        <Label htmlFor="agent-name">Name</Label>
+        <Label htmlFor="agent-path">Path</Label>
         <Input
-          id="agent-name"
-          name="agent-name"
-          placeholder="my-feature-branch"
-          value={slug}
-          onChange={(e) => setSlug(e.target.value)}
+          id="agent-path"
+          name="agent-path"
+          placeholder="/slack/thread-123"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
           autoComplete="off"
           autoFocus
         />
-        {slug && slug !== slugPreview && (
-          <p className="text-xs text-muted-foreground">Will be saved as: {slugPreview}</p>
+        {path && pathPreview && path !== pathPreview && (
+          <p className="text-xs text-muted-foreground">Will be saved as: {pathPreview}</p>
         )}
       </div>
-      <div className="grid gap-2">
-        <Label htmlFor="harnessType">Agent Type</Label>
-        <Select value={harnessType} onValueChange={(v) => setHarnessType(v as AgentType)}>
-          <SelectTrigger id="harnessType">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {agentTypeOptions.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                <div className="flex items-center gap-2">
-                  <AgentTypeIcon type={opt.value} className="size-4" />
-                  {opt.label}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="grid gap-2">
-        <Label htmlFor="workingDirectory">Working Directory</Label>
-        <Input
-          id="workingDirectory"
-          placeholder="~/path/to/project"
-          value={displayPath(workingDirectory)}
-          onChange={(e) => setWorkingDirectory(expandPath(e.target.value))}
-          autoComplete="off"
-        />
-      </div>
       <div className="flex gap-2 pt-2">
-        <Button type="submit" disabled={!slug.trim() || createAgent.isPending}>
+        <Button type="submit" disabled={!normalizedPath || createAgent.isPending}>
           {createAgent.isPending ? "Creating..." : "Create Agent"}
         </Button>
         <Button type="button" variant="outline" onClick={() => navigate({ to: "/agents" })}>

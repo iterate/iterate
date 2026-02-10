@@ -2,38 +2,54 @@
  * Webchat Router
  *
  * Handles incoming webchat messages forwarded from the OS backend.
- * Creates/reuses agents per thread and sends formatted messages.
- * Uses the harness system for SDK-based session management.
  *
- * Also exposes endpoints for agents to post messages back, add/remove reactions.
- * The agent uses `iterate tool webchat` CLI to call these endpoints,
- * analogous to how Slack agents use `iterate tool slack`.
+ * Structurally symmetric with slack.ts and email.ts — if you change the
+ * pattern in one, update the others to match.
  *
- * Message cases:
- * 1. New thread - First message creates a new agent
- * 2. Reply - Appends to existing agent (matched by threadId)
+ * ## Architecture (canonical reference -- slack.ts and email.ts point here)
+ *
+ * Message flow:
+ *
+ *   OS Backend (webhook) -> Integration Router (slack / webchat / email)
+ *        |                                                         ^
+ *        |  1. tRPC getOrCreateAgent (ensures agent + route exist) |
+ *        |  2. fire-and-forget fetch to /api/agents/:path          |
+ *        v                                                         |
+ *   AgentsRouter -> OpenCodeRouter -> OpenCode SDK                 |
+ *                                         |                        |
+ *                  client.global.event()   |                        |
+ *                  (SDK event stream)      v                        |
+ *                              idle/tool events                     |
+ *                                         |                        |
+ *                         tRPC updateAgent |                        |
+ *                                         v                        |
+ *                            AgentChangeCallbacks --(POST)---------+
+ *
+ * The callback delivers `iterate:agent-updated` events. This is the only
+ * event type today, but the callback URL is conceptually a subscription to
+ * an iterate-level event stream about the agent. In the future, other
+ * iterate-level or raw OpenCode events may be delivered on the same channel.
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
-import { getAgent, createAgent, appendToAgent } from "../services/agent-manager.ts";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { getCustomerRepoPath } from "../trpc/platform.ts";
+import { trpcRouter } from "../trpc/router.ts";
 
 const logger = console;
-
-// --- Schemas ---
+// Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
+const webchatThreadStatuses = new Map<string, string>();
+const webchatThreadIdByAgentPath = new Map<string, string>();
+const DAEMON_BASE_URL = `http://localhost:${process.env.PORT || "3001"}`;
+const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
+const WEBCHAT_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/webchat/agent-change-callback`;
 
 const Attachment = z.object({
-  /** Original file name */
   fileName: z.string(),
-  /** Absolute path on the machine filesystem */
   filePath: z.string(),
-  /** MIME type */
   mimeType: z.string().optional(),
-  /** File size in bytes */
   size: z.number().optional(),
 });
 
@@ -68,9 +84,6 @@ const SetStatusPayload = z.object({
   status: z.string().trim().max(30),
 });
 
-/** In-memory thread status — cleared when agent goes idle (status set to "") */
-const threadStatuses = new Map<string, string>();
-
 const StoredMessage = z.object({
   threadId: z.string(),
   messageId: z.string(),
@@ -78,7 +91,6 @@ const StoredMessage = z.object({
   text: z.string(),
   userId: z.string().optional(),
   userName: z.string().optional(),
-  agentSlug: z.string(),
   reactions: z.array(z.string()).optional(),
   attachments: z.array(Attachment).optional(),
   createdAt: z.number().int().positive(),
@@ -94,7 +106,6 @@ type WebchatEventType =
 
 export const webchatRouter = new Hono();
 
-// Middleware to log requests/responses
 webchatRouter.use("*", async (c, next) => {
   const reqBody = await c.req.raw.clone().text();
   logger.log(`[daemon/webchat] REQ ${c.req.method} ${c.req.path}`, reqBody.slice(0, 500));
@@ -103,8 +114,6 @@ webchatRouter.use("*", async (c, next) => {
   logger.log(`[daemon/webchat] RES ${c.res.status}`, resBody.slice(0, 500));
 });
 
-// --- Inbound: user sends a message via the UI ---
-
 webchatRouter.post("/webhook", async (c) => {
   const parsed = IncomingWebhookPayload.safeParse(await c.req.json());
   if (!parsed.success) {
@@ -112,17 +121,14 @@ webchatRouter.post("/webhook", async (c) => {
   }
 
   const payload = parsed.data;
-
-  // Must have text or attachments
   if (!payload.text && (!payload.attachments || payload.attachments.length === 0)) {
     return c.json({ error: "Message must have text or attachments" }, 400);
   }
 
-  const threadId = payload.threadId ?? createThreadId();
+  const webchatThreadId = payload.threadId ?? createWebchatThreadId();
   const messageId = payload.messageId ?? `msg_${nanoid(12)}`;
   const createdAt = payload.createdAt ?? Date.now();
 
-  // Dedup by messageId
   if (payload.messageId) {
     const existing = await db
       .select()
@@ -134,78 +140,66 @@ webchatRouter.post("/webhook", async (c) => {
         ),
       )
       .limit(1);
+
     if (existing[0]) {
-      return c.json({ success: true, duplicate: true, threadId });
+      return c.json({ success: true, duplicate: true, threadId: webchatThreadId });
     }
   }
 
-  const agentSlug = agentSlugForThread(threadId);
+  const agentPath = getAgentPathForThread(webchatThreadId);
+  const caller = trpcRouter.createCaller({});
+  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
   const userMessage: StoredMessage = {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     role: "user",
     text: payload.text,
     userId: payload.userId,
     userName: payload.userName,
-    agentSlug,
     attachments: payload.attachments,
     createdAt,
   };
 
   const eventId = await storeEvent("webchat:user-message", userMessage, messageId);
 
-  let existingAgent = await getAgent(agentSlug);
-  let wasCreated = false;
-  const workingDirectory = await getCustomerRepoPath();
+  const formattedMessage = formatIncomingMessage({
+    payload,
+    webchatThreadId,
+    messageId,
+    eventId,
+    isFirstMessageInThread: wasNewlyCreated,
+  });
 
-  if (!existingAgent) {
-    wasCreated = true;
-    existingAgent = await createAgent({
-      slug: agentSlug,
-      harnessType: "opencode",
-      workingDirectory,
+  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
+
+  if (wasNewlyCreated) {
+    void caller.subscribeToAgentChanges({
+      agentPath,
+      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
     });
   }
 
-  const formattedMessage = formatIncomingMessage({
-    payload,
-    threadId,
-    messageId,
-    agentSlug,
-    eventId,
-    isFirstMessageInThread: wasCreated,
-  });
-
-  // Fire-and-forget to agent (like Slack/email). Agent posts back via CLI tool.
-  // Do NOT await — appendToAgent blocks until the full LLM run completes,
-  // which would keep the HTTP connection open for minutes and cause timeouts.
-  appendToAgent(existingAgent, formattedMessage, {
-    workingDirectory,
-    acknowledge: async () => logger.log(`[webchat] Processing ${threadId}/${messageId}`),
-    unacknowledge: async () => {
-      logger.log(`[webchat] Finished ${threadId}/${messageId}`);
-      threadStatuses.delete(threadId);
-    },
-    setStatus: async (status) => {
-      threadStatuses.set(threadId, status);
-    },
+  void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: formattedMessage }),
   }).catch((error) => {
-    logger.error(`[webchat] appendToAgent failed for ${threadId}/${messageId}`, error);
+    logger.error(
+      `[webchat] failed to post prompt event for ${webchatThreadId}/${messageId}`,
+      error,
+    );
   });
 
   return c.json({
     success: true,
     duplicate: false,
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     eventId,
-    created: wasCreated,
-    agentSlug,
+    created: wasNewlyCreated,
   });
 });
-
-// --- Outbound: agent posts a message back ---
 
 webchatRouter.post("/postMessage", async (c) => {
   const parsed = PostMessagePayload.safeParse(await c.req.json());
@@ -213,26 +207,22 @@ webchatRouter.post("/postMessage", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, text } = parsed.data;
+  const { threadId: webchatThreadId, text } = parsed.data;
   const messageId = parsed.data.messageId ?? `msg_${nanoid(12)}`;
-  const agentSlug = agentSlugForThread(threadId);
 
   const assistantMessage: StoredMessage = {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     role: "assistant",
     text,
-    agentSlug,
     attachments: parsed.data.attachments,
     createdAt: Date.now(),
   };
 
   const eventId = await storeEvent("webchat:assistant-message", assistantMessage, messageId);
 
-  return c.json({ success: true, threadId, messageId, eventId });
+  return c.json({ success: true, threadId: webchatThreadId, messageId, eventId });
 });
-
-// --- Reactions ---
 
 webchatRouter.post("/addReaction", async (c) => {
   const parsed = ReactionPayload.safeParse(await c.req.json());
@@ -240,9 +230,9 @@ webchatRouter.post("/addReaction", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, messageId, reaction } = parsed.data;
+  const { threadId: webchatThreadId, messageId, reaction } = parsed.data;
   const eventId = await storeEvent("webchat:reaction-added", {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     reaction,
     createdAt: Date.now(),
@@ -257,9 +247,9 @@ webchatRouter.post("/removeReaction", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, messageId, reaction } = parsed.data;
+  const { threadId: webchatThreadId, messageId, reaction } = parsed.data;
   const eventId = await storeEvent("webchat:reaction-removed", {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     reaction,
     createdAt: Date.now(),
@@ -268,73 +258,92 @@ webchatRouter.post("/removeReaction", async (c) => {
   return c.json({ success: true, eventId });
 });
 
-// --- Status ---
-
 webchatRouter.post("/setStatus", async (c) => {
   const parsed = SetStatusPayload.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, status } = parsed.data;
-  if (status) {
-    threadStatuses.set(threadId, status);
-  } else {
-    threadStatuses.delete(threadId);
-  }
+  const { threadId: webchatThreadId, status } = parsed.data;
+  webchatThreadStatuses.set(webchatThreadId, status);
 
   return c.json({ success: true });
 });
 
-// --- Read endpoints ---
+/**
+ * Receives `iterate:agent-updated` events from the agent change callback system.
+ * This is currently the only event type. In the future, other iterate-level
+ * or raw OpenCode events may be delivered on this same callback channel.
+ */
+webchatRouter.post("/agent-change-callback", async (c) => {
+  const parsed = z
+    .object({
+      type: z.literal("iterate:agent-updated"),
+      payload: z
+        .object({
+          path: z.string(),
+          shortStatus: z.string(),
+          isWorking: z.boolean(),
+        })
+        .passthrough(),
+    })
+    .safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
 
-webchatRouter.get("/threads", async (_c) => {
+  const { payload } = parsed.data;
+  const webchatThreadId = webchatThreadIdByAgentPath.get(payload.path);
+  if (!webchatThreadId) {
+    logger.log(`[webchat] ignoring agent-change without mapped thread: ${payload.path}`);
+    return c.json({ success: true, ignored: true });
+  }
+
+  webchatThreadStatuses.set(webchatThreadId, payload.shortStatus);
+  logger.log(
+    `[webchat] status update thread=${webchatThreadId} path=${payload.path} working=${payload.isWorking} status="${payload.shortStatus}"`,
+  );
+  return c.json({ success: true });
+});
+
+webchatRouter.get("/threads", async (c) => {
   const messages = await listStoredMessages();
   const threads = buildThreadSummaries(messages);
-  return _c.json({ threads });
+  return c.json({ threads });
 });
 
 webchatRouter.get("/threads/:threadId/messages", async (c) => {
-  const threadId = c.req.param("threadId");
+  const webchatThreadId = c.req.param("threadId");
   const messages = (await listStoredMessages())
-    .filter((message) => message.threadId === threadId)
+    .filter((message) => message.threadId === webchatThreadId)
     .sort((a, b) => a.createdAt - b.createdAt);
 
-  // Look up agent session URL for the "attach" link
-  let agentSessionUrl: string | undefined;
-  try {
-    const agentSlug = agentSlugForThread(threadId);
-    const agent = await getAgent(agentSlug);
-    if (agent?.harnessSessionId) {
-      agentSessionUrl = buildAgentSessionUrl(agent.harnessSessionId, agent.workingDirectory);
-    }
-  } catch {
-    // Non-critical — just omit the URL
-  }
-
-  const status = threadStatuses.get(threadId) ?? "";
-  return c.json({ threadId, messages, agentSessionUrl, status });
+  const agentSessionUrl = await getThreadAgentSessionUrl(webchatThreadId);
+  const status = webchatThreadStatuses.get(webchatThreadId) ?? "";
+  return c.json({ threadId: webchatThreadId, messages, agentSessionUrl, status });
 });
 
-// --- Helpers ---
-
-function createThreadId(): string {
+function createWebchatThreadId(): string {
   return `thread-${Date.now().toString(36)}-${nanoid(8)}`;
 }
 
-function sanitizeForSlug(value: string): string {
+function sanitizeForSegment(value: string, maxLength: number): string {
   return (
     value
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, "-")
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "")
-      .slice(0, 50) || "thread"
+      .slice(0, maxLength) || "thread"
   );
 }
 
-function agentSlugForThread(threadId: string): string {
-  return `webchat-${sanitizeForSlug(threadId)}`;
+function sanitizeForPathSegment(value: string): string {
+  return sanitizeForSegment(value, 80);
+}
+
+function getAgentPathForThread(webchatThreadId: string): string {
+  return `/webchat/${sanitizeForPathSegment(webchatThreadId)}`;
 }
 
 const SessionEnv = z.object({
@@ -351,6 +360,23 @@ function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | nul
   const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${dir}`;
   const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
   return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+}
+
+async function getThreadAgentSessionUrl(webchatThreadId: string): Promise<string | undefined> {
+  const agentPath = getAgentPathForThread(webchatThreadId);
+  const route = await db
+    .select()
+    .from(schema.agentRoutes)
+    .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
+    .limit(1);
+
+  const destination = route[0]?.destination;
+  if (!destination) return undefined;
+
+  const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
+  if (!match) return undefined;
+
+  return buildAgentSessionUrl(match[1]);
 }
 
 async function storeEvent(
@@ -402,7 +428,6 @@ function buildThreadSummaries(messages: StoredMessage[]) {
 
       return {
         threadId,
-        agentSlug: lastMessage?.agentSlug ?? agentSlugForThread(threadId),
         messageCount: sorted.length,
         title: (firstUserMessage?.text ?? "New thread").slice(0, 120),
         lastMessagePreview: (lastMessage?.text ?? "").slice(0, 160),
@@ -415,17 +440,16 @@ function buildThreadSummaries(messages: StoredMessage[]) {
 
 function formatIncomingMessage(params: {
   payload: z.infer<typeof IncomingWebhookPayload>;
-  threadId: string;
+  webchatThreadId: string;
   messageId: string;
-  agentSlug: string;
   eventId: string;
   isFirstMessageInThread: boolean;
 }): string {
-  const { payload, threadId, messageId, agentSlug, eventId, isFirstMessageInThread } = params;
+  const { payload, webchatThreadId, messageId, eventId, isFirstMessageInThread } = params;
 
   const intro = isFirstMessageInThread
-    ? `[Agent: ${agentSlug}] New webchat thread started.`
-    : `Another message in webchat thread ${threadId}.`;
+    ? "New webchat thread started."
+    : `Another message in webchat thread ${webchatThreadId}.`;
 
   const sender = payload.userName ?? payload.userId ?? "unknown";
 
@@ -448,6 +472,6 @@ function formatIncomingMessage(params: {
     ...(payload.text ? [`Message: ${payload.text}`] : []),
     ...attachmentLines,
     "",
-    `thread_id=${threadId} message_id=${messageId} eventId=${eventId}`,
+    `thread_id=${webchatThreadId} message_id=${messageId} eventId=${eventId}`,
   ].join("\n");
 }

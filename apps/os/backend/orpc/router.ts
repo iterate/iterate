@@ -1,6 +1,7 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
 import { eq, and, or } from "drizzle-orm";
+import { isNull } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
@@ -204,6 +205,10 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   const { project } = machine;
   const machineId = machine.id;
 
+  // Self-heal: ensure Slack token secret exists for this project.
+  // Slack tooling expects SLACK_BOT_TOKEN to be materialized from secret storage.
+  await ensureSlackProjectSecret(db, project.id);
+
   // Check if dangerous raw secrets mode is enabled
   // BoolyString schema only allows "true" or "false" strings
   const dangerousRawSecrets = env.DANGEROUS_RAW_SECRETS_ENABLED === "true";
@@ -288,7 +293,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     },
     {
       key: "ITERATE_CUSTOMER_REPO_PATH",
-      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/placeholder-repo",
+      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate",
       secret: null,
       description: null,
       egressProxyRule: null,
@@ -416,4 +421,47 @@ async function refreshStaleConnectorTokens(
     const fresh = freshValues.get(`${envVar.secret!.secretKey}:${envVar.secret!.userId ?? ""}`);
     if (fresh) envVar.value = fresh;
   }
+}
+
+async function ensureSlackProjectSecret(db: DB, projectId: string): Promise<void> {
+  const existingSecret = await db.query.secret.findFirst({
+    where: and(
+      eq(schema.secret.projectId, projectId),
+      eq(schema.secret.key, "slack.access_token"),
+      isNull(schema.secret.userId),
+    ),
+  });
+  if (existingSecret) return;
+
+  const slackConnection = await db.query.projectConnection.findFirst({
+    where: and(
+      eq(schema.projectConnection.projectId, projectId),
+      eq(schema.projectConnection.provider, "slack"),
+    ),
+  });
+  if (!slackConnection) return;
+
+  const providerData = slackConnection.providerData as { encryptedAccessToken?: string };
+  if (!providerData.encryptedAccessToken) {
+    logger.warn("Slack connection exists but encrypted token missing", { projectId });
+    return;
+  }
+
+  const project = await db.query.project.findFirst({
+    where: eq(schema.project.id, projectId),
+  });
+  if (!project) return;
+
+  await db
+    .insert(schema.secret)
+    .values({
+      key: "slack.access_token",
+      encryptedValue: providerData.encryptedAccessToken,
+      organizationId: project.organizationId,
+      projectId,
+      egressProxyRule: `$contains(url.hostname, 'slack.com')`,
+    })
+    .onConflictDoNothing();
+
+  logger.info("Backfilled missing Slack secret from project connection", { projectId });
 }

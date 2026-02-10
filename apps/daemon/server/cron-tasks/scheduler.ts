@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { createAgent, appendToAgent, getAgent } from "../services/agent-manager.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -44,6 +44,38 @@ const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 // ============================================================================
 
 let schedulerRunning = false;
+
+const DAEMON_PORT = process.env.PORT || "3001";
+const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
+
+function getCronAgentPath(agentPathSegment: string): string {
+  return `/cron/${agentPathSegment}`;
+}
+
+/** Check whether an active agent exists via tRPC. */
+async function agentExists(agentPath: string): Promise<boolean> {
+  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
+  return agent !== null;
+}
+
+/**
+ * Send a prompt to an agent via the agents router.
+ * The agents router runs getOrCreateAgent internally, so this
+ * creates the agent + session if it doesn't exist yet.
+ */
+async function sendPromptToAgent(agentPath: string, message: string): Promise<void> {
+  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Agent prompt failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
+    );
+  }
+}
 
 export const getTasksDir = async () => {
   const customerRepoPath = await getCustomerRepoPath();
@@ -209,12 +241,11 @@ async function nudgeStaleTasks(thresholdMs: number): Promise<void> {
  * Send a "u ok?" message to the agent working on a stale task.
  */
 async function nudgeAgent(task: ParsedTask): Promise<void> {
-  const agentSlug = task.frontmatter.lockedBy;
-  if (!agentSlug) return;
+  const agentPath = task.frontmatter.lockedBy;
+  if (!agentPath) return;
 
-  const agent = await getAgent(agentSlug);
-  if (!agent) {
-    console.warn(`[cron-tasks] Agent ${agentSlug} not found for stale task ${task.filename}`);
+  if (!(await agentExists(agentPath))) {
+    console.warn(`[cron-tasks] Agent ${agentPath} not found for stale task ${task.filename}`);
     return;
   }
 
@@ -233,13 +264,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
     \`\`\`
   `;
 
-  const workingDirectory = await getCustomerRepoPath();
-  await appendToAgent(agent, message, {
-    workingDirectory,
-    acknowledge: async () => console.log(`[cron-tasks] Nudging agent ${agent.slug}`),
-    unacknowledge: async () =>
-      console.log(`[cron-tasks] Agent ${agent.slug} finished processing nudge`),
-  });
+  await sendPromptToAgent(agentPath, message);
 
   // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
@@ -247,7 +272,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
   if (existsSync(taskPath)) {
     task.frontmatter.lockedAt = new Date().toISOString();
     await fs.writeFile(taskPath, serializeTask(task));
-    console.log(`[cron-tasks] Nudged agent ${agentSlug} for task ${task.filename}`);
+    console.log(`[cron-tasks] Nudged agent ${agentPath} for task ${task.filename}`);
   } else {
     // Task was completed/archived between read and write - that's fine
     console.log(`[cron-tasks] Task ${task.filename} no longer exists, skipping lockedAt update`);
@@ -259,40 +284,32 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
  */
 async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
   const taskPath = path.join(tasksDir, task.filename);
-  const timestamp = new Date().toISOString().replaceAll(":", "-");
-  const slug = `cron-${task.filename.replace(".md", "")}-${timestamp}`;
+  const sanitize = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  const taskName = sanitize(task.filename.replace(/\.md$/i, ""));
+  const timestamp = sanitize(new Date().toISOString());
+  const agentPathSegment = `cron-${taskName}-${timestamp}`;
+  const agentPath = getCronAgentPath(agentPathSegment);
 
-  console.log(`[cron-tasks] Processing task: ${task.filename} -> agent: ${slug}`);
+  console.log(`[cron-tasks] Processing task: ${task.filename} -> agent: ${agentPath}`);
 
   try {
     // Mark as in_progress with lockedBy and lockedAt
     task.frontmatter.state = "in_progress";
-    task.frontmatter.lockedBy = slug;
+    task.frontmatter.lockedBy = agentPath;
     task.frontmatter.lockedAt = new Date().toISOString();
     await fs.writeFile(taskPath, serializeTask(task));
 
     // Build prompt from task body
-    const prompt = buildPromptFromTask(task, slug);
+    const prompt = buildPromptFromTask(task, agentPath);
 
-    // Create cron agent
-    const workingDirectory = await getCustomerRepoPath();
-    const agent = await createAgent({
-      slug,
-      harnessType: "opencode",
-      workingDirectory,
-      initialPrompt: `[Agent slug: ${slug}]\n[Source: cron]\n[Task: ${task.filename}]`,
-    });
-
-    console.log(`[cron-tasks] Created agent ${agent.slug} for task ${task.filename}`);
-
-    // Send the initial prompt to start the agent working
-    await appendToAgent(agent, prompt, {
-      workingDirectory,
-      acknowledge: async () => console.log(`[cron-tasks] Starting task ${task.filename}`),
-      unacknowledge: async () =>
-        console.log(`[cron-tasks] Agent finished processing task ${task.filename}`),
-    });
-    console.log(`[cron-tasks] Sent prompt to agent ${agent.slug}`);
+    // Send prompt via agents router (creates agent + session if needed)
+    await sendPromptToAgent(agentPath, prompt);
+    console.log(`[cron-tasks] Sent prompt to agent ${agentPath} for task ${task.filename}`);
 
     // Note: The agent now runs asynchronously. We don't wait for completion here.
     // A separate mechanism (agent completion callback or watchdog) will:
@@ -311,9 +328,9 @@ async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
 /**
  * Build the agent prompt from task content.
  */
-function buildPromptFromTask(task: ParsedTask, agentSlug: string): string {
+function buildPromptFromTask(task: ParsedTask, agentPath: string): string {
   const lines = [
-    `[Agent: ${agentSlug}]`,
+    `[Agent Path: ${agentPath}]`,
     `[Task: ${task.slug}]`,
     "",
     "You are executing a scheduled cron task. Here are your instructions:",
