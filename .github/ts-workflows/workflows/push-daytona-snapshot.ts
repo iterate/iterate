@@ -197,6 +197,7 @@ export default workflow({
           uses: "nick-fields/retry@v3",
           env: {
             CI: "true",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           with: {
             timeout_minutes: 10,
