@@ -168,15 +168,27 @@ const orpcHandler = new RPCHandler(workerRouter, {
         typeof (error as { status?: unknown }).status === "number"
           ? (error as { status: number }).status
           : undefined;
+      const errorDetails =
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
+          : {
+              name: "NonErrorThrowable",
+              message: String(error),
+              stack: new Error(String(error)).stack ?? "stack unavailable",
+            };
 
       const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
         (error as { message?: unknown })?.message ?? error,
       )}`;
 
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, error);
+        logger.error(message, errorDetails);
       } else {
-        logger.warn(message, error);
+        logger.warn(message, errorDetails);
       }
     }),
   ],
