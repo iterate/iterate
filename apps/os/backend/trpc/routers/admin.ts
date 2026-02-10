@@ -487,9 +487,9 @@ export const adminRouter = router({
         // Also get a total count for pagination
         const countRows = (
           await ctx.db.execute(sql`
-          with all_consumers as (${allConsumersSql})
-          select count(*)::int as total from outbox_event e ${whereSql}
-        `)
+            with all_consumers as (${allConsumersSql})
+            select count(*)::int as total from outbox_event e ${whereSql}
+          `)
         ).rows as { total: number }[];
         const total = countRows[0]?.total ?? 0;
 
@@ -502,12 +502,12 @@ export const adminRouter = router({
         // Get distinct consumer names
         const consumerNamesRows = (
           await ctx.db.execute(sql`
-          with all_consumers as (${allConsumersSql})
-          select distinct message->>'consumer_name' as name
-          from all_consumers
-          where message->>'consumer_name' is not null
-          order by name
-        `)
+            with all_consumers as (${allConsumersSql})
+            select distinct message->>'consumer_name' as name
+            from all_consumers
+            where message->>'consumer_name' is not null
+            order by name
+          `)
         ).rows as { name: string }[];
         const consumerNames = consumerNamesRows.map((r) => r.name);
 
