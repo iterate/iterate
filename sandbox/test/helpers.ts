@@ -316,9 +316,17 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
   }
 
   switch (TEST_CONFIG.provider) {
-    case "docker":
+    case "docker": {
       env.DOCKER_HOST_GIT_REPO_ROOT ??= ITERATE_REPO_PATH_ON_HOST;
+      // When host sync is enabled, ensure git dir env vars are populated
+      if (env.DOCKER_HOST_SYNC_ENABLED === "true" && !env.DOCKER_HOST_GIT_DIR) {
+        const dockerEnv = getDockerEnvVars(env.DOCKER_HOST_GIT_REPO_ROOT);
+        Object.entries(dockerEnv).forEach(([k, v]) => {
+          env[k] ??= v;
+        });
+      }
       return new DockerProvider(env);
+    }
     case "daytona":
       return new DaytonaProvider(env);
     case "fly":
