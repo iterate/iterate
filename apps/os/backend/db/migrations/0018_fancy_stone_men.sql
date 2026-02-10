@@ -8,5 +8,5 @@ CREATE TABLE "outbox_event" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-DROP INDEX "project_organization_id_slug_index";--> statement-breakpoint
-ALTER TABLE "project" ADD CONSTRAINT "project_slug_unique" UNIQUE("slug");
+-- DROP INDEX "project_organization_id_slug_index";--> statement-breakpoint
+-- ALTER TABLE "project" ADD CONSTRAINT "project_slug_unique" UNIQUE("slug");
