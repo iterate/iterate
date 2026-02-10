@@ -160,7 +160,7 @@ app.route("", egressProxyApp);
 // oRPC handler for machine status (called by daemon to report ready)
 const orpcHandler = new RPCHandler(workerRouter, {
   interceptors: [
-    onError((error) => {
+    onError((error, params) => {
       const maybeStatus =
         typeof error === "object" &&
         error !== null &&
@@ -168,15 +168,28 @@ const orpcHandler = new RPCHandler(workerRouter, {
         typeof (error as { status?: unknown }).status === "number"
           ? (error as { status: number }).status
           : undefined;
+      const errorDetails =
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
+          : {
+              name: "NonErrorThrowable",
+              message: String(error),
+              stack: new Error(String(error)).stack ?? "stack unavailable",
+            };
+
+      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
+        (error as { message?: unknown })?.message ?? error,
+      )}`;
 
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(`oRPC Error ${maybeStatus ?? "unknown"}: ${(error as Error).message}`, error);
+        logger.error(message, errorDetails);
       } else {
-        logger.warn(`oRPC Error ${maybeStatus}: ${(error as Error).message}`, error);
+        logger.warn(message, errorDetails);
       }
-    }),
-    onError((error, params) => {
-      logger.error(`[orpc] handler error ${params.request.url}`, error);
     }),
   ],
   plugins: [new RequestHeadersPlugin()],
