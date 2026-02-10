@@ -94,9 +94,9 @@ function normalizeSubject(subject: string): string {
 }
 
 /**
- * Create a slug-safe thread ID from email data
+ * Create a path-safe thread segment from email data
  */
-function getSlug(email: { subject: string; email_id: string }): string {
+function getThreadPathSegment(email: { subject: string; email_id: string }): string {
   const normalized = normalizeSubject(email.subject);
 
   // Handle empty/missing subjects by using email ID as fallback
@@ -104,7 +104,7 @@ function getSlug(email: { subject: string; email_id: string }): string {
     return `email-nosubject-${email.email_id}`.slice(0, 50);
   }
 
-  // Create a short hash of the subject for the slug
+  // Create a short hash of the subject for the path segment
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     hash = (hash << 5) - hash + normalized.charCodeAt(i);
@@ -120,8 +120,8 @@ function getSlug(email: { subject: string; email_id: string }): string {
   return `email-${words}-${hashStr}`.slice(0, 50);
 }
 
-function getAgentPath(slug: string): string {
-  return `/email/${slug}`;
+function getAgentPath(threadPathSegment: string): string {
+  return `/email/${threadPathSegment}`;
 }
 
 emailRouter.post("/webhook", async (c) => {
@@ -148,8 +148,8 @@ emailRouter.post("/webhook", async (c) => {
 
     const { name: senderName, email: senderEmail } = parseSender(emailData.from);
     const subject = emailData.subject;
-    const threadSlug = getSlug(emailData);
-    const agentPath = getAgentPath(threadSlug);
+    const threadPathSegment = getThreadPathSegment(emailData);
+    const agentPath = getAgentPath(threadPathSegment);
     const emailBody = payload._iterate?.emailBody;
 
     const hasAgent = await activeAgentExists(agentPath);
@@ -157,7 +157,7 @@ emailRouter.post("/webhook", async (c) => {
     if (hasAgent) {
       // Reply to existing thread
       const message = formatReplyMessage(
-        threadSlug,
+        agentPath,
         senderName,
         senderEmail,
         subject,
@@ -177,7 +177,7 @@ emailRouter.post("/webhook", async (c) => {
 
     // New email thread - create agent via gateway
     const message = formatNewEmailMessage(
-      threadSlug,
+      agentPath,
       senderName,
       senderEmail,
       subject,
@@ -233,7 +233,7 @@ async function storeEvent(
  * Format message for a new email (first in thread).
  */
 function formatNewEmailMessage(
-  agentSlug: string,
+  agentPath: string,
   senderName: string,
   senderEmail: string,
   subject: string,
@@ -252,7 +252,7 @@ function formatNewEmailMessage(
     : "\n(Email body could not be retrieved)";
 
   return [
-    `[Agent: ${agentSlug}] New email thread started.`,
+    `[Agent Path: ${agentPath}] New email thread started.`,
     `Refer to EMAIL.md for how to respond via \`iterate tool email\`.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
@@ -269,7 +269,7 @@ function formatNewEmailMessage(
  * Format message for a reply email (continuing thread).
  */
 function formatReplyMessage(
-  agentSlug: string,
+  agentPath: string,
   senderName: string,
   senderEmail: string,
   subject: string,
@@ -288,7 +288,7 @@ function formatReplyMessage(
     : "\n(Email body could not be retrieved)";
 
   return [
-    `Another email in thread ${agentSlug}.`,
+    `Another email in agent thread ${agentPath}.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `Subject: ${subject}`,

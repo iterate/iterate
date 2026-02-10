@@ -18,10 +18,6 @@ vi.mock("../db/index.ts", () => ({
   },
 }));
 
-vi.mock("../services/slack-stream-consumer.ts", () => ({
-  registerSlackWork: vi.fn(async () => {}),
-}));
-
 const { slackRouter } = await import("./slack.ts");
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -33,6 +29,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    shortStatus: "idle",
+    isWorking: false,
     metadata: metadata ?? null,
     ...rest,
   };

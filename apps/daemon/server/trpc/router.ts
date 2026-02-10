@@ -5,6 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentRoute } from "../db/schema.ts";
+import { notifyAgentChange } from "../services/agent-change-callbacks.ts";
 import { IterateEvent } from "../types/events.ts";
 import { validateAgentPath } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
@@ -107,9 +108,94 @@ export const trpcRouter = createTRPCRouter({
 
       await db
         .update(schema.agents)
-        .set({ archivedAt: new Date() })
+        .set({ archivedAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.agents.path, input.path));
+      await notifyAgentChange(input.path);
 
+      return { success: true };
+    }),
+
+  updateAgent: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+        shortStatus: z.string().min(0).max(30).optional(),
+        isWorking: z.boolean().optional(),
+        archivedAt: z.coerce.date().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ input }): Promise<SerializedAgent | null> => {
+      const setValues: Partial<typeof schema.agents.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+
+      if ("metadata" in input) setValues.metadata = input.metadata ?? null;
+      if ("shortStatus" in input) setValues.shortStatus = input.shortStatus ?? "";
+      if ("isWorking" in input) setValues.isWorking = input.isWorking ?? false;
+      if ("archivedAt" in input) setValues.archivedAt = input.archivedAt ?? null;
+
+      await db.update(schema.agents).set(setValues).where(eq(schema.agents.path, input.path));
+      await notifyAgentChange(input.path);
+
+      const rows = await db
+        .select({ agent: schema.agents, route: schema.agentRoutes })
+        .from(schema.agents)
+        .leftJoin(
+          schema.agentRoutes,
+          and(
+            eq(schema.agentRoutes.agentPath, schema.agents.path),
+            eq(schema.agentRoutes.active, true),
+          ),
+        )
+        .where(eq(schema.agents.path, input.path))
+        .limit(1);
+
+      const row = rows[0];
+      if (!row) return null;
+      return serializeAgent(row.agent, row.route ?? null);
+    }),
+
+  subscribeToAgentChanges: publicProcedure
+    .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
+    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+      const existing = await db
+        .select()
+        .from(schema.agentSubscriptions)
+        .where(
+          and(
+            eq(schema.agentSubscriptions.agentPath, input.agentPath),
+            eq(schema.agentSubscriptions.callbackUrl, input.callbackUrl),
+          ),
+        )
+        .limit(1);
+
+      if (existing[0]) {
+        await db
+          .update(schema.agentSubscriptions)
+          .set({ updatedAt: new Date() })
+          .where(eq(schema.agentSubscriptions.id, existing[0].id));
+      } else {
+        await db.insert(schema.agentSubscriptions).values({
+          agentPath: input.agentPath,
+          callbackUrl: input.callbackUrl,
+        });
+      }
+
+      return { success: true };
+    }),
+
+  unsubscribeFromAgentChanges: publicProcedure
+    .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
+    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+      await db
+        .delete(schema.agentSubscriptions)
+        .where(
+          and(
+            eq(schema.agentSubscriptions.agentPath, input.agentPath),
+            eq(schema.agentSubscriptions.callbackUrl, input.callbackUrl),
+          ),
+        );
       return { success: true };
     }),
 

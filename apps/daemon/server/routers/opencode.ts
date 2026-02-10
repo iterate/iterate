@@ -6,7 +6,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { publishAgentLifecycleEvent } from "../services/agent-lifecycle.ts";
+import { notifyAgentChange } from "../services/agent-change-callbacks.ts";
 import type { IterateEvent } from "../types/events.ts";
 import { extractIterateEvents } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
@@ -270,10 +270,9 @@ async function handleLifecycleFrame(frame: string): Promise<void> {
   if (!statusEvent) return;
 
   for (const agentPath of agentPaths) {
-    publishAgentLifecycleEvent({
-      type: "status",
-      agentPath,
-      status: statusEvent.statusText,
+    await updateAgentLifecycleState(agentPath, {
+      isWorking: true,
+      shortStatus: statusEvent.statusText,
     });
   }
 }
@@ -322,7 +321,10 @@ async function settleAgentPath(agentPath: string): Promise<void> {
     }
   }
 
-  publishAgentLifecycleEvent({ type: "unack", agentPath });
+  await updateAgentLifecycleState(agentPath, {
+    isWorking: false,
+    shortStatus: "",
+  });
 }
 
 export async function trackAgentLifecycle(params: {
@@ -347,7 +349,10 @@ export async function trackAgentLifecycle(params: {
     const set = agentPathByHarnessHandle.get(params.harnessHandle) ?? new Set<string>();
     set.add(agentPath);
     agentPathByHarnessHandle.set(params.harnessHandle, set);
-    publishAgentLifecycleEvent({ type: "ack", agentPath });
+    await updateAgentLifecycleState(agentPath, {
+      isWorking: true,
+      shortStatus: "Working",
+    });
   }
 }
 
@@ -372,6 +377,19 @@ async function resolveAgentPathByHarnessHandle(harnessHandle: string): Promise<s
   }
 
   return null;
+}
+
+async function updateAgentLifecycleState(
+  agentPath: string,
+  params: { isWorking?: boolean; shortStatus?: string },
+): Promise<void> {
+  const setValues: Partial<typeof schema.agents.$inferInsert> = {
+    updatedAt: new Date(),
+  };
+  if (params.isWorking !== undefined) setValues.isWorking = params.isWorking;
+  if (params.shortStatus !== undefined) setValues.shortStatus = params.shortStatus;
+  await db.update(schema.agents).set(setValues).where(eq(schema.agents.path, agentPath));
+  await notifyAgentChange(agentPath);
 }
 
 function extractSessionId(event: Record<string, unknown>): string | null {

@@ -175,13 +175,11 @@ const orpcHandler = new RPCHandler(workerRouter, {
         logger.warn(`oRPC Error ${maybeStatus}: ${(error as Error).message}`, error);
       }
     }),
-  ],
-  plugins: [new RequestHeadersPlugin()],
-  interceptors: [
     onError((error, params) => {
       logger.error(`[orpc] handler error ${params.request.url}`, error);
     }),
   ],
+  plugins: [new RequestHeadersPlugin()],
 });
 app.all("/api/orpc/*", async (c) => {
   const { matched, response } = await orpcHandler.handle(c.req.raw, {

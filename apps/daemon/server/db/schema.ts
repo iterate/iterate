@@ -1,6 +1,5 @@
 import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
-import { string } from "zod/v4";
 
 export const events = sqliteTable("events", {
   id: text().primaryKey(),
@@ -23,16 +22,26 @@ export const agents = sqliteTable("agents", {
   archivedAt: integer("archived_at", { mode: "timestamp" }),
 
   shortStatus: text("short_status").notNull().default("idle"),
+  isWorking: integer("is_working", { mode: "boolean" }).notNull().default(false),
 });
 
-export const agentSubscriptions = sqliteTable("agent_subscriptions", {
-  agentPath: text("agent_path")
-    .notNull()
-    .references(() => agents.path),
-  callbackUrl: text("subscription").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
-});
+export const agentSubscriptions = sqliteTable(
+  "agent_subscriptions",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    agentPath: text("agent_path")
+      .notNull()
+      .references(() => agents.path),
+    callbackUrl: text("callback_url").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    agentPathCallbackUrlUnique: uniqueIndex(
+      "agent_subscriptions_agent_path_callback_url_unique",
+    ).on(table.agentPath, table.callbackUrl),
+  }),
+);
 
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;

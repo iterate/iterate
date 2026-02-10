@@ -63,7 +63,7 @@ function MachineDetailPage() {
   };
 
   const { commands, services } = machine;
-  const isDockerMachine = machine.type === "docker" || machine.type === "local-docker";
+  const isDockerMachine = machine.type === "local-docker";
   const dockerContainerRef = metadata.containerName ?? metadata.containerId ?? machine.externalId;
 
   const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;

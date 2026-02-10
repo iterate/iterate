@@ -7,6 +7,8 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import { z } from "zod/v4";
+import { x } from "tinyexec";
 import type {
   AppMentionEvent,
   GenericMessageEvent,
@@ -17,11 +19,31 @@ import type {
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
-import { trackSlackLifecycle } from "../services/slack-stream-consumer.ts";
+import { trpcRouter } from "../trpc/router.ts";
 
 const logger = console;
 
 export const slackRouter = new Hono();
+
+// [[Explain what this is for]]
+type SlackAgentContext = {
+  channel: string;
+  threadTs: string;
+  emojiTimestamp: string;
+  emoji: string;
+  requestId?: string;
+};
+
+const slackContextByAgentPath = new Map<string, SlackAgentContext>();
+const DAEMON_PORT = process.env.PORT || "3001";
+const slackCallbackUrl = `http://localhost:${DAEMON_PORT}/api/integrations/slack/agent-change-callback`;
+
+// [[why can we not use the schema / type from the actual router? ]]
+const AgentChangePayload = z.object({
+  path: z.string(),
+  shortStatus: z.string(),
+  isWorking: z.boolean(),
+});
 
 interface SlackWebhookPayload {
   token?: string;
@@ -166,6 +188,34 @@ slackRouter.post("/webhook", async (c) => {
   });
 });
 
+// [[I'll explain briefly that this gets called by the agent tRPC router whenever anything changes. ]]
+slackRouter.post("/agent-change-callback", async (c) => {
+  const parsed = AgentChangePayload.safeParse(await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
+  }
+
+  const payload = parsed.data;
+  const context = slackContextByAgentPath.get(payload.path);
+  if (!context) {
+    return c.json({ success: true, ignored: true });
+  }
+
+  if (payload.isWorking) {
+    await acknowledge(context);
+    await setThreadStatus(context, payload.shortStatus || "Working");
+    return c.json({ success: true });
+  }
+
+  await unacknowledge(context);
+  slackContextByAgentPath.delete(payload.path);
+  await trpcRouter.createCaller({}).unsubscribeFromAgentChanges({
+    agentPath: payload.path,
+    callbackUrl: slackCallbackUrl,
+  });
+  return c.json({ success: true });
+});
+
 async function handleSlackWebhookAsync(params: {
   parsed: ParsedMessage | ParsedReaction;
   eventId: string;
@@ -192,8 +242,9 @@ async function handleSlackWebhookAsync(params: {
     }
 
     const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+    // [[This is terrible (nameing, at least) - it should be clear thisis just a fetcher. it should be really clear that this is just a fetch!]]
     await sendToAgentGateway(agentPath, { type: "prompt", message });
-    trackSlackLifecycle({
+    await registerSlackAgentChangeContext({
       agentPath,
       channel: parsed.channel,
       threadTs,
@@ -215,7 +266,7 @@ async function handleSlackWebhookAsync(params: {
       ? formatMidThreadMentionMessage(event, threadTs, eventId)
       : formatNewThreadMentionMessage(event, threadTs, eventId);
     await sendToAgentGateway(agentPath, { type: "prompt", message });
-    trackSlackLifecycle({
+    await registerSlackAgentChangeContext({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -230,7 +281,7 @@ async function handleSlackWebhookAsync(params: {
     const messageTs = event.ts || threadTs;
     const message = formatMidThreadMentionMessage(event, threadTs, eventId);
     await sendToAgentGateway(agentPath, { type: "prompt", message });
-    trackSlackLifecycle({
+    await registerSlackAgentChangeContext({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -241,6 +292,7 @@ async function handleSlackWebhookAsync(params: {
     return;
   }
 
+  // [[ Explain what this is about  / when it would happen ]]
   if (messageParsed.case === "fyi_message") {
     if (!hasAgent) {
       logger.log("[Slack Webhook] Ignored FYI: no existing agent", { eventId, requestId });
@@ -249,7 +301,7 @@ async function handleSlackWebhookAsync(params: {
 
     const message = formatFyiMessage(event, threadTs, eventId);
     await sendToAgentGateway(agentPath, { type: "prompt", message });
-    trackSlackLifecycle({
+    await registerSlackAgentChangeContext({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -259,6 +311,99 @@ async function handleSlackWebhookAsync(params: {
     });
     return;
   }
+}
+
+async function registerSlackAgentChangeContext(params: {
+  agentPath: string;
+  channel: string;
+  threadTs: string;
+  emojiTimestamp: string;
+  emoji: string;
+  requestId?: string;
+}): Promise<void> {
+  slackContextByAgentPath.set(params.agentPath, {
+    channel: params.channel,
+    threadTs: params.threadTs,
+    emojiTimestamp: params.emojiTimestamp,
+    emoji: params.emoji,
+    requestId: params.requestId,
+  });
+
+  await trpcRouter.createCaller({}).subscribeToAgentChanges({
+    agentPath: params.agentPath,
+    callbackUrl: slackCallbackUrl,
+  });
+}
+
+async function acknowledge(context: SlackAgentContext): Promise<void> {
+  try {
+    await runSlackCommand(
+      `await slack.reactions.add(${JSON.stringify({
+        channel: context.channel,
+        timestamp: context.emojiTimestamp,
+        name: context.emoji,
+      })})`,
+      context.requestId,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("already_reacted")) {
+      logger.error("[slack-callback] acknowledge failed", { context, error: message });
+    }
+  }
+}
+
+// [[ Explain a bit what this is about and that we're shelling out: because of some weird env var issue on the daemon that we didn't yet want to fix ]]
+async function unacknowledge(context: SlackAgentContext): Promise<void> {
+  try {
+    await runSlackCommand(
+      `await slack.reactions.remove(${JSON.stringify({
+        channel: context.channel,
+        timestamp: context.emojiTimestamp,
+        name: context.emoji,
+      })})`,
+      context.requestId,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("no_reaction")) {
+      logger.error("[slack-callback] unacknowledge failed", { context, error: message });
+    }
+  }
+
+  await setThreadStatus(context, "");
+}
+
+async function setThreadStatus(context: SlackAgentContext, status: string): Promise<void> {
+  try {
+    await runSlackCommand(
+      `await slack.assistant.threads.setStatus(${JSON.stringify({
+        channel_id: context.channel,
+        thread_ts: context.threadTs,
+        status,
+      })})`,
+      context.requestId,
+    );
+  } catch (error) {
+    logger.error("[slack-callback] setStatus failed", {
+      context,
+      status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+// [[ Explain we're shelling out because of some weird NFAR issue.  ]]
+async function runSlackCommand(code: string, requestId?: string): Promise<void> {
+  const result = await x("iterate", ["tool", "slack", code], { throwOnError: false });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || result.stdout || `Exit code ${result.exitCode}`);
+  }
+
+  logger.log("[slack-callback] ran slack command", {
+    requestId,
+    preview: code.slice(0, 80),
+  });
 }
 
 function parseWebhookPayload(
@@ -322,7 +467,7 @@ function sanitizeThreadId(ts: string): string {
 }
 
 function getAgentPath(threadTs: string): string {
-  return `/slack/${sanitizeThreadId(threadTs)}`;
+  return `/slack/ts-${sanitizeThreadId(threadTs)}`;
 }
 
 async function storeEvent(payload: SlackWebhookPayload, slackEventId?: string): Promise<string> {
@@ -364,10 +509,10 @@ function formatNewThreadMentionMessage(
   const user = event.user ? `<@${event.user}>` : "unknown";
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
-  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
+  const agentPath = getAgentPath(threadTs);
 
   return [
-    `[Agent: ${agentSlug}] New Slack thread started.`,
+    `[Agent Path: ${agentPath}] New Slack thread started.`,
     "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,
@@ -387,10 +532,10 @@ function formatMidThreadMentionMessage(
   const channel = event.channel || "unknown";
   const text = event.text || "(no text)";
   const messageTs = event.ts || threadTs;
-  const agentSlug = `slack-${sanitizeThreadId(threadTs)}`;
+  const agentPath = getAgentPath(threadTs);
 
   const lines = [
-    `[Agent: ${agentSlug}] You've been @mentioned in thread ${threadTs}.`,
+    `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
     "Refer to SLACK.md for how to respond via `iterate tool slack`.",
     "",
     `From: ${user}`,

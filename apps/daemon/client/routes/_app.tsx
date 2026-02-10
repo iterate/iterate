@@ -11,8 +11,8 @@ export const Route = createFileRoute("/_app")({
 
 function AppLayout() {
   const params = useParams({ strict: false });
-  const agentSlug = "slug" in params ? (params.slug as string) : undefined;
-  const agentPath = agentSlug ? decodeURIComponent(agentSlug) : undefined;
+  const encodedAgentPath = "slug" in params ? (params.slug as string) : undefined;
+  const agentPath = encodedAgentPath ? decodeURIComponent(encodedAgentPath) : undefined;
 
   const trpc = useTRPC();
   const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
