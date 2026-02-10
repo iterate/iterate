@@ -271,7 +271,6 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
-  SANDBOX_MACHINE_PROVIDERS: Optional,
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
   FLY_DEFAULT_REGION: Optional,
