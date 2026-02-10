@@ -1,5 +1,20 @@
 # Webchat Channel Instructions
 
+## Hard Rule: CLI Shape
+
+`iterate tool webchat` takes one arg: JS code.
+No subcommands. No CLI flags like `--thread-id`, `--body`, etc.
+
+```bash
+# valid
+iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "hi" })'
+
+# invalid! ERROR!!!!
+iterate tool webchat send --thread-id THREAD_ID --body "hi"
+iterate tool webchat --thread-id THREAD_ID --body "hi"
+iterate tool webchat postMessage ...
+```
+
 ## Quick Reference: Sending Messages
 
 **IMPORTANT:** `iterate tool webchat` takes JavaScript code as its only argument — there are NO subcommands.
