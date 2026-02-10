@@ -6,8 +6,7 @@ import { createOpencodeClient, type Event as OpencodeEvent, type ToolPart } from
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import type { IterateEvent } from "../types/events.ts";
-import { extractIterateEvents } from "../types/events.ts";
+import { isPromptEvent } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { trpcRouter } from "../trpc/router.ts";
 import { withSpan } from "../utils/otel.ts";
@@ -37,11 +36,6 @@ const agentPathByHarnessHandle = new Map<string, Set<string>>();
 
 let lifecycleSubscriptionStarted = false;
 
-/** Concatenate all prompt events into a single message */
-function concatenatePrompts(events: IterateEvent[]): string {
-  return events.map((e) => e.message).join("\n\n");
-}
-
 async function sendPromptToSession(
   sessionId: string,
   prompt: string,
@@ -56,10 +50,7 @@ async function sendPromptToSession(
 }
 
 opencodeRouter.post("/new", async (c) => {
-  const { agentPath, events } = (await c.req.json()) as {
-    agentPath: string;
-    events?: IterateEvent[];
-  };
+  const { agentPath } = (await c.req.json()) as { agentPath: string };
 
   const client = createOpencodeClient({ baseUrl: OPENCODE_BASE_URL });
   const workingDirectory = getOpencodeWorkingDirectory();
@@ -73,32 +64,6 @@ opencodeRouter.post("/new", async (c) => {
   }
 
   const sessionId = response.data.id;
-  const eventList = extractIterateEvents(events);
-
-  // Fire-and-forget: background the prompt so the caller doesn't block on model run
-  const combinedPrompt = concatenatePrompts(eventList);
-  if (combinedPrompt) {
-    void withSpan(
-      "daemon.opencode.prompt",
-      {
-        attributes: {
-          "opencode.session_id": sessionId,
-          "agent.path": agentPath,
-          "prompt.length": combinedPrompt.length,
-        },
-      },
-      async () => {
-        await trackAgentLifecycle({ agentPath, harnessHandle: sessionId });
-        await sendPromptToSession(sessionId, combinedPrompt, workingDirectory);
-      },
-    ).catch((error) => {
-      console.error("[opencode] background prompt failed for new session", {
-        sessionId,
-        agentPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
 
   return c.json({
     route: `/opencode/sessions/${sessionId}`,
@@ -193,34 +158,36 @@ opencodeRouter.get("/sessions/:sessionId", async (c) => {
 
 opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
-  const agentPathFromHeader = c.req.header("x-iterate-agent-path") ?? undefined;
+  const agentPath = c.req.header("x-iterate-agent-path") ?? undefined;
   const payload = await c.req.json();
-  const events = extractIterateEvents(payload);
+
+  if (!isPromptEvent(payload)) {
+    return c.json({ error: "Expected a prompt event" }, 400);
+  }
+
+  const { message } = payload;
 
   // Fire-and-forget: background the prompt so the caller returns immediately
-  const combinedPrompt = concatenatePrompts(events);
-  if (combinedPrompt) {
-    void withSpan(
-      "daemon.opencode.append",
-      {
-        attributes: {
-          "opencode.session_id": sessionId,
-          ...(agentPathFromHeader ? { "agent.path": agentPathFromHeader } : {}),
-          "prompt.length": combinedPrompt.length,
-        },
+  void withSpan(
+    "daemon.opencode.append",
+    {
+      attributes: {
+        "opencode.session_id": sessionId,
+        ...(agentPath ? { "agent.path": agentPath } : {}),
+        "prompt.length": message.length,
       },
-      async () => {
-        await trackAgentLifecycle({ agentPath: agentPathFromHeader, harnessHandle: sessionId });
-        await sendPromptToSession(sessionId, combinedPrompt, getOpencodeWorkingDirectory());
-      },
-    ).catch((error) => {
-      console.error("[opencode] background prompt failed", {
-        sessionId,
-        agentPath: agentPathFromHeader,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    },
+    async () => {
+      await trackAgentLifecycle({ agentPath, harnessHandle: sessionId });
+      await sendPromptToSession(sessionId, message, getOpencodeWorkingDirectory());
+    },
+  ).catch((error) => {
+    console.error("[opencode] background prompt failed", {
+      sessionId,
+      agentPath,
+      error: error instanceof Error ? error.message : String(error),
     });
-  }
+  });
 
   return c.json({ success: true, sessionId });
 });
