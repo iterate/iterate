@@ -136,6 +136,14 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     },
   });
 
+  // Detach any older machines still in "starting" state for this project.
+  // This prevents multiple concurrent readiness probes and wasted resources —
+  // the probe's state guard will skip machines that are no longer "starting".
+  await db
+    .update(schema.machine)
+    .set({ state: "detached" })
+    .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
+
   // Create machine in DB with 'starting' state
   const [newMachine] = await db
     .insert(schema.machine)

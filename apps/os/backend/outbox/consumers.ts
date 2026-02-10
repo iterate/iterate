@@ -15,7 +15,7 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "verifyMachineReadiness",
     on: "machine:verify-readiness",
-    visibilityTimeout: 180, // probe polls for up to 120s, give extra headroom
+    visibilityTimeout: 200, // send(60s) + poll(120s) + margin
     retry: (job) => {
       // The probe itself already polls for up to 120s, so retries here
       // cover transient infra failures (e.g. worker restarted mid-probe).
@@ -48,23 +48,31 @@ export const registerConsumers = () => {
       if (!probeResult.ok) {
         logger.error("[outbox] Machine readiness probe failed", {
           machineId,
+          attempt: params.job.attempt,
           detail: probeResult.detail,
         });
 
+        // Update metadata so the UI reflects current status.
+        // On retry this gets overwritten; on final failure it sticks as "error".
+        const isLastAttempt = params.job.attempt >= 3;
         const currentMetadata = (machine.metadata as Record<string, unknown>) ?? {};
         await db
           .update(schema.machine)
           .set({
             metadata: {
               ...currentMetadata,
-              daemonStatus: "error",
-              daemonStatusMessage: `Readiness probe failed: ${probeResult.detail}`,
+              daemonStatus: isLastAttempt ? "error" : "retrying",
+              daemonStatusMessage: isLastAttempt
+                ? `Readiness probe failed: ${probeResult.detail}`
+                : `Readiness probe attempt ${params.job.attempt} failed, retrying...`,
             },
           })
           .where(eq(schema.machine.id, machineId));
 
         await broadcastInvalidation(env).catch(() => {});
-        return `probe failed: ${probeResult.detail}`;
+
+        // Throw so the outbox retry machinery kicks in (or DLQs on final attempt)
+        throw new Error(`probe failed: ${probeResult.detail}`);
       }
 
       logger.info("[outbox] Machine readiness probe passed", {
@@ -79,6 +87,19 @@ export const registerConsumers = () => {
         daemonStatusMessage: "Daemon ready",
         daemonReadyAt: new Date().toISOString(),
       };
+
+      // Re-check state before activating — the machine may have been detached
+      // by a newer machine creation while the probe was running.
+      const freshMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (freshMachine?.state !== "starting") {
+        logger.info("[outbox] Skipping activation, machine state changed during probe", {
+          machineId,
+          state: freshMachine?.state,
+        });
+        return `skipped activation: machine state is "${freshMachine?.state}", not "starting"`;
+      }
 
       await cc.sendTx(db, "machine:activated", async (tx) => {
         // Bulk-detach all active machines for this project
