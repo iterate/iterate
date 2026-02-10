@@ -13,6 +13,7 @@ import { CONNECTORS } from "../services/connectors.ts";
 import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-refresh.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
+import { captureServerEvent } from "../lib/posthog.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
@@ -173,6 +174,29 @@ export const reportStatus = os.machines.reportStatus
           },
         };
       });
+
+      // Track machine_ready in PostHog for boot-time dashboards
+      const bootTimeMs = Date.now() - new Date(machineWithOrg.createdAt).getTime();
+      executionCtx.waitUntil(
+        captureServerEvent(env, {
+          distinctId: `machine:${machine.id}`,
+          event: "machine_ready",
+          properties: {
+            machine_id: machine.id,
+            machine_type: machineWithOrg.type,
+            machine_name: machineWithOrg.name,
+            project_id: machineWithOrg.projectId,
+            organization_id: machineWithOrg.project.organizationId,
+            boot_time_ms: bootTimeMs,
+          },
+          groups: {
+            organization: machineWithOrg.project.organizationId,
+            project: machineWithOrg.projectId,
+          },
+        }).catch((err) => {
+          logger.error("Failed to track machine_ready in PostHog", err);
+        }),
+      );
     } else {
       // Just update metadata
       await db

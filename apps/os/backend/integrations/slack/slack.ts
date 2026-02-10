@@ -625,7 +625,33 @@ slackApp.post("/webhook", async (c) => {
               correlation,
             });
             span.setAttribute("machine.id", targetMachine.id);
-            await forwardSlackWebhookToMachine(targetMachine, payload, env, correlation);
+            const forwardStart = Date.now();
+            const forwardResult = await forwardSlackWebhookToMachine(
+              targetMachine,
+              payload,
+              env,
+              correlation,
+            );
+            const forwardDurationMs = Date.now() - forwardStart;
+
+            // Track forward latency in PostHog for dashboard queries
+            trackWebhookEvent(env, {
+              distinctId: `slack:${teamId}`,
+              event: "slack:webhook_forwarded",
+              properties: {
+                machine_id: targetMachine.id,
+                machine_type: targetMachine.type,
+                project_id: projectId,
+                organization_id: connection.project.organizationId,
+                forward_duration_ms: forwardDurationMs,
+                forward_success: forwardResult.success,
+                slack_event_id: slackEventId,
+              },
+              groups: {
+                organization: connection.project.organizationId,
+                project: projectId,
+              },
+            });
           }
 
           // Save event with type slack:webhook-received, detailed info in payload

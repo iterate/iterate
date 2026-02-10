@@ -55,6 +55,33 @@ function createClient(params: { directory: string }): OpencodeClient {
   });
 }
 
+/**
+ * Warm the opencode MCP client pool by hitting GET /mcp with the correct
+ * directory context. Instance.state() is keyed by directory, so we must
+ * pass the same directory the session will use — otherwise we warm a
+ * different cache entry and the first session still pays the cold-start.
+ */
+async function warmMCPClients(directory: string): Promise<void> {
+  try {
+    const resp = await fetch(
+      `${OPENCODE_BASE_URL}/mcp?directory=${encodeURIComponent(directory)}`,
+      { signal: AbortSignal.timeout(30_000) },
+    );
+    if (resp.ok) {
+      const status = await resp.json();
+      const names = Object.keys(status as Record<string, unknown>);
+      logger.log("[opencode] MCP clients warmed", { directory, servers: names });
+    } else {
+      logger.warn("[opencode] MCP warm-up returned", { status: resp.status });
+    }
+  } catch (err) {
+    // Non-fatal — first session will just be a bit slower
+    logger.warn("[opencode] MCP warm-up failed (non-fatal)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function waitForSessionReady(
   client: OpencodeClient,
   sessionId: string,
@@ -107,6 +134,9 @@ export const opencodeHarness: AgentHarness = {
       async (span) => {
         console.log(`Creating OpenCode client for ${workingDirectory}`, { params, ITERATE_REPO });
         const client = createClient({ directory: workingDirectory });
+
+        // Pre-warm MCP clients so first resolveTools doesn't pay cold-start
+        await warmMCPClients(workingDirectory);
 
         // Create OpenCode session via SDK
         const response = await client.session.create({ title: `Agent: ${params.slug}` });
