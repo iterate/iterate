@@ -32,7 +32,7 @@
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { eq, and, inArray, asc } from "drizzle-orm";
+import { eq, and, inArray, asc, desc, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -42,6 +42,8 @@ const logger = console;
 // Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
 const webchatThreadStatuses = new Map<string, string>();
 const webchatThreadIdByAgentPath = new Map<string, string>();
+const MAX_THREAD_SUMMARY_MESSAGES = 2000;
+const MAX_THREAD_MESSAGES = 500;
 const DAEMON_BASE_URL = `http://localhost:${process.env.PORT || "3001"}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const WEBCHAT_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/webchat/agent-change-callback`;
@@ -314,13 +316,10 @@ webchatRouter.get("/threads", async (c) => {
 
 webchatRouter.get("/threads/:threadId/messages", async (c) => {
   const webchatThreadId = c.req.param("threadId");
-  const messages = (await listStoredMessages())
-    .filter((message) => message.threadId === webchatThreadId)
-    .sort((a, b) => a.createdAt - b.createdAt);
+  const messages = await listStoredMessagesForThread(webchatThreadId);
 
-  const agentSessionUrl = await getThreadAgentSessionUrl(webchatThreadId);
   const status = webchatThreadStatuses.get(webchatThreadId) ?? "";
-  return c.json({ threadId: webchatThreadId, messages, agentSessionUrl, status });
+  return c.json({ threadId: webchatThreadId, messages, status });
 });
 
 function createWebchatThreadId(): string {
@@ -344,39 +343,6 @@ function sanitizeForPathSegment(value: string): string {
 
 function getAgentPathForThread(webchatThreadId: string): string {
   return `/webchat/${sanitizeForPathSegment(webchatThreadId)}`;
-}
-
-const SessionEnv = z.object({
-  ITERATE_OS_BASE_URL: z.string(),
-  ITERATE_ORG_SLUG: z.string(),
-  ITERATE_PROJECT_SLUG: z.string(),
-  ITERATE_MACHINE_ID: z.string(),
-  ITERATE_CUSTOMER_REPO_PATH: z.string(),
-});
-
-function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | null): string {
-  const env = SessionEnv.parse(process.env);
-  const dir = workingDirectory ?? env.ITERATE_CUSTOMER_REPO_PATH;
-  const command = `opencode attach 'http://localhost:4096' --session ${sessionId} --dir ${dir}`;
-  const proxyUrl = `${env.ITERATE_OS_BASE_URL}/org/${env.ITERATE_ORG_SLUG}/proj/${env.ITERATE_PROJECT_SLUG}/${env.ITERATE_MACHINE_ID}/proxy/3000`;
-  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
-}
-
-async function getThreadAgentSessionUrl(webchatThreadId: string): Promise<string | undefined> {
-  const agentPath = getAgentPathForThread(webchatThreadId);
-  const route = await db
-    .select()
-    .from(schema.agentRoutes)
-    .where(and(eq(schema.agentRoutes.agentPath, agentPath), eq(schema.agentRoutes.active, true)))
-    .limit(1);
-
-  const destination = route[0]?.destination;
-  if (!destination) return undefined;
-
-  const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
-  if (!match) return undefined;
-
-  return buildAgentSessionUrl(match[1]);
 }
 
 async function storeEvent(
@@ -405,7 +371,27 @@ async function listStoredMessages(): Promise<StoredMessage[]> {
     .select()
     .from(schema.events)
     .where(inArray(schema.events.type, ["webchat:user-message", "webchat:assistant-message"]))
-    .orderBy(asc(schema.events.createdAt));
+    .orderBy(desc(schema.events.createdAt))
+    .limit(MAX_THREAD_SUMMARY_MESSAGES);
+
+  return events
+    .map((event) => parseStoredMessage(event.payload))
+    .filter((message): message is StoredMessage => message !== null)
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+async function listStoredMessagesForThread(webchatThreadId: string): Promise<StoredMessage[]> {
+  const events = await db
+    .select()
+    .from(schema.events)
+    .where(
+      and(
+        inArray(schema.events.type, ["webchat:user-message", "webchat:assistant-message"]),
+        sql`json_extract(${schema.events.payload}, '$.threadId') = ${webchatThreadId}`,
+      ),
+    )
+    .orderBy(asc(schema.events.createdAt))
+    .limit(MAX_THREAD_MESSAGES);
 
   return events
     .map((event) => parseStoredMessage(event.payload))

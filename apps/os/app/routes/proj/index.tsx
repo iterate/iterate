@@ -12,7 +12,6 @@ import {
   Plus,
   SendHorizontal,
   Server,
-  Terminal,
   X,
 } from "lucide-react";
 import { z } from "zod/v4";
@@ -150,11 +149,10 @@ function ProjectHomePage() {
       projectSlug: params.projectSlug,
       threadId: selectedThreadId,
     }),
-    refetchInterval: selectedThreadId ? 3000 : false,
+    refetchInterval: selectedThreadId ? 10000 : false,
   });
 
   const messages = selectedThreadId ? (messagesData?.messages ?? []) : [];
-  const agentSessionUrl = messagesData?.agentSessionUrl;
   const threadStatus = messagesData?.status;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -359,22 +357,12 @@ function ProjectHomePage() {
         {/* Messages + input */}
         <section className="flex min-h-0 min-w-0 flex-col gap-3">
           {selectedThreadId && messages.length > 0 ? (
-            <div className="flex flex-shrink-0 items-center justify-between rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+            <div className="flex shrink-0 items-center justify-between rounded-lg border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
               <span className="truncate font-medium">
                 {threadsData.threads.find((t) => t.threadId === selectedThreadId)?.title ??
                   "Thread"}
               </span>
-              {agentSessionUrl ? (
-                <a
-                  href={agentSessionUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
-                >
-                  <Terminal className="h-3 w-3" />
-                  Attach
-                </a>
-              ) : null}
+              {/* Attach removed for now; machine-detail page is canonical for attach/web links. */}
             </div>
           ) : null}
           <Card className="min-h-0 flex-1 overflow-y-auto p-4 space-y-3">
@@ -401,7 +389,7 @@ function ProjectHomePage() {
                     )}
                   >
                     {message.text ? (
-                      <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                      <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
                     ) : null}
                     {message.attachments?.map((att, i) => (
                       <AttachmentPreview
@@ -427,7 +415,7 @@ function ProjectHomePage() {
             <div ref={messagesEndRef} />
           </Card>
 
-          <form className="flex-shrink-0 space-y-2" onSubmit={handleSubmit}>
+          <form className="shrink-0 space-y-2" onSubmit={handleSubmit}>
             {/* Pending file previews */}
             {pendingFiles.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -617,7 +605,7 @@ function AttachmentPreview({
         <File className="h-4 w-4 shrink-0" />
         <span className="truncate flex-1">{attachment.fileName}</span>
         {attachment.size ? (
-          <span className="text-muted-foreground shrink-0">{formatFileSize(attachment.size)}</span>
+          <span className="shrink-0 text-muted-foreground">{formatFileSize(attachment.size)}</span>
         ) : null}
         <a href={viewUrl} target="_blank" rel="noreferrer" title="View">
           <ExternalLink className="h-3.5 w-3.5" />

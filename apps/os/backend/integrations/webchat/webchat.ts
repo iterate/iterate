@@ -51,7 +51,6 @@ const WebchatThreadsResponse = z.object({
 const WebchatMessagesResponse = z.object({
   threadId: z.string(),
   messages: z.array(WebchatMessage),
-  agentSessionUrl: z.string().optional(),
   status: z.string().optional(),
 });
 
