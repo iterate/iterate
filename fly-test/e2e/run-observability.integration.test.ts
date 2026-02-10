@@ -6,7 +6,10 @@ const describeFn = enabled ? describe : describe.skip;
 const backends = (process.env["E2E_BACKENDS"] ?? "docker")
   .split(",")
   .map((value) => value.trim())
-  .filter((value): value is "docker" | "fly" => value === "docker" || value === "fly");
+  .filter(
+    (value): value is "docker" | "fly" | "daytona" =>
+      value === "docker" || value === "fly" || value === "daytona",
+  );
 
 describeFn("observability integration", () => {
   for (const backend of backends) {

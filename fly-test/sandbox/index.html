@@ -242,8 +242,8 @@
         <h1>Sandbox Outbound Fetch</h1>
         <p>Run outbound HTTP requests from sandbox through egress MITM.</p>
         <div class="hint">
-          What to look for: proxy prepends <code>I was inserted by the egress proxy lol</code> and
-          egress logs show request lifecycle lines with matching <code>&lt;http-...&gt;</code> IDs.
+          What to look for: proxy prepends <code>__ITERATE_MITM_PROOF__</code> and egress logs show
+          request lifecycle lines with matching <code>&lt;http-...&gt;</code> IDs.
         </div>
         <label for="target">Target URL</label>
         <input id="target" type="url" />
@@ -267,7 +267,7 @@
         </div>
 
         <label for="ws-target">Upstream WS Target</label>
-        <input id="ws-target" type="url" placeholder="ws://ws-upstream:19090/ws" />
+        <input id="ws-target" type="url" placeholder="wss://ws.ifelse.io" />
 
         <div class="row action-row">
           <button id="btn-ws-connect" class="primary">Connect</button>
@@ -324,7 +324,7 @@
 
       function updateHttpProbes(url, data, responseStatus, elapsedMs) {
         const body = typeof data?.body === "string" ? data.body : "";
-        const insertedDetected = body.includes("I was inserted by the egress proxy lol");
+        const insertedDetected = body.includes("__ITERATE_MITM_PROOF__");
         const blockedDetected =
           String(data?.statusCode ?? data?.status ?? responseStatus ?? "") === "451";
 

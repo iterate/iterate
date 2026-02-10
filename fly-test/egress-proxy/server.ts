@@ -13,7 +13,7 @@ import type { ProxySocketData } from "./utils.ts";
 
 const LOG_PATH = process.env.EGRESS_LOG_PATH ?? "/tmp/egress-proxy.log";
 const VIEWER_PORT = Number(process.env.EGRESS_VIEWER_PORT ?? "18081");
-const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "I was inserted by the egress proxy lol\n";
+const PROOF_PREFIX = process.env.PROOF_PREFIX ?? "__ITERATE_MITM_PROOF__\n";
 const TRANSFORM_TIMEOUT_MS = Number(process.env.TRANSFORM_TIMEOUT_MS ?? "5000");
 
 const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));

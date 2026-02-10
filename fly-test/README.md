@@ -2,10 +2,11 @@
 
 Shared integration proof for HTTPS egress interception.
 
-One scenario, two providers:
+One scenario, three providers:
 
 - `docker`
 - `fly`
+- `daytona`
 
 Both run the same assertions.
 
@@ -41,7 +42,7 @@ SANDBOX_HOST_PORT=38080 EGRESS_VIEWER_HOST_PORT=38081 TARGET_URL=https://example
 WebSocket POC:
 
 1. Open sandbox UI at `http://127.0.0.1:38080`.
-2. In `Sandbox WebSocket Client`, keep target `ws://ws-upstream:19090/ws`.
+2. In `Sandbox WebSocket Client`, keep target `wss://ws.ifelse.io`.
 3. Set `Drop Contains=OFFENDING`, `Rewrite Server From=server-secret`, `Rewrite Server To=REDACTED`.
 4. Click `Connect`.
 5. Send `OFFENDING should be dropped` then send `normal hello`.
@@ -52,7 +53,6 @@ Tail logs:
 ```bash
 docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f sandbox-ui
 docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f egress-proxy
-docker compose -f fly-test/docker-compose.local.yml -p "$APP" logs -f ws-upstream
 ```
 
 Shutdown:
@@ -99,10 +99,43 @@ Destroy:
 doppler run --config dev -- sh -lc 'export FLY_API_TOKEN="$FLY_API_KEY"; flyctl apps destroy fly-test-manual -y'
 ```
 
+Daytona:
+
+```bash
+pnpm --filter fly-test e2e:daytona
+```
+
+Optional if your local Daytona session is not already logged in:
+
+```bash
+DAYTONA_API_KEY=... pnpm --filter fly-test e2e:daytona
+```
+
+Run with Daytona VPN-backed MITM path:
+
+```bash
+DAYTONA_TAILSCALE_AUTH_KEY=... pnpm --filter fly-test e2e:daytona
+```
+
+Manual Daytona stack (no auto-cleanup):
+
+```bash
+APP_NAME=fly-test-manual E2E_CLEANUP_ON_EXIT=0 pnpm --filter fly-test e2e:daytona
+```
+
+Daytona backend notes:
+
+- Uses two Daytona sandboxes (`sandbox-ui`, `egress-proxy`) only.
+- Default (`preview-direct`): uses signed preview URLs for sandbox->egress HTTP/WS calls.
+- Optional (`tailscale-mitm`): set `DAYTONA_TAILSCALE_AUTH_KEY` to join both sandboxes to the same tailnet, then sandbox uses egress MITM port directly over private tailnet IP (full CA trust + proxy env bootstrap path).
+- Uses `wss://ws.ifelse.io` as default WS upstream.
+- Prints preview URLs to `summary.txt` artifact.
+
 ## Providers
 
 - `fly-test/e2e/providers/docker.ts`
 - `fly-test/e2e/providers/fly.ts`
+- `fly-test/e2e/providers/daytona.ts`
 
 Provider responsibilities: boot, sandbox fetch transport, log retrieval, teardown.
 

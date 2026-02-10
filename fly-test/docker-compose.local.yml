@@ -1,14 +1,4 @@
 services:
-  ws-upstream:
-    build:
-      context: .
-      dockerfile: docker/ws-upstream.Dockerfile
-    environment:
-      UPSTREAM_WS_PORT: "19090"
-      UPSTREAM_WS_LOG_PATH: /tmp/ws-upstream.log
-    ports:
-      - "${WS_UPSTREAM_HOST_PORT:-0}:19090"
-
   egress-proxy:
     build:
       context: .
@@ -33,9 +23,8 @@ services:
       EGRESS_MITM_PORT: "18080"
       DEFAULT_TARGET_URL: "${TARGET_URL:-https://example.com/}"
       WS_PROXY_URL: "ws://egress-proxy:18081/api/ws/proxy"
-      WS_UPSTREAM_URL: "ws://ws-upstream:19090/ws"
+      WS_UPSTREAM_URL: "wss://ws.ifelse.io"
     depends_on:
-      - ws-upstream
       - egress-proxy
     ports:
       - "${SANDBOX_HOST_PORT:-0}:8080"
