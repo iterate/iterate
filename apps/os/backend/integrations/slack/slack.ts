@@ -11,8 +11,8 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { trackWebhookEvent, linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { withSpan } from "../../utils/otel.ts";
+import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
 
-import { createMachineProvider } from "../../providers/index.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { verifySlackSignature } from "./slack-utils.ts";
 
@@ -56,27 +56,24 @@ function createCorrelationContext(params: {
 }
 
 /**
- * Build URL to forward webhooks to a machine's daemon.
- * Uses the provider's getPreviewUrl to get the base URL.
+ * Build a provider-backed fetcher for forwarding to a machine daemon.
  */
-async function buildMachineForwardUrl(
+async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
-  path: string,
   env: CloudflareEnv,
-): Promise<string | null> {
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineRuntime({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata: metadata ?? {},
-      buildProxyUrl: () => "", // Not used here
     });
-    return `${provider.previewUrl}${path}`;
+    return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[Slack Webhook] Failed to build forward URL", {
+    logger.warn("[Slack Webhook] Failed to build forward fetcher", {
       machineId: machine.id,
       type: machine.type,
       error: err instanceof Error ? err.message : String(err),
@@ -108,21 +105,17 @@ export async function forwardSlackWebhookToMachine(
       },
     },
     async (span) => {
-      const targetUrl = await buildMachineForwardUrl(
-        machine,
-        "/api/integrations/slack/webhook",
-        env,
-      );
-      if (!targetUrl) {
+      const targetPath = "/api/integrations/slack/webhook";
+      const fetcher = await buildMachineForwardFetcher(machine, env);
+      if (!fetcher) {
         span.setAttribute("forward.success", false);
-        span.setAttribute("forward.error", "could_not_build_forward_url");
-        return { success: false, error: "Could not build forward URL" };
+        span.setAttribute("forward.error", "could_not_build_forward_fetcher");
+        return { success: false, error: "Could not build forward fetcher" };
       }
-
-      span.setAttribute("url.full", targetUrl);
+      span.setAttribute("url.path", targetPath);
 
       try {
-        const resp = await fetch(targetUrl, {
+        const resp = await fetcher(targetPath, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -140,7 +133,7 @@ export async function forwardSlackWebhookToMachine(
           span.setAttribute("forward.error", `http_${resp.status}`);
           logger.error("[Slack Webhook] Forward failed", {
             machine,
-            targetUrl,
+            targetPath,
             status: resp.status,
             text: await resp.text(),
             correlation,
@@ -151,7 +144,7 @@ export async function forwardSlackWebhookToMachine(
         span.setAttribute("forward.success", true);
         logger.info("[Slack Webhook] Forwarded to machine", {
           machineId: machine.id,
-          targetUrl,
+          targetPath,
           correlation,
         });
         return { success: true };
@@ -161,7 +154,7 @@ export async function forwardSlackWebhookToMachine(
         logger.error("[Slack Webhook] Forward error", {
           err,
           machineId: machine.id,
-          targetUrl,
+          targetPath,
           correlation,
         });
         return { success: false, error: err instanceof Error ? err.message : String(err) };
