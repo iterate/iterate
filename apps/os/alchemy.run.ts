@@ -587,6 +587,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ...dockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
+    // Place the worker near the PlanetScale Postgres primary (aws:us-east-1)
+    // to minimise round-trip latency on DB-heavy pages.
+    placement: { region: "aws:us-east-1" },
     assets: {
       _headers: dedent`
         /assets/*

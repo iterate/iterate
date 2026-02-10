@@ -64,7 +64,7 @@
     "@trpc/client": "^11.7.2",
     "@trpc/server": "^11.7.2",
     "@trpc/tanstack-react-query": "^11.7.2",
-    "alchemy": "^0.79.0",
+    "alchemy": "^0.83.0",
     "arctic": "^3.7.0",
     "better-auth": "1.4.3",
     "class-variance-authority": "^0.7.1",
@@ -138,7 +138,7 @@
     "vite": "7.2.4",
     "vite-tsconfig-paths": "^6.0.4",
     "vitest": "4.0.15",
-    "wrangler": "^4.51.0",
+    "wrangler": "^4.64.0",
     "ws": "^8.19.0"
   }
 }
