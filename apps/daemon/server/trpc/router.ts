@@ -5,7 +5,6 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import type { Agent, AgentRoute } from "../db/schema.ts";
-import { notifyAgentChange } from "../services/agent-change-callbacks.ts";
 import { IterateEvent } from "../types/events.ts";
 import { validateAgentPath } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
@@ -41,6 +40,35 @@ function serializeAgent(agent: Agent, route: AgentRoute | null): SerializedAgent
     archivedAt: agent.archivedAt?.toISOString() ?? null,
     activeRoute: route ? serializeAgentRoute(route) : null,
   };
+}
+
+/**
+ * POST an `iterate:agent-updated` event to all registered callback URLs for
+ * this agent. The payload is the same SerializedAgent you'd get from getAgent.
+ * This is currently the only event type. In the future, other iterate-level
+ * or raw OpenCode events may be delivered on this same callback channel.
+ */
+async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Promise<void> {
+  const subscriptions = await db
+    .select()
+    .from(schema.agentSubscriptions)
+    .where(eq(schema.agentSubscriptions.agentPath, agentPath));
+
+  const event = { type: "iterate:agent-updated" as const, payload: agent };
+
+  for (const subscription of subscriptions) {
+    void fetch(subscription.callbackUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch((error) => {
+      console.error("[agent-change] callback failed", {
+        agentPath,
+        callbackUrl: subscription.callbackUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
 }
 
 export const trpcRouter = createTRPCRouter({
@@ -110,7 +138,13 @@ export const trpcRouter = createTRPCRouter({
         .update(schema.agents)
         .set({ archivedAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.agents.path, input.path));
-      await notifyAgentChange(input.path);
+
+      // Re-fetch and notify (agent is now archived)
+      const updatedAgent = serializeAgent(
+        { ...agent, archivedAt: new Date(), updatedAt: new Date() },
+        null,
+      );
+      await notifyAgentChange(input.path, updatedAgent);
 
       return { success: true };
     }),
@@ -136,7 +170,6 @@ export const trpcRouter = createTRPCRouter({
       if ("archivedAt" in input) setValues.archivedAt = input.archivedAt ?? null;
 
       await db.update(schema.agents).set(setValues).where(eq(schema.agents.path, input.path));
-      await notifyAgentChange(input.path);
 
       const rows = await db
         .select({ agent: schema.agents, route: schema.agentRoutes })
@@ -153,7 +186,10 @@ export const trpcRouter = createTRPCRouter({
 
       const row = rows[0];
       if (!row) return null;
-      return serializeAgent(row.agent, row.route ?? null);
+
+      const serialized = serializeAgent(row.agent, row.route ?? null);
+      await notifyAgentChange(input.path, serialized);
+      return serialized;
     }),
 
   subscribeToAgentChanges: publicProcedure

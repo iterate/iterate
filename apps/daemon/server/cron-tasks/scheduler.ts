@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
 import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { activeAgentExists, sendPromptToAgent } from "../utils/agent-gateway.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -45,25 +45,36 @@ const DEFAULT_STALE_THRESHOLD_MS = 1 * 60 * 1000;
 
 let schedulerRunning = false;
 
-interface CronAgent {
-  path: string;
-}
+const DAEMON_PORT = process.env.PORT || "3001";
+const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 function getCronAgentPath(agentPathSegment: string): string {
   return `/cron/${agentPathSegment}`;
 }
 
-async function getAgent(agentPath: string): Promise<CronAgent | null> {
-  if (!(await activeAgentExists(agentPath))) return null;
-  return { path: agentPath };
+/** Check whether an active agent exists via tRPC. */
+async function agentExists(agentPath: string): Promise<boolean> {
+  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
+  return agent !== null;
 }
 
-async function createAgent({ agentPath }: { agentPath: string }): Promise<CronAgent> {
-  return { path: agentPath };
-}
-
-async function appendToAgent(agent: CronAgent, message: string): Promise<void> {
-  await sendPromptToAgent(agent.path, message);
+/**
+ * Send a prompt to an agent via the agents router.
+ * The agents router runs getOrCreateAgent internally, so this
+ * creates the agent + session if it doesn't exist yet.
+ */
+async function sendPromptToAgent(agentPath: string, message: string): Promise<void> {
+  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "prompt", message }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Agent prompt failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
+    );
+  }
 }
 
 export const getTasksDir = async () => {
@@ -233,8 +244,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
   const agentPath = task.frontmatter.lockedBy;
   if (!agentPath) return;
 
-  const agent = await getAgent(agentPath);
-  if (!agent) {
+  if (!(await agentExists(agentPath))) {
     console.warn(`[cron-tasks] Agent ${agentPath} not found for stale task ${task.filename}`);
     return;
   }
@@ -254,7 +264,7 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
     \`\`\`
   `;
 
-  await appendToAgent(agent, message);
+  await sendPromptToAgent(agentPath, message);
 
   // Update lockedAt so we don't spam the agent - but only if task still exists
   const tasksDir = await getTasksDir();
@@ -290,14 +300,9 @@ async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
     // Build prompt from task body
     const prompt = buildPromptFromTask(task, agentPath);
 
-    // Create cron agent
-    const agent = await createAgent({ agentPath });
-
-    console.log(`[cron-tasks] Created agent ${agent.path} for task ${task.filename}`);
-
-    // Send the initial prompt to start the agent working
-    await appendToAgent(agent, prompt);
-    console.log(`[cron-tasks] Sent prompt to agent ${agent.path}`);
+    // Send prompt via agents router (creates agent + session if needed)
+    await sendPromptToAgent(agentPath, prompt);
+    console.log(`[cron-tasks] Sent prompt to agent ${agentPath} for task ${task.filename}`);
 
     // Note: The agent now runs asynchronously. We don't wait for completion here.
     // A separate mechanism (agent completion callback or watchdog) will:

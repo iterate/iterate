@@ -1,8 +1,10 @@
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { propagation, context } from "@opentelemetry/api";
 import { extractAgentPathFromUrl } from "../utils/agent-path.ts";
 import { trpcRouter } from "../trpc/router.ts";
+import { withSpan } from "../utils/otel.ts";
 
 export const agentsRouter = new Hono();
 
@@ -62,69 +64,81 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
     return c.json({ error: `Method not allowed: ${method}` }, 405);
   }
 
-  const caller = trpcRouter.createCaller({});
-  const { route } = await caller.getOrCreateAgent({
-    agentPath,
-    createWithEvents: [],
-    newAgentPath: getNewAgentPath(agentPath),
-  });
-
-  const readyRoute = await waitForReadyRoute(caller, agentPath, route);
-  if (!readyRoute || readyRoute.destination === "pending") {
-    return c.json(
-      {
-        error: "Agent route is not ready",
+  return withSpan(
+    "daemon.agent.forward",
+    { attributes: { "agent.path": agentPath, "http.method": method } },
+    async (span) => {
+      const caller = trpcRouter.createCaller({});
+      const { route } = await caller.getOrCreateAgent({
         agentPath,
-      },
-      503,
-    );
-  }
+        createWithEvents: [],
+        newAgentPath: getNewAgentPath(agentPath),
+      });
 
-  const destination = readyRoute.destination.startsWith("http")
-    ? readyRoute.destination
-    : `${DAEMON_BASE_URL}/api${readyRoute.destination}`;
-
-  const upstreamHeaders = new Headers();
-  const accept = c.req.header("accept");
-  if (accept) upstreamHeaders.set("Accept", accept);
-  if (method === "POST") {
-    upstreamHeaders.set("Content-Type", "application/json");
-  }
-  upstreamHeaders.set("x-iterate-agent-path", agentPath);
-
-  const upstreamResponse = await fetch(destination, {
-    method,
-    headers: upstreamHeaders,
-    body: method === "POST" ? JSON.stringify(await c.req.json()) : undefined,
-  });
-
-  // Forward relevant headers from upstream
-  for (const header of FORWARDED_HEADERS) {
-    const value = upstreamResponse.headers.get(header);
-    if (value) {
-      c.header(header, value);
-    }
-  }
-
-  c.status(upstreamResponse.status as ContentfulStatusCode);
-
-  // Just pipe the response body through - works for both streaming and non-streaming
-  if (upstreamResponse.body) {
-    return stream(c, async (streamWriter) => {
-      const reader = upstreamResponse.body!.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await streamWriter.write(value);
-        }
-      } finally {
-        reader.releaseLock();
+      const readyRoute = await waitForReadyRoute(caller, agentPath, route);
+      if (!readyRoute || readyRoute.destination === "pending") {
+        span.setAttribute("agent.route_ready", false);
+        return c.json({ error: "Agent route is not ready", agentPath }, 503);
       }
-    });
-  }
 
-  return c.body(null);
+      const destination = readyRoute.destination.startsWith("http")
+        ? readyRoute.destination
+        : `${DAEMON_BASE_URL}/api${readyRoute.destination}`;
+
+      span.setAttribute("agent.destination", destination);
+
+      const upstreamHeaders = new Headers();
+      const accept = c.req.header("accept");
+      if (accept) upstreamHeaders.set("Accept", accept);
+      if (method === "POST") {
+        upstreamHeaders.set("Content-Type", "application/json");
+      }
+      upstreamHeaders.set("x-iterate-agent-path", agentPath);
+
+      // Inject active trace context so the opencode router inherits the span
+      propagation.inject(context.active(), upstreamHeaders, {
+        set(carrier, key, value) {
+          carrier.set(key, value);
+        },
+      });
+
+      const upstreamResponse = await fetch(destination, {
+        method,
+        headers: upstreamHeaders,
+        body: method === "POST" ? JSON.stringify(await c.req.json()) : undefined,
+      });
+
+      span.setAttribute("agent.upstream_status", upstreamResponse.status);
+
+      // Forward relevant headers from upstream
+      for (const header of FORWARDED_HEADERS) {
+        const value = upstreamResponse.headers.get(header);
+        if (value) {
+          c.header(header, value);
+        }
+      }
+
+      c.status(upstreamResponse.status as ContentfulStatusCode);
+
+      // Just pipe the response body through - works for both streaming and non-streaming
+      if (upstreamResponse.body) {
+        return stream(c, async (streamWriter) => {
+          const reader = upstreamResponse.body!.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              await streamWriter.write(value);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+        });
+      }
+
+      return c.body(null);
+    },
+  );
 }
 
 agentsRouter.get("/*", async (c) => forwardAgentRequest(c));

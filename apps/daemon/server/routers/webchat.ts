@@ -2,11 +2,34 @@
  * Webchat Router
  *
  * Handles incoming webchat messages forwarded from the OS backend.
- * Uses path-based agents and a webchat-specific SSE consumer for status lifecycle.
+ *
+ * ## Architecture (canonical reference -- slack.ts and email.ts point here)
+ *
+ * Message flow:
+ *
+ *   OS Backend (webhook) -> Integration Router (slack / webchat / email)
+ *        |                                                         ^
+ *        |  1. tRPC getOrCreateAgent (ensures agent + route exist) |
+ *        |  2. fire-and-forget fetch to /api/agents/:path          |
+ *        v                                                         |
+ *   AgentsRouter -> OpenCodeRouter -> OpenCode SDK                 |
+ *                                         |                        |
+ *                  client.global.event()   |                        |
+ *                  (SDK event stream)      v                        |
+ *                              idle/tool events                     |
+ *                                         |                        |
+ *                         tRPC updateAgent |                        |
+ *                                         v                        |
+ *                            AgentChangeCallbacks --(POST)---------+
+ *
+ * The callback delivers `iterate:agent-updated` events. This is the only
+ * event type today, but the callback URL is conceptually a subscription to
+ * an iterate-level event stream about the agent. In the future, other
+ * iterate-level or raw OpenCode events may be delivered on the same channel.
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import { eq, and, inArray, asc, isNull } from "drizzle-orm";
+import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -121,7 +144,7 @@ webchatRouter.post("/webhook", async (c) => {
   }
 
   const agentPath = getAgentPathForThread(threadId);
-  const existedBefore = await webchatAgentExists(agentPath);
+  const existedBefore = await agentExists(agentPath);
 
   const userMessage: StoredMessage = {
     threadId,
@@ -245,22 +268,29 @@ webchatRouter.post("/setStatus", async (c) => {
   return c.json({ success: true });
 });
 
+/**
+ * Receives `iterate:agent-updated` events from the agent change callback system.
+ * This is currently the only event type. In the future, other iterate-level
+ * or raw OpenCode events may be delivered on this same callback channel.
+ */
 webchatRouter.post("/agent-change-callback", async (c) => {
-  // Callback payload is the same agent-change shape produced by the daemon tRPC stack
-  // (`apps/daemon/server/trpc/router.ts` -> `updateAgent` / `notifyAgentChange`),
-  // but webchat only needs path + working status fields.
   const parsed = z
     .object({
-      path: z.string(),
-      shortStatus: z.string(),
-      isWorking: z.boolean(),
+      type: z.literal("iterate:agent-updated"),
+      payload: z
+        .object({
+          path: z.string(),
+          shortStatus: z.string(),
+          isWorking: z.boolean(),
+        })
+        .passthrough(),
     })
     .safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const payload = parsed.data;
+  const { payload } = parsed.data;
   const threadId = threadIdByAgentPath.get(payload.path);
   if (!threadId) {
     logger.log(`[webchat] ignoring agent-change without mapped thread: ${payload.path}`);
@@ -295,13 +325,14 @@ webchatRouter.get("/threads/:threadId/messages", async (c) => {
   return c.json({ threadId, messages, agentSessionUrl, status });
 });
 
-async function webchatAgentExists(agentPath: string): Promise<boolean> {
-  const existing = await db
-    .select()
-    .from(schema.agents)
-    .where(and(eq(schema.agents.path, agentPath), isNull(schema.agents.archivedAt)))
-    .limit(1);
-  return Boolean(existing[0]);
+/**
+ * Check whether an active agent exists for the given path via tRPC.
+ * The agents router handles getOrCreateAgent automatically when we POST
+ * to it, so this is only needed to determine first-vs-reply message format.
+ */
+async function agentExists(agentPath: string): Promise<boolean> {
+  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
+  return agent !== null;
 }
 
 function createThreadId(): string {

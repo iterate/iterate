@@ -8,17 +8,47 @@
  * Message cases:
  * 1. New email - Creates a new agent for this email thread
  * 2. Reply email - Appends to existing agent (matched by subject)
+ *
+ * See webchat.ts for the full architecture diagram of message flow
+ * and the `iterate:agent-updated` callback event model.
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
+import { trpcRouter } from "../trpc/router.ts";
 
 const logger = console;
+const DAEMON_PORT = process.env.PORT || "3001";
+const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 
 export const emailRouter = new Hono();
+
+/**
+ * Check whether an active agent exists for the given path via tRPC.
+ * For new emails we just send to the agents router (which creates if needed).
+ * This check is only used when we need to vary behavior (e.g. reply vs new).
+ */
+async function agentExists(agentPath: string): Promise<boolean> {
+  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
+  return agent !== null;
+}
+
+/** Send a prompt to agent via the agents router HTTP endpoint. */
+async function sendPromptViaAgentsRouter(agentPath: string, message: string): Promise<void> {
+  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "prompt", message }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Agent prompt failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
+    );
+  }
+}
 
 // Middleware to log request and response bodies
 emailRouter.use("*", async (c, next) => {
@@ -152,7 +182,7 @@ emailRouter.post("/webhook", async (c) => {
     const agentPath = getAgentPath(threadPathSegment);
     const emailBody = payload._iterate?.emailBody;
 
-    const hasAgent = await activeAgentExists(agentPath);
+    const hasAgent = await agentExists(agentPath);
 
     if (hasAgent) {
       // Reply to existing thread
@@ -165,7 +195,7 @@ emailRouter.post("/webhook", async (c) => {
         emailBody,
         eventId,
       );
-      await sendToAgentGateway(agentPath, { type: "prompt", message });
+      await sendPromptViaAgentsRouter(agentPath, message);
       return c.json({
         success: true,
         agentPath,
@@ -175,7 +205,7 @@ emailRouter.post("/webhook", async (c) => {
       });
     }
 
-    // New email thread - create agent via gateway
+    // New email thread - send prompt via agents router (creates agent if needed)
     const message = formatNewEmailMessage(
       agentPath,
       senderName,
@@ -185,7 +215,7 @@ emailRouter.post("/webhook", async (c) => {
       emailBody,
       eventId,
     );
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    await sendPromptViaAgentsRouter(agentPath, message);
 
     return c.json({
       success: true,

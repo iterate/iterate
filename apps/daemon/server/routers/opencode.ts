@@ -2,14 +2,15 @@ import { homedir } from "node:os";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import { createOpencodeClient, type Event as OpencodeEvent, type ToolPart } from "@opencode-ai/sdk";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { notifyAgentChange } from "../services/agent-change-callbacks.ts";
 import type { IterateEvent } from "../types/events.ts";
 import { extractIterateEvents } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
+import { trpcRouter } from "../trpc/router.ts";
+import { withSpan } from "../utils/otel.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
 function getOpencodeWorkingDirectory(): string {
@@ -22,6 +23,7 @@ function getOpencodeWorkingDirectory(): string {
 }
 
 const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:4096";
+const trpc = trpcRouter.createCaller({});
 
 export const opencodeRouter = new Hono();
 
@@ -73,11 +75,29 @@ opencodeRouter.post("/new", async (c) => {
   const sessionId = response.data.id;
   const eventList = extractIterateEvents(events);
 
-  // Concatenate all events into one prompt
+  // Fire-and-forget: background the prompt so the caller doesn't block on model run
   const combinedPrompt = concatenatePrompts(eventList);
   if (combinedPrompt) {
-    await sendPromptToSession(sessionId, combinedPrompt, workingDirectory);
-    await trackAgentLifecycle({ agentPath, harnessHandle: sessionId });
+    void withSpan(
+      "daemon.opencode.prompt",
+      {
+        attributes: {
+          "opencode.session_id": sessionId,
+          "agent.path": agentPath,
+          "prompt.length": combinedPrompt.length,
+        },
+      },
+      async () => {
+        await trackAgentLifecycle({ agentPath, harnessHandle: sessionId });
+        await sendPromptToSession(sessionId, combinedPrompt, workingDirectory);
+      },
+    ).catch((error) => {
+      console.error("[opencode] background prompt failed for new session", {
+        sessionId,
+        agentPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   return c.json({
@@ -177,135 +197,91 @@ opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const payload = await c.req.json();
   const events = extractIterateEvents(payload);
 
-  // Concatenate all events into one prompt
+  // Fire-and-forget: background the prompt so the caller returns immediately
   const combinedPrompt = concatenatePrompts(events);
   if (combinedPrompt) {
-    await sendPromptToSession(sessionId, combinedPrompt, getOpencodeWorkingDirectory());
-    await trackAgentLifecycle({ agentPath: agentPathFromHeader, harnessHandle: sessionId });
+    void withSpan(
+      "daemon.opencode.append",
+      {
+        attributes: {
+          "opencode.session_id": sessionId,
+          ...(agentPathFromHeader ? { "agent.path": agentPathFromHeader } : {}),
+          "prompt.length": combinedPrompt.length,
+        },
+      },
+      async () => {
+        await trackAgentLifecycle({ agentPath: agentPathFromHeader, harnessHandle: sessionId });
+        await sendPromptToSession(sessionId, combinedPrompt, getOpencodeWorkingDirectory());
+      },
+    ).catch((error) => {
+      console.error("[opencode] background prompt failed", {
+        sessionId,
+        agentPath: agentPathFromHeader,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   return c.json({ success: true, sessionId });
 });
 
+// ---------------------------------------------------------------------------
+// Lifecycle subscription via OpenCode SDK global event stream
+// ---------------------------------------------------------------------------
+//
+// We subscribe once to `client.global.event()` and dispatch typed events
+// to tracked agent paths. Only two signals matter:
+//   1. idle / error  -> mark agent not working, clear status
+//   2. tool running/completed -> update shortStatus
+
 function ensureLifecycleSubscription(): void {
   if (lifecycleSubscriptionStarted) return;
   lifecycleSubscriptionStarted = true;
-  void runLifecycleSubscriptionLoop();
+  void startLifecycleSubscription();
 }
 
-async function runLifecycleSubscriptionLoop(): Promise<void> {
-  while (true) {
-    try {
-      const globalResponse = await fetch(`${OPENCODE_BASE_URL}/global/event`, {
-        method: "GET",
-        headers: { Accept: "text/event-stream" },
-      });
+async function startLifecycleSubscription(): Promise<void> {
+  const client = createOpencodeClient({ baseUrl: OPENCODE_BASE_URL });
+  const result = await client.global.event();
 
-      if (!globalResponse.ok || !globalResponse.body) {
-        await sleepMs(1000);
-        continue;
-      }
+  for await (const globalEvent of result.stream) {
+    const event = globalEvent.payload;
+    const sessionId = extractSessionIdFromEvent(event);
+    if (!sessionId) continue;
 
-      const reader = globalResponse.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+    const agentPaths = agentPathByHarnessHandle.get(sessionId);
+    if (!agentPaths || agentPaths.size === 0) continue;
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          let boundary = buffer.indexOf("\n\n");
-          while (boundary !== -1) {
-            const frame = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            await handleLifecycleFrame(frame);
-            boundary = buffer.indexOf("\n\n");
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-    } catch {
-      // Keep lifecycle handling best-effort; we'll reconnect below.
+    // Idle / error -> settle (mark not working)
+    if (
+      event.type === "session.idle" ||
+      event.type === "session.error" ||
+      (event.type === "session.status" && event.properties.status.type === "idle")
+    ) {
+      for (const agentPath of agentPaths) await settleAgentPath(agentPath);
+      continue;
     }
 
-    await sleepMs(1000);
-  }
-}
-
-async function handleLifecycleFrame(frame: string): Promise<void> {
-  const dataLines = frame
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.startsWith("data:"));
-  if (dataLines.length === 0) return;
-
-  const payload = dataLines.map((line) => line.slice(5).trimStart()).join("\n");
-  if (!payload || payload === "[DONE]") return;
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(payload) as Record<string, unknown>;
-  } catch {
-    return;
-  }
-
-  const harnessHandle = extractSessionId(parsed);
-  if (!harnessHandle) return;
-
-  const agentPaths = agentPathByHarnessHandle.get(harnessHandle);
-  if (!agentPaths || agentPaths.size === 0) return;
-
-  const type = typeof parsed.type === "string" ? parsed.type : "";
-  if (type === "session.idle" || type === "session.error" || isIdleStatusEvent(parsed)) {
-    for (const agentPath of agentPaths) {
-      await settleAgentPath(agentPath);
+    // Tool status updates
+    if (event.type === "message.part.updated" && event.properties.part.type === "tool") {
+      const statusText = extractToolStatusText(event.properties.part);
+      if (!statusText) continue;
+      for (const agentPath of agentPaths) {
+        await trpc.updateAgent({ path: agentPath, isWorking: true, shortStatus: statusText });
+      }
     }
-    return;
-  }
-
-  const statusEvent = extractToolStatusEvent(parsed);
-  if (!statusEvent) return;
-
-  for (const agentPath of agentPaths) {
-    await updateAgentLifecycleState(agentPath, {
-      isWorking: true,
-      shortStatus: statusEvent.statusText,
-    });
   }
 }
 
-function isIdleStatusEvent(event: Record<string, unknown>): boolean {
-  if (event.type !== "session.status") return false;
-  const properties = asRecord(event.properties);
-  const status = asRecord(properties?.status);
-  return status?.type === "idle";
-}
+/** Extract a human-readable status string from a tool part in running/completed state. */
+function extractToolStatusText(part: ToolPart): string | null {
+  const { state } = part;
+  if (state.status !== "running" && state.status !== "completed") return null;
 
-function extractToolStatusEvent(event: Record<string, unknown>): {
-  statusText: string;
-} | null {
-  if (event.type !== "message.part.updated") return null;
-  const properties = asRecord(event.properties);
-  const part = asRecord(properties?.part);
-  if (!part || part.type !== "tool") return null;
-
-  const state = asRecord(part.state);
-  if (!state) return null;
-  const stateStatus = typeof state.status === "string" ? state.status : "";
-  if (stateStatus !== "running" && stateStatus !== "completed") return null;
-
-  const input = asRecord(state.input) ?? {};
-  const title = typeof state.title === "string" ? state.title : "";
-  const description = typeof input.description === "string" ? input.description : "";
-  const tool = typeof part.tool === "string" ? part.tool : "";
-  const statusText = (title || description || tool || "Working").slice(0, 30);
-
-  return {
-    statusText,
-  };
+  const title = "title" in state && typeof state.title === "string" ? state.title : "";
+  const description =
+    state.input && typeof state.input.description === "string" ? state.input.description : "";
+  return (title || description || part.tool || "Working").slice(0, 30);
 }
 
 async function settleAgentPath(agentPath: string): Promise<void> {
@@ -321,10 +297,7 @@ async function settleAgentPath(agentPath: string): Promise<void> {
     }
   }
 
-  await updateAgentLifecycleState(agentPath, {
-    isWorking: false,
-    shortStatus: "",
-  });
+  await trpc.updateAgent({ path: agentPath, isWorking: false, shortStatus: "" });
 }
 
 export async function trackAgentLifecycle(params: {
@@ -349,15 +322,8 @@ export async function trackAgentLifecycle(params: {
     const set = agentPathByHarnessHandle.get(params.harnessHandle) ?? new Set<string>();
     set.add(agentPath);
     agentPathByHarnessHandle.set(params.harnessHandle, set);
-    await updateAgentLifecycleState(agentPath, {
-      isWorking: true,
-      shortStatus: "Working",
-    });
+    await trpc.updateAgent({ path: agentPath, isWorking: true, shortStatus: "Working" });
   }
-}
-
-async function sleepMs(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function resolveAgentPathByHarnessHandle(harnessHandle: string): Promise<string | null> {
@@ -379,19 +345,27 @@ async function resolveAgentPathByHarnessHandle(harnessHandle: string): Promise<s
   return null;
 }
 
-async function updateAgentLifecycleState(
-  agentPath: string,
-  params: { isWorking?: boolean; shortStatus?: string },
-): Promise<void> {
-  const setValues: Partial<typeof schema.agents.$inferInsert> = {
-    updatedAt: new Date(),
-  };
-  if (params.isWorking !== undefined) setValues.isWorking = params.isWorking;
-  if (params.shortStatus !== undefined) setValues.shortStatus = params.shortStatus;
-  await db.update(schema.agents).set(setValues).where(eq(schema.agents.path, agentPath));
-  await notifyAgentChange(agentPath);
+// ---------------------------------------------------------------------------
+// Session ID extraction from raw events (used by the GET stream proxy)
+// ---------------------------------------------------------------------------
+
+function extractSessionIdFromEvent(event: OpencodeEvent): string | null {
+  switch (event.type) {
+    case "session.status":
+    case "session.idle":
+      return event.properties.sessionID;
+    case "session.error":
+      return event.properties.sessionID ?? null;
+    case "message.updated":
+      return event.properties.info.sessionID;
+    case "message.part.updated":
+      return event.properties.part.sessionID;
+    default:
+      return null;
+  }
 }
 
+/** Extract session ID from untyped event record (used for raw SSE proxy filtering). */
 function extractSessionId(event: Record<string, unknown>): string | null {
   if (
     event.type === "session.status" ||
