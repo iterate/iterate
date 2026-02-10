@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
-import { createTRPCRouter, mergeRouters, publicProcedure } from "./init.ts";
-import { platformRouter, getCustomerRepoPath } from "./platform.ts";
 import { agentTrpcRouter } from "../routers/agents.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
+import { createTRPCRouter, mergeRouters, publicProcedure } from "./init.ts";
+import { platformRouter, getCustomerRepoPath } from "./platform.ts";
 
 const baseProcedures = createTRPCRouter({
   platform: platformRouter,
