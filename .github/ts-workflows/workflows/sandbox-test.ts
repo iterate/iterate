@@ -176,7 +176,7 @@ export default workflow({
             SANDBOX_TEST_BASE_FLY_IMAGE: "${{ needs.build-image.outputs.fly_registry_image_name }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+          run: "doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
         },
         {
           name: "Upload Fly test results",

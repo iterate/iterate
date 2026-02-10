@@ -37,13 +37,13 @@ interface MachineTableProps {
 }
 
 function getMetadataPreview(metadata: Record<string, unknown>): string {
-  try {
-    const raw = JSON.stringify(metadata);
-    if (!raw) return "{}";
-    return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
-  } catch {
-    return "{...}";
-  }
+  const values = [
+    metadata.containerName,
+    metadata.containerId,
+    metadata.sandboxName,
+    metadata.snapshotName,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  return values.length > 0 ? values.join(" · ") : "-";
 }
 
 export function MachineTable({
@@ -136,7 +136,7 @@ export function MachineTable({
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
               </div>
               <div className="font-mono text-xs text-muted-foreground truncate">
-                metadata: {getMetadataPreview(machine.metadata)}
+                {getMetadataPreview(machine.metadata)}
               </div>
 
               {/* ID */}

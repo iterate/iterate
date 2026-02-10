@@ -154,9 +154,10 @@ function MachineDetailPage() {
   const flyMachineUrl = flyMachine
     ? `https://fly.io/apps/${flyMachine.appName}/machines/${flyMachine.machineId}`
     : null;
+  const flyGrafanaOrgId = import.meta.env.VITE_FLY_GRAFANA_ORG_ID ?? "1440139";
   const flyGrafanaUrl = flyMachine
     ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
-        orgId: "1440139",
+        orgId: flyGrafanaOrgId,
         "var-app": flyMachine.appName,
       }).toString()}`
     : null;

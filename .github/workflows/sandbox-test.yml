@@ -167,7 +167,7 @@ jobs:
           SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-image.outputs.fly_registry_image_name }}
           SANDBOX_TEST_BASE_FLY_IMAGE: ${{ needs.build-image.outputs.fly_registry_image_name }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
+        run: doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
       - name: Upload Fly test results
         if: failure()
         uses: actions/upload-artifact@v4
