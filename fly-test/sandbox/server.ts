@@ -4,8 +4,9 @@ import { spawn } from "node:child_process";
 const PORT = Number(process.env.SANDBOX_PORT ?? "8080");
 const LOG_PATH = process.env.SANDBOX_LOG_PATH ?? "/tmp/sandbox-ui.log";
 const DEFAULT_TARGET_URL = process.env.DEFAULT_TARGET_URL ?? "https://example.com/";
+const EGRESS_HTTP_PROXY_URL = process.env.EGRESS_HTTP_PROXY_URL ?? "";
 const WS_PROXY_URL = process.env.WS_PROXY_URL ?? "ws://egress-proxy:18081/api/ws/proxy";
-const WS_UPSTREAM_URL = process.env.WS_UPSTREAM_URL ?? "ws://ws-upstream:19090/ws";
+const WS_UPSTREAM_URL = process.env.WS_UPSTREAM_URL ?? "wss://ws.ifelse.io";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
 const INDEX_HTML = Bun.file(new URL("./index.html", import.meta.url));
 const WS_EVENT_LIMIT = 250;
@@ -195,6 +196,7 @@ async function parseFetchInput(request: Request): Promise<FetchInput> {
 
 async function fetchViaCurl(input: FetchInput): Promise<FetchResult> {
   const method = input.method;
+  const targetUrl = EGRESS_HTTP_PROXY_URL.length > 0 ? EGRESS_HTTP_PROXY_URL : input.url;
   const args = [
     "-sS",
     "-L",
@@ -205,12 +207,15 @@ async function fetchViaCurl(input: FetchInput): Promise<FetchResult> {
     "--write-out",
     "\n%{http_code}",
   ];
+  if (EGRESS_HTTP_PROXY_URL.length > 0) {
+    args.push("--header", `x-proxy-target-url: ${input.url}`);
+  }
 
   if (input.body.length > 0 && method !== "GET" && method !== "HEAD") {
     args.push("--header", "content-type: application/json");
     args.push("--data-raw", input.body);
   }
-  args.push(input.url);
+  args.push(targetUrl);
 
   const raw = await new Promise<string>((resolve, reject) => {
     const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });

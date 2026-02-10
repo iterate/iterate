@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { DaytonaProvider } from "./providers/daytona.ts";
 import { DockerProvider } from "./providers/docker.ts";
 import { FlyProvider } from "./providers/fly.ts";
 import type { ObservabilityProvider } from "./providers/types.ts";
@@ -11,7 +12,7 @@ type RunnerConfig = {
   flyDir: string;
   artifactDir: string;
   app: string;
-  backend: "docker" | "fly";
+  backend: "docker" | "fly" | "daytona";
   cleanupOnExit: boolean;
   targetUrl: string;
   blockedUrl: string;
@@ -19,7 +20,8 @@ type RunnerConfig = {
 
 function buildConfig(): RunnerConfig {
   const flyDir = findFlyDir();
-  const backend = process.env["E2E_BACKEND"] === "fly" ? "fly" : "docker";
+  const requested = process.env["E2E_BACKEND"]?.trim();
+  const backend = requested === "fly" || requested === "daytona" ? requested : "docker";
   const app = process.env["APP_NAME"] ?? `iterate-obsv-${backend}-${nowTag()}`;
   const cleanupOnExit = process.env["E2E_CLEANUP_ON_EXIT"] !== "0";
   const targetUrl = process.env["TARGET_URL"] ?? "https://example.com/";
@@ -55,6 +57,7 @@ function createProvider(config: RunnerConfig, log: (line: string) => void): Obse
   };
 
   if (config.backend === "fly") return new FlyProvider(init);
+  if (config.backend === "daytona") return new DaytonaProvider(init);
   return new DockerProvider(init);
 }
 

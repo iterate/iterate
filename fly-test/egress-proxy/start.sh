@@ -7,6 +7,8 @@ MITM_PORT="${EGRESS_MITM_PORT:-18080}"
 VIEWER_PORT="${EGRESS_VIEWER_PORT:-18081}"
 HANDLER_URL="${HANDLER_URL:-http://127.0.0.1:${VIEWER_PORT}/proxy}"
 PROXIFY_CONFIG_DIR="${PROXIFY_CONFIG_DIR:-/data/proxify}"
+PROOF_ROOT="${PROOF_ROOT:-/proof}"
+EGRESS_ENABLE_MITM="${EGRESS_ENABLE_MITM:-1}"
 
 log() {
   printf "%s %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$INIT_LOG"
@@ -20,21 +22,29 @@ mkdir -p "$PROXIFY_CONFIG_DIR"
 
 EGRESS_LOG_PATH="$MITM_LOG" \
 EGRESS_VIEWER_PORT="$VIEWER_PORT" \
-bun run /proof/egress-proxy/server.ts >>"$INIT_LOG" 2>&1 &
+bun run "$PROOF_ROOT/egress-proxy/server.ts" >>"$INIT_LOG" 2>&1 &
 VIEWER_PID="$!"
 log "viewer_pid=$VIEWER_PID"
 
-MITM_PORT="$MITM_PORT" \
-HANDLER_URL="$HANDLER_URL" \
-PROXIFY_CONFIG_DIR="$PROXIFY_CONFIG_DIR" \
-bash /proof/mitm-go/start.sh >>"$INIT_LOG" 2>&1 &
-MITM_PID="$!"
-log "mitm_pid=$MITM_PID"
+if [ "$EGRESS_ENABLE_MITM" = "1" ]; then
+  MITM_PORT="$MITM_PORT" \
+  HANDLER_URL="$HANDLER_URL" \
+  PROXIFY_CONFIG_DIR="$PROXIFY_CONFIG_DIR" \
+  bash "$PROOF_ROOT/mitm-go/start.sh" >>"$INIT_LOG" 2>&1 &
+  MITM_PID="$!"
+  log "mitm_pid=$MITM_PID"
+else
+  log "mitm=disabled"
+fi
 
 for attempt in $(seq 1 60); do
-  if \
-    curl -fsS --max-time 2 "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1 \
-    && curl -fsS --max-time 2 --noproxy "" --proxy "http://127.0.0.1:${MITM_PORT}" "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1; then
+  if curl -fsS --max-time 2 "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1; then
+    if [ "$EGRESS_ENABLE_MITM" = "1" ]; then
+      if ! curl -fsS --max-time 2 --noproxy "" --proxy "http://127.0.0.1:${MITM_PORT}" "http://127.0.0.1:${VIEWER_PORT}/healthz" >/dev/null 2>&1; then
+        sleep 1
+        continue
+      fi
+    fi
     log "services_health=ok"
     log "READY mitm_port=${MITM_PORT} viewer_port=${VIEWER_PORT}"
     tail -f /dev/null

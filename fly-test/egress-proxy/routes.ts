@@ -113,6 +113,7 @@ export async function handleTransform(
   }
 
   logger.appendLog(withRequestId(requestId, `Received proxied ${method} request for ${target}.`));
+  logger.appendLog(withRequestId(requestId, `MITM_REQUEST method=${method} target=${target}`));
 
   if (isBlockedHost(parsed.hostname)) {
     logger.appendLog(
@@ -121,6 +122,7 @@ export async function handleTransform(
         `Blocked by policy before upstream call. Host "${parsed.hostname}" is not allowed.`,
       ),
     );
+    logger.appendLog(withRequestId(requestId, `POLICY_BLOCK host=${parsed.hostname}`));
     return new Response("policy violation\n", {
       status: 451,
       headers: {
@@ -130,6 +132,7 @@ export async function handleTransform(
     });
   }
 
+  // this is your human in the loop code path
   if (shouldHoldHttpRequest(parsed)) {
     logger.appendLog(
       withRequestId(
@@ -176,9 +179,12 @@ export async function handleTransform(
     logger.appendLog(
       withRequestId(
         requestId,
-        `Upstream response ${upstream.status} in ${Date.now() - startedAt}ms. ${transformedText ? 'Prepended "I was inserted by the egress proxy lol" to text response body.' : "Forwarded response body without text change."}`,
+        `Upstream response ${upstream.status} in ${Date.now() - startedAt}ms. ${transformedText ? "Prepended proof prefix to text response body." : "Forwarded response body without text change."}`,
       ),
     );
+    if (transformedText) {
+      logger.appendLog(withRequestId(requestId, `TRANSFORM_OK status=${upstream.status}`));
+    }
 
     return new Response(bodyOut, {
       status: upstream.status,

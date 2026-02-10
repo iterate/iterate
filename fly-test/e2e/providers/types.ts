@@ -13,7 +13,7 @@ export type ProviderInit = {
 };
 
 export interface ObservabilityProvider {
-  readonly name: "docker" | "fly";
+  readonly name: "docker" | "fly" | "daytona";
   up(): Promise<void>;
   sandboxFetch(payload: FetchPayload): Promise<string>;
   readSandboxLog(): Promise<string>;
