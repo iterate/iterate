@@ -1,6 +1,6 @@
 {
-  "id": "06cc1f60-c832-418c-819a-10b3312fd9e8",
-  "prevId": "10a31471-ebaf-4505-b98c-84f8a69d732e",
+  "id": "6a395f26-d6b1-48a2-a904-1c1d4c0e2fc1",
+  "prevId": "1066f283-955a-42e5-aeff-fd178286a47b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1173,6 +1173,51 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.outbox_event": {
+      "name": "outbox_event",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.project": {
       "name": "project",
       "schema": "",
@@ -1200,13 +1245,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "sandbox_provider": {
-          "name": "sandbox_provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'daytona'"
         },
         "created_at": {
           "name": "created_at",

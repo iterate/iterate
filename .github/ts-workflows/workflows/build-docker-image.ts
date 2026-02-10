@@ -42,7 +42,8 @@ export default workflow({
           default: "iterate-sandbox:ci",
         },
         use_depot_registry: {
-          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          description:
+            "Save image to Depot Registry and load into local Docker daemon in one build",
           required: false,
           type: "boolean",
           default: true,
@@ -93,7 +94,8 @@ export default workflow({
           default: "iterate-sandbox:ci",
         },
         use_depot_registry: {
-          description: "Save image to Depot Registry instead of loading into local Docker daemon",
+          description:
+            "Save image to Depot Registry and load into local Docker daemon in one build",
           required: false,
           type: "boolean",
           default: true,

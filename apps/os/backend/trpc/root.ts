@@ -10,6 +10,7 @@ import { accessTokenRouter } from "./routers/access-token.ts";
 import { billingRouter } from "./routers/billing.ts";
 import { eventRouter } from "./routers/event.ts";
 import { secretRouter } from "./routers/secret.ts";
+import { webchatRouter } from "./routers/webchat.ts";
 
 export const appRouter = router({
   user: userRouter,
@@ -23,6 +24,7 @@ export const appRouter = router({
   billing: billingRouter,
   event: eventRouter,
   secret: secretRouter,
+  webchat: webchatRouter,
 });
 
 export type AppRouter = typeof appRouter;

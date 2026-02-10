@@ -22,6 +22,7 @@ import {
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
 import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import { workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -595,6 +596,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
         adopt: true,
       },
     ],
+    crons: Object.values(workerCrons),
     wrangler: {
       main: "./backend/worker.ts",
     },

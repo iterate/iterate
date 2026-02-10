@@ -26,6 +26,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
       git \
       inotify-tools \
       jq \
+      less \
       locales \
       make \
       openssh-client \
@@ -39,10 +40,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && rm -rf /var/lib/apt/lists/* \
     && ln -s $(which fdfind) /usr/local/bin/fd
 
+# Install cloudflared (Cloudflare Tunnel client) — used to expose local ports via trycloudflare.com
 RUN ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "arm64" ]; then CLOUD_FLARED_ARCH="arm64"; else CLOUD_FLARED_ARCH="amd64"; fi && \
-    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CLOUD_FLARED_ARCH}" -o /usr/local/bin/cloudflared && \
-    chmod +x /usr/local/bin/cloudflared
+    curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" && \
+    dpkg -i /tmp/cloudflared.deb && \
+    rm /tmp/cloudflared.deb
 
 RUN corepack enable
 
@@ -158,8 +160,9 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
     sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
     sudo update-ca-certificates
 
-# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session
-RUN opencode run "Hello" || true
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
+# Use a free model — no API keys are available at build time.
+RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
 
 ARG GIT_SHA=unknown
 # Keep a functional git repo inside the image for tools/tests that call git.

@@ -1,19 +1,22 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq, and, lt } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
+import { CONNECTORS } from "../services/connectors.ts";
+import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-refresh.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
 import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
 import type { CloudflareEnv } from "../../env.ts";
+import { outboxClient } from "../outbox/client.ts";
 
 /** Initial context provided by the handler */
 export type ORPCContext = RequestHeadersPluginContext & {
@@ -146,97 +149,29 @@ export const reportStatus = os.machines.reportStatus
       daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
     };
 
-    // If machine is in 'starting' state and daemon reports ready, activate it
-    // This detaches any existing active machine and promotes this one to active
+    // If machine is in 'starting' state and daemon reports ready, verify it
+    // actually works before activating. The readiness probe runs async via outbox.
     if (status === "ready" && machineWithOrg.state === "starting") {
-      // If externalId is empty, provisioning hasn't completed yet — the container exists
-      // but the provisionPromise hasn't updated the DB with the container ID yet.
-      // Just record daemonStatus; the provisionPromise will activate when it finishes.
-      if (!machineWithOrg.externalId) {
-        await db
-          .update(schema.machine)
-          .set({ metadata: updatedMetadata })
-          .where(eq(schema.machine.id, machine.id));
+      const verifyingMetadata = {
+        ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
+        daemonStatus: "verifying",
+        daemonStatusMessage: "Running readiness probe...",
+        daemonReadyAt: null,
+      };
 
-        logger.info("Machine daemon ready, awaiting provisioning to set externalId", {
-          machineId: machine.id,
-        });
-
-        executionCtx.waitUntil(
-          broadcastInvalidation(env).catch((err) => {
-            logger.error("Failed to broadcast invalidation", err);
-          }),
-        );
-
-        return { success: true };
-      }
-
-      // Use transaction to ensure atomic activation - prevents race conditions
-      // if two machines report ready simultaneously
-      const detachedMachines = await db.transaction(async (tx) => {
-        // Detach all currently active machines for this project
-        const activeMachines = await tx.query.machine.findMany({
-          where: and(
-            eq(schema.machine.projectId, machineWithOrg.projectId),
-            eq(schema.machine.state, "active"),
-          ),
-        });
-
-        for (const activeMachine of activeMachines) {
-          // Detach in DB (within transaction)
-          await tx
-            .update(schema.machine)
-            .set({ state: "detached" })
-            .where(eq(schema.machine.id, activeMachine.id));
-
-          logger.info("Detached existing active machine", { machineId: activeMachine.id });
-        }
-
-        // Promote this machine to active
+      // Set verifying status and emit event in one transaction
+      await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
         await tx
           .update(schema.machine)
-          .set({ state: "active", metadata: updatedMetadata })
+          .set({ metadata: verifyingMetadata })
           .where(eq(schema.machine.id, machine.id));
 
-        logger.info("Machine activated", { machineId: machine.id });
-
-        return activeMachines;
-      });
-
-      // Cleanup old detached machines (older than 48h) after handoff.
-      // Run this opportunistically here to keep flow simple for now.
-      // TODO: Add scheduled/outbox cleanup across projects so detached machines
-      // from inactive projects also get archived.
-      const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-      const staleDetachedMachines = await db.query.machine.findMany({
-        where: and(
-          eq(schema.machine.projectId, machineWithOrg.projectId),
-          eq(schema.machine.state, "detached"),
-          lt(schema.machine.updatedAt, detachedCleanupCutoff),
-        ),
-      });
-
-      for (const detachedMachine of staleDetachedMachines) {
-        const runtime = await createMachineRuntime({
-          type: detachedMachine.type,
-          env,
-          externalId: detachedMachine.externalId,
-          metadata: (detachedMachine.metadata as Record<string, unknown>) ?? {},
-        });
-        await runtime.archive();
-
-        await db
-          .update(schema.machine)
-          .set({ state: "archived" })
-          .where(eq(schema.machine.id, detachedMachine.id));
-
-        logger.info("Archived stale detached machine", { machineId: detachedMachine.id });
-      }
-
-      logger.info("Machine handoff complete", {
-        activatedMachineId: machine.id,
-        detachedCount: detachedMachines.length,
-        archivedDetachedCount: staleDetachedMachines.length,
+        return {
+          payload: {
+            machineId: machine.id,
+            projectId: machineWithOrg.projectId,
+          },
+        };
       });
     } else {
       // Just update metadata
@@ -332,6 +267,13 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
+  // In raw secrets mode, proactively refresh all connector tokens (GitHub, Google, Slack).
+  // Without the egress proxy, there's no 401→refresh flow, so tokens go stale.
+  // attemptSecretRefresh also saves the fresh token to the DB for future calls.
+  if (dangerousRawSecrets) {
+    await refreshStaleConnectorTokens(db, env, project.id, unifiedEnvVars);
+  }
+
   // Add daemon-specific env vars not shown in frontend
   const daemonEnvVars: typeof unifiedEnvVars = [
     ...unifiedEnvVars,
@@ -383,3 +325,95 @@ export const workerRouter = os.router({
     getEnv,
   },
 });
+
+// --- Utility functions ---
+
+type UnifiedEnvVar = Awaited<ReturnType<typeof getUnifiedEnvVars>>[number];
+
+/**
+ * Proactively refresh all refreshable connector tokens in the env vars.
+ * In raw secrets mode there's no egress proxy to do 401→refresh, so tokens
+ * (e.g., GitHub installation tokens, Google OAuth) go stale.
+ * Also persists the fresh token to the DB so future getEnv calls benefit.
+ */
+async function refreshStaleConnectorTokens(
+  db: DB,
+  env: CloudflareEnv,
+  projectId: string,
+  envVars: UnifiedEnvVar[],
+): Promise<void> {
+  // Refreshable connector secret keys from the registry
+  const refreshableKeys = new Set(
+    Object.values(CONNECTORS)
+      .filter((c) => c.refreshable)
+      .map((c) => c.secretKey),
+  );
+
+  // Env vars that come from refreshable connectors
+  const toRefresh = envVars.filter((v) => v.secret && refreshableKeys.has(v.secret.secretKey));
+  if (toRefresh.length === 0) return;
+
+  // Unique secret keys to query (deduped)
+  const secretKeysToQuery = [...new Set(toRefresh.map((v) => v.secret!.secretKey))];
+
+  // Query ALL matching secrets for the project (both project-scoped and user-scoped).
+  const secrets = await db.query.secret.findMany({
+    where: and(
+      eq(schema.secret.projectId, projectId),
+      or(...secretKeysToQuery.map((k) => eq(schema.secret.key, k))),
+    ),
+    columns: { id: true, key: true, userId: true },
+  });
+
+  if (secrets.length === 0) return;
+
+  // Representative URLs for connector detection (attemptSecretRefresh uses getConnectorForUrl)
+  const connectorURLs = new Map(
+    Object.values(CONNECTORS).map((c) => [
+      c.secretKey,
+      `https://${c.urlPatterns[0].replace("*.", "x.").replace("/*", "/x")}`,
+    ]),
+  );
+
+  const refreshContext: RefreshContext = {
+    encryptionSecret: env.ENCRYPTION_SECRET,
+    publicUrl: env.VITE_PUBLIC_URL,
+    slackClientId: env.SLACK_CLIENT_ID,
+    slackClientSecret: env.SLACK_CLIENT_SECRET,
+    googleClientId: env.GOOGLE_CLIENT_ID,
+    googleClientSecret: env.GOOGLE_CLIENT_SECRET,
+    githubAppId: env.GITHUB_APP_ID,
+    githubAppPrivateKey: env.GITHUB_APP_PRIVATE_KEY,
+  };
+
+  // Refresh all in parallel
+  const results = await Promise.allSettled(
+    secrets.map(async (secret) => {
+      const url = connectorURLs.get(secret.key);
+      if (!url) return null;
+      const result = await attemptSecretRefresh(db, secret.id, url, refreshContext);
+      if (!result.ok) {
+        logger.warn("Failed to refresh connector token for raw mode", {
+          secretKey: secret.key,
+          code: result.code,
+        });
+        return null;
+      }
+      return { key: secret.key, userId: secret.userId, value: result.newValue };
+    }),
+  );
+
+  // Build lookup: "secretKey:userId" → fresh value
+  const freshValues = new Map<string, string>();
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      freshValues.set(`${r.value.key}:${r.value.userId ?? ""}`, r.value.value);
+    }
+  }
+
+  // Override stale values in place
+  for (const envVar of toRefresh) {
+    const fresh = freshValues.get(`${envVar.secret!.secretKey}:${envVar.secret!.userId ?? ""}`);
+    if (fresh) envVar.value = fresh;
+  }
+}

@@ -27,7 +27,8 @@ import { EmptyState } from "../../components/empty-state.tsx";
 import { MachineTable } from "../../components/machine-table.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 
-const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_DEFAULT_SNAPSHOT ?? "";
+const DEFAULT_DAYTONA_SNAPSHOT_NAME =
+  import.meta.env.VITE_DAYTONA_DEFAULT_SNAPSHOT ?? import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
 
 function dateSlug() {
   const d = new Date();
@@ -289,10 +290,10 @@ function ProjectMachinesPage() {
       {previousMachines.length > 0 && (
         <section className="space-y-3">
           <div>
-            <h2 className="text-sm font-medium">Previous Machines</h2>
+            <h2 className="text-sm font-medium">Inactive Machines</h2>
             <p className="text-xs text-muted-foreground">
               Starting, detached, or archived machines. A new machine becomes active once it reports
-              ready.
+              ready. Detached machines will be archived after 48 hours.
             </p>
           </div>
           <MachineTable

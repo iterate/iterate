@@ -12,8 +12,9 @@ export default iterateConfig({
   /**
    * Default model used for OpenCode sessions.
    */
-  defaultModel: {
-    providerID: "anthropic",
-    modelID: "claude-opus-4-5",
+  defaultModel: () => {
+    if (process.env.ANTHROPIC_API_KEY)
+      return { providerID: "anthropic", modelID: "claude-opus-4-6" };
+    return { providerID: "opencode", modelID: "kimi-k2.5-free" };
   },
 });

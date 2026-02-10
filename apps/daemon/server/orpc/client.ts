@@ -13,6 +13,21 @@ export function createWorkerClient(): ContractRouterClient<WorkerContract> {
     headers: {
       Authorization: `Bearer ${process.env.ITERATE_OS_API_KEY}`,
     },
+    fetch: async (request, init) => {
+      const response = await globalThis.fetch(request, init);
+      if (!response.ok) {
+        const cfRay = response.headers.get("cf-ray");
+        const body = await response
+          .clone()
+          .text()
+          .catch(() => "<unreadable>");
+        console.error(`[orpc-client] ${request.url} responded ${response.status}`, {
+          cfRay,
+          body: body.slice(0, 500),
+        });
+      }
+      return response;
+    },
     plugins: [
       new ClientRetryPlugin({
         default: { onRetry: (error) => console.warn(`Retrying after error`, error) },

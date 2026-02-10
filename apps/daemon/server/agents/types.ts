@@ -35,6 +35,11 @@ export interface AppendParams {
   acknowledge: () => Promise<void>;
   /** Called when the agent's turn ends (e.g., session becomes idle) */
   unacknowledge: () => Promise<void>;
+  /** Called when the agent starts a tool call or changes status (max ~30 chars) */
+  setStatus?: (
+    status: string,
+    context: { tool: string; input: Record<string, unknown> },
+  ) => Promise<void>;
 }
 
 export interface AgentHarness {

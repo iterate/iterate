@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, Link, notFound } from "@tanstack/react-router";
-import { Shield, Terminal, Info } from "lucide-react";
+import { Shield, Terminal, Info, Inbox } from "lucide-react";
 import { Suspense } from "react";
 import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -47,6 +47,13 @@ function AdminLayout() {
           >
             <Info className="h-4 w-4" />
             Session Info
+          </Link>
+          <Link
+            to="/admin/outbox"
+            className={cn("flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent")}
+          >
+            <Inbox className="h-4 w-4" />
+            Outbox
           </Link>
         </nav>
       </div>

@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
+import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
@@ -17,6 +18,7 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { googleApp } from "./integrations/google/google.ts";
 import { resendApp } from "./integrations/resend/resend.ts";
+import { webchatApp } from "./integrations/webchat/webchat.ts";
 import { machineProxyApp } from "./routes/machine-proxy.ts";
 import { stripeWebhookApp } from "./integrations/stripe/webhook.ts";
 import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
@@ -25,14 +27,38 @@ import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
+import { queuer } from "./outbox/outbox-queuer.ts";
+import * as workerConfig from "./worker-config.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
+import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 
 export type { Variables };
 
+// Register outbox consumers at module load time
+registerConsumers();
+
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+app.use("*", async (c, next) => {
+  initializeOtel(c.env as Record<string, unknown>);
+  return withExtractedTraceContext(c.req.raw.headers, next);
+});
+
+app.get("/api/observability", (c) => {
+  return c.json({
+    otel: getOtelConfig(c.env as Record<string, unknown>),
+    traceViewer: {
+      name: "jaeger",
+      port: 16686,
+      path: "/",
+      note: "Viewer runs inside the sandbox",
+    },
+  });
+});
 
 app.use(
   cors({
@@ -123,6 +149,7 @@ app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
 app.route("/api/integrations/google", googleApp);
 app.route("/api/integrations/resend", resendApp);
+app.route("/api/integrations/webchat", webchatApp);
 app.route("/api/integrations/stripe/webhook", stripeWebhookApp);
 app.route("", posthogProxyApp); // PostHog reverse proxy (for ad-blocker bypass)
 app.route("/api", egressApprovalsApp);
@@ -133,6 +160,11 @@ app.route("", egressProxyApp);
 // oRPC handler for machine status (called by daemon to report ready)
 const orpcHandler = new RPCHandler(workerRouter, {
   plugins: [new RequestHeadersPlugin()],
+  interceptors: [
+    onError((error, params) => {
+      logger.error(`[orpc] handler error ${params.request.url}`, error);
+    }),
+  ],
 });
 app.all("/api/orpc/*", async (c) => {
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
@@ -206,6 +238,27 @@ export default class extends WorkerEntrypoint {
 
     // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
+  }
+
+  async scheduled(controller: ScheduledController) {
+    const db = getDb();
+    const cron = controller.cron as workerConfig.WorkerCronExpression;
+    switch (cron) {
+      case workerConfig.workerCrons.processOutboxQueue: {
+        try {
+          const result = await queuer.processQueue(db);
+          if (result !== "0 messages processed")
+            logger.info("Scheduled outbox queue processing completed", result);
+        } catch (error) {
+          logger.error("Scheduled outbox queue processing failed:", error);
+        }
+        break;
+      }
+      default: {
+        cron satisfies never;
+        logger.error("Unknown cron pattern:", controller);
+      }
+    }
   }
 }
 

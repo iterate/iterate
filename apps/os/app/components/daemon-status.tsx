@@ -1,6 +1,6 @@
-import { Circle, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { Circle, CheckCircle2, XCircle, RefreshCw, SearchCheck } from "lucide-react";
 
-type DaemonStatusValue = "ready" | "error" | "restarting" | "stopping" | undefined;
+type DaemonStatusValue = "ready" | "error" | "restarting" | "stopping" | "verifying" | undefined;
 
 interface DaemonStatusProps {
   state: "starting" | "active" | "detached" | "archived";
@@ -58,6 +58,15 @@ export function DaemonStatus({
       <span className="flex items-center gap-1.5 text-orange-600 text-sm">
         <Circle className="h-3 w-3 animate-pulse" />
         Stopping...
+      </span>
+    );
+  }
+
+  if (daemonStatus === "verifying") {
+    return (
+      <span className="flex items-center gap-1.5 text-blue-600 text-sm" title={daemonStatusMessage}>
+        <SearchCheck className="h-3 w-3 animate-pulse" />
+        Verifying...
       </span>
     );
   }

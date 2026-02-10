@@ -3,11 +3,15 @@ import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { propagation, context, type TextMapGetter } from "@opentelemetry/api";
+import { getOtelConfig } from "./utils/otel-init.ts";
 import { trpcRouter } from "./trpc/router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
 import { emailRouter } from "./routers/email.ts";
+import { webchatRouter } from "./routers/webchat.ts";
+import { filesRouter } from "./routers/files.ts";
 
 const app = baseApp.use(
   logger(),
@@ -25,8 +29,36 @@ const app = baseApp.use(
   secureHeaders(),
 );
 
+const headersGetter: TextMapGetter<Headers> = {
+  get(carrier, key) {
+    return carrier.get(key) ?? undefined;
+  },
+  keys(carrier) {
+    const keys: string[] = [];
+    carrier.forEach((_value, key) => keys.push(key));
+    return keys;
+  },
+};
+
+app.use("*", async (c, next) => {
+  const extracted = propagation.extract(context.active(), c.req.raw.headers, headersGetter);
+  return context.with(extracted, next);
+});
+
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/observability", (c) => {
+  return c.json({
+    otel: getOtelConfig(),
+    traceViewer: {
+      name: "jaeger",
+      port: 16686,
+      path: "/",
+      note: "Open the machine proxy on port 16686 to view traces",
+    },
+  });
 });
 
 app.all("/api/trpc/*", (c) => {
@@ -50,5 +82,7 @@ app.all("/api/trpc/*", (c) => {
 app.route("/api/pty", ptyRouter);
 app.route("/api/integrations/slack", slackRouter);
 app.route("/api/integrations/email", emailRouter);
+app.route("/api/integrations/webchat", webchatRouter);
+app.route("/api/files", filesRouter);
 
 export default app;

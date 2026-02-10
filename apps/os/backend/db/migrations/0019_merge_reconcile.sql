@@ -1,0 +1,1 @@
+ALTER TABLE "project" ADD COLUMN "sandbox_provider" text DEFAULT 'daytona' NOT NULL;
