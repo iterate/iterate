@@ -47,6 +47,14 @@ type RequestCorrelation = {
  * The CLI loads env vars from ~/.iterate/.env (including proxy settings and SLACK_BOT_TOKEN).
  */
 async function runSlackCommand(code: string, requestId?: string): Promise<void> {
+  await runSlackCommandWithResult(code, requestId);
+}
+
+/**
+ * Like runSlackCommand but returns the JSON-parsed stdout from the CLI.
+ * The code must `return` a value for it to appear in stdout.
+ */
+async function runSlackCommandWithResult(code: string, requestId?: string): Promise<unknown> {
   logger.log("[slack] runSlackCommand", {
     requestId,
     preview: code.slice(0, 80) + "...",
@@ -61,14 +69,34 @@ async function runSlackCommand(code: string, requestId?: string): Promise<void> 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || result.stdout || `Exit code ${result.exitCode}`);
   }
+  if (!result.stdout.trim()) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return result.stdout;
+  }
 }
 
+/** Threshold: status strings longer than this get posted as a thread message. */
+const CHECKUP_POST_THRESHOLD = 50;
+
+/** Marker text appended to checkup messages so we can identify our own bot messages. */
+const CHECKUP_MARKER = "\u200B\u200B\u200B"; // three zero-width spaces
+
 /**
- * Build the acknowledge/unacknowledge/setStatus callbacks for a Slack thread.
+ * Per-thread state for tracking the last checkup message we posted.
+ * Keyed by `${channel}/${threadTs}`.
+ */
+const lastCheckupMessageTs = new Map<string, string>();
+
+/**
+ * Build the acknowledge/unacknowledge/setStatus/onIdle callbacks for a Slack thread.
  *
  * - `acknowledge`: adds an emoji reaction to `emojiTimestamp`
- * - `unacknowledge`: removes that emoji and clears the thread status
- * - `setStatus`: updates the assistant thread status (max ~30 chars)
+ * - `unacknowledge`: removes that emoji, clears thread status, and cleans up checkup message tracking
+ * - `setStatus`: short strings update the thread status indicator; long strings (>50 chars)
+ *   are posted as (or update) a thread message
+ * - `onIdle`: posts an idle-check summary to the thread
  */
 function createSlackCallbacks(params: {
   channel: string;
@@ -77,8 +105,9 @@ function createSlackCallbacks(params: {
   emojiTimestamp: string;
   emoji: string;
   requestId?: string;
-}): Pick<AppendParams, "acknowledge" | "unacknowledge" | "setStatus"> {
+}): Pick<AppendParams, "acknowledge" | "unacknowledge" | "setStatus" | "onIdle"> {
   const { channel, threadTs, emojiTimestamp, emoji, requestId } = params;
+  const threadKey = `${channel}/${threadTs}`;
 
   return {
     acknowledge: async () => {
@@ -126,6 +155,8 @@ function createSlackCallbacks(params: {
       } catch {
         // Non-critical
       }
+      // Clean up checkup message tracking
+      lastCheckupMessageTs.delete(threadKey);
     },
 
     setStatus: async (
@@ -135,13 +166,65 @@ function createSlackCallbacks(params: {
       // Skip — the agent is already talking to Slack directly via this tool call
       const command = typeof input.command === "string" ? input.command : "";
       if (command.includes("iterate tool slack")) return;
+
+      if (status.length > CHECKUP_POST_THRESHOLD) {
+        // Long status: post or update a thread message
+        const existingTs = lastCheckupMessageTs.get(threadKey);
+        const text = `${status}${CHECKUP_MARKER}`;
+        try {
+          if (existingTs) {
+            // Update the existing checkup message
+            await runSlackCommand(
+              `return await slack.chat.update(${JSON.stringify({ channel, ts: existingTs, text })})`,
+              requestId,
+            );
+          } else {
+            // Post a new checkup message and remember its ts
+            const result = (await runSlackCommandWithResult(
+              `return await slack.chat.postMessage(${JSON.stringify({ channel, thread_ts: threadTs, text })})`,
+              requestId,
+            )) as { ts?: string } | undefined;
+            if (result?.ts) {
+              lastCheckupMessageTs.set(threadKey, result.ts);
+            }
+          }
+        } catch (error) {
+          logger.error(`[slack] Failed to post/update checkup message:`, { error, requestId });
+        }
+        // Also set a short thread status indicator
+        const shortStatus = status.slice(0, 30);
+        try {
+          await runSlackCommand(
+            `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status: shortStatus })})`,
+            requestId,
+          );
+        } catch {
+          // Non-critical
+        }
+      } else {
+        // Short status: just update the thread status indicator
+        try {
+          await runSlackCommand(
+            `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status })})`,
+            requestId,
+          );
+        } catch (error) {
+          logger.error(`[slack] Failed to set thread status:`, { error, requestId });
+        }
+      }
+    },
+
+    onIdle: async (summary: string) => {
+      const text = `${summary}${CHECKUP_MARKER}`;
       try {
+        // Post the idle assessment as a thread message
+        // (Don't reuse/update the in-progress checkup message — this is a separate "done" summary)
         await runSlackCommand(
-          `await slack.assistant.threads.setStatus(${JSON.stringify({ channel_id: channel, thread_ts: threadTs, status })})`,
+          `await slack.chat.postMessage(${JSON.stringify({ channel, thread_ts: threadTs, text })})`,
           requestId,
         );
       } catch (error) {
-        logger.error(`[slack] Failed to set thread status:`, { error, requestId });
+        logger.error(`[slack] Failed to post idle summary:`, { error, requestId });
       }
     },
   };
@@ -407,7 +490,7 @@ slackRouter.post("/webhook", async (c) => {
         }
 
         const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-        const { setStatus } = createSlackCallbacks({
+        const { setStatus, onIdle } = createSlackCallbacks({
           channel: parsed.channel,
           threadTs,
           emojiTimestamp: threadTs,
@@ -421,6 +504,7 @@ slackRouter.post("/webhook", async (c) => {
           unacknowledge: async () =>
             logger.log(`[slack] Finished processing reaction in ${parsed.channel}/${threadTs}`),
           setStatus,
+          onIdle,
         });
         span.setAttribute("daemon.result", parsed.case);
         return c.json({
@@ -644,6 +728,10 @@ function parseWebhookPayload(
   }
   if ("subtype" in event && event.subtype === "bot_message") {
     return { case: "ignored", reason: "Ignored: bot message" };
+  }
+  // Ignore our own checkup/idle messages (identified by marker)
+  if ("text" in event && typeof event.text === "string" && event.text.includes(CHECKUP_MARKER)) {
+    return { case: "ignored", reason: "Ignored: checkup marker message" };
   }
 
   // Ignore regular message events when the bot is mentioned - app_mention handles those

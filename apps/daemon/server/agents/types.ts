@@ -35,11 +35,16 @@ export interface AppendParams {
   acknowledge: () => Promise<void>;
   /** Called when the agent's turn ends (e.g., session becomes idle) */
   unacknowledge: () => Promise<void>;
-  /** Called when the agent starts a tool call or changes status (max ~30 chars) */
+  /** Called when the agent starts a tool call or changes status.
+   *  Short strings (~30 chars) update the thread status indicator.
+   *  Longer strings (>50 chars) are posted/updated as a thread message. */
   setStatus?: (
     status: string,
     context: { tool: string; input: Record<string, unknown> },
   ) => Promise<void>;
+  /** Called ~1s after the session goes idle with an LLM-generated assessment
+   *  of whether the agent actually resolved the user's request. */
+  onIdle?: (summary: string) => Promise<void>;
 }
 
 export interface AgentHarness {

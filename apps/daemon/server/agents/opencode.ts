@@ -9,6 +9,8 @@ import {
   type OpencodeClient,
   type Session,
   type Event as OpencodeRuntimeEvent,
+  type Message,
+  type Part,
 } from "@opencode-ai/sdk/v2";
 import {
   SpanStatusCode,
@@ -221,6 +223,7 @@ interface SessionTracking {
     status: string,
     context: { tool: string; input: Record<string, unknown> },
   ) => Promise<void>;
+  onIdle?: (summary: string) => Promise<void>;
   workingDirectory: string;
   startedAtMs: number;
   firstBusyAtMs?: number;
@@ -232,6 +235,7 @@ interface SessionTracking {
     span: Span;
   };
   parentContext: Context;
+  checkupTimer?: ReturnType<typeof setTimeout>;
 }
 
 // Track active sessions and their callbacks
@@ -306,12 +310,248 @@ function getSessionIdFromEvent(event: OpencodeRuntimeEvent): string | undefined 
   }
 }
 
+// #region Checkup
+// ============================================================================
+// Periodic "what's going on" checkup that runs while a turn is active.
+// After CHECKUP_INTERVAL_MS, fetches the conversation so far, spins up a
+// throwaway summariser session, and pushes the result through setStatus.
+// ============================================================================
+
+const CHECKUP_INTERVAL_MS = 30_000;
+const MAX_TEXT_PART_LENGTH = 500;
+
+/**
+ * Build a simplified text transcript from the session's messages.
+ * Keeps user messages (including metadata from format helpers) and assistant
+ * text parts. Skips tool calls, reasoning, snapshots, synthetic/ignored parts.
+ */
+async function buildConversationSummary(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<string> {
+  const response = await client.session.messages({ sessionID: sessionId });
+  const messages = response.data ?? [];
+
+  const lines: string[] = [];
+
+  for (const msg of messages) {
+    const info: Message = msg.info;
+    const parts: Part[] = msg.parts;
+
+    if (info.role === "user") {
+      // User messages: extract text parts only
+      const textParts = parts.filter(
+        (p): p is Extract<Part, { type: "text" }> =>
+          p.type === "text" && !("synthetic" in p && p.synthetic) && !("ignored" in p && p.ignored),
+      );
+      for (const tp of textParts) {
+        const text =
+          tp.text.length > MAX_TEXT_PART_LENGTH
+            ? tp.text.slice(0, MAX_TEXT_PART_LENGTH) + "..."
+            : tp.text;
+        lines.push(`[user] ${text}`);
+      }
+    } else if (info.role === "assistant") {
+      // Assistant messages: only text parts, skip tools/reasoning/etc
+      const textParts = parts.filter(
+        (p): p is Extract<Part, { type: "text" }> =>
+          p.type === "text" && !("synthetic" in p && p.synthetic) && !("ignored" in p && p.ignored),
+      );
+      for (const tp of textParts) {
+        const text =
+          tp.text.length > MAX_TEXT_PART_LENGTH
+            ? tp.text.slice(0, MAX_TEXT_PART_LENGTH) + "..."
+            : tp.text;
+        lines.push(`[assistant] ${text}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Run a single checkup: summarise the conversation so far via a throwaway
+ * one-shot session and push the result through setStatus.
+ */
+async function runCheckup(tracking: SessionTracking): Promise<void> {
+  const { sessionId, workingDirectory } = tracking;
+  const client = createClient({ directory: workingDirectory });
+  const config = getConfig();
+
+  // Build a text transcript of the conversation so far
+  const transcript = await buildConversationSummary(client, sessionId);
+  if (!transcript.trim()) {
+    logger.log("[opencode] Checkup: no transcript content, skipping", { sessionId });
+    return;
+  }
+
+  const elapsedSec = Math.round((Date.now() - tracking.startedAtMs) / 1000);
+
+  // Create a throwaway session for the summariser
+  const checkupSession = await client.session.create({ title: `checkup-${sessionId}` });
+  if (!checkupSession.data) {
+    logger.error("[opencode] Checkup: failed to create summariser session", { sessionId });
+    return;
+  }
+  const checkupSessionId = checkupSession.data.id;
+
+  try {
+    await waitForSessionReady(client, checkupSessionId);
+
+    const systemPrompt = [
+      "You are a status summariser. You will receive a transcript of an AI coding agent session.",
+      "Summarise what the agent is currently working on in 1-2 short sentences.",
+      "Reply with ONLY the summary, nothing else. No preamble, no formatting.",
+    ].join(" ");
+
+    const userPrompt = [
+      `This agent session has been running for ${elapsedSec}s.`,
+      `Here is the conversation transcript:\n\n${transcript}`,
+    ].join(" ");
+
+    // Send the prompt (blocks until the assistant responds)
+    await client.session.prompt({
+      sessionID: checkupSessionId,
+      system: systemPrompt,
+      parts: [{ type: "text", text: userPrompt }],
+      ...(config.defaultModel && typeof config.defaultModel === "function"
+        ? { model: config.defaultModel() }
+        : {}),
+    });
+
+    // Retrieve the assistant's response
+    const checkupMessages = await client.session.messages({ sessionID: checkupSessionId });
+    const assistantMsg = (checkupMessages.data ?? []).find((m) => m.info.role === "assistant");
+    const summaryPart = assistantMsg?.parts.find(
+      (p): p is Extract<Part, { type: "text" }> => p.type === "text",
+    );
+    const summary = summaryPart?.text?.trim();
+
+    if (summary && tracking.setStatus) {
+      logger.log("[opencode] Checkup summary", { sessionId, summary, elapsedSec });
+      await tracking.setStatus(summary, { tool: "checkup", input: { elapsedSec } });
+    }
+  } finally {
+    // Clean up the throwaway session (fire-and-forget)
+    client.session.delete({ sessionID: checkupSessionId }).catch((err) => {
+      logger.error("[opencode] Checkup: failed to delete summariser session", {
+        checkupSessionId,
+        err,
+      });
+    });
+  }
+}
+
+/**
+ * Schedule the next checkup for a tracked session.
+ * Repeats every CHECKUP_INTERVAL_MS until the session is stopped.
+ */
+function scheduleCheckup(tracking: SessionTracking): void {
+  tracking.checkupTimer = setTimeout(async () => {
+    if (!trackedSessions.has(tracking.sessionId)) return;
+    try {
+      await runCheckup(tracking);
+    } catch (error) {
+      logger.error("[opencode] Checkup failed:", { sessionId: tracking.sessionId, error });
+    }
+    // Reschedule if still tracked
+    if (trackedSessions.has(tracking.sessionId)) {
+      scheduleCheckup(tracking);
+    }
+  }, CHECKUP_INTERVAL_MS);
+}
+
+/**
+ * Cancel any pending checkup timer for a tracked session.
+ */
+function clearCheckup(tracking: SessionTracking): void {
+  if (tracking.checkupTimer) {
+    clearTimeout(tracking.checkupTimer);
+    tracking.checkupTimer = undefined;
+  }
+}
+
+const IDLE_CHECKUP_DELAY_MS = 1_000;
+
+/**
+ * Run after a session goes idle: ask an LLM whether the agent actually resolved
+ * the user's request or left things hanging. Posts the assessment via onIdle.
+ */
+async function runIdleCheckup(
+  sessionId: string,
+  workingDirectory: string,
+  onIdle: (summary: string) => Promise<void>,
+): Promise<void> {
+  const client = createClient({ directory: workingDirectory });
+  const config = getConfig();
+
+  const transcript = await buildConversationSummary(client, sessionId);
+  if (!transcript.trim()) return;
+
+  const checkupSession = await client.session.create({ title: `idle-check-${sessionId}` });
+  if (!checkupSession.data) {
+    logger.error("[opencode] Idle checkup: failed to create session", { sessionId });
+    return;
+  }
+  const checkupSessionId = checkupSession.data.id;
+
+  try {
+    await waitForSessionReady(client, checkupSessionId);
+
+    const systemPrompt = [
+      "You are reviewing an AI coding agent conversation that just went idle.",
+      "Determine whether the agent resolved the user's request or put the ball back in the user's court.",
+      "Reply with a short 1-2 sentence assessment. Start with either 'Done:' or 'Waiting:' to indicate the state.",
+      "For example: 'Done: Implemented the feature and ran tests.' or 'Waiting: Asked the user a clarifying question about the API design.'",
+      "Reply with ONLY the assessment, nothing else.",
+    ].join(" ");
+
+    const userPrompt = [
+      "The agent session just went idle. Here is the full conversation transcript:",
+      "",
+      transcript,
+    ].join("\n");
+
+    await client.session.prompt({
+      sessionID: checkupSessionId,
+      system: systemPrompt,
+      parts: [{ type: "text", text: userPrompt }],
+      ...(config.defaultModel && typeof config.defaultModel === "function"
+        ? { model: config.defaultModel() }
+        : {}),
+    });
+
+    const messages = await client.session.messages({ sessionID: checkupSessionId });
+    const assistantMsg = (messages.data ?? []).find((m) => m.info.role === "assistant");
+    const summaryPart = assistantMsg?.parts.find(
+      (p): p is Extract<Part, { type: "text" }> => p.type === "text",
+    );
+    const summary = summaryPart?.text?.trim();
+
+    if (summary) {
+      logger.log("[opencode] Idle checkup result", { sessionId, summary });
+      await onIdle(summary);
+    }
+  } finally {
+    client.session.delete({ sessionID: checkupSessionId }).catch((err) => {
+      logger.error("[opencode] Idle checkup: failed to delete session", { checkupSessionId, err });
+    });
+  }
+}
+
+// #endregion Checkup
+
 /**
  * Stop tracking a session and call its unacknowledge callback.
+ * Also schedules an idle checkup if onIdle is configured.
  */
 async function stopTracking(sessionId: string): Promise<void> {
   const tracking = trackedSessions.get(sessionId);
   if (!tracking) return;
+
+  // Cancel checkup timer before anything else
+  clearCheckup(tracking);
 
   // Delete first to prevent duplicate calls (both session.idle and session.status fire)
   trackedSessions.delete(sessionId);
@@ -328,6 +568,16 @@ async function stopTracking(sessionId: string): Promise<void> {
     } catch (error) {
       logger.error(`[opencode] Error calling unacknowledge for session ${sessionId}:`, error);
     }
+  }
+
+  // Schedule idle checkup after a short delay
+  if (tracking.onIdle) {
+    const { workingDirectory, onIdle } = tracking;
+    setTimeout(() => {
+      runIdleCheckup(sessionId, workingDirectory, onIdle).catch((error) => {
+        logger.error("[opencode] Idle checkup failed:", { sessionId, error });
+      });
+    }, IDLE_CHECKUP_DELAY_MS);
   }
 }
 
@@ -515,20 +765,27 @@ async function trackSession(sessionId: string, params: AppendParams): Promise<vo
   if (existing) {
     existing.unacknowledgeCallbacks.push(params.unacknowledge);
     existing.setStatus = params.setStatus;
+    existing.onIdle = params.onIdle;
     existing.workingDirectory = params.workingDirectory;
     existing.parentContext = context.active();
+    // Reset checkup timer on new message in same session
+    clearCheckup(existing);
+    scheduleCheckup(existing);
     logger.log(`[opencode] Updated tracking session ${sessionId}`, {
       unackCount: existing.unacknowledgeCallbacks.length,
     });
   } else {
-    trackedSessions.set(sessionId, {
+    const tracking: SessionTracking = {
       sessionId,
       unacknowledgeCallbacks: [params.unacknowledge],
       setStatus: params.setStatus,
+      onIdle: params.onIdle,
       workingDirectory: params.workingDirectory,
       startedAtMs: Date.now(),
       parentContext: context.active(),
-    });
+    };
+    trackedSessions.set(sessionId, tracking);
+    scheduleCheckup(tracking);
   }
 
   logger.log(`[opencode] Tracking session ${sessionId}`);
