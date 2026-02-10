@@ -8,8 +8,12 @@ services:
       EGRESS_VIEWER_PORT: "18081"
       PROXIFY_CONFIG_DIR: /data/mitm
       EGRESS_LOG_PATH: /tmp/egress-proxy.log
+      EGRESS_DATA_DIR: /data
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
       - fly-test-mitm-data:/data/mitm
+      - fly-test-egress-data:/data
     ports:
       - "${EGRESS_VIEWER_HOST_PORT:-0}:18081"
 
@@ -31,3 +35,4 @@ services:
 
 volumes:
   fly-test-mitm-data:
+  fly-test-egress-data:

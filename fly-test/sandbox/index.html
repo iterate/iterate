@@ -243,14 +243,76 @@
         <p>Run outbound HTTP requests from sandbox through egress MITM.</p>
         <div class="hint">
           What to look for: proxy prepends <code>__ITERATE_MITM_PROOF__</code> and egress logs show
-          request lifecycle lines with matching <code>&lt;http-...&gt;</code> IDs.
+          request lifecycle lines with matching <code>&lt;http-...&gt;</code> IDs. Use
+          <code>getIterateSecret({secretKey: '...'})</code> in headers to inject secrets.
         </div>
         <label for="target">Target URL</label>
         <input id="target" type="url" />
+        <label for="fetch-method">Method</label>
+        <select
+          id="fetch-method"
+          style="
+            margin-top: 6px;
+            width: auto;
+            padding: 8px 12px;
+            border: 1px solid #c9d4e5;
+            border-radius: 8px;
+          "
+        >
+          <option value="GET" selected>GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+          <option value="DELETE">DELETE</option>
+        </select>
+        <label for="fetch-headers"
+          >Headers
+          <span style="font-weight: normal; color: #64748b"
+            >(one per line: <code>Name: Value</code>)</span
+          ></label
+        >
+        <textarea
+          id="fetch-headers"
+          style="
+            margin-top: 6px;
+            width: 100%;
+            min-height: 60px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #c9d4e5;
+            border-radius: 8px;
+            padding: 8px;
+            box-sizing: border-box;
+            resize: vertical;
+          "
+          spellcheck="false"
+          placeholder="Authorization: Bearer getIterateSecret({secretKey: 'openai.api_key'})"
+        ></textarea>
+        <label for="fetch-body"
+          >Body <span style="font-weight: normal; color: #64748b">(for POST/PUT/PATCH)</span></label
+        >
+        <textarea
+          id="fetch-body"
+          style="
+            margin-top: 6px;
+            width: 100%;
+            min-height: 80px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid #c9d4e5;
+            border-radius: 8px;
+            padding: 8px;
+            box-sizing: border-box;
+            resize: vertical;
+          "
+          spellcheck="false"
+          placeholder='{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Say hi"}]}'
+        ></textarea>
         <div class="row action-row">
           <button id="btn-example">Example.com</button>
           <button id="btn-held">Held example.com?review=1</button>
           <button id="btn-blocked">Blocked iterate.com</button>
+          <button id="btn-openai">OpenAI (with secret)</button>
           <button id="btn-run" class="primary">Fetch</button>
         </div>
         <div id="fetch-status" class="status">Ready.</div>
@@ -400,7 +462,24 @@
         } catch {}
       }
 
+      function parseHeaderLines(text) {
+        const headers = {};
+        for (const line of text.split("\n")) {
+          const colon = line.indexOf(":");
+          if (colon < 1) continue;
+          const key = line.slice(0, colon).trim();
+          const value = line.slice(colon + 1).trim();
+          if (key.length > 0 && value.length > 0) headers[key] = value;
+        }
+        return headers;
+      }
+
       async function runFetch(url) {
+        const method = document.getElementById("fetch-method").value;
+        const headersText = document.getElementById("fetch-headers").value;
+        const bodyText = document.getElementById("fetch-body").value;
+        const customHeaders = parseHeaderLines(headersText);
+
         fetchStatusEl.textContent = "Fetching...";
         fetchOutput.textContent = "Running...";
         const startedAt = Date.now();
@@ -408,7 +487,7 @@
           const response = await fetch("/api/fetch", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ url, method: "GET", body: "" }),
+            body: JSON.stringify({ url, method, body: bodyText, headers: customHeaders }),
           });
           const data = await response.json();
           const elapsedMs = Date.now() - startedAt;
@@ -475,6 +554,22 @@
 
       document.getElementById("btn-blocked").addEventListener("click", () => {
         targetInput.value = "https://iterate.com/";
+      });
+
+      document.getElementById("btn-openai").addEventListener("click", () => {
+        targetInput.value = "https://api.openai.com/v1/chat/completions";
+        document.getElementById("fetch-method").value = "POST";
+        document.getElementById("fetch-headers").value =
+          "Authorization: Bearer getIterateSecret({secretKey: 'openai.api_key'})";
+        document.getElementById("fetch-body").value = JSON.stringify(
+          {
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "Say hello in one sentence." }],
+            max_tokens: 50,
+          },
+          null,
+          2,
+        );
       });
 
       document.getElementById("btn-run").addEventListener("click", () => {

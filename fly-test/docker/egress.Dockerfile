@@ -14,6 +14,7 @@ ENV PATH=/root/.bun/bin:${PATH}
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
+  gettext-base \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://bun.sh/install | bash
@@ -23,6 +24,12 @@ RUN chmod +x /usr/local/bin/fly-mitm
 
 COPY egress-proxy /proof/egress-proxy
 COPY mitm-go /proof/mitm-go
+
+# Install egress-proxy dependencies (jsonata)
+RUN cd /proof/egress-proxy && bun install --production
+
+# Bootstrap default data files
+RUN mkdir -p /data
 
 RUN chmod +x /proof/egress-proxy/start.sh /proof/mitm-go/start.sh
 RUN bun --version && test -x /usr/local/bin/fly-mitm

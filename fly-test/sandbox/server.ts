@@ -15,6 +15,7 @@ type FetchInput = {
   url: string;
   method: string;
   body: string;
+  headers: Record<string, string>;
 };
 
 type FetchResult = {
@@ -174,13 +175,19 @@ function sendWsMessage(message: string): WsState {
 async function parseFetchInput(request: Request): Promise<FetchInput> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
-    const data = (await request.json()) as { url?: string; method?: string; body?: string };
+    const data = (await request.json()) as {
+      url?: string;
+      method?: string;
+      body?: string;
+      headers?: Record<string, string>;
+    };
     return {
       url: String(data.url ?? "").trim(),
       method: String(data.method ?? "GET")
         .trim()
         .toUpperCase(),
       body: String(data.body ?? ""),
+      headers: data.headers && typeof data.headers === "object" ? data.headers : {},
     };
   }
 
@@ -191,6 +198,7 @@ async function parseFetchInput(request: Request): Promise<FetchInput> {
       .trim()
       .toUpperCase(),
     body: String(form.get("body") ?? ""),
+    headers: {},
   };
 }
 
@@ -211,8 +219,21 @@ async function fetchViaCurl(input: FetchInput): Promise<FetchResult> {
     args.push("--header", `x-proxy-target-url: ${input.url}`);
   }
 
+  // Add custom headers
+  for (const [key, value] of Object.entries(input.headers)) {
+    if (key.trim().length > 0 && value.trim().length > 0) {
+      args.push("--header", `${key}: ${value}`);
+    }
+  }
+
   if (input.body.length > 0 && method !== "GET" && method !== "HEAD") {
-    args.push("--header", "content-type: application/json");
+    // Only add content-type if not already in custom headers
+    const hasContentType = Object.keys(input.headers).some(
+      (k) => k.toLowerCase() === "content-type",
+    );
+    if (!hasContentType) {
+      args.push("--header", "content-type: application/json");
+    }
     args.push("--data-raw", input.body);
   }
   args.push(targetUrl);

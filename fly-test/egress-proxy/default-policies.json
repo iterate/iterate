@@ -1,0 +1,42 @@
+{
+  "policies": [
+    {
+      "priority": 10,
+      "expression": "url.hostname = 'iterate.com' or $match(url.hostname, /\\.iterate\\.com$/)",
+      "decision": "deny",
+      "reason": "blocked: iterate.com"
+    },
+    {
+      "priority": 20,
+      "expression": "url.hostname = 'example.com' and $contains(url.href, 'review=1')",
+      "decision": "human_approval",
+      "reason": "example.com with review=1 requires approval"
+    },
+    {
+      "priority": 30,
+      "expression": "$contains(payload, 'OFFENDING') or $contains(payload, 'offending')",
+      "decision": "drop",
+      "reason": "blocked word in WS payload"
+    },
+    {
+      "priority": 40,
+      "expression": "$contains(payload, 'reviewme')",
+      "decision": "human_approval",
+      "reason": "WS message contains review trigger"
+    },
+    {
+      "priority": 50,
+      "expression": "$contains(payload, 'server-secret')",
+      "decision": "rewrite",
+      "rewriteFrom": "server-secret",
+      "rewriteTo": "REDACTED",
+      "reason": "redact server-secret in WS"
+    },
+    {
+      "priority": 1000,
+      "expression": "true",
+      "decision": "allow",
+      "reason": "default allow-all (remove to lock down)"
+    }
+  ]
+}
