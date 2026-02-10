@@ -218,20 +218,6 @@ export const agentTrpcRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  unsubscribeFromAgentChanges: publicProcedure
-    .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
-      await db
-        .delete(schema.agentSubscriptions)
-        .where(
-          and(
-            eq(schema.agentSubscriptions.agentPath, input.agentPath),
-            eq(schema.agentSubscriptions.callbackUrl, input.callbackUrl),
-          ),
-        );
-      return { success: true };
-    }),
-
   getOrCreateAgent: publicProcedure
     .input(
       z.object({
@@ -324,7 +310,7 @@ export const agentTrpcRouter = createTRPCRouter({
             agent,
             route,
             pendingRoute: null,
-            wasCreated: false,
+            wasNewlyCreated: false,
             cleanupAgentOnCreateFailure: false,
           };
         }
@@ -348,36 +334,36 @@ export const agentTrpcRouter = createTRPCRouter({
           agent,
           route: routeAfterInsert,
           pendingRoute: pendingRoute ?? null,
-          wasCreated: Boolean(pendingRoute),
+          wasNewlyCreated: Boolean(pendingRoute),
           cleanupAgentOnCreateFailure,
         };
       });
 
       // ── Existing agent with ready route ──
-      if (!result.wasCreated && result.route.destination !== "pending") {
+      if (!result.wasNewlyCreated && result.route.destination !== "pending") {
         return {
           agent: serializeAgent(result.agent, result.route),
           route: serializeAgentRoute(result.route),
-          wasCreated: false,
+          wasNewlyCreated: false,
         };
       }
 
       // ── Existing agent with pending route: wait for the in-flight create ──
-      if (!result.wasCreated) {
+      if (!result.wasNewlyCreated) {
         const inflight = inflightCreates.get(agentPath);
         if (inflight) {
           const resolvedRoute = await inflight;
           return {
             agent: serializeAgent(result.agent, resolvedRoute),
             route: serializeAgentRoute(resolvedRoute),
-            wasCreated: false,
+            wasNewlyCreated: false,
           };
         }
         // No in-flight promise — should not happen, return what we have
         return {
           agent: serializeAgent(result.agent, result.route),
           route: serializeAgentRoute(result.route),
-          wasCreated: false,
+          wasNewlyCreated: false,
         };
       }
 
@@ -453,7 +439,7 @@ export const agentTrpcRouter = createTRPCRouter({
         return {
           agent: serializeAgent(result.agent, finalRoute),
           route: serializeAgentRoute(finalRoute),
-          wasCreated: true,
+          wasNewlyCreated: true,
         };
       } catch (error) {
         rejectInflight!(error);

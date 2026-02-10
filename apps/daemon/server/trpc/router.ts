@@ -41,6 +41,7 @@ const baseProcedures = createTRPCRouter({
   }),
 });
 
+// TODO: refactor to `agents: agentTrpcRouter` sub-router instead of merging at top level
 export const trpcRouter = mergeRouters(baseProcedures, agentTrpcRouter);
 
 export type TRPCRouter = typeof trpcRouter;

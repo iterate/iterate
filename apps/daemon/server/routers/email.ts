@@ -2,15 +2,16 @@
  * Email Router
  *
  * Handles incoming emails forwarded from the OS backend (Resend webhooks).
- * Creates/reuses agents per email thread and sends formatted messages.
- * Uses subject as thread identifier (similar to thread_ts in Slack).
+ * One agent per email thread, keyed by normalized subject line.
  *
- * Message cases:
- * 1. New email - Creates a new agent for this email thread
- * 2. Reply email - Appends to existing agent (matched by subject)
+ * Flow:
+ *   1. OS worker receives Resend email.received webhook, forwards to POST /webhook
+ *   2. Dedup by resend email_id
+ *   3. getOrCreateAgent(agentPath) — uses wasNewlyCreated to pick new vs reply format
+ *   4. Fire-and-forget prompt to the agent via /api/agents/:path
  *
- * See webchat.ts for the full architecture diagram of message flow
- * and the `iterate:agent-updated` callback event model.
+ * Structurally symmetric with slack.ts and webchat.ts — if you change the
+ * pattern in one, update the others to match.
  */
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
@@ -22,43 +23,18 @@ import { trpcRouter } from "../trpc/router.ts";
 const logger = console;
 const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
+const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 
 export const emailRouter = new Hono();
 
-/**
- * Check whether an active agent exists for the given path via tRPC.
- * For new emails we just send to the agents router (which creates if needed).
- * This check is only used when we need to vary behavior (e.g. reply vs new).
- */
-async function agentExists(agentPath: string): Promise<boolean> {
-  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
-  return agent !== null;
-}
-
-/** Send a prompt to agent via the agents router HTTP endpoint. */
-async function sendPromptViaAgentsRouter(agentPath: string, message: string): Promise<void> {
-  const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
-  });
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `Agent prompt failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
-    );
-  }
-}
-
-// Middleware to log request and response bodies
 emailRouter.use("*", async (c, next) => {
   const reqBody = await c.req.raw.clone().text();
-  console.log(`[daemon/email] REQ ${c.req.method} ${c.req.path}`, reqBody);
+  logger.log(`[daemon/email] REQ ${c.req.method} ${c.req.path}`, reqBody);
 
   await next();
 
   const resBody = await c.res.clone().text();
-  console.log(`[daemon/email] RES ${c.res.status}`, resBody);
+  logger.log(`[daemon/email] RES ${c.res.status}`, resBody);
 });
 
 /**
@@ -95,6 +71,83 @@ interface ResendEmailPayload {
     } | null;
   };
 }
+
+emailRouter.post("/webhook", async (c) => {
+  const payload = (await c.req.json()) as ResendEmailPayload;
+
+  // Only handle email.received events
+  if (payload.type !== "email.received") {
+    return c.json({ success: true, message: "Event type not handled" });
+  }
+
+  const emailData = payload.data;
+  const resendEmailId = emailData.email_id;
+
+  try {
+    // Store the raw event for later inspection and dedup check
+    const { eventId, isDuplicate } = await storeEvent(payload, resendEmailId);
+
+    if (isDuplicate) {
+      logger.log(`[daemon/email] Duplicate event, skipping`, { eventId, resendEmailId });
+      return c.json({ success: true, message: "Duplicate event", eventId });
+    }
+
+    const { name: senderName, email: senderEmail } = parseSender(emailData.from);
+    const subject = emailData.subject;
+    const threadPathSegment = getThreadPathSegment(emailData);
+    const agentPath = getAgentPath(threadPathSegment);
+    const emailBody = payload._iterate?.emailBody;
+
+    // Get or create the agent — wasNewlyCreated tells us if this is a new thread or a reply.
+    const caller = trpcRouter.createCaller({});
+    const { wasNewlyCreated } = await caller.getOrCreateAgent({
+      agentPath,
+      createWithEvents: [],
+    });
+
+    const message = wasNewlyCreated
+      ? formatNewEmailMessage(
+          agentPath,
+          senderName,
+          senderEmail,
+          subject,
+          emailData,
+          emailBody,
+          eventId,
+        )
+      : formatReplyMessage(
+          agentPath,
+          senderName,
+          senderEmail,
+          subject,
+          emailData,
+          emailBody,
+          eventId,
+        );
+
+    // Fire-and-forget prompt to the agent, matching slack.ts / webchat.ts pattern.
+    void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+    }).catch((error) => {
+      logger.error(`[email] failed to post prompt for ${agentPath}`, error);
+    });
+
+    return c.json({
+      success: true,
+      agentPath,
+      created: wasNewlyCreated,
+      case: wasNewlyCreated ? "new_email" : "reply",
+      eventId,
+    });
+  } catch (error) {
+    logger.error("[Email Webhook] Failed to handle webhook", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// ────────────────────────── Helpers ──────────────────────────────────────────
 
 /**
  * Parse sender name and email from "Name <email@domain.com>" format
@@ -154,81 +207,7 @@ function getAgentPath(threadPathSegment: string): string {
   return `/email/${threadPathSegment}`;
 }
 
-emailRouter.post("/webhook", async (c) => {
-  const payload = (await c.req.json()) as ResendEmailPayload;
-
-  console.log(`[daemon/email] Received payload`, payload);
-
-  // Only handle email.received events
-  if (payload.type !== "email.received") {
-    return c.json({ success: true, message: "Event type not handled" });
-  }
-
-  const emailData = payload.data;
-  const resendEmailId = emailData.email_id;
-
-  try {
-    // Store the raw event for later inspection and dedup check
-    const { eventId, isDuplicate } = await storeEvent(payload, resendEmailId);
-
-    if (isDuplicate) {
-      console.log(`[daemon/email] Duplicate event, skipping`, { eventId, resendEmailId });
-      return c.json({ success: true, message: "Duplicate event", eventId });
-    }
-
-    const { name: senderName, email: senderEmail } = parseSender(emailData.from);
-    const subject = emailData.subject;
-    const threadPathSegment = getThreadPathSegment(emailData);
-    const agentPath = getAgentPath(threadPathSegment);
-    const emailBody = payload._iterate?.emailBody;
-
-    const hasAgent = await agentExists(agentPath);
-
-    if (hasAgent) {
-      // Reply to existing thread
-      const message = formatReplyMessage(
-        agentPath,
-        senderName,
-        senderEmail,
-        subject,
-        emailData,
-        emailBody,
-        eventId,
-      );
-      await sendPromptViaAgentsRouter(agentPath, message);
-      return c.json({
-        success: true,
-        agentPath,
-        created: false,
-        case: "reply",
-        eventId,
-      });
-    }
-
-    // New email thread - send prompt via agents router (creates agent if needed)
-    const message = formatNewEmailMessage(
-      agentPath,
-      senderName,
-      senderEmail,
-      subject,
-      emailData,
-      emailBody,
-      eventId,
-    );
-    await sendPromptViaAgentsRouter(agentPath, message);
-
-    return c.json({
-      success: true,
-      agentPath,
-      created: true,
-      case: "new_email",
-      eventId,
-    });
-  } catch (error) {
-    logger.error("[Email Webhook] Failed to handle webhook", error);
-    return c.json({ error: "Internal server error" }, 500);
-  }
-});
+// ────────────────────────── Event storage ────────────────────────────────────
 
 /**
  * Store the raw webhook event in SQLite for later inspection.
@@ -258,6 +237,8 @@ async function storeEvent(
 
   return { eventId, isDuplicate: false };
 }
+
+// ────────────────────────── Message formatting ──────────────────────────────
 
 /**
  * Format message for a new email (first in thread).

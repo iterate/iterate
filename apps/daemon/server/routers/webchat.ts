@@ -3,6 +3,9 @@
  *
  * Handles incoming webchat messages forwarded from the OS backend.
  *
+ * Structurally symmetric with slack.ts and email.ts — if you change the
+ * pattern in one, update the others to match.
+ *
  * ## Architecture (canonical reference -- slack.ts and email.ts point here)
  *
  * Message flow:
@@ -145,7 +148,7 @@ webchatRouter.post("/webhook", async (c) => {
 
   const agentPath = getAgentPathForThread(webchatThreadId);
   const caller = trpcRouter.createCaller({});
-  const { wasCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
   const userMessage: StoredMessage = {
     threadId: webchatThreadId,
@@ -165,12 +168,12 @@ webchatRouter.post("/webhook", async (c) => {
     webchatThreadId,
     messageId,
     eventId,
-    isFirstMessageInThread: wasCreated,
+    isFirstMessageInThread: wasNewlyCreated,
   });
 
   webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
 
-  if (wasCreated) {
+  if (wasNewlyCreated) {
     void caller.subscribeToAgentChanges({
       agentPath,
       callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
@@ -194,7 +197,7 @@ webchatRouter.post("/webhook", async (c) => {
     threadId: webchatThreadId,
     messageId,
     eventId,
-    created: wasCreated,
+    created: wasNewlyCreated,
   });
 });
 

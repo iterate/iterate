@@ -19,11 +19,7 @@ piRouter.post("/new", async (c) => {
 });
 
 piRouter.post("/sessions/:sessionId", async (c) => {
-  console.log(`[pi] Would send events to coding agent pi`);
-  const piClient = createPiClient({ baseUrl: PI_BASE_URL });
-  await piClient.session.prompt({
-    path: { id: c.req.param("sessionId") },
-    body: { parts: [{ type: "text", text: "Hello, world!" }] },
-  });
+  // TODO: Real implementation would use createPiClient from @mariozechner/pi-coding-agent SDK
+  console.log(`[pi] Would send events to coding agent pi session=${c.req.param("sessionId")}`);
   return c.json({ success: true, sessionId: c.req.param("sessionId") });
 });

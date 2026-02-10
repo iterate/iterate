@@ -91,7 +91,7 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
       },
     },
     async () => {
-      if (agentPath) trackSession(agentPath, opencodeSessionId);
+      if (agentPath) agentPathByOpencodeSessionId.set(opencodeSessionId, agentPath);
       await opencodeClient.session.prompt({
         path: { id: opencodeSessionId },
         query: { directory: getOpencodeWorkingDirectory() },
@@ -128,7 +128,10 @@ void (async () => {
     if (!opencodeSessionId) continue;
 
     const agentPath = agentPathByOpencodeSessionId.get(opencodeSessionId);
-    if (!agentPath) continue;
+    if (!agentPath) {
+      console.warn("[opencode] no agent path for session", { opencodeSessionId });
+      continue;
+    }
 
     const status = agentStatusFromOpencodeEvent(event);
     if (!status) continue;
@@ -170,10 +173,6 @@ export function agentStatusFromOpencodeEvent(
   }
 
   return null;
-}
-
-function trackSession(agentPath: string, opencodeSessionId: string): void {
-  agentPathByOpencodeSessionId.set(opencodeSessionId, agentPath);
 }
 
 function extractOpencodeSessionId(event: OpencodeEvent): string | null {

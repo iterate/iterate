@@ -73,7 +73,7 @@ describe("getOrCreateAgent", () => {
       newAgentPath: "http://localhost:9999/new",
     });
 
-    expect(result.wasCreated).toBe(false);
+    expect(result.wasNewlyCreated).toBe(false);
     expect(result.route?.destination).toBe("/opencode/sessions/existing-route");
     expect(result.agent.archivedAt).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -106,7 +106,7 @@ describe("getOrCreateAgent", () => {
       newAgentPath: "http://localhost:9999/new",
     });
 
-    expect(result.wasCreated).toBe(true);
+    expect(result.wasNewlyCreated).toBe(true);
     expect(result.route?.destination).toBe("/opencode/sessions/new-route");
     expect(result.agent.archivedAt).toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -174,7 +174,7 @@ describe("getOrCreateAgent", () => {
 
     const results = await Promise.all(promises);
 
-    const createdCount = results.filter((r) => r.wasCreated).length;
+    const createdCount = results.filter((r) => r.wasNewlyCreated).length;
     expect(createdCount).toBe(1);
     expect(mockServerCalls).toBe(1);
 
