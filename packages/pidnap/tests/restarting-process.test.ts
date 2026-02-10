@@ -10,6 +10,8 @@ import {
   timedProcess,
 } from "./test-utils.ts";
 
+const POLL_TIMEOUT_MS = 5000;
+
 describe("RestartingProcess", () => {
   let mockLogger: Logger;
 
@@ -34,7 +36,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       await proc.stop();
     });
@@ -44,7 +46,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       expect(() => proc.start()).toThrow('Process "test" is already running');
 
@@ -59,12 +61,12 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       // Start again with long-running process - should reset counters
       const proc2 = new RestartingProcess("test2", longRunningProcess, options, mockLogger);
       proc2.start();
-      await expect.poll(() => proc2.state).toBe("running");
+      await expect.poll(() => proc2.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
       expect(proc2.restarts).toBe(0);
 
       await proc2.stop();
@@ -91,7 +93,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
       expect(proc.restarts).toBe(0);
     });
 
@@ -141,7 +143,9 @@ describe("RestartingProcess", () => {
         mockLogger,
       );
       successProc.start();
-      await expect.poll(() => successProc.restarts).toBeGreaterThan(0);
+      await expect
+        .poll(() => successProc.restarts, { timeout: POLL_TIMEOUT_MS })
+        .toBeGreaterThan(0);
 
       await successProc.stop();
 
@@ -153,7 +157,7 @@ describe("RestartingProcess", () => {
         mockLogger,
       );
       failureProc.start();
-      await expect.poll(() => failureProc.state).toBe("stopped");
+      await expect.poll(() => failureProc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
       expect(failureProc.restarts).toBe(0);
     });
 
@@ -166,7 +170,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS }).toBeGreaterThan(0);
 
       await proc.stop();
       expect(proc.state).toBe("stopped");
@@ -286,7 +290,7 @@ describe("RestartingProcess", () => {
       };
       const proc2 = new RestartingProcess("test2", longRunningProcess, options2, mockLogger);
       proc2.start();
-      await expect.poll(() => proc2.state).toBe("running");
+      await expect.poll(() => proc2.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
       expect(proc2.restarts).toBe(0);
 
       await proc2.stop();
@@ -302,7 +306,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       await proc.stop();
       expect(proc.state).toBe("stopped");
@@ -320,7 +324,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("restarting");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("restarting");
 
       await proc.stop();
       expect(proc.state).toBe("stopped");
@@ -336,7 +340,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       const startTime = Date.now();
       await proc.restart(true);
@@ -344,7 +348,7 @@ describe("RestartingProcess", () => {
 
       // Should have restarted without waiting for 1000ms delay
       expect(elapsed).toBeLessThan(500);
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       await proc.stop();
     });
@@ -357,7 +361,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       const startTime = Date.now();
       await proc.restart(false);
@@ -366,7 +370,7 @@ describe("RestartingProcess", () => {
       // Should have waited for the delay
       expect(elapsed).toBeGreaterThanOrEqual(180);
 
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       await proc.stop();
     });
@@ -379,7 +383,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       await proc.restart();
       await wait(150);
@@ -402,7 +406,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", timedProcess(150), options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS }).toBeGreaterThan(0);
 
       await proc.stop();
     });
@@ -416,11 +420,11 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
 
       // Reload with long-running process
       await proc.reload(longRunningProcess, true);
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
       expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Reloading"));
 
       await proc.stop();
@@ -433,7 +437,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", longRunningProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       // Reload but don't restart
       await proc.reload(successProcess, false);
@@ -455,7 +459,7 @@ describe("RestartingProcess", () => {
 
       // Start should use new definition
       proc.start();
-      await expect.poll(() => proc.state).toBe("running");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("running");
 
       await proc.stop();
     });
@@ -469,13 +473,13 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.state).toBe("stopped");
+      await expect.poll(() => proc.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");
       expect(proc.restarts).toBe(0);
 
       // Update policy and restart
       proc.updateOptions({ restartPolicy: "always", maxTotalRestarts: 2 });
       proc.start();
-      await expect.poll(() => proc.restarts).toBeGreaterThan(0);
+      await expect.poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS }).toBeGreaterThan(0);
 
       await proc.stop();
     });
@@ -495,7 +499,9 @@ describe("RestartingProcess", () => {
 
       const startTime = Date.now();
       proc.start();
-      await expect.poll(() => proc.restarts).toBeGreaterThanOrEqual(1);
+      await expect
+        .poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS })
+        .toBeGreaterThanOrEqual(1);
 
       const elapsed = Date.now() - startTime;
 
