@@ -91,11 +91,15 @@ export default workflow({
         {
           id: "metadata",
           name: "Export build metadata",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
           run: [
             "set -euo pipefail",
             'short_sha="$(git rev-parse --short=7 HEAD)"',
+            'fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain 2>/dev/null || echo iterate-sandbox-image)"',
             'image_tag="iterate-sandbox:sha-${short_sha}"',
-            'fly_image_tag="registry.fly.io/iterate-sandbox-image:sha-${short_sha}"',
+            'fly_image_tag="registry.fly.io/${fly_registry_app}:sha-${short_sha}"',
             'echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"',
             'echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"',
           ].join("\n"),

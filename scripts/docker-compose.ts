@@ -29,14 +29,17 @@ const args = process.argv.slice(2);
 if (args[0] === "--") args.shift();
 
 function runDockerCompose(composeArgs: string[]) {
+  const captureOutput = composeArgs[0] === "up";
   const result = spawnSync("docker", ["compose", ...composeArgs], {
     env,
-    encoding: "utf-8",
-    stdio: ["inherit", "pipe", "pipe"],
+    ...(captureOutput ? { encoding: "utf-8", stdio: ["inherit", "pipe", "pipe"] } : {}),
+    ...(!captureOutput ? { stdio: "inherit" } : {}),
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (captureOutput) {
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+  }
 
   return result;
 }

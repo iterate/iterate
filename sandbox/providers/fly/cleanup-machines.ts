@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 const FLY_API_BASE = "https://api.machines.dev";
 const DEFAULT_TIMEFRAME = "24h";
 const DEFAULT_ACTION = "stop";
-const ALLOWED_APP_NAMES = new Set(["dev", "stg"]);
+const ALLOWED_APP_NAMES = new Set(["dev-sandboxes", "stg-sandboxes"]);
 
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string().optional(),
@@ -86,10 +86,10 @@ function shouldSkipForStop(state: string | undefined): boolean {
 
 function resolveAppName(positional: string[], env: FlyEnv): string {
   const argAppName = positional[2];
-  const appName = argAppName ?? env.FLY_APP_NAME_PREFIX ?? "dev";
+  const appName = argAppName ?? env.FLY_APP_NAME_PREFIX ?? "dev-sandboxes";
   if (!ALLOWED_APP_NAMES.has(appName)) {
     throw new Error(
-      `App '${appName}' is not allowed. This script is intentionally limited to dev/stg.`,
+      `App '${appName}' is not allowed. This script is intentionally limited to dev-sandboxes/stg-sandboxes.`,
     );
   }
   return appName;
