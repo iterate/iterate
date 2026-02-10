@@ -7,6 +7,7 @@ const PROBE_THREAD_ID = "__readiness-probe__";
 const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
 const POLL_INTERVAL_MS = 3_000;
 const SEND_RETRY_INTERVAL_MS = 3_000;
+const SEND_TIMEOUT_MS = 10_000;
 const SEND_MAX_WAIT_MS = 60_000;
 const MAX_WAIT_MS = 120_000;
 
@@ -85,7 +86,7 @@ async function sendProbeMessage(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
 
       if (response.ok) {

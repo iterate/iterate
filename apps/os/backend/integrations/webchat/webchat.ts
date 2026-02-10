@@ -21,7 +21,6 @@ const WebchatMessage = z.object({
   text: z.string(),
   userId: z.string().optional(),
   userName: z.string().optional(),
-  agentSlug: z.string(),
   reactions: z.array(z.string()).optional(),
   attachments: z.array(WebchatAttachment).optional(),
   createdAt: z.number(),
@@ -29,7 +28,6 @@ const WebchatMessage = z.object({
 
 const WebchatThread = z.object({
   threadId: z.string(),
-  agentSlug: z.string(),
   messageCount: z.number(),
   title: z.string(),
   lastMessagePreview: z.string(),
@@ -44,7 +42,6 @@ const WebchatWebhookResponse = z.object({
   messageId: z.string().optional(),
   eventId: z.string().optional(),
   created: z.boolean().optional(),
-  agentSlug: z.string().optional(),
 });
 
 const WebchatThreadsResponse = z.object({

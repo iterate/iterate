@@ -175,19 +175,26 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     apiKey,
   });
 
-  // Create DB record first, provision in background
-  const [newMachine] = await db
-    .insert(schema.machine)
-    .values({
-      id: machineId,
-      name,
-      type,
-      projectId,
-      state: "starting",
-      metadata: metadata ?? {},
-      externalId: "",
-    })
-    .returning();
+  // Detach older starting machines first to avoid concurrent readiness probes.
+  const [newMachine] = await db.transaction(async (tx) => {
+    await tx
+      .update(schema.machine)
+      .set({ state: "detached" })
+      .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
+
+    return tx
+      .insert(schema.machine)
+      .values({
+        id: machineId,
+        name,
+        type,
+        projectId,
+        state: "starting",
+        metadata: metadata ?? {},
+        externalId: "",
+      })
+      .returning();
+  });
 
   if (!newMachine) throw new Error("Failed to create machine");
   logger.info("Machine record created, starting provisioning", { machineId, projectId, type });
