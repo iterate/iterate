@@ -11,7 +11,9 @@ sqlite.exec(`
     metadata text,
     created_at integer DEFAULT (unixepoch()),
     updated_at integer DEFAULT (unixepoch()),
-    archived_at integer
+    archived_at integer,
+    short_status text NOT NULL DEFAULT 'idle',
+    is_working integer NOT NULL DEFAULT 0
   );
   CREATE TABLE agent_routes (
     id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -24,6 +26,14 @@ sqlite.exec(`
     FOREIGN KEY (agent_path) REFERENCES agents(path)
   );
   CREATE UNIQUE INDEX agent_routes_active_unique ON agent_routes (agent_path) WHERE active = 1;
+  CREATE TABLE agent_subscriptions (
+    id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+    agent_path text NOT NULL,
+    callback_url text NOT NULL,
+    created_at integer DEFAULT (unixepoch()),
+    updated_at integer DEFAULT (unixepoch()),
+    FOREIGN KEY (agent_path) REFERENCES agents(path)
+  );
 `);
 
 const testDb = drizzle(sqlite, { schema });
@@ -34,9 +44,9 @@ vi.mock("../db/index.ts", () => ({
 
 const { trpcRouter } = await import("./router.ts");
 
-describe("getOrCreateAgent concurrency", () => {
+describe("getOrCreateAgent", () => {
   beforeEach(() => {
-    sqlite.exec("DELETE FROM agent_routes; DELETE FROM agents;");
+    sqlite.exec("DELETE FROM agent_subscriptions; DELETE FROM agent_routes; DELETE FROM agents;");
   });
 
   afterEach(() => {
@@ -59,7 +69,7 @@ describe("getOrCreateAgent concurrency", () => {
     const caller = trpcRouter.createCaller({});
     const result = await caller.getOrCreateAgent({
       agentPath: "/test/archived-with-route",
-      createWithEvents: [{ type: "prompt", message: "resume" }],
+      createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
       newAgentPath: "http://localhost:9999/new",
     });
 
@@ -92,7 +102,7 @@ describe("getOrCreateAgent concurrency", () => {
     const caller = trpcRouter.createCaller({});
     const result = await caller.getOrCreateAgent({
       agentPath: "/test/archived-no-route",
-      createWithEvents: [{ type: "prompt", message: "resume" }],
+      createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
       newAgentPath: "http://localhost:9999/new",
     });
 
@@ -125,7 +135,7 @@ describe("getOrCreateAgent concurrency", () => {
     await expect(
       caller.getOrCreateAgent({
         agentPath: "/test/archived-create-fails",
-        createWithEvents: [{ type: "prompt", message: "resume" }],
+        createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
         newAgentPath: "http://localhost:9999/new",
       }),
     ).rejects.toThrow("Failed to create session: upstream failed");
@@ -136,7 +146,7 @@ describe("getOrCreateAgent concurrency", () => {
     expect(loaded?.activeRoute).toBeNull();
   });
 
-  it("only creates one session when called concurrently", async () => {
+  it("only creates one session when called concurrently, all callers get ready route", async () => {
     let mockServerCalls = 0;
     vi.stubGlobal(
       "fetch",
@@ -157,7 +167,7 @@ describe("getOrCreateAgent concurrency", () => {
     const promises = Array.from({ length: 10 }, () =>
       caller.getOrCreateAgent({
         agentPath: "/test/concurrent",
-        createWithEvents: [{ type: "prompt", message: "Hello" }],
+        createWithEvents: [{ type: "iterate:agent:prompt-added", message: "Hello" }],
         newAgentPath: "http://localhost:9999/new",
       }),
     );
@@ -168,12 +178,9 @@ describe("getOrCreateAgent concurrency", () => {
     expect(createdCount).toBe(1);
     expect(mockServerCalls).toBe(1);
 
-    const routes = results.map((r) => r.route?.destination);
-    expect(routes).toContain("/opencode/sessions/mock-1");
-    const uniqueRoutes = new Set(routes);
-    expect(uniqueRoutes.size).toBeLessThanOrEqual(2);
-    for (const route of uniqueRoutes) {
-      expect(route === "pending" || route === "/opencode/sessions/mock-1").toBe(true);
+    // All callers should get the ready route — no "pending" destinations
+    for (const result of results) {
+      expect(result.route?.destination).toBe("/opencode/sessions/mock-1");
     }
   });
 });

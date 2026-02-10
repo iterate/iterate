@@ -37,11 +37,11 @@ import { trpcRouter } from "../trpc/router.ts";
 
 const logger = console;
 // Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
-const threadStatuses = new Map<string, string>();
-const threadIdByAgentPath = new Map<string, string>();
+const webchatThreadStatuses = new Map<string, string>();
+const webchatThreadIdByAgentPath = new Map<string, string>();
 const DAEMON_BASE_URL = `http://localhost:${process.env.PORT || "3001"}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
-const WEBCHAT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/integrations/webchat`;
+const WEBCHAT_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/webchat/agent-change-callback`;
 
 const Attachment = z.object({
   fileName: z.string(),
@@ -122,7 +122,7 @@ webchatRouter.post("/webhook", async (c) => {
     return c.json({ error: "Message must have text or attachments" }, 400);
   }
 
-  const threadId = payload.threadId ?? createThreadId();
+  const webchatThreadId = payload.threadId ?? createWebchatThreadId();
   const messageId = payload.messageId ?? `msg_${nanoid(12)}`;
   const createdAt = payload.createdAt ?? Date.now();
 
@@ -139,15 +139,16 @@ webchatRouter.post("/webhook", async (c) => {
       .limit(1);
 
     if (existing[0]) {
-      return c.json({ success: true, duplicate: true, threadId });
+      return c.json({ success: true, duplicate: true, threadId: webchatThreadId });
     }
   }
 
-  const agentPath = getAgentPathForThread(threadId);
-  const existedBefore = await agentExists(agentPath);
+  const agentPath = getAgentPathForThread(webchatThreadId);
+  const caller = trpcRouter.createCaller({});
+  const { wasCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
   const userMessage: StoredMessage = {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     role: "user",
     text: payload.text,
@@ -161,41 +162,39 @@ webchatRouter.post("/webhook", async (c) => {
 
   const formattedMessage = formatIncomingMessage({
     payload,
-    threadId,
+    webchatThreadId,
     messageId,
     eventId,
-    isFirstMessageInThread: !existedBefore,
+    isFirstMessageInThread: wasCreated,
   });
+
+  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
+
+  if (wasCreated) {
+    void caller.subscribeToAgentChanges({
+      agentPath,
+      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
+    });
+  }
 
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "prompt", message: formattedMessage }),
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "");
-        throw new Error(
-          `Agent gateway failed: ${response.status}${errorBody ? ` ${errorBody.slice(0, 500)}` : ""}`,
-        );
-      }
-      threadIdByAgentPath.set(agentPath, threadId);
-      await trpcRouter.createCaller({}).subscribeToAgentChanges({
-        agentPath,
-        callbackUrl: getWebchatAgentChangeCallbackUrl(),
-      });
-    })
-    .catch((error) => {
-      logger.error(`[webchat] failed to post prompt event for ${threadId}/${messageId}`, error);
-    });
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: formattedMessage }),
+  }).catch((error) => {
+    logger.error(
+      `[webchat] failed to post prompt event for ${webchatThreadId}/${messageId}`,
+      error,
+    );
+  });
 
   return c.json({
     success: true,
     duplicate: false,
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     eventId,
-    created: !existedBefore,
+    created: wasCreated,
   });
 });
 
@@ -205,11 +204,11 @@ webchatRouter.post("/postMessage", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, text } = parsed.data;
+  const { threadId: webchatThreadId, text } = parsed.data;
   const messageId = parsed.data.messageId ?? `msg_${nanoid(12)}`;
 
   const assistantMessage: StoredMessage = {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     role: "assistant",
     text,
@@ -219,7 +218,7 @@ webchatRouter.post("/postMessage", async (c) => {
 
   const eventId = await storeEvent("webchat:assistant-message", assistantMessage, messageId);
 
-  return c.json({ success: true, threadId, messageId, eventId });
+  return c.json({ success: true, threadId: webchatThreadId, messageId, eventId });
 });
 
 webchatRouter.post("/addReaction", async (c) => {
@@ -228,9 +227,9 @@ webchatRouter.post("/addReaction", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, messageId, reaction } = parsed.data;
+  const { threadId: webchatThreadId, messageId, reaction } = parsed.data;
   const eventId = await storeEvent("webchat:reaction-added", {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     reaction,
     createdAt: Date.now(),
@@ -245,9 +244,9 @@ webchatRouter.post("/removeReaction", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, messageId, reaction } = parsed.data;
+  const { threadId: webchatThreadId, messageId, reaction } = parsed.data;
   const eventId = await storeEvent("webchat:reaction-removed", {
-    threadId,
+    threadId: webchatThreadId,
     messageId,
     reaction,
     createdAt: Date.now(),
@@ -262,8 +261,8 @@ webchatRouter.post("/setStatus", async (c) => {
     return c.json({ error: "Invalid payload", issues: parsed.error.issues }, 400);
   }
 
-  const { threadId, status } = parsed.data;
-  threadStatuses.set(threadId, status);
+  const { threadId: webchatThreadId, status } = parsed.data;
+  webchatThreadStatuses.set(webchatThreadId, status);
 
   return c.json({ success: true });
 });
@@ -291,22 +290,18 @@ webchatRouter.post("/agent-change-callback", async (c) => {
   }
 
   const { payload } = parsed.data;
-  const threadId = threadIdByAgentPath.get(payload.path);
-  if (!threadId) {
+  const webchatThreadId = webchatThreadIdByAgentPath.get(payload.path);
+  if (!webchatThreadId) {
     logger.log(`[webchat] ignoring agent-change without mapped thread: ${payload.path}`);
     return c.json({ success: true, ignored: true });
   }
 
-  threadStatuses.set(threadId, payload.shortStatus);
+  webchatThreadStatuses.set(webchatThreadId, payload.shortStatus);
   logger.log(
-    `[webchat] status update thread=${threadId} path=${payload.path} working=${payload.isWorking} status="${payload.shortStatus}"`,
+    `[webchat] status update thread=${webchatThreadId} path=${payload.path} working=${payload.isWorking} status="${payload.shortStatus}"`,
   );
   return c.json({ success: true });
 });
-
-function getWebchatAgentChangeCallbackUrl(): string {
-  return `${WEBCHAT_ROUTER_BASE_URL}/agent-change-callback`;
-}
 
 webchatRouter.get("/threads", async (c) => {
   const messages = await listStoredMessages();
@@ -315,27 +310,17 @@ webchatRouter.get("/threads", async (c) => {
 });
 
 webchatRouter.get("/threads/:threadId/messages", async (c) => {
-  const threadId = c.req.param("threadId");
+  const webchatThreadId = c.req.param("threadId");
   const messages = (await listStoredMessages())
-    .filter((message) => message.threadId === threadId)
+    .filter((message) => message.threadId === webchatThreadId)
     .sort((a, b) => a.createdAt - b.createdAt);
 
-  const agentSessionUrl = await getThreadAgentSessionUrl(threadId);
-  const status = threadStatuses.get(threadId) ?? "";
-  return c.json({ threadId, messages, agentSessionUrl, status });
+  const agentSessionUrl = await getThreadAgentSessionUrl(webchatThreadId);
+  const status = webchatThreadStatuses.get(webchatThreadId) ?? "";
+  return c.json({ threadId: webchatThreadId, messages, agentSessionUrl, status });
 });
 
-/**
- * Check whether an active agent exists for the given path via tRPC.
- * The agents router handles getOrCreateAgent automatically when we POST
- * to it, so this is only needed to determine first-vs-reply message format.
- */
-async function agentExists(agentPath: string): Promise<boolean> {
-  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
-  return agent !== null;
-}
-
-function createThreadId(): string {
+function createWebchatThreadId(): string {
   return `thread-${Date.now().toString(36)}-${nanoid(8)}`;
 }
 
@@ -354,8 +339,8 @@ function sanitizeForPathSegment(value: string): string {
   return sanitizeForSegment(value, 80);
 }
 
-function getAgentPathForThread(threadId: string): string {
-  return `/webchat/${sanitizeForPathSegment(threadId)}`;
+function getAgentPathForThread(webchatThreadId: string): string {
+  return `/webchat/${sanitizeForPathSegment(webchatThreadId)}`;
 }
 
 const SessionEnv = z.object({
@@ -374,8 +359,8 @@ function buildAgentSessionUrl(sessionId: string, workingDirectory?: string | nul
   return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
 }
 
-async function getThreadAgentSessionUrl(threadId: string): Promise<string | undefined> {
-  const agentPath = getAgentPathForThread(threadId);
+async function getThreadAgentSessionUrl(webchatThreadId: string): Promise<string | undefined> {
+  const agentPath = getAgentPathForThread(webchatThreadId);
   const route = await db
     .select()
     .from(schema.agentRoutes)
@@ -452,16 +437,16 @@ function buildThreadSummaries(messages: StoredMessage[]) {
 
 function formatIncomingMessage(params: {
   payload: z.infer<typeof IncomingWebhookPayload>;
-  threadId: string;
+  webchatThreadId: string;
   messageId: string;
   eventId: string;
   isFirstMessageInThread: boolean;
 }): string {
-  const { payload, threadId, messageId, eventId, isFirstMessageInThread } = params;
+  const { payload, webchatThreadId, messageId, eventId, isFirstMessageInThread } = params;
 
   const intro = isFirstMessageInThread
     ? "New webchat thread started."
-    : `Another message in webchat thread ${threadId}.`;
+    : `Another message in webchat thread ${webchatThreadId}.`;
 
   const sender = payload.userName ?? payload.userId ?? "unknown";
 
@@ -484,6 +469,6 @@ function formatIncomingMessage(params: {
     ...(payload.text ? [`Message: ${payload.text}`] : []),
     ...attachmentLines,
     "",
-    `thread_id=${threadId} message_id=${messageId} eventId=${eventId}`,
+    `thread_id=${webchatThreadId} message_id=${messageId} eventId=${eventId}`,
   ].join("\n");
 }

@@ -1,27 +1,19 @@
 import { z } from "zod/v4";
 
-export const PromptEvent = z.object({
-  type: z.literal("prompt"),
+export const PromptAddedEvent = z.object({
+  type: z.literal("iterate:agent:prompt-added"),
   message: z.string(),
 });
 
-export const IterateEvent = z.discriminatedUnion("type", [PromptEvent]);
+export const AgentUpdatedEvent = z.object({
+  type: z.literal("iterate:agent:updated"),
+  path: z.string(),
+  isWorking: z.boolean().optional(),
+  shortStatus: z.string().max(30).optional(),
+});
 
-export type PromptEvent = z.infer<typeof PromptEvent>;
+export const IterateEvent = z.discriminatedUnion("type", [PromptAddedEvent, AgentUpdatedEvent]);
+
+export type PromptAddedEvent = z.infer<typeof PromptAddedEvent>;
+export type AgentUpdatedEvent = z.infer<typeof AgentUpdatedEvent>;
 export type IterateEvent = z.infer<typeof IterateEvent>;
-
-export function isPromptEvent(event: unknown): event is PromptEvent {
-  return PromptEvent.safeParse(event).success;
-}
-
-export function isIterateEvent(event: unknown): event is IterateEvent {
-  return IterateEvent.safeParse(event).success;
-}
-
-export function extractIterateEvents(payload: unknown): IterateEvent[] {
-  const raw = Array.isArray(payload) ? payload : [payload];
-  return raw.flatMap((event) => {
-    const parsed = IterateEvent.safeParse(event);
-    return parsed.success ? [parsed.data] : [];
-  });
-}

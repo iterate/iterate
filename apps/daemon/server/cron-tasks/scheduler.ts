@@ -67,7 +67,7 @@ async function sendPromptToAgent(agentPath: string, message: string): Promise<vo
   const response = await fetch(`${DAEMON_BASE_URL}/api/agents${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "prompt", message }),
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
   });
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
