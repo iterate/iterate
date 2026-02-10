@@ -8,7 +8,6 @@ import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../components/daemon-status.tsx";
-import { HeaderActions } from "../../components/header-actions.tsx";
 import { TypeId } from "../../components/type-id.tsx";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
@@ -155,6 +154,12 @@ function MachineDetailPage() {
   const flyMachineUrl = flyMachine
     ? `https://fly.io/apps/${flyMachine.appName}/machines/${flyMachine.machineId}`
     : null;
+  const flyGrafanaUrl = flyMachine
+    ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
+        orgId: "1440139",
+        "var-app": flyMachine.appName,
+      }).toString()}`
+    : null;
 
   const buildAgentTerminalUrl = (daemonBaseUrl: string, command: string) => {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
@@ -167,12 +172,20 @@ function MachineDetailPage() {
 
   return (
     <div className="space-y-6 p-4">
-      <HeaderActions>
+      <div className="flex flex-wrap items-center gap-2">
         {flyMachineUrl && (
           <a href={flyMachineUrl} target="_blank" rel="noopener noreferrer">
             <Button variant="outline" size="sm">
               <ExternalLink className="h-4 w-4" />
               Fly
+            </Button>
+          </a>
+        )}
+        {flyGrafanaUrl && (
+          <a href={flyGrafanaUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Grafana
             </Button>
           </a>
         )}
@@ -202,7 +215,7 @@ function MachineDetailPage() {
         >
           <Trash2 className="h-4 w-4" />
         </Button>
-      </HeaderActions>
+      </div>
 
       <div className="grid grid-cols-3 gap-4 text-sm">
         <div>
