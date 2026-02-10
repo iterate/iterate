@@ -119,25 +119,33 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
 //   2. tool running/completed -> update shortStatus
 
 void (async () => {
-  const result = await opencodeClient.global.event();
-  console.log("[opencode] lifecycle subscription connected");
+  try {
+    const result = await opencodeClient.global.event();
+    console.log("[opencode] lifecycle subscription connected");
 
-  for await (const globalEvent of result.stream) {
-    const event = globalEvent.payload;
-    const opencodeSessionId = extractOpencodeSessionId(event);
-    if (!opencodeSessionId) continue;
+    for await (const globalEvent of result.stream) {
+      const event = globalEvent.payload;
+      const opencodeSessionId = extractOpencodeSessionId(event);
+      if (!opencodeSessionId) continue;
 
-    const agentPath = agentPathByOpencodeSessionId.get(opencodeSessionId);
-    if (!agentPath) {
-      console.warn("[opencode] no agent path for session", { opencodeSessionId });
-      continue;
+      const agentPath = agentPathByOpencodeSessionId.get(opencodeSessionId);
+      if (!agentPath) {
+        console.warn("[opencode] no agent path for session", { opencodeSessionId });
+        continue;
+      }
+
+      const status = agentStatusFromOpencodeEvent(event);
+      if (!status) continue;
+
+      if (!status.isWorking) agentPathByOpencodeSessionId.delete(opencodeSessionId);
+      await trpc.updateAgent({ path: agentPath, ...status });
     }
 
-    const status = agentStatusFromOpencodeEvent(event);
-    if (!status) continue;
-
-    if (!status.isWorking) agentPathByOpencodeSessionId.delete(opencodeSessionId);
-    await trpc.updateAgent({ path: agentPath, ...status });
+    console.warn("[opencode] lifecycle subscription stream ended unexpectedly");
+  } catch (error) {
+    console.error("[opencode] lifecycle subscription failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 })();
 
@@ -157,19 +165,28 @@ export function agentStatusFromOpencodeEvent(
     return { isWorking: false, shortStatus: "" };
   }
 
-  // Tool status -> working with a short description
-  if (event.type === "message.part.updated" && event.properties.part.type === "tool") {
-    const { state } = event.properties.part;
-    if (state.status !== "running" && state.status !== "completed") return null;
+  // Busy session -> thinking (LLM is reasoning, no tool call or text yet)
+  if (event.type === "session.status" && event.properties.status.type === "busy") {
+    return { isWorking: true, shortStatus: "🤔 Thinking" };
+  }
 
-    const title = "title" in state && typeof state.title === "string" ? state.title : "";
-    const description =
-      state.input && typeof state.input.description === "string" ? state.input.description : "";
-    const shortStatus = (title || description || event.properties.part.tool || "Working").slice(
-      0,
-      30,
-    );
-    return { isWorking: true, shortStatus };
+  if (event.type === "message.part.updated") {
+    // Text part -> the LLM is generating a response
+    if (event.properties.part.type === "text") {
+      return { isWorking: true, shortStatus: "✏️ Writing response" };
+    }
+
+    // Tool status -> working with a short description
+    if (event.properties.part.type === "tool") {
+      const { state } = event.properties.part;
+      if (state.status !== "running" && state.status !== "completed") return null;
+
+      const title = "title" in state && typeof state.title === "string" ? state.title : "";
+      const description =
+        state.input && typeof state.input.description === "string" ? state.input.description : "";
+      const shortStatus = `🔧 ${(title || description || event.properties.part.tool || "Working").slice(0, 27)}`;
+      return { isWorking: true, shortStatus };
+    }
   }
 
   return null;

@@ -284,7 +284,12 @@ async function nudgeAgent(task: ParsedTask): Promise<void> {
  */
 async function processTask(task: ParsedTask, tasksDir: string): Promise<void> {
   const taskPath = path.join(tasksDir, task.filename);
-  const timestamp = new Date().toISOString().replaceAll(":", "-");
+  const timestamp = new Date()
+    .toISOString()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/-$/g, "");
   const agentPathSegment = `cron-${task.filename.replace(".md", "")}-${timestamp}`;
   const agentPath = getCronAgentPath(agentPathSegment);
 

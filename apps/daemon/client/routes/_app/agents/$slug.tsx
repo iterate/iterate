@@ -11,13 +11,15 @@ const XtermTerminal = lazy(() =>
   })),
 );
 
+const OPENCODE_BASE_URL = "http://localhost:4096";
+
 /** Build an attach command when the active route is an OpenCode session. */
 function getAgentCommand(agent: SerializedAgent): string | undefined {
   const destination = agent.activeRoute?.destination;
   if (!destination) return undefined;
   const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
   if (!match) return undefined;
-  return `opencode attach ${match[1]}`;
+  return `opencode attach ${OPENCODE_BASE_URL} -s ${match[1]}`;
 }
 
 export const Route = createFileRoute("/_app/agents/$slug")({

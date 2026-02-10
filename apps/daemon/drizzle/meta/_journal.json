@@ -36,6 +36,13 @@
       "when": 1770668977648,
       "tag": "0004_agent_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1770748270177,
+      "tag": "0005_broken_mephisto",
+      "breakpoints": true
     }
   ]
 }

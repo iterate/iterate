@@ -397,15 +397,6 @@ export const agentTrpcRouter = createTRPCRouter({
         });
 
         if (!createResponse.ok) {
-          db.transaction((tx) => {
-            tx.delete(schema.agentRoutes)
-              .where(eq(schema.agentRoutes.id, result.pendingRoute!.id))
-              .run();
-            if (result.cleanupAgentOnCreateFailure) {
-              tx.delete(schema.agents).where(eq(schema.agents.path, agentPath)).run();
-            }
-          });
-
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: `Failed to create session: ${await createResponse.text()}`,
@@ -442,6 +433,16 @@ export const agentTrpcRouter = createTRPCRouter({
           wasNewlyCreated: true,
         };
       } catch (error) {
+        // Clean up pending route on any failure — network errors, HTTP errors, etc.
+        // Without this, the unique active-route index blocks future creates permanently.
+        db.transaction((tx) => {
+          tx.delete(schema.agentRoutes)
+            .where(eq(schema.agentRoutes.id, result.pendingRoute!.id))
+            .run();
+          if (result.cleanupAgentOnCreateFailure) {
+            tx.delete(schema.agents).where(eq(schema.agents.path, agentPath)).run();
+          }
+        });
         rejectInflight!(error);
         throw error;
       } finally {

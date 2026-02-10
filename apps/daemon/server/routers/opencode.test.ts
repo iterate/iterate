@@ -56,12 +56,34 @@ describe("agentStatusFromOpencodeEvent", () => {
     });
   });
 
-  it("returns null for session.status with busy type", () => {
+  it("returns thinking for session.status with busy type", () => {
     const event: OpencodeEvent = {
       type: "session.status",
       properties: { sessionID: SESSION_ID, status: { type: "busy" } },
     };
-    expect(agentStatusFromOpencodeEvent(event)).toBeNull();
+    expect(agentStatusFromOpencodeEvent(event)).toEqual({
+      isWorking: true,
+      shortStatus: "🤔 Thinking",
+    });
+  });
+
+  it("returns writing response for text part updates", () => {
+    const event: OpencodeEvent = {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-1",
+          sessionID: SESSION_ID,
+          messageID: MESSAGE_ID,
+          type: "text",
+          text: "Hello world",
+        },
+      },
+    } as OpencodeEvent;
+    expect(agentStatusFromOpencodeEvent(event)).toEqual({
+      isWorking: true,
+      shortStatus: "✏️ Writing response",
+    });
   });
 
   it("returns working with title for running tool", () => {
@@ -76,7 +98,7 @@ describe("agentStatusFromOpencodeEvent", () => {
     });
     expect(agentStatusFromOpencodeEvent(event)).toEqual({
       isWorking: true,
-      shortStatus: "Running tests",
+      shortStatus: "🔧 Running tests",
     });
   });
 
@@ -94,7 +116,7 @@ describe("agentStatusFromOpencodeEvent", () => {
     });
     expect(agentStatusFromOpencodeEvent(event)).toEqual({
       isWorking: true,
-      shortStatus: "Read file",
+      shortStatus: "🔧 Read file",
     });
   });
 
@@ -109,7 +131,7 @@ describe("agentStatusFromOpencodeEvent", () => {
     });
     expect(agentStatusFromOpencodeEvent(event)).toEqual({
       isWorking: true,
-      shortStatus: "pnpm test",
+      shortStatus: "🔧 pnpm test",
     });
   });
 
@@ -120,7 +142,7 @@ describe("agentStatusFromOpencodeEvent", () => {
     });
     expect(agentStatusFromOpencodeEvent(event)).toEqual({
       isWorking: true,
-      shortStatus: "glob",
+      shortStatus: "🔧 glob",
     });
   });
 
