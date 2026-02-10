@@ -86,6 +86,9 @@ function ProjectEnvVarsPage() {
   const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
   const [deleteConfirmEnvVar, setDeleteConfirmEnvVar] = useState<EnvVar | null>(null);
   const [infoDialogEnvVar, setInfoDialogEnvVar] = useState<EnvVar | null>(null);
+  const [discordDialogOpen, setDiscordDialogOpen] = useState(false);
+  const [discordToken, setDiscordToken] = useState("");
+  const [discordGuildId, setDiscordGuildId] = useState("");
   const [formKey, setFormKey] = useState("");
   const [formValue, setFormValue] = useState("");
   const [formDescription, setFormDescription] = useState("");
@@ -175,6 +178,35 @@ function ProjectEnvVarsPage() {
     onError: (error) => toast.error("Failed to delete: " + error.message),
   });
 
+  const setupDiscordBot = useMutation({
+    mutationFn: async (input: { token: string; guildId: string }) => {
+      await Promise.all([
+        trpcClient.envVar.set.mutate({
+          projectSlug: params.projectSlug,
+          key: "DISCORD_TOKEN",
+          value: input.token,
+          description: "Discord bot token",
+        }),
+        trpcClient.envVar.set.mutate({
+          projectSlug: params.projectSlug,
+          key: "DISCORD_GUILD_ID",
+          value: input.guildId,
+          description: "Discord server (guild) ID",
+        }),
+      ]);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
+      setDiscordDialogOpen(false);
+      setDiscordToken("");
+      setDiscordGuildId("");
+      toast.success("Discord bot env vars saved");
+    },
+    onError: (error) => {
+      toast.error("Failed to save Discord env vars: " + error.message);
+    },
+  });
+
   const resetForm = () => {
     setFormKey("");
     setFormValue("");
@@ -187,6 +219,20 @@ function ProjectEnvVarsPage() {
     resetForm();
     setEditingEnvVar(null);
     setAddSheetOpen(true);
+  };
+
+  const handleOpenDiscordSetup = () => {
+    setDiscordToken("");
+    setDiscordGuildId("");
+    setDiscordDialogOpen(true);
+  };
+
+  const handleDiscordSetupSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const token = discordToken.trim();
+    const guildId = discordGuildId.trim();
+    if (!token || !guildId) return;
+    setupDiscordBot.mutate({ token, guildId });
   };
 
   const handleOpenEdit = (envVar: EnvVar) => {
@@ -430,10 +476,66 @@ function ProjectEnvVarsPage() {
     </Dialog>
   );
 
+  const discordDialog = (
+    <Dialog open={discordDialogOpen} onOpenChange={setDiscordDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Use Discord Bot</DialogTitle>
+          <DialogDescription>
+            Provide Discord credentials. These will be saved as normal env vars for now.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleDiscordSetupSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="discord-token">DISCORD_TOKEN</Label>
+            <Input
+              id="discord-token"
+              value={discordToken}
+              onChange={(e) => setDiscordToken(e.target.value)}
+              placeholder="Discord bot token"
+              autoComplete="off"
+              data-1p-ignore
+              disabled={setupDiscordBot.isPending}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="discord-guild-id">DISCORD_GUILD_ID</Label>
+            <Input
+              id="discord-guild-id"
+              value={discordGuildId}
+              onChange={(e) => setDiscordGuildId(e.target.value)}
+              placeholder="Discord server ID"
+              autoComplete="off"
+              data-1p-ignore
+              disabled={setupDiscordBot.isPending}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDiscordDialogOpen(false)}
+              disabled={setupDiscordBot.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={setupDiscordBot.isPending || !discordToken.trim() || !discordGuildId.trim()}
+            >
+              {setupDiscordBot.isPending ? "Saving..." : "Save env vars"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+
   if (envVars.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center">
         {addSheet}
+        {discordDialog}
         <EmptyState
           icon={<SlidersHorizontal className="h-12 w-12" />}
           title="No environment variables"
@@ -458,6 +560,7 @@ function ProjectEnvVarsPage() {
         </Button>
       </HeaderActions>
       {addSheet}
+      {discordDialog}
       {infoDialogContent}
       <ConfirmDialog
         open={!!deleteConfirmEnvVar}
@@ -472,9 +575,9 @@ function ProjectEnvVarsPage() {
         Environment variables are available to your machines.
       </p>
 
-      {missingConnectors.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {missingConnectors.map(({ provider, label, icon: Icon }) => (
+      <div className="mb-4 flex flex-wrap gap-2">
+        {missingConnectors.length > 0 &&
+          missingConnectors.map(({ provider, label, icon: Icon }) => (
             <Link
               key={provider}
               to="/proj/$projectSlug/connectors"
@@ -486,8 +589,11 @@ function ProjectEnvVarsPage() {
               </Button>
             </Link>
           ))}
-        </div>
-      )}
+        <Button variant="outline" size="sm" onClick={handleOpenDiscordSetup}>
+          <MessageSquare className="h-4 w-4" />
+          Use Discord Bot
+        </Button>
+      </div>
 
       <div className="divide-y rounded-lg border">
         {envVars.map((envVar, idx) => {
