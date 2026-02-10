@@ -41,13 +41,15 @@ const getTestDb = () => {
 };
 
 describe("machine creation integration", () => {
-  let db: ReturnType<typeof getTestDb>;
+  let db: ReturnType<typeof getTestDb> | undefined;
 
   beforeAll(async () => {
     try {
-      db = getTestDb();
-      await db.execute(sql`select 1`);
+      const connectedDb = getTestDb();
+      await connectedDb.execute(sql`select 1`);
+      db = connectedDb;
     } catch {
+      db = undefined;
       return;
     }
   });
