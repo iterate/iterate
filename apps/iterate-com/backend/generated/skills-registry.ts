@@ -13,16 +13,15 @@ export interface WellKnownSkillsRegistry {
 }
 
 export const wellKnownSkillsRegistry: WellKnownSkillsRegistry = {
-  "skills": [
+  skills: [
     {
-      "name": "example-skill",
-      "description": "Example skill published from iterate's root skills directory",
-      "files": [
-        "SKILL.md"
-      ]
-    }
+      name: "example-skill",
+      description: "Example skill published from iterate's root skills directory",
+      files: ["SKILL.md"],
+    },
   ],
-  "fileContents": {
-    "example-skill/SKILL.md": "---\nname: example-skill\ndescription: Example skill published from iterate's root skills directory\npublish: true\n---\n\n# Example Skill\n\nUse this as a template for publishing real skills from this repository.\n\n## When To Use\n\nUse when you want a minimal, installable skill that confirms the registry works.\n\n## Steps\n\n1. Read the task request.\n2. Apply concise, practical instructions.\n3. Return concrete output.\n"
-  }
+  fileContents: {
+    "example-skill/SKILL.md":
+      "---\nname: example-skill\ndescription: Example skill published from iterate's root skills directory\npublish: true\n---\n\n# Example Skill\n\nUse this as a template for publishing real skills from this repository.\n\n## When To Use\n\nUse when you want a minimal, installable skill that confirms the registry works.\n\n## Steps\n\n1. Read the task request.\n2. Apply concise, practical instructions.\n3. Return concrete output.\n",
+  },
 };
