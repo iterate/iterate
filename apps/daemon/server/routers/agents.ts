@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { subscribeAgentLifecycle } from "../services/agent-lifecycle.ts";
 import { extractAgentPathFromUrl } from "../utils/agent-path.ts";
 import { trpcRouter } from "../trpc/router.ts";
 
@@ -90,6 +91,7 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
   if (method === "POST") {
     upstreamHeaders.set("Content-Type", "application/json");
   }
+  upstreamHeaders.set("x-iterate-agent-path", agentPath);
 
   const upstreamResponse = await fetch(destination, {
     method,
@@ -125,6 +127,45 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
 
   return c.body(null);
 }
+
+agentsRouter.get("/*/lifecycle", async (c) => {
+  const fullPath = extractAgentPathFromUrl(c.req.path, "/api/agents");
+  if (!fullPath || !fullPath.endsWith("/lifecycle")) {
+    return c.json({ error: "Invalid lifecycle path" }, 400);
+  }
+  const agentPath = fullPath.slice(0, -"/lifecycle".length);
+  if (!agentPath) {
+    return c.json({ error: "Invalid agent path" }, 400);
+  }
+
+  c.header("content-type", "text/event-stream");
+  c.header("cache-control", "no-cache");
+  c.header("connection", "keep-alive");
+
+  return stream(c, async (streamWriter) => {
+    let writeQueue = Promise.resolve();
+    const enqueueWrite = (chunk: string): void => {
+      writeQueue = writeQueue
+        .then(() => Promise.resolve(streamWriter.write(chunk)).then(() => undefined))
+        .catch(() => {});
+    };
+
+    const unsubscribe = subscribeAgentLifecycle(agentPath, (event) => {
+      enqueueWrite(`data: ${JSON.stringify(event)}\n\n`);
+    });
+
+    try {
+      enqueueWrite(": connected\n\n");
+      while (!c.req.raw.signal.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 15000));
+        enqueueWrite(": ping\n\n");
+      }
+    } finally {
+      unsubscribe();
+      await writeQueue;
+    }
+  });
+});
 
 agentsRouter.get("/*", async (c) => forwardAgentRequest(c));
 

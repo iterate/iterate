@@ -311,7 +311,8 @@ export const trpcRouter = createTRPCRouter({
       const routeMetadata =
         typeof sessionId === "string"
           ? ({
-              provider: routePath.startsWith("/opencode/") ? "opencode" : "unknown",
+              harness: routePath.startsWith("/opencode/") ? "opencode" : "unknown",
+              harnessHandle: sessionId,
               sessionId,
             } satisfies Record<string, unknown>)
           : undefined;

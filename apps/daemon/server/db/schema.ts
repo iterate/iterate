@@ -1,5 +1,6 @@
 import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { string } from "zod/v4";
 
 export const events = sqliteTable("events", {
   id: text().primaryKey(),
@@ -20,6 +21,17 @@ export const agents = sqliteTable("agents", {
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
   archivedAt: integer("archived_at", { mode: "timestamp" }),
+
+  shortStatus: text("short_status").notNull().default("idle"),
+});
+
+export const agentSubscriptions = sqliteTable("agent_subscriptions", {
+  agentPath: text("agent_path")
+    .notNull()
+    .references(() => agents.path),
+  callbackUrl: text("subscription").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
 });
 
 export type Agent = typeof agents.$inferSelect;
@@ -34,12 +46,15 @@ export const agentRoutes = sqliteTable(
   "agent_routes",
   {
     id: integer().primaryKey({ autoIncrement: true }),
-    agentPath: text("agent_path")
+    agentPath: text("agent_path") // /slack/ts-12313
       .notNull()
       .references(() => agents.path),
     destination: text().notNull(),
+    // /opencode/sessions/[xyz] <- opencode session id
+    // served by opencode router in our daemon
     active: integer({ mode: "boolean" }).notNull().default(true),
     metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
+
     createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).default(sql`(unixepoch())`),
   },

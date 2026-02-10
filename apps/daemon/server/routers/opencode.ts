@@ -3,6 +3,10 @@ import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { eq } from "drizzle-orm";
+import { db } from "../db/index.ts";
+import * as schema from "../db/schema.ts";
+import { publishAgentLifecycleEvent } from "../services/agent-lifecycle.ts";
 import type { IterateEvent } from "../types/events.ts";
 import { extractIterateEvents } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
@@ -20,6 +24,16 @@ function getOpencodeWorkingDirectory(): string {
 const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:4096";
 
 export const opencodeRouter = new Hono();
+
+type TrackedAgentPath = {
+  agentPath: string;
+  harnessHandle: string;
+};
+
+const trackedByAgentPath = new Map<string, TrackedAgentPath>();
+const agentPathByHarnessHandle = new Map<string, Set<string>>();
+
+let lifecycleSubscriptionStarted = false;
 
 /** Concatenate all prompt events into a single message */
 function concatenatePrompts(events: IterateEvent[]): string {
@@ -63,6 +77,7 @@ opencodeRouter.post("/new", async (c) => {
   const combinedPrompt = concatenatePrompts(eventList);
   if (combinedPrompt) {
     await sendPromptToSession(sessionId, combinedPrompt, workingDirectory);
+    await trackAgentLifecycle({ agentPath, harnessHandle: sessionId });
   }
 
   return c.json({
@@ -158,6 +173,7 @@ opencodeRouter.get("/sessions/:sessionId", async (c) => {
 
 opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
+  const agentPathFromHeader = c.req.header("x-iterate-agent-path") ?? undefined;
   const payload = await c.req.json();
   const events = extractIterateEvents(payload);
 
@@ -165,10 +181,198 @@ opencodeRouter.post("/sessions/:sessionId", async (c) => {
   const combinedPrompt = concatenatePrompts(events);
   if (combinedPrompt) {
     await sendPromptToSession(sessionId, combinedPrompt, getOpencodeWorkingDirectory());
+    await trackAgentLifecycle({ agentPath: agentPathFromHeader, harnessHandle: sessionId });
   }
 
   return c.json({ success: true, sessionId });
 });
+
+function ensureLifecycleSubscription(): void {
+  if (lifecycleSubscriptionStarted) return;
+  lifecycleSubscriptionStarted = true;
+  void runLifecycleSubscriptionLoop();
+}
+
+async function runLifecycleSubscriptionLoop(): Promise<void> {
+  while (true) {
+    try {
+      const globalResponse = await fetch(`${OPENCODE_BASE_URL}/global/event`, {
+        method: "GET",
+        headers: { Accept: "text/event-stream" },
+      });
+
+      if (!globalResponse.ok || !globalResponse.body) {
+        await sleepMs(1000);
+        continue;
+      }
+
+      const reader = globalResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary !== -1) {
+            const frame = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            await handleLifecycleFrame(frame);
+            boundary = buffer.indexOf("\n\n");
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch {
+      // Keep lifecycle handling best-effort; we'll reconnect below.
+    }
+
+    await sleepMs(1000);
+  }
+}
+
+async function handleLifecycleFrame(frame: string): Promise<void> {
+  const dataLines = frame
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.startsWith("data:"));
+  if (dataLines.length === 0) return;
+
+  const payload = dataLines.map((line) => line.slice(5).trimStart()).join("\n");
+  if (!payload || payload === "[DONE]") return;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+
+  const harnessHandle = extractSessionId(parsed);
+  if (!harnessHandle) return;
+
+  const agentPaths = agentPathByHarnessHandle.get(harnessHandle);
+  if (!agentPaths || agentPaths.size === 0) return;
+
+  const type = typeof parsed.type === "string" ? parsed.type : "";
+  if (type === "session.idle" || type === "session.error" || isIdleStatusEvent(parsed)) {
+    for (const agentPath of agentPaths) {
+      await settleAgentPath(agentPath);
+    }
+    return;
+  }
+
+  const statusEvent = extractToolStatusEvent(parsed);
+  if (!statusEvent) return;
+
+  for (const agentPath of agentPaths) {
+    publishAgentLifecycleEvent({
+      type: "status",
+      agentPath,
+      status: statusEvent.statusText,
+    });
+  }
+}
+
+function isIdleStatusEvent(event: Record<string, unknown>): boolean {
+  if (event.type !== "session.status") return false;
+  const properties = asRecord(event.properties);
+  const status = asRecord(properties?.status);
+  return status?.type === "idle";
+}
+
+function extractToolStatusEvent(event: Record<string, unknown>): {
+  statusText: string;
+} | null {
+  if (event.type !== "message.part.updated") return null;
+  const properties = asRecord(event.properties);
+  const part = asRecord(properties?.part);
+  if (!part || part.type !== "tool") return null;
+
+  const state = asRecord(part.state);
+  if (!state) return null;
+  const stateStatus = typeof state.status === "string" ? state.status : "";
+  if (stateStatus !== "running" && stateStatus !== "completed") return null;
+
+  const input = asRecord(state.input) ?? {};
+  const title = typeof state.title === "string" ? state.title : "";
+  const description = typeof input.description === "string" ? input.description : "";
+  const tool = typeof part.tool === "string" ? part.tool : "";
+  const statusText = (title || description || tool || "Working").slice(0, 30);
+
+  return {
+    statusText,
+  };
+}
+
+async function settleAgentPath(agentPath: string): Promise<void> {
+  const tracked = trackedByAgentPath.get(agentPath);
+  if (!tracked) return;
+
+  trackedByAgentPath.delete(agentPath);
+  const set = agentPathByHarnessHandle.get(tracked.harnessHandle);
+  if (set) {
+    set.delete(agentPath);
+    if (set.size === 0) {
+      agentPathByHarnessHandle.delete(tracked.harnessHandle);
+    }
+  }
+
+  publishAgentLifecycleEvent({ type: "unack", agentPath });
+}
+
+export async function trackAgentLifecycle(params: {
+  agentPath?: string;
+  harnessHandle: string;
+}): Promise<void> {
+  const agentPath =
+    params.agentPath ?? (await resolveAgentPathByHarnessHandle(params.harnessHandle));
+  if (!agentPath) return;
+
+  ensureLifecycleSubscription();
+
+  const existing = trackedByAgentPath.get(agentPath);
+  if (!existing || existing.harnessHandle !== params.harnessHandle) {
+    if (existing) {
+      await settleAgentPath(agentPath);
+    }
+    trackedByAgentPath.set(agentPath, {
+      agentPath,
+      harnessHandle: params.harnessHandle,
+    });
+    const set = agentPathByHarnessHandle.get(params.harnessHandle) ?? new Set<string>();
+    set.add(agentPath);
+    agentPathByHarnessHandle.set(params.harnessHandle, set);
+    publishAgentLifecycleEvent({ type: "ack", agentPath });
+  }
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveAgentPathByHarnessHandle(harnessHandle: string): Promise<string | null> {
+  const activeRoutes = await db
+    .select()
+    .from(schema.agentRoutes)
+    .where(eq(schema.agentRoutes.active, true));
+
+  for (const route of activeRoutes) {
+    const metadata = (route.metadata ?? null) as Record<string, unknown> | null;
+    if (!metadata) continue;
+    const maybeHarnessHandle =
+      metadata.harnessHandle ?? metadata.providerHandle ?? metadata.sessionId;
+    if (maybeHarnessHandle === harnessHandle) {
+      return route.agentPath;
+    }
+  }
+
+  return null;
+}
 
 function extractSessionId(event: Record<string, unknown>): string | null {
   if (

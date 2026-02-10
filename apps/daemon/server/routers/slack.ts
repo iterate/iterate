@@ -17,7 +17,7 @@ import type {
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { activeAgentExists, sendToAgentGateway } from "../utils/agent-gateway.ts";
-import { registerSlackWork } from "../services/slack-stream-consumer.ts";
+import { trackSlackLifecycle } from "../services/slack-stream-consumer.ts";
 
 const logger = console;
 
@@ -191,7 +191,9 @@ async function handleSlackWebhookAsync(params: {
       return;
     }
 
-    await registerSlackWork({
+    const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    trackSlackLifecycle({
       agentPath,
       channel: parsed.channel,
       threadTs,
@@ -199,9 +201,6 @@ async function handleSlackWebhookAsync(params: {
       emoji: "eyes",
       requestId,
     });
-
-    const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
     return;
   }
 
@@ -212,7 +211,11 @@ async function handleSlackWebhookAsync(params: {
 
   if (messageParsed.case === "new_thread_mention") {
     const messageTs = event.ts || threadTs;
-    await registerSlackWork({
+    const message = hasAgent
+      ? formatMidThreadMentionMessage(event, threadTs, eventId)
+      : formatNewThreadMentionMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    trackSlackLifecycle({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -220,17 +223,14 @@ async function handleSlackWebhookAsync(params: {
       emoji: "eyes",
       requestId,
     });
-
-    const message = hasAgent
-      ? formatMidThreadMentionMessage(event, threadTs, eventId)
-      : formatNewThreadMentionMessage(event, threadTs, eventId);
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
     return;
   }
 
   if (messageParsed.case === "mid_thread_mention") {
     const messageTs = event.ts || threadTs;
-    await registerSlackWork({
+    const message = formatMidThreadMentionMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    trackSlackLifecycle({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -238,9 +238,6 @@ async function handleSlackWebhookAsync(params: {
       emoji: "eyes",
       requestId,
     });
-
-    const message = formatMidThreadMentionMessage(event, threadTs, eventId);
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
     return;
   }
 
@@ -250,7 +247,9 @@ async function handleSlackWebhookAsync(params: {
       return;
     }
 
-    await registerSlackWork({
+    const message = formatFyiMessage(event, threadTs, eventId);
+    await sendToAgentGateway(agentPath, { type: "prompt", message });
+    trackSlackLifecycle({
       agentPath,
       channel: event.channel || "",
       threadTs,
@@ -258,9 +257,6 @@ async function handleSlackWebhookAsync(params: {
       emoji: "thinking_face",
       requestId,
     });
-
-    const message = formatFyiMessage(event, threadTs, eventId);
-    await sendToAgentGateway(agentPath, { type: "prompt", message });
     return;
   }
 }

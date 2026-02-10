@@ -13,8 +13,8 @@ import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import {
   getWebchatThreadStatus,
-  registerWebchatWork,
   setWebchatThreadStatus,
+  trackWebchatLifecycle,
 } from "../services/webchat-stream-consumer.ts";
 
 const logger = console;
@@ -138,12 +138,6 @@ webchatRouter.post("/webhook", async (c) => {
 
   const eventId = await storeEvent("webchat:user-message", userMessage, messageId);
 
-  registerWebchatWork({
-    agentPath,
-    threadId,
-    messageId,
-  });
-
   const formattedMessage = formatIncomingMessage({
     payload,
     threadId,
@@ -153,11 +147,11 @@ webchatRouter.post("/webhook", async (c) => {
     isFirstMessageInThread: !existedBefore,
   });
 
-  void sendToAgentGateway(agentPath, { type: "prompt", message: formattedMessage }).catch(
-    (error) => {
+  void sendToAgentGateway(agentPath, { type: "prompt", message: formattedMessage })
+    .then(() => trackWebchatLifecycle({ agentPath, threadId }))
+    .catch((error) => {
       logger.error(`[webchat] sendToAgentGateway failed for ${threadId}/${messageId}`, error);
-    },
-  );
+    });
 
   return c.json({
     success: true,
