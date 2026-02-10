@@ -269,8 +269,9 @@ const Env = z.object({
   DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
 
-  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: NonEmpty.default("0"), // minutes, 0 = disabled
-  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
+  // Policy knobs: require explicit values in Doppler (no hidden defaults in code).
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: Required, // minutes, 0 = disabled
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: Required, // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
@@ -381,7 +382,13 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    const localDockerPostgresPort = process.env.LOCAL_DOCKER_POSTGRES_PORT ?? "5432";
+    const localDockerPostgresPort = process.env.LOCAL_DOCKER_POSTGRES_PORT;
+    if (!localDockerPostgresPort) {
+      throw new Error(
+        "LOCAL_DOCKER_POSTGRES_PORT is not set. " +
+          "Run `pnpm docker:up` (or `pnpm os dev`) and ensure docker-compose port resolution ran.",
+      );
+    }
     const origin = `postgres://postgres:postgres@localhost:${localDockerPostgresPort}/os`;
     await migrate(origin);
     await seedGlobalSecrets(origin);
@@ -509,7 +516,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
-    const imageName = process.env.DOCKER_DEFAULT_IMAGE || "iterate-sandbox:local";
+    // No implicit fallback here: if DOCKER_DEFAULT_IMAGE isn't set, we want it to be obvious
+    // (the Docker provider is strict and will throw when attempting to create a machine).
+    const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
 
     const hostSyncEnabled = repoCheckout && gitDir && commonDir ? "true" : "";
     Object.assign(dockerBindings, {

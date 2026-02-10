@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --parallel --filter '!./apps/daemon' dev",
-    "dev:daytona-head": "DAYTONA_DEFAULT_SNAPSHOT=iterate-sandbox-$(git rev-parse HEAD) pnpm dev",
+    "dev:daytona-head": "DAYTONA_DEFAULT_SNAPSHOT=iterate-sandbox-sha-$(git rev-parse --short=7 HEAD) pnpm dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
