@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "cloudflare-observability": {
+      "url": "https://observability.mcp.cloudflare.com/mcp"
+    }
+  }
+}
