@@ -52,9 +52,20 @@ export default {
         update_doppler: true,
       },
     },
+    "deploy-os-early": {
+      uses: "./.github/workflows/deploy.yml",
+      needs: ["variables"],
+      if: "needs.variables.outputs.stage == 'prd'",
+      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
+      secrets: "inherit",
+      with: {
+        stage: "${{ needs.variables.outputs.stage }}",
+        deploy_iterate_com: false,
+      },
+    },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: ["variables", "push-daytona-snapshot"],
+      needs: ["variables", "push-daytona-snapshot", "deploy-os-early"],
       if: "needs.variables.outputs.stage == 'prd'",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
@@ -64,7 +75,7 @@ export default {
       },
     },
     slack_failure: {
-      needs: ["variables", "push-daytona-snapshot", "deploy"],
+      needs: ["variables", "push-daytona-snapshot", "deploy-os-early", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },

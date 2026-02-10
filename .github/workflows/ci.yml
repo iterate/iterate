@@ -37,11 +37,21 @@ jobs:
       update_fly_doppler: true
       fly_doppler_configs_to_update: dev,stg,prd
       update_doppler: true
+  deploy-os-early:
+    uses: ./.github/workflows/deploy.yml
+    needs:
+      - variables
+    if: needs.variables.outputs.stage == 'prd'
+    secrets: inherit
+    with:
+      stage: ${{ needs.variables.outputs.stage }}
+      deploy_iterate_com: false
   deploy:
     uses: ./.github/workflows/deploy.yml
     needs:
       - variables
       - push-daytona-snapshot
+      - deploy-os-early
     if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
     with:
@@ -51,6 +61,7 @@ jobs:
     needs:
       - variables
       - push-daytona-snapshot
+      - deploy-os-early
       - deploy
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
