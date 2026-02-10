@@ -120,6 +120,20 @@
       "when": 1770297200000,
       "tag": "0016_globally_unique_project_slugs",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1770682553628,
+      "tag": "0017_pgmq",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1770682593930,
+      "tag": "0018_fancy_stone_men",
+      "breakpoints": true
     }
   ]
 }

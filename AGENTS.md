@@ -125,6 +125,35 @@ When a machine shows `status=error` in the dashboard:
 4. Key log patterns: `webchat/webhook`, `readiness-probe`, `opencode`, `bootstrap`
 5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (probe + activation), `apps/os/backend/services/machine-creation.ts`
 
+### Getting logs from Daytona machines (production)
+
+No `docker logs` for Daytona. Use the Daytona SDK to exec commands in the sandbox:
+
+```bash
+# Get daemon logs from a Daytona sandbox (run from apps/os/)
+doppler run --config prd -- node -e "
+const { Daytona } = require('@daytonaio/sdk');
+(async () => {
+  const d = new Daytona({ apiKey: process.env.DAYTONA_API_KEY, organizationId: process.env.DAYTONA_ORG_ID });
+  const sb = await d.get('<sandbox-name>');  // e.g. 'prd--nustom--ci-c87d181'
+  const r = await sb.process.executeCommand('tail -200 /var/log/pidnap/process/daemon-backend.log');
+  console.log(r.result);
+})();
+"
+# Other useful log files: opencode.log, env-manager.log (all under /var/log/pidnap/process/)
+```
+
+Sandbox name is visible on the machine detail page in the dashboard, or via the Daytona dashboard at app.daytona.io.
+
+### Cloudflare Worker logs (control plane)
+
+The `os` worker handles all oRPC calls from daemons. To debug 500s from the control plane:
+
+- **Dashboard:** Machine detail page has "CF Worker Logs" link in the sidebar, filtered to the project
+- **Direct URL:** `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events`
+- **Real-time tail:** `doppler run --config prd -- npx wrangler tail os --format json` (live only, not historical)
+- **Telemetry API:** Requires a CF API token with `Workers Scripts:Read` + `Workers Tail:Read` permissions. The `CLOUDFLARE_API_TOKEN` in Doppler may not have POST access to the telemetry events endpoint. For historical queries, use the dashboard query builder or add the needed permissions to the token.
+
 ## Pointers
 
 - Egress proxy & secrets: `docs/egress-proxy-secrets.md`
