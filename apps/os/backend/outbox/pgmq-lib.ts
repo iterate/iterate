@@ -116,7 +116,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         select * from pgmq.read(
           queue_name => ${queueName}::text,
           vt         => 30,
-          qty        => 2
+          qty        => 10
         )
       `,
     );
