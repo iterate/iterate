@@ -8,7 +8,7 @@
  *   SANDBOX_BUILD_PLATFORM    Target platform(s) (default: linux/amd64,linux/arm64)
  *   SANDBOX_SKIP_LOAD         Skip --load into local Docker (default: false)
  *   SANDBOX_PUSH_FLY_REGISTRY Push to Fly registry (default: auto based on FLY_API_TOKEN)
- *   SANDBOX_UPDATE_DOPPLER    Update Doppler after build (default: true)
+ *   SANDBOX_UPDATE_DOPPLER    Update Doppler defaults after build (default: true)
  *   SANDBOX_DOPPLER_CONFIGS   Comma-separated Doppler configs to update (default: current)
  */
 import { execFileSync, execSync } from "node:child_process";
@@ -157,16 +157,27 @@ function getCurrentDopplerConfig(): string | undefined {
   }
 }
 
-if (pushTags.includes(flyImageTag) && shouldUpdateDoppler) {
+if (shouldUpdateDoppler) {
   const configs = dopplerConfigsToUpdate ?? [getCurrentDopplerConfig()].filter(Boolean);
   const dopplerProject = process.env.DOPPLER_PROJECT ?? "os";
   for (const config of configs) {
     if (!config) continue;
-    console.log(`Updating Doppler (${dopplerProject}/${config}): FLY_DEFAULT_IMAGE=${flyImageTag}`);
+    console.log(
+      `Updating Doppler (${dopplerProject}/${config}): DOCKER_DEFAULT_IMAGE=${localImageTag}`,
+    );
     execSync(
-      `doppler secrets set FLY_DEFAULT_IMAGE=${flyImageTag} --project ${dopplerProject} --config ${config}`,
+      `doppler secrets set DOCKER_DEFAULT_IMAGE=${localImageTag} --project ${dopplerProject} --config ${config}`,
       { cwd: repoRoot, stdio: "inherit" },
     );
+    if (pushTags.includes(flyImageTag)) {
+      console.log(
+        `Updating Doppler (${dopplerProject}/${config}): FLY_DEFAULT_IMAGE=${flyImageTag}`,
+      );
+      execSync(
+        `doppler secrets set FLY_DEFAULT_IMAGE=${flyImageTag} --project ${dopplerProject} --config ${config}`,
+        { cwd: repoRoot, stdio: "inherit" },
+      );
+    }
   }
 }
 

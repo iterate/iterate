@@ -1,6 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
@@ -31,7 +31,7 @@ async function buildDaemonTransport(
   const metadata = machine.metadata as Record<string, unknown>;
 
   try {
-    const runtime = await createMachineRuntime({
+    const runtime = await createMachineStub({
       type: machine.type,
       env,
       externalId: machine.externalId,

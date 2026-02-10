@@ -3,10 +3,7 @@ import { eq, and, or, gt, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import {
-  createMachineRuntime,
-  type MachineRuntime,
-} from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub, type MachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import {
   router,
   projectProtectedProcedure,
@@ -56,7 +53,7 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
 
   const buildProxyUrl = (port: number) =>
     `/org/${orgSlug}/proj/${projectSlug}/${machine.id}/proxy/${port}/`;
-  const runtime = await createMachineRuntime({
+  const runtime = await createMachineStub({
     type: machine.type,
     env: cloudflareEnv,
     externalId: machine.externalId,
@@ -113,7 +110,7 @@ async function getProviderForMachine(
   projectId: string,
   machineId: string,
   cloudflareEnv: CloudflareEnv,
-): Promise<{ runtime: MachineRuntime; machine: typeof schema.machine.$inferSelect }> {
+): Promise<{ runtime: MachineStub; machine: typeof schema.machine.$inferSelect }> {
   const machine = await db.query.machine.findFirst({
     where: and(eq(schema.machine.id, machineId), eq(schema.machine.projectId, projectId)),
   });
@@ -125,7 +122,7 @@ async function getProviderForMachine(
     });
   }
 
-  const runtime = await createMachineRuntime({
+  const runtime = await createMachineStub({
     type: machine.type,
     env: cloudflareEnv,
     externalId: machine.externalId,
@@ -508,7 +505,7 @@ export const machineRouter = router({
         });
       }
 
-      const runtime = await createMachineRuntime({
+      const runtime = await createMachineStub({
         type: machineRecord.type,
         env: ctx.env,
         externalId: machineRecord.externalId,

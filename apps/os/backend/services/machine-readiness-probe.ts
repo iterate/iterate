@@ -1,4 +1,4 @@
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../env.ts";
 import type * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
@@ -40,7 +40,7 @@ async function buildPreviewUrl(
   env: CloudflareEnv,
 ): Promise<string | null> {
   try {
-    const runtime = await createMachineRuntime({
+    const runtime = await createMachineStub({
       type: machine.type,
       env,
       externalId: machine.externalId,

@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -65,7 +65,7 @@ async function buildMachineForwardFetcher(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const runtime = await createMachineRuntime({
+    const runtime = await createMachineStub({
       type: machine.type,
       env,
       externalId: machine.externalId,

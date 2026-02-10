@@ -89,7 +89,7 @@ Runs `sandbox/providers/docker/build-image.ts` via Depot for persistent layer ca
 
 The build always saves to Depot registry (`--save`). Fly registry push happens automatically when `FLY_API_TOKEN` is available.
 
-Local builds auto-update your current Doppler config with the new `FLY_DEFAULT_IMAGE`. You can override to a different image by editing Doppler manually.
+Local builds auto-update your current Doppler config with `DOCKER_DEFAULT_IMAGE`, and with `FLY_DEFAULT_IMAGE` when Fly push is enabled. You can override either in Doppler manually.
 
 ### Daytona snapshot: `pnpm sandbox daytona:push`
 
@@ -210,4 +210,4 @@ doppler run -- sh -c 'RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly pnpm sand
 - `sandbox/providers/docker/provider.ts` — Docker provider
 - `sandbox/providers/fly/provider.ts` — Fly provider
 - `sandbox/providers/daytona/provider.ts` — Daytona provider
-- `sandbox/providers/machine-runtime.ts` — provider abstraction used by control plane
+- `sandbox/providers/machine-stub.ts` — machine stub abstraction used by control plane

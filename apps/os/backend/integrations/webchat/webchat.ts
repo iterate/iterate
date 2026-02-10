@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod/v4";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
@@ -85,7 +85,7 @@ async function buildMachineForwardFetcher(
   const metadata = machine.metadata as Record<string, unknown> | null;
 
   try {
-    const runtime = await createMachineRuntime({
+    const runtime = await createMachineStub({
       type: machine.type,
       env,
       externalId: machine.externalId,

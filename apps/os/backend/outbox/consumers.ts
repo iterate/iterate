@@ -1,5 +1,5 @@
 import { eq, and, lt } from "drizzle-orm";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
@@ -180,7 +180,7 @@ export const registerConsumers = () => {
       const { machineId, type, externalId, metadata } = params.payload;
       const db = getDb();
 
-      const runtime = await createMachineRuntime({
+      const runtime = await createMachineStub({
         type,
         env,
         externalId,

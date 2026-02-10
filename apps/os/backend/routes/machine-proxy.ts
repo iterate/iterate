@@ -9,7 +9,7 @@
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
@@ -110,7 +110,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  const runtime = await createMachineRuntime({
+  const runtime = await createMachineStub({
     type: machineRecord.type,
     env: c.env,
     externalId,

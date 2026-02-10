@@ -1,6 +1,6 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
-import { createMachineRuntime } from "@iterate-com/sandbox/providers/machine-runtime";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -201,7 +201,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
 
   const provisionPromise = (async () => {
     try {
-      const runtime = await createMachineRuntime({
+      const runtime = await createMachineStub({
         type,
         env,
         externalId: "",

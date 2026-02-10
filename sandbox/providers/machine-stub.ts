@@ -9,14 +9,14 @@ export interface CreateMachineConfig {
   envVars: Record<string, string>;
 }
 
-export interface MachineRuntimeResult {
+export interface MachineStubResult {
   externalId: string;
   metadata?: Record<string, unknown>;
 }
 
-export interface MachineRuntime {
+export interface MachineStub {
   readonly type: MachineType;
-  create(config: CreateMachineConfig): Promise<MachineRuntimeResult>;
+  create(config: CreateMachineConfig): Promise<MachineStubResult>;
   start(): Promise<void>;
   stop(): Promise<void>;
   restart(): Promise<void>;
@@ -27,7 +27,7 @@ export interface MachineRuntime {
   getProviderState?(): Promise<ProviderState>;
 }
 
-export interface CreateMachineRuntimeOptions {
+export interface CreateMachineStubOptions {
   type: MachineType;
   env: Record<string, unknown>;
   externalId: string;
@@ -115,7 +115,7 @@ function createUrlFetcher(baseUrl: string): SandboxFetcher {
   };
 }
 
-function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
+function createLocalStub(metadata: Record<string, unknown>): MachineStub {
   const typedMetadata = metadata as LocalMetadata;
   const host = typedMetadata.host ?? "localhost";
   const ports = typedMetadata.ports ?? {};
@@ -144,7 +144,7 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
 
   return {
     type: "local",
-    async create(machineConfig: CreateMachineConfig): Promise<MachineRuntimeResult> {
+    async create(machineConfig: CreateMachineConfig): Promise<MachineStubResult> {
       return {
         externalId: machineConfig.machineId,
         metadata: {
@@ -168,7 +168,7 @@ function createLocalRuntime(metadata: Record<string, unknown>): MachineRuntime {
   };
 }
 
-function createSandboxRuntime<TSandbox extends Sandbox>(options: {
+function createSandboxStub<TSandbox extends Sandbox>(options: {
   type: Exclude<MachineType, "local">;
   externalId: string;
   provider: SandboxHandleProvider<TSandbox>;
@@ -176,9 +176,9 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
   createResult(params: {
     config: CreateMachineConfig;
     sandbox: TSandbox;
-  }): Promise<MachineRuntimeResult>;
+  }): Promise<MachineStubResult>;
   archiveSandbox?: (sandbox: TSandbox) => Promise<void>;
-}): MachineRuntime {
+}): MachineStub {
   const { type, externalId, provider, createSandbox, createResult, archiveSandbox } = options;
   let sandboxHandle: TSandbox | null = null;
 
@@ -194,7 +194,7 @@ function createSandboxRuntime<TSandbox extends Sandbox>(options: {
 
   return {
     type,
-    async create(config: CreateMachineConfig): Promise<MachineRuntimeResult> {
+    async create(config: CreateMachineConfig): Promise<MachineStubResult> {
       const sandbox = await createSandbox(config);
       sandboxHandle = sandbox;
       return createResult({ config, sandbox });
@@ -252,7 +252,7 @@ function resolveDockerPortsFromMetadata(metadata: DockerMetadata): Record<number
   return mappedPorts;
 }
 
-function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
+function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
   const localDockerConfig = typedMetadata.localDocker ?? {};
@@ -277,7 +277,7 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
     },
   };
 
-  return createSandboxRuntime({
+  return createSandboxStub({
     type: "docker",
     externalId,
     provider: providerHandle,
@@ -289,7 +289,7 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
         ...(imageName ? { providerSnapshotId: imageName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineStubResult> {
       const daemonPortPairs = await Promise.all(
         Object.entries(LOCAL_SERVICE_KEY_BY_PORT)
           .filter(([port]) => Number(port) !== 9876)
@@ -323,13 +323,13 @@ function createDockerRuntime(options: CreateMachineRuntimeOptions): MachineRunti
   });
 }
 
-function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
+function createDaytonaStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const provider = new DaytonaProvider(toRawEnv({ env }));
   const typedMetadata = metadata as DaytonaMetadata;
   const snapshotName = typedMetadata.snapshotName;
 
-  return createSandboxRuntime({
+  return createSandboxStub({
     type: "daytona",
     externalId,
     provider,
@@ -341,7 +341,7 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineStubResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {
@@ -355,13 +355,13 @@ function createDaytonaRuntime(options: CreateMachineRuntimeOptions): MachineRunt
   });
 }
 
-function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime {
+function createFlyStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const provider = new FlyProvider(toRawEnv({ env }));
   const typedMetadata = metadata as FlyMetadata;
   const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
 
-  return createSandboxRuntime({
+  return createSandboxStub({
     type: "fly",
     externalId,
     provider,
@@ -373,7 +373,7 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineRuntimeResult> {
+    async createResult({ sandbox }): Promise<MachineStubResult> {
       return {
         externalId: sandbox.providerId,
         metadata: {
@@ -384,20 +384,18 @@ function createFlyRuntime(options: CreateMachineRuntimeOptions): MachineRuntime 
   });
 }
 
-export async function createMachineRuntime(
-  options: CreateMachineRuntimeOptions,
-): Promise<MachineRuntime> {
+export async function createMachineStub(options: CreateMachineStubOptions): Promise<MachineStub> {
   const { type, metadata } = options;
 
   switch (type) {
     case "local":
-      return createLocalRuntime(metadata);
+      return createLocalStub(metadata);
     case "docker":
-      return createDockerRuntime(options);
+      return createDockerStub(options);
     case "daytona":
-      return createDaytonaRuntime(options);
+      return createDaytonaStub(options);
     case "fly":
-      return createFlyRuntime(options);
+      return createFlyStub(options);
     default: {
       const exhaustiveCheck: never = type;
       throw new Error(`Unknown machine type: ${exhaustiveCheck}`);
