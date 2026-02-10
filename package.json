@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --parallel --filter '!./apps/daemon' dev",
-    "dev:daytona-head": "DAYTONA_SNAPSHOT_NAME=iterate-sandbox-$(git rev-parse HEAD) pnpm dev",
+    "dev:daytona-head": "DAYTONA_DEFAULT_SNAPSHOT=iterate-sandbox-$(git rev-parse HEAD) pnpm dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -27,8 +27,7 @@
     "docker:up": "tsx ./scripts/docker-compose.ts up -d",
     "docker:down": "tsx ./scripts/docker-compose.ts down --remove-orphans && tsx ./scripts/docker-remove-project-containers.ts",
     "docker:clean": "tsx ./scripts/docker-compose.ts down -v --remove-orphans && tsx ./scripts/docker-remove-project-containers.ts",
-    "docker:build": "pnpm os docker:build",
-    "daytona:build": "pnpm os daytona:build",
+    "sandbox": "pnpm --filter @iterate-com/sandbox",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",
@@ -39,7 +38,7 @@
     "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
+    "super-reset": "pnpm i && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

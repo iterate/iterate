@@ -101,19 +101,16 @@ function matchesPattern(hostAndPath: string, pattern: string): boolean {
  * Build the connect URL for a connector.
  * This is where users go to set up the connection.
  */
-export function getConnectUrl(
-  connector: Connector,
-  context: { orgSlug?: string; projectSlug?: string },
-): string {
-  if (!context.orgSlug || !context.projectSlug) {
+export function getConnectUrl(connector: Connector, context: { projectSlug?: string }): string {
+  if (!context.projectSlug) {
     // Fallback if we don't have context
     return "/settings/connectors";
   }
   // GitHub connection is on /repo page, others on /connectors
   if (connector.name === "GitHub") {
-    return `/orgs/${context.orgSlug}/projects/${context.projectSlug}/repo`;
+    return `/proj/${context.projectSlug}/repo`;
   }
-  return `/orgs/${context.orgSlug}/projects/${context.projectSlug}/connectors`;
+  return `/proj/${context.projectSlug}/connectors`;
 }
 
 /**
@@ -122,7 +119,7 @@ export function getConnectUrl(
  */
 export function getFullReauthUrl(
   connector: Connector,
-  context: { orgSlug?: string; projectSlug?: string },
+  context: { projectSlug?: string },
   baseUrl?: string,
 ): string {
   const path = getConnectUrl(connector, context);

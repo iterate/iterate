@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Trash2, RefreshCw, Copy, Globe, TerminalSquare } from "lucide-react";
+import { ExternalLink, Trash2, RefreshCw, Copy, Globe, TerminalSquare } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -25,6 +25,14 @@ const PIDNAP_PROCESSES = [
   "trace-viewer",
   "task-install-jaeger",
 ] as const;
+
+function parseFlyExternalId(externalId: string): { appName: string; machineId: string } | null {
+  const separatorIndex = externalId.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === externalId.length - 1) return null;
+  const appName = externalId.slice(0, separatorIndex);
+  const machineId = externalId.slice(separatorIndex + 1);
+  return { appName, machineId };
+}
 
 function MachineDetailPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
@@ -62,8 +70,8 @@ function MachineDetailPage() {
     daemonStatusMessage?: string;
   };
 
-  const { commands, services } = machine;
-  const isDockerMachine = machine.type === "local-docker";
+  const { services } = machine;
+  const isDockerMachine = machine.type === "docker";
   const dockerContainerRef = metadata.containerName ?? metadata.containerId ?? machine.externalId;
 
   const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -146,6 +154,21 @@ function MachineDetailPage() {
   const daemonBaseUrl = iterateDaemonService?.options[0]?.url;
   const opencodeService = services.find((s) => s.id === "opencode");
   const opencodeBaseUrl = opencodeService?.options[0]?.url;
+  const flyMachine = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
+  const flyMachineUrl = flyMachine
+    ? `https://fly.io/apps/${flyMachine.appName}/machines/${flyMachine.machineId}`
+    : null;
+  const flyGrafanaOrgId = import.meta.env.VITE_FLY_GRAFANA_ORG_ID ?? "1440139";
+  const flyGrafanaUrl = flyMachine
+    ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
+        orgId: flyGrafanaOrgId,
+        "var-app": flyMachine.appName,
+      }).toString()}`
+    : null;
+  const flyLogsUrl = flyMachine ? `https://fly.io/apps/${flyMachine.appName}/monitoring` : null;
+  const flyNetworkingUrl = flyMachine
+    ? `https://fly.io/apps/${flyMachine.appName}/networking`
+    : null;
 
   const buildTerminalUrl = (command: string) => {
     if (!daemonBaseUrl) return "#";
@@ -183,6 +206,38 @@ function MachineDetailPage() {
   return (
     <div className="space-y-6 p-4">
       <HeaderActions>
+        {flyMachineUrl && (
+          <a href={flyMachineUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Fly
+            </Button>
+          </a>
+        )}
+        {flyLogsUrl && (
+          <a href={flyLogsUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Logs
+            </Button>
+          </a>
+        )}
+        {flyGrafanaUrl && (
+          <a href={flyGrafanaUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Grafana
+            </Button>
+          </a>
+        )}
+        {flyNetworkingUrl && (
+          <a href={flyNetworkingUrl} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="sm">
+              <ExternalLink className="h-4 w-4" />
+              Networking
+            </Button>
+          </a>
+        )}
         {isDockerMachine && dockerTailLogsCommand && (
           <Button
             variant="outline"
@@ -298,6 +353,26 @@ function MachineDetailPage() {
             </dd>
           </div>
         )}
+        {flyMachine && (
+          <>
+            <div>
+              <dt className="text-xs text-muted-foreground">Fly App</dt>
+              <dd className="mt-1 truncate font-mono text-xs">{flyMachine.appName}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Fly Machine</dt>
+              <dd className="mt-1">
+                <button
+                  onClick={() => copyToClipboard(flyMachine.machineId)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {flyMachine.machineId}
+                  <Copy className="h-3 w-3 opacity-50" />
+                </button>
+              </dd>
+            </div>
+          </>
+        )}
       </div>
 
       {machine.state !== "archived" && (
@@ -351,26 +426,6 @@ function MachineDetailPage() {
                     className="truncate text-foreground hover:underline"
                   >
                     {proc}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Commands */}
-          {commands.length > 0 && daemonBaseUrl && (
-            <div>
-              <h3 className="mb-1 text-xs font-medium text-muted-foreground">Commands</h3>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
-                {commands.map((cmd, i) => (
-                  <a
-                    key={i}
-                    href={buildTerminalUrl(cmd.command)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="truncate text-foreground hover:underline"
-                  >
-                    {cmd.label}
                   </a>
                 ))}
               </div>

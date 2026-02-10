@@ -17,9 +17,12 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import {
+  ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
+  getDockerEnvVars,
+} from "../../sandbox/providers/docker/utils.ts";
 import type { ProjectIngressProxy } from "./proxy/worker.ts";
 import { workerCrons } from "./backend/worker-config.ts";
-import { ensureIteratePnpmStoreVolume, getLocalDockerEnvVars } from "./sandbox/test/helpers.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -263,11 +266,23 @@ const Env = z.object({
 
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_NAME: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
+  DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
-  VITE_DAYTONA_SNAPSHOT_NAME: Optional,
-  DAYTONA_SANDBOX_AUTO_STOP_INTERVAL: NonEmpty.default("0"), // minutes, 0 = disabled
-  DAYTONA_SANDBOX_AUTO_DELETE_INTERVAL: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
+
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: NonEmpty.default("0"), // minutes, 0 = disabled
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: NonEmpty.default("-1"), // minutes, -1 = disabled, 0 = delete on stop
+  SANDBOX_DAYTONA_ENABLED: BoolyString,
+  SANDBOX_DOCKER_ENABLED: BoolyString,
+  SANDBOX_FLY_ENABLED: BoolyString,
+  FLY_API_TOKEN: Optional,
+  FLY_ORG: Optional,
+  FLY_DEFAULT_REGION: Optional,
+  FLY_DEFAULT_IMAGE: Optional,
+  FLY_DEFAULT_CPUS: Optional,
+  FLY_DEFAULT_MEMORY_MB: Optional,
+  FLY_APP_NAME_PREFIX: Optional,
+  FLY_NETWORK: Optional,
+  FLY_BASE_DOMAIN: Optional,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -309,7 +324,7 @@ const Env = z.object({
 
 // Type for env vars wrapped as alchemy secrets
 type EnvSecrets = {
-  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string
+  [K in keyof z.output<typeof Env>]-?: z.output<typeof Env>[K] extends string | undefined
     ? ReturnType<typeof alchemy.secret<string>>
     : never;
 };
@@ -463,53 +478,53 @@ const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/
 
 const domains = [`${subdomain}.iterate.com`];
 
-function envVarsFrom(keys: readonly string[]) {
-  // Build an object of only the env vars that are set.
-  return Object.fromEntries(
-    keys.flatMap((key) => {
-      const value = process.env[key];
-      return value === undefined ? [] : [[key, value]];
-    }),
-  ) as Record<string, string>;
-}
-
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
-  const localDockerEnvVars = isDevelopment
-    ? {
-        ...getLocalDockerEnvVars(repoRoot),
-        ...envVarsFrom([
-          "LOCAL_DOCKER_COMPOSE_PROJECT_NAME",
-          "LOCAL_DOCKER_POSTGRES_PORT",
-          "LOCAL_DOCKER_NEON_PROXY_PORT",
-          "LOCAL_DOCKER_GIT_COMMON_DIR",
-          "LOCAL_DOCKER_GIT_GITDIR",
-          "LOCAL_DOCKER_GIT_COMMIT",
-          "LOCAL_DOCKER_GIT_BRANCH",
-          "LOCAL_DOCKER_GIT_REPO_ROOT",
-          "LOCAL_DOCKER_REPO_CHECKOUT",
-          "LOCAL_DOCKER_GIT_DIR",
-          "LOCAL_DOCKER_COMMON_DIR",
-        ]),
-      }
-    : {};
-  const localDockerBindings = {
+  const dockerEnvVars = isDevelopment ? getDockerEnvVars(repoRoot) : {};
+
+  // Docker provider env vars — git info is resolved here (where execSync works)
+  // and injected as env bindings for the worker (where execSync is unavailable).
+  const dockerBindings = {
+    DOCKER_DEFAULT_IMAGE: "",
+    DOCKER_COMPOSE_PROJECT_NAME: "",
+    DOCKER_HOST_SYNC_ENABLED: "",
+    DOCKER_HOST_GIT_REPO_ROOT: "",
+    DOCKER_HOST_GIT_DIR: "",
+    DOCKER_HOST_GIT_COMMON_DIR: "",
+    DOCKER_HOST_GIT_COMMIT: "",
+    DOCKER_HOST_GIT_BRANCH: "",
+    /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
-    LOCAL_DOCKER_POSTGRES_PORT: "",
-    LOCAL_DOCKER_NEON_PROXY_PORT: "",
-    LOCAL_DOCKER_GIT_COMMON_DIR: "",
-    LOCAL_DOCKER_GIT_GITDIR: "",
-    LOCAL_DOCKER_GIT_COMMIT: "",
-    LOCAL_DOCKER_GIT_BRANCH: "",
-    LOCAL_DOCKER_GIT_REPO_ROOT: "",
     LOCAL_DOCKER_REPO_CHECKOUT: "",
-    LOCAL_DOCKER_GIT_DIR: "",
-    LOCAL_DOCKER_COMMON_DIR: "",
   };
   if (isDevelopment) {
-    Object.assign(localDockerBindings, {
-      LOCAL_DOCKER_IMAGE_NAME: process.env.LOCAL_DOCKER_IMAGE_NAME ?? "iterate-sandbox:local",
-      ...localDockerEnvVars,
+    const composeProjectName =
+      process.env.DOCKER_COMPOSE_PROJECT_NAME ?? dockerEnvVars.DOCKER_COMPOSE_PROJECT_NAME ?? "";
+    const repoCheckout =
+      process.env.DOCKER_HOST_GIT_REPO_ROOT ?? dockerEnvVars.DOCKER_HOST_GIT_REPO_ROOT ?? "";
+    const gitDir = process.env.DOCKER_HOST_GIT_DIR ?? dockerEnvVars.DOCKER_HOST_GIT_DIR ?? "";
+    const commonDir =
+      process.env.DOCKER_HOST_GIT_COMMON_DIR ?? dockerEnvVars.DOCKER_HOST_GIT_COMMON_DIR ?? "";
+    const gitCommit =
+      process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
+    const gitBranch =
+      process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
+    const imageName = process.env.DOCKER_DEFAULT_IMAGE || "iterate-sandbox:local";
+
+    const hostSyncEnabled = repoCheckout && gitDir && commonDir ? "true" : "";
+    Object.assign(dockerBindings, {
+      DOCKER_DEFAULT_IMAGE: imageName,
+      DOCKER_COMPOSE_PROJECT_NAME: composeProjectName,
+      DOCKER_HOST_SYNC_ENABLED: process.env.DOCKER_HOST_SYNC_ENABLED ?? hostSyncEnabled,
+      DOCKER_HOST_GIT_REPO_ROOT: repoCheckout,
+      DOCKER_HOST_GIT_DIR: gitDir,
+      DOCKER_HOST_GIT_COMMON_DIR: commonDir,
+      DOCKER_HOST_GIT_COMMIT: gitCommit,
+      DOCKER_HOST_GIT_BRANCH: gitBranch,
+      LOCAL_DOCKER_IMAGE_NAME: imageName,
+      LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
+        process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,
+      LOCAL_DOCKER_REPO_CHECKOUT: process.env.LOCAL_DOCKER_REPO_CHECKOUT ?? repoCheckout,
     });
   }
 
@@ -560,7 +575,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       PROXY_WORKER: proxyWorker,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
-      ...localDockerBindings,
+      ...dockerBindings,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
@@ -613,8 +628,8 @@ if (isDevelopment) {
   setupDevTunnelEnv();
 
   // Start Docker containers (postgres, neon-proxy) before migrations
-  // docker-compose.ts handles COMPOSE_PROJECT_NAME and LOCAL_DOCKER_GIT_* env vars.
-  // Host ports are dynamic and resolved immediately after startup.
+  // docker-compose.ts handles DOCKER_COMPOSE_PROJECT_NAME and SANDBOX_DOCKER_HOST_GIT_* env vars
+  // --wait flag ensures postgres healthcheck passes before returning
   console.log("Starting Docker containers...");
   execSync("pnpm docker:up", {
     cwd: repoRoot,

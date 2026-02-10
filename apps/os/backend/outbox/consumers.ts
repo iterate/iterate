@@ -1,9 +1,9 @@
 import { eq, and, lt } from "drizzle-orm";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
-import { createMachineProvider } from "../providers/index.ts";
 import { probeMachineReadiness } from "../services/machine-readiness-probe.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
@@ -180,14 +180,13 @@ export const registerConsumers = () => {
       const { machineId, type, externalId, metadata } = params.payload;
       const db = getDb();
 
-      const provider = await createMachineProvider({
+      const runtime = await createMachineStub({
         type,
         env,
         externalId,
         metadata,
-        buildProxyUrl: () => "",
       });
-      await provider.archive();
+      await runtime.archive();
 
       await db
         .update(schema.machine)

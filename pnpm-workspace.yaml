@@ -3,7 +3,7 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
-  - apps/os/sandbox
+  - sandbox
   - packages/*
   - packages/pidnap/docker
   - repo-templates/*

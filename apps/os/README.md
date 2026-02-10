@@ -23,19 +23,19 @@ curl http://127.0.0.1:2375/version
 
 ### Local Docker Snapshots
 
-When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background from the repo root using `apps/os/sandbox/Dockerfile`. Docker's layer caching ensures this is fast (~2s) if nothing changed, while still picking up Dockerfile changes without manual rebuilds.
+When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built in the background from the repo root using `sandbox/Dockerfile`. Docker's layer caching ensures this is fast (~2s) if nothing changed, while still picking up Dockerfile changes without manual rebuilds.
 
-To manually rebuild the local Docker snapshot from the repo root or `apps/os`:
+To manually rebuild the local Docker snapshot from the repo root:
 
 ```bash
-pnpm docker:build
+pnpm sandbox build
 ```
 
-New local-docker machines always use the latest `iterate-sandbox:local` image tag.
+New docker machines always use the latest `iterate-sandbox:local` image tag.
 
 ### Creating a Local Machine
 
-In the UI, select "local-docker" as the machine type when creating a new machine. The container will run locally and be accessible at `http://localhost:<port>`.
+In the UI, select "docker" as the machine type when creating a new machine. The container will run locally and be accessible at `http://localhost:<port>`.
 
 ---
 
@@ -70,48 +70,36 @@ For local development, each developer gets their own namespace based on `ITERATE
 
 ### Creating a New Snapshot
 
-To create a new Daytona snapshot from `apps/os`:
+To create a new Daytona snapshot from the repo root:
 
 ```bash
-pnpm daytona:build
-```
-
-Or from the repo root using the filter flag:
-
-```bash
-pnpm --filter os daytona:build
+pnpm sandbox daytona:push
 ```
 
 To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
-doppler run --config dev -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
+doppler run --config dev -- pnpm sandbox daytona:push
 
 # For staging snapshots
-doppler run --config stg -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
+doppler run --config stg -- pnpm sandbox daytona:push
 
 # For production snapshots
-doppler run --config prd -- tsx apps/os/sandbox/push-docker-image-to-daytona.ts
+doppler run --config prd -- pnpm sandbox daytona:push
 ```
 
-Or from the `apps/os` directory:
+If you want to force a specific Doppler config:
 
 ```bash
-pnpm daytona:build
-```
-
-If you want to force a specific Doppler config while staying in `apps/os`:
-
-```bash
-doppler run --config stg -- pnpm daytona:build
+doppler run --config stg -- pnpm sandbox daytona:push
 ```
 
 This will:
 
 1. Construct the stage from `ITERATE_USER` (dev) or `APP_STAGE` (stg/prd)
 2. Generate a timestamp-based snapshot name
-3. Build the Docker image from the repo root using `apps/os/sandbox/Dockerfile`
+3. Build the Docker image from the repo root using `sandbox/Dockerfile`
 4. Push the snapshot to Daytona
 
 ### Dynamic Snapshot Resolution
@@ -126,7 +114,7 @@ This means new snapshots are automatically picked up quickly in dev and within 5
 
 ### Snapshot Contents
 
-The snapshot (`apps/os/sandbox/Dockerfile`) includes:
+The snapshot (`sandbox/Dockerfile`) includes:
 
 - Node.js 24
 - pnpm 10, tsx 4
@@ -135,9 +123,9 @@ The snapshot (`apps/os/sandbox/Dockerfile`) includes:
 - OpenCode CLI
 - Git (configured for iterate-bot)
 
-The entry point (`apps/os/sandbox/entry.sh`) sets up the environment and starts s6 process supervision.
+The entry point (`sandbox/entry.sh`) sets up the environment and starts s6 process supervision.
 
-For detailed documentation on the s6 process supervision setup, see [`apps/os/sandbox/README.md`](./sandbox/README.md).
+For detailed documentation on the sandbox setup, see [`sandbox/README.md`](../../sandbox/README.md).
 
 ---
 

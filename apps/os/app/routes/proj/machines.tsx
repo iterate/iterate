@@ -14,7 +14,6 @@ import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Checkbox } from "../../components/ui/checkbox.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import {
   Sheet,
@@ -24,27 +23,28 @@ import {
   SheetHeader,
   SheetTitle,
 } from "../../components/ui/sheet.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
 import { MachineTable } from "../../components/machine-table.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
 
-type MachineType = "daytona" | "local-docker" | "local";
-
-const DEFAULT_LOCAL_PORTS: Record<string, string> = {
-  "iterate-daemon": "3000",
-  "iterate-daemon-server": "3001",
-  opencode: "4096",
-  "jaeger-ui": "16686",
-  "jaeger-otlp-http": "4318",
+/** Metadata key used by each provider to override the default image/snapshot */
+const SNAPSHOT_META: Record<string, { key: string; label: string; placeholder: string }> = {
+  daytona: {
+    key: "snapshotName",
+    label: "Snapshot",
+    placeholder: "iterate-sandbox-sha-<shortSha> (leave blank for default)",
+  },
+  fly: {
+    key: "snapshotName",
+    label: "Image",
+    placeholder: "registry.fly.io/iterate-sandbox-image:sha-<shortSha> (leave blank for default)",
+  },
+  docker: {
+    key: "localDocker.imageName",
+    label: "Image",
+    placeholder: "iterate-sandbox:sha-<shortSha> (leave blank for default)",
+  },
 };
-const DEFAULT_DAYTONA_SNAPSHOT_NAME = import.meta.env.VITE_DAYTONA_SNAPSHOT_NAME ?? "";
 
 function dateSlug() {
   const d = new Date();
@@ -53,10 +53,6 @@ function dateSlug() {
   const hour = d.getHours().toString().padStart(2, "0");
   const min = d.getMinutes().toString().padStart(2, "0");
   return `${month}-${day}-${hour}h${min}`;
-}
-
-function isDefaultMachineName(name: string) {
-  return /^(daytona|local-docker|local)-[a-z]{3}-\d{1,2}-\d{2}h\d{2}$/.test(name);
 }
 
 const Search = z.object({
@@ -85,23 +81,21 @@ function ProjectMachinesPage() {
     navigate({ search: open ? { create: true } : {}, replace: true });
   };
 
-  const { data: daemonData } = useSuspenseQuery(trpc.machine.getDaemonDefinitions.queryOptions());
-  const { data: machineTypes } = useSuspenseQuery(
-    trpc.machine.getAvailableMachineTypes.queryOptions(),
+  const { data: project } = useSuspenseQuery(
+    trpc.project.bySlug.queryOptions({
+      projectSlug: params.projectSlug,
+    }),
   );
+  const sandboxProvider = project.sandboxProvider;
 
-  const defaultType =
-    machineTypes.find((t) => !t.disabledReason)?.type ?? machineTypes[0]?.type ?? "daytona";
-
-  const [newMachineType, setNewMachineType] = useState<MachineType>(defaultType);
-  const [newMachineName, setNewMachineName] = useState(`${defaultType}-${dateSlug()}`);
-  const [newLocalHost, setNewLocalHost] = useState("localhost");
-  const [newLocalPorts, setNewLocalPorts] = useState<Record<string, string>>(DEFAULT_LOCAL_PORTS);
-  const [newLocalDockerImage, setNewLocalDockerImage] = useState("iterate-sandbox:local");
-  const [newLocalDockerSyncRepo, setNewLocalDockerSyncRepo] = useState(true);
-  const [newDaytonaSnapshotName, setNewDaytonaSnapshotName] = useState(
-    DEFAULT_DAYTONA_SNAPSHOT_NAME,
+  const { data: defaultSnapshots } = useSuspenseQuery(
+    trpc.machine.getDefaultSnapshots.queryOptions(),
   );
+  const defaultSnapshotForProvider =
+    defaultSnapshots[sandboxProvider as keyof typeof defaultSnapshots] ?? "";
+
+  const [newMachineName, setNewMachineName] = useState(`${sandboxProvider}-${dateSlug()}`);
+  const [snapshotOverride, setSnapshotOverride] = useState(defaultSnapshotForProvider);
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
     projectSlug: params.projectSlug,
@@ -113,29 +107,21 @@ function ProjectMachinesPage() {
   const createMachine = useMutation({
     mutationFn: async ({
       name,
-      type,
       metadata,
     }: {
       name: string;
-      type: MachineType;
       metadata?: Record<string, unknown>;
     }) => {
       return trpcClient.machine.create.mutate({
         projectSlug: params.projectSlug,
         name,
-        type,
         metadata,
       });
     },
     onSuccess: () => {
       setCreateSheetOpen(false);
-      setNewMachineType(defaultType);
-      setNewMachineName(`${defaultType}-${dateSlug()}`);
-      setNewLocalHost("localhost");
-      setNewLocalPorts(DEFAULT_LOCAL_PORTS);
-      setNewLocalDockerImage("iterate-sandbox:local");
-      setNewLocalDockerSyncRepo(true);
-      setNewDaytonaSnapshotName(DEFAULT_DAYTONA_SNAPSHOT_NAME);
+      setNewMachineName(`${sandboxProvider}-${dateSlug()}`);
+      setSnapshotOverride(defaultSnapshotForProvider);
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -196,51 +182,22 @@ function ProjectMachinesPage() {
     const trimmedName = newMachineName.trim();
     if (!trimmedName) return;
 
-    if (newMachineType === "local") {
-      const host = newLocalHost.trim();
-      if (!host) {
-        toast.error("Host is required for local machines");
-        return;
+    const snapshot = snapshotOverride.trim();
+    const meta = SNAPSHOT_META[sandboxProvider];
+
+    // Build metadata from the snapshot override
+    let metadata: Record<string, unknown> | undefined;
+    if (snapshot && meta) {
+      if (meta.key.includes(".")) {
+        // Nested key like "localDocker.imageName"
+        const [parent, child] = meta.key.split(".");
+        metadata = { [parent]: { [child]: snapshot } };
+      } else {
+        metadata = { [meta.key]: snapshot };
       }
-      const ports: Record<string, number> = {};
-      for (const daemon of daemonData.daemons) {
-        const portStr = newLocalPorts[daemon.id] ?? "";
-        const port = Number.parseInt(portStr, 10);
-        if (!Number.isFinite(port) || port < 1 || port > 65535) {
-          toast.error(`Port for ${daemon.name} must be between 1 and 65535`);
-          return;
-        }
-        ports[daemon.id] = port;
-      }
-      createMachine.mutate({ name: trimmedName, type: newMachineType, metadata: { host, ports } });
-      return;
     }
 
-    if (newMachineType === "local-docker") {
-      const imageName = newLocalDockerImage.trim();
-      if (!imageName) {
-        toast.error("Docker image is required");
-        return;
-      }
-      createMachine.mutate({
-        name: trimmedName,
-        type: newMachineType,
-        metadata: { localDocker: { imageName, syncRepo: newLocalDockerSyncRepo } },
-      });
-      return;
-    }
-
-    if (newMachineType === "daytona") {
-      const snapshotName = newDaytonaSnapshotName.trim();
-      if (!snapshotName) {
-        toast.error("Snapshot name is required");
-        return;
-      }
-      createMachine.mutate({ name: trimmedName, type: newMachineType, metadata: { snapshotName } });
-      return;
-    }
-
-    createMachine.mutate({ name: trimmedName, type: newMachineType });
+    createMachine.mutate({ name: trimmedName, metadata });
   };
 
   const createSheet = (
@@ -249,7 +206,9 @@ function ProjectMachinesPage() {
         <form onSubmit={handleCreateMachine} className="flex h-full flex-col">
           <SheetHeader>
             <SheetTitle>Create Machine</SheetTitle>
-            <SheetDescription>Create a new machine in this project.</SheetDescription>
+            <SheetDescription>
+              Create a new machine in this project. Provider is managed at project level.
+            </SheetDescription>
           </SheetHeader>
           <div className="flex-1 space-y-4 p-4">
             <div className="space-y-2">
@@ -264,115 +223,27 @@ function ProjectMachinesPage() {
                 data-1p-ignore
               />
             </div>
-            {machineTypes.length > 1 && (
+            <div className="space-y-1">
+              <div className="text-sm font-medium">Sandbox Provider</div>
+              <div className="text-sm text-muted-foreground">{sandboxProvider}</div>
+            </div>
+            {SNAPSHOT_META[sandboxProvider] && (
               <div className="space-y-2">
-                <label className="text-sm font-medium">Machine Type</label>
-                <Select
-                  value={newMachineType}
-                  onValueChange={(v) => {
-                    const type = v as MachineType;
-                    setNewMachineType(type);
-                    if (isDefaultMachineName(newMachineName))
-                      setNewMachineName(`${type}-${dateSlug()}`);
-                  }}
-                  disabled={createMachine.isPending}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {machineTypes.map((mt) => (
-                      <SelectItem
-                        key={mt.type}
-                        value={mt.type}
-                        disabled={Boolean(mt.disabledReason)}
-                      >
-                        {mt.label}
-                        {mt.disabledReason && ` (${mt.disabledReason})`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {newMachineType === "daytona" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Snapshot Name</label>
+                <label className="text-sm font-medium">
+                  {SNAPSHOT_META[sandboxProvider].label}
+                </label>
                 <Input
-                  placeholder="iterate-sandbox-<sha>"
-                  value={newDaytonaSnapshotName}
-                  onChange={(e) => setNewDaytonaSnapshotName(e.target.value)}
+                  placeholder={SNAPSHOT_META[sandboxProvider].placeholder}
+                  value={snapshotOverride}
+                  onChange={(e) => setSnapshotOverride(e.target.value)}
                   disabled={createMachine.isPending}
                   autoComplete="off"
                   data-1p-ignore
                 />
-              </div>
-            )}
-            {newMachineType === "local" && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Host</label>
-                  <Input
-                    placeholder="localhost"
-                    value={newLocalHost}
-                    onChange={(e) => setNewLocalHost(e.target.value)}
-                    disabled={createMachine.isPending}
-                    autoComplete="off"
-                    data-1p-ignore
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Daemon Ports</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {daemonData.daemons.map((daemon) => (
-                      <div key={daemon.id} className="space-y-1">
-                        <label className="text-xs text-muted-foreground">{daemon.name}</label>
-                        <Input
-                          type="number"
-                          placeholder={String(daemon.internalPort)}
-                          min={1}
-                          max={65535}
-                          value={newLocalPorts[daemon.id] ?? ""}
-                          onChange={(e) =>
-                            setNewLocalPorts((prev) => ({ ...prev, [daemon.id]: e.target.value }))
-                          }
-                          disabled={createMachine.isPending}
-                          autoComplete="off"
-                          data-1p-ignore
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-            {newMachineType === "local-docker" && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Docker Image</label>
-                  <Input
-                    placeholder="iterate-sandbox:local"
-                    value={newLocalDockerImage}
-                    onChange={(e) => setNewLocalDockerImage(e.target.value)}
-                    disabled={createMachine.isPending}
-                    autoComplete="off"
-                    data-1p-ignore
-                  />
-                </div>
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="local-docker-sync-repo"
-                    checked={newLocalDockerSyncRepo}
-                    onCheckedChange={(value) => setNewLocalDockerSyncRepo(value === true)}
-                    disabled={createMachine.isPending}
-                  />
-                  <label
-                    className="text-sm font-medium leading-tight"
-                    htmlFor="local-docker-sync-repo"
-                  >
-                    Sync host git repo into the sandbox
-                  </label>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Override the default {SNAPSHOT_META[sandboxProvider].label.toLowerCase()}. Leave
+                  blank to use the Doppler default.
+                </p>
               </div>
             )}
           </div>

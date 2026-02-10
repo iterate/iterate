@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "build": "doppler run -- vite build",
-    "deploy:prd": "doppler run --config prd --preserve-env=DAYTONA_SNAPSHOT_NAME,VITE_DAYTONA_SNAPSHOT_NAME -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
-    "deploy:stg": "doppler run --config stg --preserve-env=DAYTONA_SNAPSHOT_NAME,VITE_DAYTONA_SNAPSHOT_NAME -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
+    "deploy:prd": "doppler run --config prd --preserve-env=DAYTONA_DEFAULT_SNAPSHOT -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
+    "deploy:stg": "doppler run --config stg --preserve-env=DAYTONA_DEFAULT_SNAPSHOT -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy": "pnpm deploy:${APP_STAGE}",
     "dev": "doppler run -- sh -c 'tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER'",
     "dev:tunnel": "DEV_TUNNEL=1 pnpm dev",
@@ -19,10 +19,6 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "db:studio:prd": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_POSTGRES_URL) drizzle-kit studio",
-    "docker:build": "doppler run -- tsx sandbox/build-docker-image.ts",
-    "docker:test": "doppler run -- sh -c 'RUN_LOCAL_DOCKER_TESTS=true vitest run --reporter=verbose sandbox/'",
-    "docker:shell": "doppler run -- tsx sandbox/local-docker-shell.ts",
-    "daytona:build": "doppler run -- tsx sandbox/push-docker-image-to-daytona.ts",
     "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {
@@ -35,6 +31,7 @@
     "@hono/vite-dev-server": "^0.24.0",
     "@hono/zod-validator": "^0.7.5",
     "@hookform/resolvers": "^5.2.2",
+    "@iterate-com/sandbox": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@mariozechner/pi-ai": "^0.42.0",
     "@mariozechner/pi-coding-agent": "^0.42.0",

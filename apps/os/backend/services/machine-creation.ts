@@ -1,9 +1,11 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
-import type { CloudflareEnv } from "../../env.ts";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { createMachineProvider } from "../providers/index.ts";
+import { createConsumerClient, type DBLike } from "../outbox/pgmq-lib.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -65,19 +67,34 @@ export type CreateMachineParams = {
   organizationSlug: string;
   projectSlug: string;
   name: string;
-  type: (typeof schema.MachineType)[number];
   metadata?: Record<string, unknown>;
 };
 
+type MachineCreationEventTypes = {
+  "machine:verify-readiness": {
+    machineId: string;
+    projectId: string;
+  };
+};
+
+const machineCreationOutbox = createConsumerClient<MachineCreationEventTypes, DBLike>(queuer, {
+  waitUntil,
+});
+
 /**
- * Create a machine for a project.
- * This is the core machine creation logic shared between tRPC and webhooks.
- * Returns the created machine and optionally the API key (for local machines).
+ * Build the full env var map for a new machine.
  */
-export async function createMachineForProject(params: CreateMachineParams): Promise<{
-  machine: typeof schema.machine.$inferSelect;
-  apiKey?: string;
-}> {
+async function buildMachineEnvVars(params: {
+  db: DB;
+  env: CloudflareEnv;
+  projectId: string;
+  organizationId: string;
+  organizationSlug: string;
+  projectSlug: string;
+  machineId: string;
+  name: string;
+  apiKey: string;
+}): Promise<Record<string, string>> {
   const {
     db,
     env,
@@ -85,26 +102,11 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     organizationId,
     organizationSlug,
     projectSlug,
+    machineId,
     name,
-    type,
-    metadata,
+    apiKey,
   } = params;
 
-  const machineId = typeid("mach").toString();
-
-  // Get or create the project-level access token
-  const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
-
-  // Create provider for creation
-  const provider = await createMachineProvider({
-    type,
-    env,
-    externalId: "",
-    metadata: metadata ?? {},
-    buildProxyUrl: () => "",
-  });
-
-  // Get project-level env vars (plain text, not secrets)
   const globalEnvVars = await db.query.projectEnvVar.findMany({
     where: and(
       eq(schema.projectEnvVar.projectId, projectId),
@@ -114,76 +116,169 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
 
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
-  // Create the machine via the provider
-  const providerResult = await provider.create({
-    machineId,
-    name,
-    envVars: {
-      ...envVars,
-      ITERATE_OS_BASE_URL: env.VITE_PUBLIC_URL,
-      ITERATE_OS_API_KEY: apiKey,
-      ITERATE_MACHINE_ID: machineId,
-      ITERATE_MACHINE_NAME: name,
-      ITERATE_ORG_ID: organizationId,
-      ITERATE_ORG_SLUG: organizationSlug,
-      ITERATE_PROJECT_ID: projectId,
-      ITERATE_PROJECT_SLUG: projectSlug,
-      ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
-      // When raw secrets mode is enabled, tell pidnap to skip proxy/CA env vars
-      ...(env.DANGEROUS_RAW_SECRETS_ENABLED === "true" ? { ITERATE_SKIP_PROXY: "true" } : {}),
-      GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
-      GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
-    },
+  return {
+    ...envVars,
+    ITERATE_OS_BASE_URL: env.VITE_PUBLIC_URL,
+    ITERATE_OS_API_KEY: apiKey,
+    ITERATE_MACHINE_ID: machineId,
+    ITERATE_MACHINE_NAME: name,
+    ITERATE_ORG_ID: organizationId,
+    ITERATE_ORG_SLUG: organizationSlug,
+    ITERATE_PROJECT_ID: projectId,
+    ITERATE_PROJECT_SLUG: projectSlug,
+    ITERATE_EGRESS_PROXY_URL: `${env.VITE_PUBLIC_URL}/api/egress-proxy`,
+    ...(env.DANGEROUS_RAW_SECRETS_ENABLED === "true" ? { ITERATE_SKIP_PROXY: "true" } : {}),
+    GH_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
+    GITHUB_TOKEN: `getIterateSecret({secretKey: "github.access_token"})`,
+  };
+}
+
+/**
+ * Create a machine for a project.
+ * This is the core machine creation logic shared between tRPC and webhooks.
+ *
+ * The DB record is created immediately and a `provisionPromise` is returned
+ * for background provisioning. Callers should pass this to `waitUntil()` or
+ * `await` it directly.
+ */
+export async function createMachineForProject(params: CreateMachineParams): Promise<{
+  machine: typeof schema.machine.$inferSelect;
+  apiKey?: string;
+  provisionPromise?: Promise<void>;
+}> {
+  const { db, env, projectId, organizationId, organizationSlug, projectSlug, name, metadata } =
+    params;
+
+  const machineId = typeid("mach").toString();
+
+  const projectRecord = await db.query.project.findFirst({
+    where: eq(schema.project.id, projectId),
   });
 
-  // Detach older "starting" machines and insert the new one atomically.
-  // This prevents concurrent readiness probes and avoids orphaning a project
-  // if the insert were to fail after a non-transactional detach.
-  const [newMachine] = await db
-    .transaction(async (tx) => {
-      await tx
-        .update(schema.machine)
-        .set({ state: "detached" })
-        .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
-
-      return tx
-        .insert(schema.machine)
-        .values({
-          id: machineId,
-          name,
-          type,
-          projectId,
-          state: "starting",
-          metadata: { ...(metadata ?? {}), ...(providerResult.metadata ?? {}) },
-          externalId: providerResult.externalId,
-        })
-        .returning();
-    })
-    .catch(async (err) => {
-      // Cleanup: delete the provider resource if DB transaction fails
-      try {
-        const cleanupProvider = await createMachineProvider({
-          type,
-          env,
-          externalId: providerResult.externalId,
-          metadata: providerResult.metadata ?? {},
-          buildProxyUrl: () => "",
-        });
-        await cleanupProvider.delete();
-      } catch {
-        // Ignore cleanup errors
-      }
-      throw err;
-    });
-
-  if (!newMachine) {
-    throw new Error("Failed to create machine");
+  if (!projectRecord) {
+    throw new Error(`Project not found: ${projectId}`);
   }
+  const type = projectRecord.sandboxProvider;
 
-  logger.info("Machine created", { machineId, projectId, type });
+  // Get or create the project-level access token
+  const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
 
-  return {
-    machine: newMachine,
-    apiKey: type === "local" ? apiKey : undefined,
-  };
+  const fullEnvVars = await buildMachineEnvVars({
+    db,
+    env,
+    projectId,
+    organizationId,
+    organizationSlug,
+    projectSlug,
+    machineId,
+    name,
+    apiKey,
+  });
+
+  // Detach older starting machines first to avoid concurrent readiness probes.
+  const [newMachine] = await db.transaction(async (tx) => {
+    await tx
+      .update(schema.machine)
+      .set({ state: "detached" })
+      .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
+
+    return tx
+      .insert(schema.machine)
+      .values({
+        id: machineId,
+        name,
+        type,
+        projectId,
+        state: "starting",
+        metadata: metadata ?? {},
+        externalId: "",
+      })
+      .returning();
+  });
+
+  if (!newMachine) throw new Error("Failed to create machine");
+  logger.info("Machine record created, starting provisioning", { machineId, projectId, type });
+
+  const provisionPromise = (async () => {
+    try {
+      const runtime = await createMachineStub({
+        type,
+        env,
+        externalId: "",
+        metadata: metadata ?? {},
+      });
+      const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
+
+      // Read current metadata — daemon status may have changed while provisioning.
+      const latestMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+      const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
+      const daemonStatus = latestMetadata.daemonStatus;
+      const shouldEnqueueDeferredReadiness =
+        latestMachine?.state === "starting" &&
+        (daemonStatus === "verifying" || daemonStatus === "ready");
+
+      if (shouldEnqueueDeferredReadiness) {
+        const verifyingMetadata = {
+          ...latestMachineMetadata,
+          daemonStatus: "verifying",
+          daemonStatusMessage: "Running readiness probe...",
+          daemonReadyAt: null,
+        };
+
+        await machineCreationOutbox.sendTx(db, "machine:verify-readiness", async (tx) => {
+          await tx
+            .update(schema.machine)
+            .set({
+              externalId: runtimeResult.externalId,
+              metadata: verifyingMetadata,
+            })
+            .where(eq(schema.machine.id, machineId));
+
+          return { payload: { machineId, projectId } };
+        });
+
+        logger.info("Machine provisioned, deferred readiness probe enqueued", {
+          machineId,
+          projectId,
+          type,
+        });
+      } else {
+        await db
+          .update(schema.machine)
+          .set({
+            externalId: runtimeResult.externalId,
+            metadata: latestMachineMetadata,
+          })
+          .where(eq(schema.machine.id, machineId));
+      }
+
+      logger.info("Machine provisioned", { machineId, projectId, type });
+    } catch (err) {
+      logger.error("Machine provisioning failed", { machineId, projectId, type, err });
+      // Store provisioning error in metadata while preserving any concurrent daemon state updates.
+      const currentMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      await db
+        .update(schema.machine)
+        .set({
+          metadata: {
+            ...currentMetadata,
+            provisioningError: errorMessage,
+            daemonStatus: "error",
+            daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
+            daemonReadyAt: null,
+          },
+        })
+        .where(eq(schema.machine.id, machineId))
+        .catch(() => {});
+    }
+  })();
+
+  return { machine: newMachine, provisionPromise };
 }

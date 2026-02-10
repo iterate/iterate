@@ -1,20 +1,21 @@
 #!/usr/bin/env tsx
+// Wrapper for docker compose that injects repo/git env vars (used by local dev services).
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLocalDockerEnvVars } from "../apps/os/sandbox/test/helpers.ts";
+import { getDockerEnvVars } from "../sandbox/providers/docker/utils.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
 
-const derivedEnvVars = getLocalDockerEnvVars(repoRoot);
+const derivedEnvVars = getDockerEnvVars(repoRoot);
 const overrideKeys = [
-  "LOCAL_DOCKER_COMPOSE_PROJECT_NAME",
-  "LOCAL_DOCKER_GIT_COMMON_DIR",
-  "LOCAL_DOCKER_GIT_GITDIR",
-  "LOCAL_DOCKER_GIT_COMMIT",
-  "LOCAL_DOCKER_GIT_BRANCH",
-  "LOCAL_DOCKER_GIT_REPO_ROOT",
+  "DOCKER_COMPOSE_PROJECT_NAME",
+  "DOCKER_HOST_GIT_COMMON_DIR",
+  "DOCKER_HOST_GIT_DIR",
+  "DOCKER_HOST_GIT_COMMIT",
+  "DOCKER_HOST_GIT_BRANCH",
+  "DOCKER_HOST_GIT_REPO_ROOT",
 ] as const;
 const env = {
   ...process.env,

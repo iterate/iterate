@@ -1,6 +1,6 @@
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../env.ts";
 import type * as schema from "../db/schema.ts";
-import { createMachineProvider } from "../providers/index.ts";
 import { logger } from "../tag-logger.ts";
 
 const PROBE_THREAD_ID = "__readiness-probe__";
@@ -40,14 +40,13 @@ async function buildPreviewUrl(
   env: CloudflareEnv,
 ): Promise<string | null> {
   try {
-    const provider = await createMachineProvider({
+    const runtime = await createMachineStub({
       type: machine.type,
       env,
       externalId: machine.externalId,
       metadata: (machine.metadata as Record<string, unknown>) ?? {},
-      buildProxyUrl: () => "",
     });
-    return provider.previewUrl;
+    return await runtime.getBaseUrl(3000);
   } catch (err) {
     logger.warn("[readiness-probe] Failed to build preview URL", {
       machineId: machine.id,

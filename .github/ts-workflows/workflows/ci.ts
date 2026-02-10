@@ -23,28 +23,13 @@ export default {
       },
     },
   },
-  // todo: uncomment this once depot has unshat the bed
-  //   concurrency: {
-  //     group: "ci-${{ github.ref }}",
-  //     "cancel-in-progress": false,
-  //   },
   jobs: {
-    /**
-     * ${{ env.* }} limitations with reusable workflows:
-     *     1. environment variables are not inherited by sub-workflows
-     *     2. we can't reference ${{ env.* }} outside of a step
-     *
-     * This means we need a preliminary job that extracts whatever we need from env,
-     * and then pass those values as inputs to the reusable workflow.
-     */
     variables: {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         {
           id: "get_env",
           name: "Get environment variables",
-          // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
-
           run: `echo stage=\${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT`,
         },
       ],
@@ -52,30 +37,34 @@ export default {
         stage: "${{ steps.get_env.outputs.stage }}",
       },
     },
-    "build-daytona-snapshot": {
+    "push-daytona-snapshot": {
       needs: ["variables"],
       if: "needs.variables.outputs.stage == 'prd'",
-      uses: "./.github/workflows/build-daytona-snapshot.yml",
+      uses: "./.github/workflows/push-daytona-snapshot.yml",
       // @ts-expect-error - secrets inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
+        build_image: true,
+        docker_platform: "linux/amd64",
+        update_fly_doppler: true,
+        fly_doppler_configs_to_update: "dev,stg,prd",
+        update_doppler: true,
       },
     },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: ["variables", "build-daytona-snapshot"],
-      // Explicit condition (defensive - don't rely only on build-daytona-snapshot being skipped)
+      needs: ["variables", "push-daytona-snapshot"],
       if: "needs.variables.outputs.stage == 'prd'",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
-        daytona_snapshot_name: "${{ needs.build-daytona-snapshot.outputs.snapshot_name }}",
+        daytona_snapshot_name: "${{ needs.push-daytona-snapshot.outputs.snapshot_name }}",
       },
     },
     slack_failure: {
-      needs: ["variables", "build-daytona-snapshot", "deploy"],
+      needs: ["variables", "push-daytona-snapshot", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },
