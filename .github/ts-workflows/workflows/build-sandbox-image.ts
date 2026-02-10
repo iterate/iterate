@@ -29,7 +29,7 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "linux/amd64,linux/arm64",
         },
         skip_load: {
           description: "Skip --load into local Docker daemon (faster if image not needed locally)",
@@ -83,7 +83,7 @@ export default workflow({
           description: "Target platform(s): linux/amd64, linux/arm64, or linux/amd64,linux/arm64",
           required: false,
           type: "string",
-          default: "linux/amd64",
+          default: "linux/amd64,linux/arm64",
         },
         skip_load: {
           description: "Skip --load into local Docker daemon",
