@@ -14,18 +14,20 @@ minimumReleaseAgeExclude:
   - drizzle-kit
   - miniflare
   - wrangler
-  - '@cloudflare/sandbox'
+  - "@cloudflare/unenv-preset"
   - alchemy
-  - '@mmkal/jsonata'
-  - '@mmkal/json-schema-to-typescript'
-  - '@mariozechner/pi-ai'
-  - '@mariozechner/pi-coding-agent'
-  - '@mariozechner/pi-agent-core'
-  - '@mariozechner/pi-tui'
+  - "@cloudflare/sandbox"
+  - workerd
+  - "@mmkal/jsonata"
+  - "@mmkal/json-schema-to-typescript"
+  - "@mariozechner/pi-ai"
+  - "@mariozechner/pi-coding-agent"
+  - "@mariozechner/pi-agent-core"
+  - "@mariozechner/pi-tui"
   - pidnap
 
 onlyBuiltDependencies:
-  - '@tailwindcss/oxide'
+  - "@tailwindcss/oxide"
   - better-sqlite3
   - esbuild
   - sharp
@@ -33,7 +35,7 @@ onlyBuiltDependencies:
 
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
-  'agents>x402': '-'
-  'agents>viem': '-'
-  'quicktype-core>readable-stream': 'npm:vite-compatible-readable-stream@3.6.1'
-  'better-sqlite3': 'npm:libsql@0.5.22'
+  "agents>x402": "-"
+  "agents>viem": "-"
+  "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
+  "better-sqlite3": "npm:libsql@0.5.22"
