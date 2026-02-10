@@ -73,16 +73,13 @@ export class DiscordService {
       // Thread message - find existing session
       if (message.channel.isThread()) {
         const mapping = await this.sessionFromThreadID(message.channel.id);
-        if (!mapping) {
-          await message.reply({
-            content: "No stored session found for this thread.",
-          });
-          return;
-        }
+        if (!mapping) return;
         return this.sendDiscordThreadMessageToOpencodeSession(message, mapping.session);
       }
 
-      // New message in main channel - create session and thread
+      if (!this.isBotMentioned(message)) return;
+
+      // New message in channel with bot mention - create session and thread
       const directory = config.INITIAL_CWD;
       const session = await opencodeClient.session.create({ directory });
 
@@ -198,20 +195,20 @@ export class DiscordService {
   }
 
   private isAllowedMessage(message: Discord.Message) {
-    return (
-      !message.author.bot &&
-      message.guildId === config.TARGET_GUILD_ID &&
-      (message.channel.isThread()
-        ? message.channel.parentId === config.TARGET_CHANNEL_ID
-        : message.channel.id === config.TARGET_CHANNEL_ID)
-    );
+    return !message.author.bot && message.guildId === config.TARGET_GUILD_ID;
+  }
+
+  private isBotMentioned(message: Discord.Message) {
+    const botId = this.client.user?.id;
+    if (!botId) return false;
+    return message.mentions.has(botId);
   }
 
   private async sendDiscordThreadMessageToOpencodeSession(
     message: Discord.Message,
     session: OpenCode.Session,
   ) {
-    const content = message.content;
+    const content = message.cleanContent;
 
     // Shell mode: if message starts with !, execute as shell command
     if (content.startsWith("!")) {
@@ -364,7 +361,6 @@ export class DiscordService {
     const fullMessage = await reaction.message.fetch();
     if (!fullMessage.channel.isThread()) return;
     if (fullMessage.guildId !== config.TARGET_GUILD_ID) return;
-    if (fullMessage.channel.parentId !== config.TARGET_CHANNEL_ID) return;
 
     const mapping = await this.sessionFromThreadID(fullMessage.channel.id);
     if (!mapping) return;
