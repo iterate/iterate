@@ -28,6 +28,8 @@ import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { logger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
+import { queuer } from "./outbox/outbox-queuer.ts";
+import * as workerConfig from "./worker-config.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
@@ -175,6 +177,11 @@ const orpcHandler = new RPCHandler(workerRouter, {
     }),
   ],
   plugins: [new RequestHeadersPlugin()],
+  interceptors: [
+    onError((error, params) => {
+      logger.error(`[orpc] handler error ${params.request.url}`, error);
+    }),
+  ],
 });
 app.all("/api/orpc/*", async (c) => {
   const { matched, response } = await orpcHandler.handle(c.req.raw, {
@@ -248,6 +255,27 @@ export default class extends WorkerEntrypoint {
 
     // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
+  }
+
+  async scheduled(controller: ScheduledController) {
+    const db = getDb();
+    const cron = controller.cron as workerConfig.WorkerCronExpression;
+    switch (cron) {
+      case workerConfig.workerCrons.processOutboxQueue: {
+        try {
+          const result = await queuer.processQueue(db);
+          if (result !== "0 messages processed")
+            logger.info("Scheduled outbox queue processing completed", result);
+        } catch (error) {
+          logger.error("Scheduled outbox queue processing failed:", error);
+        }
+        break;
+      }
+      default: {
+        cron satisfies never;
+        logger.error("Unknown cron pattern:", controller);
+      }
+    }
   }
 }
 

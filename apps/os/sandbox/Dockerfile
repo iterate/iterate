@@ -41,6 +41,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && rm -rf /var/lib/apt/lists/* \
     && ln -s $(which fdfind) /usr/local/bin/fd
 
+# Install cloudflared (Cloudflare Tunnel client) — used to expose local ports via trycloudflare.com
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" && \
+    dpkg -i /tmp/cloudflared.deb && \
+    rm /tmp/cloudflared.deb
+
 RUN corepack enable
 
 # Global npm tools (as root for system-wide access)

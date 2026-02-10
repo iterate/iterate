@@ -18,6 +18,7 @@ import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
 import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import { workerCrons } from "./backend/worker-config.ts";
 import { ensureIteratePnpmStoreVolume, getLocalDockerEnvVars } from "./sandbox/test/helpers.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
@@ -583,6 +584,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
         adopt: true,
       },
     ],
+    crons: Object.values(workerCrons),
     wrangler: {
       main: "./backend/worker.ts",
     },
