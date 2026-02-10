@@ -1,5 +1,4 @@
 import { serve, type ServerType } from "@hono/node-server";
-import { startDiscordIfDefined } from "../discord/index.ts";
 import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
@@ -15,7 +14,6 @@ export const startServer = async (params: { port: number; hostname: string }) =>
     const server = serve({ fetch: app.fetch, ...params }, () => {
       console.log(`\n[daemon] Server running at http://${params.hostname}:${params.port}`);
 
-      startDiscordIfDefined();
       // Bootstrap: report status, fetch env vars, start refresh scheduler
       // Exit on errors so process manager can restart us
       bootstrapWithControlPlane().catch(async (err) => {
