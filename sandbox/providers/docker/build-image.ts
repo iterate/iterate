@@ -34,7 +34,6 @@ const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 
 // --- Config ---
 const buildPlatform = process.env.SANDBOX_BUILD_PLATFORM || "linux/amd64,linux/arm64";
-const isMultiPlatform = buildPlatform.includes(",");
 const skipLoad = process.env.SANDBOX_SKIP_LOAD === "true";
 const shouldUpdateDoppler = process.env.SANDBOX_UPDATE_DOPPLER !== "false";
 const dopplerConfigsToUpdate = process.env.SANDBOX_DOPPLER_CONFIGS?.split(",").filter(Boolean);

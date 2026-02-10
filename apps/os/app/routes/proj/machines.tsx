@@ -89,7 +89,7 @@ function ProjectMachinesPage() {
   const sandboxProvider = project.sandboxProvider;
 
   const { data: defaultSnapshots } = useSuspenseQuery(
-    trpc.machine.getDefaultSnapshots.queryOptions({}),
+    trpc.machine.getDefaultSnapshots.queryOptions(),
   );
   const defaultSnapshotForProvider =
     defaultSnapshots[sandboxProvider as keyof typeof defaultSnapshots] ?? "";
@@ -121,7 +121,7 @@ function ProjectMachinesPage() {
     onSuccess: () => {
       setCreateSheetOpen(false);
       setNewMachineName(`${sandboxProvider}-${dateSlug()}`);
-      setSnapshotOverride(sandboxProvider === "daytona" ? DEFAULT_DAYTONA_SNAPSHOT_NAME : "");
+      setSnapshotOverride(defaultSnapshotForProvider);
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
