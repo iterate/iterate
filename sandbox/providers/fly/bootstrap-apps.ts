@@ -4,9 +4,9 @@ import { z } from "zod/v4";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const APP_BY_DOPPLER_CONFIG = {
-  dev: "dev",
-  stg: "stg",
-  prd: "prd",
+  dev: "iterate-dev",
+  stg: "iterate-stg",
+  prd: "iterate-prd",
 } as const;
 const SHARED_IMAGE_REGISTRY_APP = "iterate-sandbox";
 

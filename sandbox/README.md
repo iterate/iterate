@@ -41,9 +41,9 @@ Two separate concepts:
 1. Machine app names (runtime):
    - Controlled by `FLY_APP_NAME_PREFIX` (per Doppler config)
    - Expected values:
-     - `dev`: `dev`
-     - `stg`: `stg`
-     - `prd`: `prd`
+     - `dev`: `iterate-dev`
+     - `stg`: `iterate-stg`
+     - `prd`: `iterate-prd`
    - Current behavior: each environment uses exactly one Fly app (all machines in that stage share the same app).
    - This is temporary and may be changed later.
 2. Image registry app (build/push):
@@ -54,7 +54,7 @@ Two separate concepts:
 
 Why split:
 
-- runtime isolation by environment (`dev`, `stg`, `prd`)
+- runtime isolation by environment (`iterate-dev`, `iterate-stg`, `iterate-prd`)
 - one shared image artifact source (`iterate-sandbox`)
 - simpler CI image build/push flow
 
@@ -203,12 +203,12 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 ```bash
 # Create/ensure Fly apps and sync Doppler
 # - shared image app: iterate-sandbox
-# - machine app prefixes: dev, stg, prd
+# - machine app prefixes: iterate-dev, iterate-stg, iterate-prd
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
-pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- 24h stop iterate-dev    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- 7d delete iterate-stg   # delete machines idle >7d
 ```
 
 ## Testing
