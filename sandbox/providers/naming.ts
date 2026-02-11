@@ -1,6 +1,6 @@
 export const MAX_CANONICAL_MACHINE_NAME_LENGTH = 63;
 
-function sanitizeNamePart(value: string): string {
+export function sanitizeNamePart(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")

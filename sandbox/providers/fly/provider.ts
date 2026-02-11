@@ -7,6 +7,7 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
+import { MAX_CANONICAL_MACHINE_NAME_LENGTH, sanitizeNamePart } from "../naming.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
@@ -19,7 +20,6 @@ const DEFAULT_FLY_REGION = "lhr";
 const DEFAULT_FLY_MACHINE_CPUS = 2;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
-const APP_NAME_MAX_LENGTH = 63;
 const LIST_APPS_PAGE_SIZE = 100;
 const FLY_MACHINE_NAME = "sandbox";
 
@@ -122,14 +122,7 @@ function asString(value: unknown): string | undefined {
 }
 
 function sanitizeFlyAppName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "")
-    .slice(0, APP_NAME_MAX_LENGTH)
-    .replace(/-+$/, "");
+  return sanitizeNamePart(value).slice(0, MAX_CANONICAL_MACHINE_NAME_LENGTH).replace(/-+$/, "");
 }
 
 function isSandboxAppName(params: { env: FlyEnv; appName: string }): boolean {
