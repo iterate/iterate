@@ -39,6 +39,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Minimal Container Tests", () => {
   // Override provider entrypoint args to skip pidnap - entry.sh will exec these directly
   test.scoped({
     sandboxOptions: {
+      externalId: "test-minimal-test",
       id: "minimal-test",
       name: "Minimal Test",
       envVars: {},
@@ -165,6 +166,7 @@ const hasApiKeys = Boolean(process.env.OPENAI_API_KEY && process.env.ANTHROPIC_A
 describe.runIf(RUN_SANDBOX_TESTS && hasApiKeys)("Agent CLI Tests", () => {
   test.scoped({
     sandboxOptions: {
+      externalId: "test-agent-cli-test",
       id: "agent-cli-test",
       name: "Agent CLI Test",
       entrypointArguments: ["sleep", "infinity"],

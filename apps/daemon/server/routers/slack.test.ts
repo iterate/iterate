@@ -38,6 +38,16 @@ vi.mock("tinyexec", () => ({
 
 const { slackRouter } = await import("./slack.ts");
 
+function buildAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    path: "/slack/ts-default",
+    workingDirectory: "/workspace/repo",
+    metadata: null,
+    activeRoute: null,
+    ...overrides,
+  };
+}
+
 describe("slack router", () => {
   const fetchSpy = vi.fn();
 
@@ -47,6 +57,11 @@ describe("slack router", () => {
     getOrCreateAgentMock.mockReset();
     getAgentMock.mockReset();
     subscribeToAgentChangesMock.mockReset();
+    getOrCreateAgentMock.mockResolvedValue({
+      wasNewlyCreated: false,
+      route: null,
+      agent: buildAgent(),
+    });
     tinyexecMock.mockReset();
     tinyexecMock.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
     vi.stubGlobal("fetch", fetchSpy);
@@ -54,6 +69,7 @@ describe("slack router", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   describe("new thread @mention (case 1)", () => {
@@ -62,7 +78,11 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -99,7 +119,11 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -137,7 +161,11 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const payload = {
@@ -176,7 +204,11 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${threadTs.replace(".", "-")}` }),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -213,7 +245,11 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${threadTs.replace(".", "-")}` }),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const payload = {
@@ -447,13 +483,222 @@ describe("slack router", () => {
     });
   });
 
+  describe("!debug command", () => {
+    it("handles !debug in-thread without forwarding prompt and posts debug details", async () => {
+      const threadTs = "2121212121.212121";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
+      vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
+      vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
+      vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getAgentMock.mockResolvedValue({
+        path: agentPath,
+        workingDirectory: "/workspace/repo",
+        metadata: null,
+        activeRoute: {
+          destination: "/opencode/sessions/sess_abc123",
+          metadata: {
+            agentHarness: "opencode",
+            opencodeSessionId: "sess_abc123",
+          },
+        },
+      });
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_1",
+          event: {
+            type: "message",
+            thread_ts: threadTs,
+            ts: "2121212121.313131",
+            text: "!debug",
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "2121212121.313131",
+            channel_type: "channel",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+
+      expect(getAgentMock).toHaveBeenCalledTimes(1);
+      expect(getAgentMock).toHaveBeenCalledWith({ path: agentPath });
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      const postMessageCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("chat.postMessage"),
+      );
+      expect(postMessageCall).toBeDefined();
+      expect(postMessageCall![1][2]).toContain("sess_abc123");
+      expect(postMessageCall![1][2]).toContain("Harness Web UI (direct proxy)");
+      expect(postMessageCall![1][2]).toContain("terminal?command=");
+
+      const removeCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.remove"),
+      );
+      expect(removeCall).toBeDefined();
+      expect(removeCall![1][2]).toContain("thinking_face");
+    });
+
+    it("does not run !debug when no agent exists for non-mention FYI messages", async () => {
+      const threadTs = "3131313131.313131";
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getAgentMock.mockResolvedValue(null);
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_2",
+          event: {
+            type: "message",
+            thread_ts: threadTs,
+            ts: "3131313131.414141",
+            text: "!debug",
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "3131313131.414141",
+            channel_type: "channel",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("no mention and no existing agent");
+
+      const postMessageCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("chat.postMessage"),
+      );
+      expect(postMessageCall).toBeUndefined();
+
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("waits for pending reactions.add before cleanup remove on !debug intercept", async () => {
+      const threadTs = "4141414141.414141";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+      let releaseAdd: () => void = () => {};
+      let hasPendingAdd = false;
+
+      tinyexecMock.mockImplementation((...args: unknown[]) => {
+        const code = Array.isArray(args[1]) ? args[1][2] : undefined;
+        if (typeof code === "string" && code.includes("reactions.add")) {
+          return new Promise((resolve) => {
+            hasPendingAdd = true;
+            releaseAdd = () => resolve({ exitCode: 0, stdout: "", stderr: "" });
+          });
+        }
+
+        return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+      });
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: {
+          path: agentPath,
+          workingDirectory: "/workspace/repo",
+          metadata: null,
+          activeRoute: {
+            destination: "/opencode/sessions/sess_race",
+            metadata: {
+              agentHarness: "opencode",
+              opencodeSessionId: "sess_race",
+            },
+          },
+        },
+      });
+
+      const responsePromise = slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_race_1",
+          event: {
+            type: "app_mention",
+            thread_ts: threadTs,
+            ts: "4141414141.515151",
+            text: `<@${botUserId}> !debug`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "4141414141.515151",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      for (let i = 0; i < 10 && !hasPendingAdd; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const removeBeforeRelease = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.remove"),
+      );
+      expect(removeBeforeRelease).toBeUndefined();
+
+      expect(hasPendingAdd).toBe(true);
+      releaseAdd();
+
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+
+      const commandCalls = tinyexecMock.mock.calls
+        .map((call: unknown[]) => (Array.isArray(call[1]) ? call[1][2] : ""))
+        .filter((value): value is string => typeof value === "string");
+      const addIndex = commandCalls.findIndex((call) => call.includes("reactions.add"));
+      const removeIndex = commandCalls.findIndex((call) => call.includes("reactions.remove"));
+
+      expect(addIndex).toBeGreaterThanOrEqual(0);
+      expect(removeIndex).toBeGreaterThan(addIndex);
+    });
+  });
+
   describe("immediate emoji reaction", () => {
     it("sends eyes emoji immediately on @mention before getOrCreateAgent", async () => {
       const ts = "5050505050.111111";
       const botUserId = "U_BOT";
 
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -541,7 +786,11 @@ describe("slack router", () => {
 
       // ── First webhook: new thread mention ──
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -578,7 +827,11 @@ describe("slack router", () => {
 
       // ── Second webhook: mid-thread mention (same thread, different message) ──
       selectLimitQueue.push([]); // storeEvent dedup check
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const response2 = await slackRouter.request("/webhook", {

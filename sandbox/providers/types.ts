@@ -49,6 +49,8 @@ export interface SnapshotInfo {
  * Options for creating a new sandbox.
  */
 export interface CreateSandboxOptions {
+  /** Canonical, provider-agnostic external machine identifier. */
+  externalId: string;
   /** Unique identifier for the sandbox (used for naming) */
   id?: string;
   /** Human-readable name for the sandbox */

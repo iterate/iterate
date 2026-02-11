@@ -1,33 +1,24 @@
-import { Pool, neonConfig } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
+import { Pool, neonConfig } from "@neondatabase/serverless";
 import { env } from "../../env.ts";
-import { isNonProd } from "../../env-client.ts";
 import * as schema from "./schema.ts";
 
-/**
- * In non-prod, route @neondatabase/serverless through the local neon proxy
- * (docker service `neon-proxy`) for WebSocket support.
- * Production targets Neon cloud which works out of the box.
- *
- * See https://github.com/TimoWilhelm/local-neon-http-proxy
- */
-if (isNonProd && "LOCAL_DOCKER_NEON_PROXY_PORT" in env) {
-  const proxyPort = String((env as Record<string, unknown>)["LOCAL_DOCKER_NEON_PROXY_PORT"] ?? "");
-  if (proxyPort) {
-    neonConfig.useSecureWebSocket = false;
-    neonConfig.wsProxy = (host) => `${host}:${proxyPort}/v1`;
-  }
-}
+neonConfig.webSocketConstructor = WebSocket;
+neonConfig.pipelineConnect = false;
+neonConfig.useSecureWebSocket = !env.DATABASE_URL?.includes("localhost");
+neonConfig.wsProxy = (host, port) =>
+  host === "localhost"
+    ? `localhost:${env.LOCAL_DOCKER_NEON_PROXY_PORT}/v2?address=${host}:${port}`
+    : `${host}/v2?address=${host}:${port}`;
 
-export const getDb = () => {
-  const pool = new Pool({ connectionString: env.DATABASE_URL });
-  return drizzle({ client: pool, schema, casing: "snake_case" });
-};
+const createPool = (databaseUrl: string) => new Pool({ connectionString: databaseUrl, max: 3 });
+
+export const getDb = () =>
+  drizzle({ client: createPool(env.DATABASE_URL), schema, casing: "snake_case" });
 
 /** Accepts any env-like object with DATABASE_URL */
 export const getDbWithEnv = (envParam: { DATABASE_URL: string }) => {
-  const pool = new Pool({ connectionString: envParam.DATABASE_URL });
-  return drizzle({ client: pool, schema, casing: "snake_case" });
+  return drizzle({ client: createPool(envParam.DATABASE_URL), schema, casing: "snake_case" });
 };
 
 export type DB = ReturnType<typeof getDb>;

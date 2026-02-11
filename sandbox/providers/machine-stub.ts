@@ -2,15 +2,16 @@ import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox, SandboxFetcher } from "./types.ts";
+import { asRecord } from "./utils.ts";
 
 export interface CreateMachineConfig {
   machineId: string;
+  externalId: string;
   name: string;
   envVars: Record<string, string>;
 }
 
 export interface MachineStubResult {
-  externalId: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -45,6 +46,9 @@ type DockerMetadata = {
     imageName?: string;
     syncRepo?: boolean;
   };
+  docker?: {
+    containerRef?: string;
+  };
   snapshotName?: string;
   ports?: Record<string, number>;
   port?: number;
@@ -53,10 +57,17 @@ type DockerMetadata = {
 type FlyMetadata = {
   snapshotName?: string;
   providerSnapshotId?: string;
+  flyMachineCpus?: number;
+  fly?: {
+    machineId?: string;
+  };
 };
 
 type DaytonaMetadata = {
   snapshotName?: string;
+  daytona?: {
+    sandboxId?: string;
+  };
 };
 
 type SandboxHandleProvider<TSandbox extends Sandbox> = {
@@ -80,6 +91,19 @@ function asBoolean(value: unknown): boolean | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function parsePortFromUrl(url: string): number {
@@ -145,9 +169,8 @@ function createLocalStub(metadata: Record<string, unknown>): MachineStub {
 
   return {
     type: "local",
-    async create(machineConfig: CreateMachineConfig): Promise<MachineStubResult> {
+    async create(): Promise<MachineStubResult> {
       return {
-        externalId: machineConfig.machineId,
         metadata: {
           host,
           ports,
@@ -177,7 +200,7 @@ function createSandboxStub<TSandbox extends Sandbox>(options: {
   createResult(params: {
     config: CreateMachineConfig;
     sandbox: TSandbox;
-  }): Promise<MachineStubResult>;
+  }): Promise<Record<string, unknown> | undefined>;
   archiveSandbox?: (sandbox: TSandbox) => Promise<void>;
 }): MachineStub {
   const { type, externalId, provider, createSandbox, createResult, archiveSandbox } = options;
@@ -198,7 +221,8 @@ function createSandboxStub<TSandbox extends Sandbox>(options: {
     async create(config: CreateMachineConfig): Promise<MachineStubResult> {
       const sandbox = await createSandbox(config);
       sandboxHandle = sandbox;
-      return createResult({ config, sandbox });
+      const metadata = await createResult({ config, sandbox });
+      return metadata ? { metadata } : {};
     },
     async start(): Promise<void> {
       await getSandbox().start();
@@ -257,8 +281,10 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
   const localDockerConfig = typedMetadata.localDocker ?? {};
+  const dockerMetadata = asRecord(typedMetadata.docker);
   const imageName = asString(localDockerConfig.imageName) ?? asString(typedMetadata.snapshotName);
   const syncRepo = asBoolean(localDockerConfig.syncRepo);
+  const knownContainerRef = asString(dockerMetadata.containerRef);
 
   const provider = new DockerProvider(
     toRawEnv({
@@ -274,7 +300,10 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const knownPorts = resolveDockerPortsFromMetadata(typedMetadata);
   const providerHandle: SandboxHandleProvider<DockerSandbox> = {
     get(providerId) {
-      return provider.getWithPorts({ providerId, knownPorts: { ...knownPorts } });
+      return provider.getWithPorts({
+        providerId: knownContainerRef ?? providerId,
+        knownPorts: { ...knownPorts },
+      });
     },
   };
 
@@ -284,13 +313,14 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
     provider: providerHandle,
     async createSandbox(config: CreateMachineConfig) {
       return provider.create({
+        externalId: config.externalId,
         id: config.machineId,
         name: config.name,
         envVars: config.envVars,
         ...(imageName ? { providerSnapshotId: imageName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineStubResult> {
+    async createResult({ sandbox }): Promise<Record<string, unknown>> {
       const daemonPortPairs = await Promise.all(
         Object.entries(LOCAL_SERVICE_KEY_BY_PORT)
           .filter(([port]) => Number(port) !== 9876)
@@ -307,17 +337,17 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
       ]);
 
       return {
-        externalId: sandbox.providerId,
-        metadata: {
-          ...(imageName || syncRepo !== undefined
-            ? {
-                localDocker: {
-                  ...(imageName ? { imageName } : {}),
-                  ...(syncRepo === undefined ? {} : { syncRepo }),
-                },
-              }
-            : {}),
-          ports,
+        ...(imageName || syncRepo !== undefined
+          ? {
+              localDocker: {
+                ...(imageName ? { imageName } : {}),
+                ...(syncRepo === undefined ? {} : { syncRepo }),
+              },
+            }
+          : {}),
+        ports,
+        docker: {
+          containerRef: sandbox.runtimeId ?? sandbox.providerId,
         },
       };
     },
@@ -329,24 +359,31 @@ function createDaytonaStub(options: CreateMachineStubOptions): MachineStub {
   const provider = new DaytonaProvider(toRawEnv({ env }));
   const typedMetadata = metadata as DaytonaMetadata;
   const snapshotName = typedMetadata.snapshotName;
+  const daytonaMetadata = asRecord(typedMetadata.daytona);
+  const knownSandboxId = asString(daytonaMetadata.sandboxId);
 
   return createSandboxStub({
     type: "daytona",
     externalId,
-    provider,
+    provider: {
+      get(providerId) {
+        return provider.getWithSandboxId({ providerId, sandboxId: knownSandboxId });
+      },
+    },
     async createSandbox(config: CreateMachineConfig) {
       return provider.create({
+        externalId: config.externalId,
         id: config.machineId,
         name: config.name,
         envVars: config.envVars,
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineStubResult> {
+    async createResult({ sandbox }): Promise<Record<string, unknown>> {
       return {
-        externalId: sandbox.providerId,
-        metadata: {
-          snapshotName: snapshotName ?? provider.defaultSnapshotId,
+        snapshotName: snapshotName ?? provider.defaultSnapshotId,
+        daytona: {
+          sandboxId: sandbox.runtimeSandboxId ?? sandbox.providerId,
         },
       };
     },
@@ -358,27 +395,40 @@ function createDaytonaStub(options: CreateMachineStubOptions): MachineStub {
 
 function createFlyStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
-  const provider = new FlyProvider(toRawEnv({ env }));
   const typedMetadata = metadata as FlyMetadata;
   const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
+  const flyMachineCpus = asPositiveInteger(typedMetadata.flyMachineCpus);
+  const provider = new FlyProvider(
+    toRawEnv({
+      env,
+      overrides: flyMachineCpus ? { FLY_DEFAULT_CPUS: String(flyMachineCpus) } : {},
+    }),
+  );
+  const flyMetadata = asRecord(typedMetadata.fly);
+  const knownMachineId = asString(flyMetadata.machineId);
 
   return createSandboxStub({
     type: "fly",
     externalId,
-    provider,
+    provider: {
+      get(providerId) {
+        return provider.getWithMachineId({ providerId, machineId: knownMachineId });
+      },
+    },
     async createSandbox(config: CreateMachineConfig) {
       return provider.create({
+        externalId: config.externalId,
         id: config.machineId,
         name: config.name,
         envVars: config.envVars,
         ...(snapshotName ? { providerSnapshotId: snapshotName } : {}),
       });
     },
-    async createResult({ sandbox }): Promise<MachineStubResult> {
+    async createResult({ sandbox }): Promise<Record<string, unknown>> {
       return {
-        externalId: sandbox.providerId,
-        metadata: {
-          snapshotName: snapshotName ?? provider.defaultSnapshotId,
+        snapshotName: snapshotName ?? provider.defaultSnapshotId,
+        fly: {
+          machineId: sandbox.machineId,
         },
       };
     },

@@ -123,11 +123,8 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   // For Daytona, we need special auth handling
   if (machineRecord.type === "daytona") {
-    if (!/^[a-zA-Z0-9-]+$/.test(externalId)) {
-      logger.error("Invalid sandbox ID format", {
-        sandboxId: externalId,
-        machineId: machineRecord.id,
-      });
+    if (!externalId.trim()) {
+      logger.error("Invalid sandbox identifier", { externalId, machineId: machineRecord.id });
       return c.json({ error: "Invalid sandbox configuration" }, 500);
     }
 
@@ -147,7 +144,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     // Handle 401 - lazy refresh
     if (response.status === 401) {
       logger.info("Received 401 from Daytona, refreshing token", {
-        sandboxId: externalId,
+        sandboxIdentifier: externalId,
         port: portNum,
       });
       try {

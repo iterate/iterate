@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { z } from "zod/v4";
 import {
   Sandbox,
@@ -8,7 +7,8 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
-import { slugify } from "../utils.ts";
+import { MAX_CANONICAL_MACHINE_NAME_LENGTH, sanitizeNamePart } from "../naming.ts";
+import { asRecord } from "../utils.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
@@ -18,12 +18,11 @@ const DEFAULT_WEB_INTERNAL_PORT = 3000;
 const DEFAULT_SERVICE_PORTS = [3001, 4096, 7777, 9876];
 const DEFAULT_FLY_ORG = "iterate";
 const DEFAULT_FLY_REGION = "lhr";
-const DEFAULT_FLY_MACHINE_CPUS = 2;
+const DEFAULT_FLY_MACHINE_CPUS = 4;
 const DEFAULT_FLY_MACHINE_MEMORY_MB = 4096;
 const EXEC_RETRY_LIMIT = 3;
-const APP_NAME_MAX_LENGTH = 63;
-const PROVIDER_ID_SEPARATOR = ":";
 const LIST_APPS_PAGE_SIZE = 100;
+const FLY_MACHINE_NAME = "sandbox";
 
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string(),
@@ -36,7 +35,7 @@ const FlyEnv = z.object({
     ),
   FLY_DEFAULT_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
   FLY_DEFAULT_MEMORY_MB: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_MEMORY_MB),
-  FLY_APP_NAME_PREFIX: z.string(),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
   FLY_NETWORK: z.string().optional(),
   FLY_BASE_DOMAIN: z.string().default("fly.dev"),
 });
@@ -112,57 +111,17 @@ const FLY_ORG_APPS_QUERY = `
   }
 `;
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
-}
-
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function encodeProviderId(appName: string, machineId: string): string {
-  return `${appName}${PROVIDER_ID_SEPARATOR}${machineId}`;
-}
-
-function decodeProviderId(params: {
-  providerId: string;
-  fallbackAppName: string;
-}): { appName: string; machineId: string } | null {
-  const { providerId, fallbackAppName } = params;
-  const trimmed = providerId.trim();
-  if (!trimmed) return null;
-
-  const separatorIndex = trimmed.indexOf(PROVIDER_ID_SEPARATOR);
-  if (separatorIndex <= 0 || separatorIndex >= trimmed.length - 1) {
-    // Legacy ids only stored machine id.
-    return {
-      appName: fallbackAppName,
-      machineId: trimmed,
-    };
-  }
-
-  return {
-    appName: trimmed.slice(0, separatorIndex),
-    machineId: trimmed.slice(separatorIndex + 1),
-  };
-}
-
-function sanitizeAppNamePart(value: string): string {
-  return slugify(value).replace(/^-+/, "").replace(/-+$/, "");
-}
-
-function resolveSandboxAppName(prefix: string): string {
-  // Temporary model: one Fly app per stage. Keep env var name for forward compatibility.
-  const appName = sanitizeAppNamePart(prefix).slice(0, APP_NAME_MAX_LENGTH).replace(/-+$/, "");
-  return appName || "iterate-sandbox";
+function sanitizeFlyAppName(value: string): string {
+  return sanitizeNamePart(value).slice(0, MAX_CANONICAL_MACHINE_NAME_LENGTH).replace(/-+$/, "");
 }
 
 function isSandboxAppName(params: { env: FlyEnv; appName: string }): boolean {
   const { env, appName } = params;
-  return appName === resolveSandboxAppName(env.FLY_APP_NAME_PREFIX);
+  return appName.startsWith(`${env.SANDBOX_NAME_PREFIX}-`);
 }
 
 async function flyApi<T = unknown>(params: {
@@ -404,20 +363,55 @@ function resolveState(payload: unknown): ProviderState {
   };
 }
 
+function resolveSandboxMachine(payload: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(payload)) return null;
+  const records = payload.map(asRecord);
+
+  const byName = records.find((record) => asString(record.name) === FLY_MACHINE_NAME);
+  if (byName) return byName;
+
+  const byMetadata = records.find((record) => {
+    const config = asRecord(record.config);
+    const metadata = asRecord(config.metadata);
+    return metadata["com.iterate.sandbox"] === "true";
+  });
+  if (byMetadata) return byMetadata;
+
+  return records.length === 1 ? records[0] : null;
+}
+
 export class FlySandbox extends Sandbox {
   readonly type = "fly" as const;
   readonly providerId: string;
   readonly appName: string;
-  readonly machineId: string;
+  machineId: string | undefined;
 
   private readonly env: FlyEnv;
 
-  constructor(params: { env: FlyEnv; appName: string; machineId: string }) {
+  constructor(params: { env: FlyEnv; appName: string; machineId?: string }) {
     super();
     this.env = params.env;
     this.appName = params.appName;
     this.machineId = params.machineId;
-    this.providerId = encodeProviderId(this.appName, this.machineId);
+    this.providerId = this.appName;
+  }
+
+  private async resolveMachineId(): Promise<string> {
+    if (this.machineId) return this.machineId;
+
+    const machinesPayload = await flyApi<unknown>({
+      env: this.env,
+      method: "GET",
+      path: `/v1/apps/${encodeURIComponent(this.appName)}/machines`,
+    });
+    const machine = resolveSandboxMachine(machinesPayload);
+    const machineId = machine ? asString(machine.id) : undefined;
+    if (!machineId) {
+      throw new Error(`Could not resolve Fly machine for app ${this.appName}`);
+    }
+
+    this.machineId = machineId;
+    return machineId;
   }
 
   async getBaseUrl(opts: { port: number }): Promise<string> {
@@ -433,13 +427,15 @@ export class FlySandbox extends Sandbox {
       throw new Error("Fly exec requires at least one command token");
     }
 
+    const machineId = await this.resolveMachineId();
+
     let payload: unknown;
     for (let attempt = 1; attempt <= EXEC_RETRY_LIMIT; attempt += 1) {
       try {
         payload = await flyApi<unknown>({
           env: this.env,
           method: "POST",
-          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/exec`,
+          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}/exec`,
           body: {
             command: cmd,
             timeout: 60,
@@ -472,10 +468,11 @@ export class FlySandbox extends Sandbox {
 
   async getState(): Promise<ProviderState> {
     try {
+      const machineId = await this.resolveMachineId();
       const payload = await flyApi<unknown>({
         env: this.env,
         method: "GET",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}`,
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}`,
       });
       return resolveState(payload);
     } catch (error) {
@@ -487,12 +484,14 @@ export class FlySandbox extends Sandbox {
   }
 
   async start(): Promise<void> {
+    const machineId = await this.resolveMachineId();
+
     for (let attempt = 1; attempt <= EXEC_RETRY_LIMIT; attempt += 1) {
       try {
         await flyApi({
           env: this.env,
           method: "POST",
-          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/start`,
+          path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}/start`,
           body: {},
         });
         break;
@@ -507,24 +506,25 @@ export class FlySandbox extends Sandbox {
     await waitForState({
       env: this.env,
       appName: this.appName,
-      machineId: this.machineId,
+      machineId,
       state: "started",
     });
   }
 
   async stop(): Promise<void> {
     try {
+      const machineId = await this.resolveMachineId();
       await flyApi({
         env: this.env,
         method: "POST",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/stop`,
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}/stop`,
         body: {},
       });
 
       await waitForState({
         env: this.env,
         appName: this.appName,
-        machineId: this.machineId,
+        machineId,
         state: "stopped",
       });
     } catch {
@@ -533,11 +533,13 @@ export class FlySandbox extends Sandbox {
   }
 
   async restart(): Promise<void> {
+    const machineId = await this.resolveMachineId();
+
     try {
       await flyApi({
         env: this.env,
         method: "POST",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}/restart`,
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}/restart`,
         body: {},
       });
     } catch {
@@ -549,23 +551,32 @@ export class FlySandbox extends Sandbox {
     await waitForState({
       env: this.env,
       appName: this.appName,
-      machineId: this.machineId,
+      machineId,
       state: "started",
     });
   }
 
   async delete(): Promise<void> {
     try {
+      const machineId = await this.resolveMachineId();
       await flyApi({
         env: this.env,
         method: "DELETE",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(this.machineId)}?force=true`,
+        path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}?force=true`,
       });
     } catch {
       // best effort cleanup
     }
-    // Intentionally do not delete Fly apps here.
-    // Apps are shared per environment (`iterate-dev`/`iterate-stg`/`iterate-prd`).
+
+    try {
+      await flyApi({
+        env: this.env,
+        method: "DELETE",
+        path: `/v1/apps/${encodeURIComponent(this.appName)}`,
+      });
+    } catch {
+      // best effort cleanup
+    }
   }
 }
 
@@ -585,8 +596,18 @@ export class FlyProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<FlySandbox> {
-    const suffix = randomBytes(4).toString("hex");
-    const base = slugify(opts.id ?? opts.name) || "sandbox";
+    // Fly app names can be rejected by abuse filters even when they are technically valid
+    // (for example names containing certain phishing-related words). Our canonical
+    // external ID currently includes project slug; if this becomes noisy in production,
+    // switch the canonical builder to use project ID instead of project slug.
+    const appName = sanitizeFlyAppName(opts.externalId);
+    if (!appName) {
+      throw new Error("Fly create requires a non-empty externalId");
+    }
+    if (appName !== opts.externalId) {
+      throw new Error(`Fly externalId '${opts.externalId}' contains invalid app-name characters`);
+    }
+
     const entrypointArguments = opts.entrypointArguments;
     const hasEntrypointArguments = Boolean(entrypointArguments?.length);
     const envVars = {
@@ -595,22 +616,25 @@ export class FlyProvider extends SandboxProvider {
         opts.envVars?.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS ?? ".fly.dev",
     };
 
-    const appName = resolveSandboxAppName(this.env.FLY_APP_NAME_PREFIX);
-
     await ensureFlyAppExists({ env: this.env, appName });
     await ensureFlyIngress({ env: this.env, appName });
-    const flyRegion = this.env.FLY_DEFAULT_REGION;
+    const snapshotId = opts.providerSnapshotId ?? this.defaultSnapshotId;
+    if (snapshotId.includes("registry.fly.io/iterate-sandbox-image:")) {
+      throw new Error(
+        `FLY_DEFAULT_IMAGE is still using deprecated registry app 'iterate-sandbox-image': ${snapshotId}. Update Doppler to registry.fly.io/iterate-sandbox:sha-...`,
+      );
+    }
 
     const createPayload = await flyApi<unknown>({
       env: this.env,
       method: "POST",
       path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
       body: {
-        name: `sandbox-${base}-${suffix}`.slice(0, 63),
-        region: flyRegion,
+        name: FLY_MACHINE_NAME,
+        region: this.env.FLY_DEFAULT_REGION,
         skip_launch: false,
         config: {
-          image: opts.providerSnapshotId ?? this.defaultSnapshotId,
+          image: snapshotId,
           env: envVars,
           guest: {
             cpu_kind: "shared",
@@ -622,6 +646,7 @@ export class FlyProvider extends SandboxProvider {
           metadata: {
             "com.iterate.sandbox": "true",
             "com.iterate.machine_type": "fly",
+            "com.iterate.external_id": opts.externalId,
           },
           ...(hasEntrypointArguments ? { init: { exec: entrypointArguments } } : {}),
         },
@@ -639,17 +664,17 @@ export class FlyProvider extends SandboxProvider {
   }
 
   get(providerId: string): FlySandbox | null {
-    const fallbackAppName = resolveSandboxAppName(this.env.FLY_APP_NAME_PREFIX);
-    const decoded = decodeProviderId({
-      providerId,
-      fallbackAppName,
-    });
-    if (!decoded) return null;
+    return this.getWithMachineId({ providerId });
+  }
+
+  getWithMachineId(params: { providerId: string; machineId?: string }): FlySandbox | null {
+    const appName = sanitizeFlyAppName(params.providerId);
+    if (!appName) return null;
 
     return new FlySandbox({
       env: this.env,
-      appName: decoded.appName,
-      machineId: decoded.machineId,
+      appName,
+      machineId: params.machineId,
     });
   }
 
@@ -702,24 +727,20 @@ export class FlyProvider extends SandboxProvider {
     const sandboxes: SandboxInfo[] = [];
 
     for (const list of lists) {
-      const machineList = Array.isArray(list.machinesPayload) ? list.machinesPayload : [];
-      for (const machine of machineList) {
-        const machineRecord = asRecord(machine);
-        const machineId = asString(machineRecord.id);
-        if (!machineId) continue;
+      const machine = resolveSandboxMachine(list.machinesPayload);
+      if (!machine) continue;
 
-        const config = asRecord(machineRecord.config);
-        const metadata = asRecord(config.metadata);
-        const isSandbox = metadata["com.iterate.sandbox"] === "true";
-        if (!isSandbox) continue;
+      const config = asRecord(machine.config);
+      const metadata = asRecord(config.metadata);
+      const isSandbox = metadata["com.iterate.sandbox"] === "true";
+      if (!isSandbox) continue;
 
-        sandboxes.push({
-          type: "fly" as const,
-          providerId: encodeProviderId(list.appName, machineId),
-          name: asString(machineRecord.name) ?? machineId,
-          state: asString(machineRecord.state) ?? "unknown",
-        });
-      }
+      sandboxes.push({
+        type: "fly" as const,
+        providerId: list.appName,
+        name: list.appName,
+        state: asString(machine.state) ?? "unknown",
+      });
     }
 
     return sandboxes;
