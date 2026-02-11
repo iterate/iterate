@@ -15,6 +15,47 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
+import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
+
+/**
+ * Derive the correct provider-specific snapshot/image name from a short SHA.
+ *
+ * Naming conventions (must match CI build outputs):
+ *   Daytona: iterate-sandbox-sha-{shortSha}
+ *   Fly:     registry.fly.io/{app}:sha-{shortSha}  (prefix extracted from FLY_DEFAULT_IMAGE)
+ *   Docker:  registry.depot.dev/{id}:sha-{shortSha} (prefix extracted from DOCKER_DEFAULT_IMAGE)
+ *
+ * Returns undefined when the provider's default image env var is missing
+ * (can't derive the registry prefix).
+ */
+function snapshotNameForProvider(
+  provider: ProjectSandboxProvider,
+  shortSha: string,
+  env: CloudflareEnv,
+): string | undefined {
+  switch (provider) {
+    case "daytona":
+      return `iterate-sandbox-sha-${shortSha}`;
+    case "fly": {
+      // FLY_DEFAULT_IMAGE = "registry.fly.io/<app>:sha-<sha>"
+      const flyDefault = env.FLY_DEFAULT_IMAGE;
+      if (!flyDefault) return undefined;
+      const colonIdx = flyDefault.lastIndexOf(":");
+      if (colonIdx === -1) return undefined;
+      return `${flyDefault.slice(0, colonIdx)}:sha-${shortSha}`;
+    }
+    case "docker": {
+      // DOCKER_DEFAULT_IMAGE = "registry.depot.dev/<id>:sha-<sha>"
+      const dockerDefault = env.DOCKER_DEFAULT_IMAGE;
+      if (!dockerDefault) return undefined;
+      const colonIdx = dockerDefault.lastIndexOf(":");
+      if (colonIdx === -1) return undefined;
+      return `${dockerDefault.slice(0, colonIdx)}:sha-${shortSha}`;
+    }
+    default:
+      return undefined;
+  }
+}
 
 export type GitHubOAuthStateData = {
   projectId: string;
@@ -699,12 +740,12 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
   }
 
   const headSha = workflow_run.head_sha;
-  const snapshotName = `iterate-sandbox-${headSha}`;
+  const shortSha = headSha.slice(0, 7);
 
   logger.info("[GitHub Webhook] Processing CI completion", {
     workflowRunId: workflow_run.id,
     headSha,
-    snapshotName,
+    shortSha,
   });
 
   // Get all projects with active machines
@@ -732,7 +773,8 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
   for (const project of projectsToUpdate) {
     try {
       const activeMachine = project.machines[0];
-      const machineName = `ci-${headSha.slice(0, 7)}`;
+      const machineName = `ci-${shortSha}`;
+      const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
 
       const result = await createMachineForProject({
         db,
@@ -744,7 +786,7 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
         name: machineName,
         metadata: {
           ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
-          snapshotName, // Override to use the CI-built snapshot
+          ...(snapshotName ? { snapshotName } : {}),
         },
       });
       if (result.provisionPromise) {
@@ -821,13 +863,13 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
   }
 
   const commitSha = comment.commit_id;
-  const snapshotName = `iterate-sandbox-${commitSha}`;
+  const shortSha = commitSha.slice(0, 7);
 
   logger.info("[GitHub Webhook] Processing [refresh] comment", {
     commentId: comment.id,
     user: comment.user.login,
     commitSha,
-    snapshotName,
+    shortSha,
   });
 
   // Get all projects with active machines
@@ -854,7 +896,8 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
   for (const project of projectsToUpdate) {
     try {
       const activeMachine = project.machines[0];
-      const machineName = `refresh-${commitSha.slice(0, 7)}`;
+      const machineName = `refresh-${shortSha}`;
+      const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
 
       const result = await createMachineForProject({
         db,
@@ -866,7 +909,7 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
         name: machineName,
         metadata: {
           ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
-          snapshotName,
+          ...(snapshotName ? { snapshotName } : {}),
           triggeredBy: `commit_comment:${comment.id}`,
           triggeredByUser: comment.user.login,
         },

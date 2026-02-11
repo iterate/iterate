@@ -76,11 +76,11 @@ Machine metadata (per-machine override in create-machine UI)
 Actual image used for sandbox creation
 ```
 
-| Provider | Default env var            | Format                                        |
-| -------- | -------------------------- | --------------------------------------------- |
-| Docker   | `DOCKER_DEFAULT_IMAGE`     | `iterate-sandbox:sha-abc1234`                 |
-| Fly      | `FLY_DEFAULT_IMAGE`        | `registry.fly.io/iterate-sandbox:sha-abc1234` |
-| Daytona  | `DAYTONA_DEFAULT_SNAPSHOT` | `iterate-sandbox-sha-abc1234`                 |
+| Provider | Default env var            | Format                                            |
+| -------- | -------------------------- | ------------------------------------------------- |
+| Docker   | `DOCKER_DEFAULT_IMAGE`     | `registry.depot.dev/{depotProjectId}:sha-abc1234` |
+| Fly      | `FLY_DEFAULT_IMAGE`        | `registry.fly.io/iterate-sandbox:sha-abc1234`     |
+| Daytona  | `DAYTONA_DEFAULT_SNAPSHOT` | `iterate-sandbox-sha-abc1234`                     |
 
 The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` tRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
 
@@ -119,7 +119,7 @@ Runs `sandbox/providers/docker/build-image.ts` via Depot for persistent layer ca
 
 The build always saves to Depot registry (`--save`). Fly registry push happens automatically when `FLY_API_TOKEN` is available.
 
-Local builds auto-update your current Doppler config with `DOCKER_DEFAULT_IMAGE`, and with `FLY_DEFAULT_IMAGE` when Fly push is enabled. You can override either in Doppler manually.
+Local builds auto-update your current Doppler config with `DOCKER_DEFAULT_IMAGE` (Depot registry image), and with `FLY_DEFAULT_IMAGE` when Fly push is enabled. You can override either in Doppler manually.
 
 ### Daytona snapshot: `pnpm sandbox daytona:push`
 

@@ -61,26 +61,32 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   });
 
   // Build service options for each daemon with web UI
-  const services = await Promise.all(
+  const serviceResults = await Promise.all(
     getDaemonsWithWebUI().map(async (daemon) => {
-      const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
-      const proxyUrl = buildProxyUrl(daemon.internalPort);
-      const options: ServiceOption[] = [];
+      try {
+        const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
+        const proxyUrl = buildProxyUrl(daemon.internalPort);
+        const options: ServiceOption[] = [];
 
-      // Add native URL if different from proxy (e.g., Daytona has direct access)
-      if (nativeUrl && !nativeUrl.startsWith("/")) {
-        options.push({ label: "Direct", url: nativeUrl });
+        // Add native URL if different from proxy (e.g., Daytona has direct access)
+        if (nativeUrl && !nativeUrl.startsWith("/")) {
+          options.push({ label: "Direct", url: nativeUrl });
+        }
+        options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
+
+        return {
+          id: daemon.id,
+          name: daemon.name,
+          port: daemon.internalPort,
+          options,
+        };
+      } catch {
+        // Port not mapped (e.g. Jaeger not exposed in older docker containers) — skip
+        return null;
       }
-      options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
-
-      return {
-        id: daemon.id,
-        name: daemon.name,
-        port: daemon.internalPort,
-        options,
-      };
     }),
   );
+  const services = serviceResults.filter((s) => s !== null);
 
   return {
     ...machine,
@@ -421,6 +427,15 @@ export const machineRouter = router({
         ctx.env,
       );
 
+      // Best-effort provider cleanup first — don't block DB deletion if provider fails
+      // (e.g. sandbox already deleted, invalid externalId, provider API down)
+      await runtime.delete().catch((err) => {
+        logger.warn("Failed to delete provider sandbox, proceeding with DB cleanup", {
+          machineId: input.machineId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       // Delete machine from DB (token is shared across project, so we keep it)
       const deleted = await ctx.db
         .delete(schema.machine)
@@ -435,13 +450,6 @@ export const machineRouter = router({
           message: "Machine not found",
         });
       }
-
-      await runtime.delete().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
 
       return { success: true };
     }),
