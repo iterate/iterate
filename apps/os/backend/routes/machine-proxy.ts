@@ -123,22 +123,8 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   // For Daytona, we need special auth handling
   if (machineRecord.type === "daytona") {
-    const daytonaMetadata = metadata["daytona"];
-    const metadataRecord =
-      daytonaMetadata && typeof daytonaMetadata === "object" && !Array.isArray(daytonaMetadata)
-        ? (daytonaMetadata as Record<string, unknown>)
-        : null;
-    const sandboxId =
-      metadataRecord && typeof metadataRecord.sandboxId === "string"
-        ? metadataRecord.sandboxId
-        : null;
-
-    if (!sandboxId || !/^[a-zA-Z0-9-]+$/.test(sandboxId)) {
-      logger.error("Invalid sandbox ID format", {
-        sandboxId,
-        externalId,
-        machineId: machineRecord.id,
-      });
+    if (!externalId.trim()) {
+      logger.error("Invalid sandbox identifier", { externalId, machineId: machineRecord.id });
       return c.json({ error: "Invalid sandbox configuration" }, 500);
     }
 
@@ -147,7 +133,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
     let token: string;
     try {
-      token = await getPreviewToken(deps, machineRecord.id, sandboxId, portNum);
+      token = await getPreviewToken(deps, machineRecord.id, externalId, portNum);
     } catch (err) {
       logger.error("Failed to get preview token", err);
       return c.json({ error: "Failed to get preview token" }, 500);
@@ -158,11 +144,11 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     // Handle 401 - lazy refresh
     if (response.status === 401) {
       logger.info("Received 401 from Daytona, refreshing token", {
-        sandboxId,
+        sandboxIdentifier: externalId,
         port: portNum,
       });
       try {
-        token = await refreshPreviewToken(deps, machineRecord.id, sandboxId, portNum);
+        token = await refreshPreviewToken(deps, machineRecord.id, externalId, portNum);
         response = await proxyDaytona(c.req.raw, fullTargetUrl, token);
       } catch (err) {
         logger.error("Failed to refresh token after 401", err);
