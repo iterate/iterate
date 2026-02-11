@@ -31,19 +31,10 @@ vi.mock("../db/index.ts", () => ({
   },
 }));
 
-const reactionsAddMock = vi.fn().mockResolvedValue({ ok: true });
-const reactionsRemoveMock = vi.fn().mockResolvedValue({ ok: true });
-const apiCallMock = vi.fn().mockResolvedValue({ ok: true });
-
-vi.mock("@slack/web-api", () => ({
-  WebClient: vi.fn(() => ({
-    reactions: { add: reactionsAddMock, remove: reactionsRemoveMock },
-    apiCall: apiCallMock,
-  })),
+const tinyexecMock = vi.fn();
+vi.mock("tinyexec", () => ({
+  x: (...args: unknown[]) => tinyexecMock(...args),
 }));
-
-// SLACK_BOT_TOKEN needed for getSlackClient()
-vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test-token");
 
 const { slackRouter } = await import("./slack.ts");
 
@@ -56,9 +47,8 @@ describe("slack router", () => {
     getOrCreateAgentMock.mockReset();
     getAgentMock.mockReset();
     subscribeToAgentChangesMock.mockReset();
-    reactionsAddMock.mockReset().mockResolvedValue({ ok: true });
-    reactionsRemoveMock.mockReset().mockResolvedValue({ ok: true });
-    apiCallMock.mockReset().mockResolvedValue({ ok: true });
+    tinyexecMock.mockReset();
+    tinyexecMock.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
     vi.stubGlobal("fetch", fetchSpy);
   });
 
@@ -485,12 +475,18 @@ describe("slack router", () => {
         }),
       });
 
-      // Flush fire-and-forget addReaction
+      // Flush fire-and-forget acknowledge
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(reactionsAddMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: ts, name: "eyes" }),
+      const addCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.add"),
       );
+      expect(addCall).toBeDefined();
+      expect(addCall![1][2]).toContain(ts);
+      expect(addCall![1][2]).toContain("eyes");
     });
 
     it("sends thinking_face emoji on FYI message after confirming agent exists", async () => {
@@ -521,17 +517,23 @@ describe("slack router", () => {
         }),
       });
 
-      // Flush fire-and-forget addReaction
+      // Flush fire-and-forget acknowledge
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(reactionsAddMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: ts, name: "thinking_face" }),
+      const addCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.add"),
       );
+      expect(addCall).toBeDefined();
+      expect(addCall![1][2]).toContain(ts);
+      expect(addCall![1][2]).toContain("thinking_face");
     });
   });
 
-  describe("emoji context replacement", () => {
-    it("replaces emoji context when second webhook arrives for same thread", async () => {
+  describe("emoji guard", () => {
+    it("does not clobber emoji context when second webhook arrives for same thread", async () => {
       const threadTs = "4444444444.444444";
       const secondTs = "4444444444.555555";
       const botUserId = "U_BOT";
@@ -561,17 +563,20 @@ describe("slack router", () => {
         }),
       });
 
-      // Flush fire-and-forget addReaction from first webhook
+      // Flush fire-and-forget acknowledge from first webhook
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       // Verify eyes emoji was added for the first message
-      expect(reactionsAddMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
+      const addCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.add"),
       );
+      expect(addCall).toBeDefined();
+      expect(addCall![1][2]).toContain(threadTs);
 
       // ── Second webhook: mid-thread mention (same thread, different message) ──
-      // The second webhook REPLACES the context and removes the old emoji.
-      reactionsAddMock.mockClear();
       selectLimitQueue.push([]); // storeEvent dedup check
       getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
@@ -595,18 +600,11 @@ describe("slack router", () => {
         }),
       });
 
+      // Second webhook still succeeds — prompt is sent, emoji tracking is skipped.
       expect(response2.status).toBe(200);
       expect((await response2.json()).queued).toBe(true);
 
-      // Flush fire-and-forget calls
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      // Old emoji should have been removed (fire-and-forget)
-      expect(reactionsRemoveMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
-      );
-
-      // ── Agent goes idle: debounced callback removes SECOND message's emoji ──
+      // ── Agent goes idle: callback should use FIRST message's emoji context ──
       const callbackResponse = await slackRouter.request("/agent-change-callback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -618,15 +616,18 @@ describe("slack router", () => {
 
       const callbackBody = await callbackResponse.json();
       expect(callbackBody.success).toBe(true);
-      expect(callbackBody.debounced).toBe(true);
+      expect(callbackBody.ignored).toBeUndefined();
 
-      // Wait for debounce (200ms) + async cleanup
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      // Verify the SECOND message's emoji was removed during cleanup
-      expect(reactionsRemoveMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: secondTs }),
+      // Verify unacknowledge removed the reaction from the FIRST message, not the second.
+      const removeCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.remove"),
       );
+      expect(removeCall).toBeDefined();
+      expect(removeCall![1][2]).toContain(threadTs);
+      expect(removeCall![1][2]).not.toContain(secondTs);
     });
   });
 });
