@@ -51,14 +51,19 @@ export class DaytonaSandbox extends Sandbox {
     this.resolvedSandboxId = sandboxId ?? null;
   }
 
-  private async resolveSandboxId(): Promise<string> {
-    if (this.resolvedSandboxId) return this.resolvedSandboxId;
-    const sandbox = await this.daytona.get(this.providerId);
+  private async loadSandbox(identifier: string): Promise<DaytonaSDKSandbox> {
+    const sandbox = await this.daytona.get(identifier);
     if (!sandbox.id) {
-      throw new Error(`Daytona sandbox resolved without id for identifier '${this.providerId}'`);
+      throw new Error(`Daytona sandbox resolved without id for identifier '${identifier}'`);
     }
     this.resolvedSandboxId = sandbox.id;
-    return this.resolvedSandboxId;
+    return sandbox;
+  }
+
+  private async resolveSandboxId(): Promise<string> {
+    if (this.resolvedSandboxId) return this.resolvedSandboxId;
+    const sandbox = await this.loadSandbox(this.providerId);
+    return sandbox.id;
   }
 
   async getBaseUrl(opts: { port: number }): Promise<string> {
@@ -69,8 +74,11 @@ export class DaytonaSandbox extends Sandbox {
   // === Lifecycle ===
 
   private async getSdkSandbox(): Promise<DaytonaSDKSandbox> {
-    const sandboxId = await this.resolveSandboxId();
-    return this.daytona.get(sandboxId);
+    if (this.resolvedSandboxId) {
+      return this.daytona.get(this.resolvedSandboxId);
+    }
+
+    return this.loadSandbox(this.providerId);
   }
 
   async exec(cmd: string[]): Promise<string> {

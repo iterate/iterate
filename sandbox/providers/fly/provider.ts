@@ -8,6 +8,7 @@ import {
   type SnapshotInfo,
 } from "../types.ts";
 import { MAX_CANONICAL_MACHINE_NAME_LENGTH, sanitizeNamePart } from "../naming.ts";
+import { asRecord } from "../utils.ts";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
@@ -109,13 +110,6 @@ const FLY_ORG_APPS_QUERY = `
     }
   }
 `;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
-}
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;

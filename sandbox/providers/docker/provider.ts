@@ -31,7 +31,7 @@ const TUNNEL_RATE_LIMIT_MARKER = "__CLOUDFLARE_TUNNEL_RATE_LIMIT__";
 const DEFAULT_LOCAL_OS_PORT = 5173;
 const LOCAL_OS_PORT_SCAN_RANGE = 10;
 const DEV_ITERATE_HOST_PATTERN = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)+dev\.iterate\.com(?::\d+)?/i;
-const DEV_ITERATE_HOST_CAPTURE = /https?:\/\/((?:[a-z0-9-]+\.)+dev\.iterate\.com)(?::\d+)?/i;
+const DEV_ITERATE_HOST_CAPTURE = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+dev\.iterate\.com)(?::\d+)?/i;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [

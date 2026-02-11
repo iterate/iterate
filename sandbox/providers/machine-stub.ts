@@ -2,6 +2,7 @@ import { DaytonaProvider } from "./daytona/provider.ts";
 import { DockerProvider, type DockerSandbox } from "./docker/provider.ts";
 import { FlyProvider } from "./fly/provider.ts";
 import type { MachineType, ProviderState, Sandbox, SandboxFetcher } from "./types.ts";
+import { asRecord } from "./utils.ts";
 
 export interface CreateMachineConfig {
   machineId: string;
@@ -89,13 +90,6 @@ function asBoolean(value: unknown): boolean | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
 }
 
 function parsePortFromUrl(url: string): number {

@@ -280,12 +280,18 @@ async function main(): Promise<void> {
         continue;
       }
 
-      await flyApi({
-        token,
-        method: "DELETE",
-        path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
-      });
-      deletedCount += 1;
+      try {
+        await flyApi({
+          token,
+          method: "DELETE",
+          path: `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
+        });
+        deletedCount += 1;
+      } catch (error) {
+        skippedCount += 1;
+        console.log(`skip delete app=${appName} machine=${machine.id}: ${String(error)}`);
+        continue;
+      }
 
       try {
         await flyApi({
