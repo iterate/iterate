@@ -3,7 +3,6 @@
  */
 import { eq, and } from "drizzle-orm";
 import { Daytona } from "@daytonaio/sdk";
-import { resolveDaytonaSandboxByIdentifier } from "@iterate-com/sandbox/providers/daytona/resolve-sandbox";
 import * as schema from "../../db/schema.ts";
 import type { DB } from "../../db/client.ts";
 
@@ -18,7 +17,7 @@ export type TokenDeps = {
 export async function getPreviewToken(
   deps: TokenDeps,
   machineId: string,
-  sandboxIdentifier: string,
+  sandboxId: string,
   port: number,
 ): Promise<string> {
   const cached = await deps.db.query.daytonaPreviewToken.findFirst({
@@ -32,7 +31,7 @@ export async function getPreviewToken(
     return cached.token;
   }
 
-  return refreshPreviewToken(deps, machineId, sandboxIdentifier, port);
+  return refreshPreviewToken(deps, machineId, sandboxId, port);
 }
 
 /**
@@ -41,10 +40,10 @@ export async function getPreviewToken(
 export async function refreshPreviewToken(
   deps: TokenDeps,
   machineId: string,
-  sandboxIdentifier: string,
+  sandboxId: string,
   port: number,
 ): Promise<string> {
-  const sandbox = await resolveDaytonaSandboxByIdentifier(deps.daytona, sandboxIdentifier);
+  const sandbox = await deps.daytona.get(sandboxId);
   const previewInfo = await sandbox.getPreviewLink(port);
 
   await deps.db
