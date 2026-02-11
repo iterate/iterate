@@ -61,7 +61,7 @@ export function buildOpencodeWebSessionUrl(params: {
   const env = getSessionLinkEnv();
   if (!env) return undefined;
   const directory = params.workingDirectory || env.customerRepoPath;
-  const encodedDirectory = Buffer.from(directory, "utf8").toString("base64").replace(/=+$/, "");
+  const encodedDirectory = Buffer.from(directory, "utf8").toString("base64url");
   const opencodeProxyBase = buildMachineProxyBase(env, 4096);
   return `${opencodeProxyBase}/${encodedDirectory}/session/${params.sessionId}`;
 }

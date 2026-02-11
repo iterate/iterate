@@ -256,67 +256,33 @@ slackRouter.post("/webhook", async (c) => {
   const agentPath = getAgentPath(threadTs);
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
-  const commandResult = await runAgentCommand({
-    message: event.text || "",
-    agentPath,
-    getAgent: caller.getAgent,
-    rendererHint: "apps/daemon/server/routers/slack.ts",
-  });
-
-  if (commandResult) {
-    const channel = event.channel || "";
-    if (!channel) {
-      return c.json({
-        success: true,
-        message: "Ignored: command message missing channel",
-        case: `${commandResult.command}_command`,
-        eventId,
-        requestId,
-      });
-    }
-
-    await postSlackThreadMessage({
-      channel,
-      threadTs,
-      text: commandResult.resultMarkdown,
-      requestId,
-    });
-
-    return c.json({
-      success: true,
-      queued: false,
-      created: false,
-      case: `${commandResult.command}_command`,
-      eventId,
-      requestId,
-    });
-  }
-
-  // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
-  // which can be slow (it blocks waiting for an OpenCode session to be created).
-  // The user should see the reaction ~instantly as confirmation we received their message.
-  // Skip if an emoji is already pending — avoid clobbering the tracked context.
-  if (isMention && !slackThreadContextByAgentPath.has(agentPath)) {
-    const ctx: SlackThreadContext = {
-      channel: event.channel || "",
-      threadTs,
-      emojiTimestamp: messageTs,
-      emoji: "eyes",
-      requestId,
-    };
-    slackThreadContextByAgentPath.set(agentPath, ctx);
-    void acknowledge(ctx);
-  }
-
   let wasNewlyCreated = false;
+  let agent: Awaited<ReturnType<typeof caller.getAgent>> = null;
 
   if (isMention) {
+    // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
+    // which can be slow (it blocks waiting for an OpenCode session to be created).
+    // The user should see the reaction ~instantly as confirmation we received their message.
+    // Skip if an emoji is already pending — avoid clobbering the tracked context.
+    if (!slackThreadContextByAgentPath.has(agentPath)) {
+      const ctx: SlackThreadContext = {
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "eyes",
+        requestId,
+      };
+      slackThreadContextByAgentPath.set(agentPath, ctx);
+      void acknowledge(ctx);
+    }
+
     // Mentions always get-or-create an agent, matching the webchat pattern.
     const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
     wasNewlyCreated = result.wasNewlyCreated;
+    agent = result.agent;
   } else {
     // FYI messages (no @mention) in a thread — only forward if an agent already exists.
-    const agent = await caller.getAgent({ path: agentPath });
+    agent = await caller.getAgent({ path: agentPath });
     if (!agent) {
       return c.json({
         success: true,
@@ -338,6 +304,59 @@ slackRouter.post("/webhook", async (c) => {
       slackThreadContextByAgentPath.set(agentPath, ctx);
       void acknowledge(ctx);
     }
+  }
+
+  if (!agent) {
+    return c.json({
+      success: true,
+      message: "Ignored: no resolved agent",
+      eventId,
+      requestId,
+    });
+  }
+
+  // Commands are agent-scoped. If no agent exists, callers should return early above.
+  const commandResult = await runAgentCommand({
+    message: event.text || "",
+    agentPath,
+    agent,
+    rendererHint: "apps/daemon/server/routers/slack.ts",
+  });
+
+  if (commandResult) {
+    if (wasNewlyCreated) {
+      void caller.subscribeToAgentChanges({
+        agentPath,
+        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
+      });
+    }
+
+    const channel = event.channel || "";
+    if (!channel) {
+      return c.json({
+        success: true,
+        message: "Ignored: command message missing channel",
+        case: `${commandResult.command}_command`,
+        eventId,
+        requestId,
+      });
+    }
+
+    await postSlackThreadMessage({
+      channel,
+      threadTs,
+      text: commandResult.resultMarkdown,
+      requestId,
+    });
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: wasNewlyCreated,
+      case: `${commandResult.command}_command`,
+      eventId,
+      requestId,
+    });
   }
 
   // Subscribe to agent-change callbacks once, when the agent is first created.

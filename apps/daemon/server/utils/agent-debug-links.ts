@@ -10,18 +10,16 @@ type AgentDebugRoute = {
 type AgentDebugInfo = {
   path: string;
   workingDirectory: string;
-  metadata?: JsonRecord | null;
   activeRoute?: AgentDebugRoute | null;
 };
 
-type SessionResolutionSource = "agent.metadata" | "route.destination";
+type SessionResolutionSource = "route.metadata" | "route.destination";
 
 export type ResolvedAgentSession = {
   agentHarness: "opencode" | null;
-  opencodeSessionId: string | null;
   source: SessionResolutionSource | null;
-  terminalAttachUrl?: string;
-  opencodeWebUrl?: string;
+  terminalUrl?: string;
+  webUrl?: string;
 };
 
 type AgentHarnessMetadata = {
@@ -33,10 +31,6 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function readRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" ? (value as JsonRecord) : null;
-}
-
 function readAgentHarnessMetadata(metadata: JsonRecord | null): AgentHarnessMetadata | null {
   if (!metadata) return null;
   const agentHarness = readString(metadata.agentHarness);
@@ -45,9 +39,7 @@ function readAgentHarnessMetadata(metadata: JsonRecord | null): AgentHarnessMeta
   return { agentHarness: "opencode", opencodeSessionId };
 }
 
-export function extractOpencodeSessionIdFromDestination(
-  destination?: string | null,
-): string | null {
+function extractOpencodeSessionIdFromDestination(destination?: string | null): string | null {
   if (!destination) return null;
   const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
   return match?.[1] ?? null;
@@ -55,27 +47,26 @@ export function extractOpencodeSessionIdFromDestination(
 
 export function resolveAgentSession(agent: AgentDebugInfo): ResolvedAgentSession {
   // Current contract:
-  // - agent metadata stores the active harness and session id
+  // - active route metadata stores harness/session for this route
   // - today only OpenCode is supported:
   //   { agentHarness: "opencode", opencodeSessionId: "..." }
   //
   // Future direction:
   // harness providers should publish deep links directly in structured metadata.
-  const agentMetadata = readRecord(agent.metadata);
+  const routeMetadata = agent.activeRoute?.metadata ?? null;
   const routeDestination = agent.activeRoute?.destination ?? null;
 
-  const harnessMetadata = readAgentHarnessMetadata(agentMetadata);
+  const harnessMetadata = readAgentHarnessMetadata(routeMetadata);
   if (harnessMetadata) {
     const { opencodeSessionId } = harnessMetadata;
     return {
       agentHarness: "opencode",
-      opencodeSessionId,
-      source: "agent.metadata",
-      terminalAttachUrl: buildOpencodeAttachUrl({
+      source: "route.metadata",
+      terminalUrl: buildOpencodeAttachUrl({
         sessionId: opencodeSessionId,
         workingDirectory: agent.workingDirectory,
       }),
-      opencodeWebUrl: buildOpencodeWebSessionUrl({
+      webUrl: buildOpencodeWebSessionUrl({
         sessionId: opencodeSessionId,
         workingDirectory: agent.workingDirectory,
       }),
@@ -86,18 +77,17 @@ export function resolveAgentSession(agent: AgentDebugInfo): ResolvedAgentSession
   if (sessionIdFromRoute) {
     return {
       agentHarness: "opencode",
-      opencodeSessionId: sessionIdFromRoute,
       source: "route.destination",
-      terminalAttachUrl: buildOpencodeAttachUrl({
+      terminalUrl: buildOpencodeAttachUrl({
         sessionId: sessionIdFromRoute,
         workingDirectory: agent.workingDirectory,
       }),
-      opencodeWebUrl: buildOpencodeWebSessionUrl({
+      webUrl: buildOpencodeWebSessionUrl({
         sessionId: sessionIdFromRoute,
         workingDirectory: agent.workingDirectory,
       }),
     };
   }
 
-  return { agentHarness: null, opencodeSessionId: null, source: null };
+  return { agentHarness: null, source: null };
 }

@@ -149,6 +149,19 @@ webchatRouter.post("/webhook", async (c) => {
 
   const agentPath = getAgentPathForThread(webchatThreadId);
   const caller = trpcRouter.createCaller({});
+  const { agent, wasNewlyCreated } = await caller.getOrCreateAgent({
+    agentPath,
+    createWithEvents: [],
+  });
+
+  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
+
+  if (wasNewlyCreated) {
+    void caller.subscribeToAgentChanges({
+      agentPath,
+      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
+    });
+  }
 
   const userMessage: StoredMessage = {
     threadId: webchatThreadId,
@@ -165,7 +178,7 @@ webchatRouter.post("/webhook", async (c) => {
   const commandResult = await runAgentCommand({
     message: payload.text || "",
     agentPath,
-    getAgent: caller.getAgent,
+    agent,
     rendererHint: "apps/daemon/server/routers/webchat.ts",
   });
 
@@ -199,8 +212,6 @@ webchatRouter.post("/webhook", async (c) => {
     });
   }
 
-  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
-
   const formattedMessage = formatIncomingMessage({
     payload,
     webchatThreadId,
@@ -208,15 +219,6 @@ webchatRouter.post("/webhook", async (c) => {
     eventId,
     isFirstMessageInThread: wasNewlyCreated,
   });
-
-  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
-
-  if (wasNewlyCreated) {
-    void caller.subscribeToAgentChanges({
-      agentPath,
-      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
-    });
-  }
 
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",

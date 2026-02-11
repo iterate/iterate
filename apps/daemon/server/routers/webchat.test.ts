@@ -33,6 +33,16 @@ vi.mock("../db/index.ts", () => ({
 
 const { webchatRouter } = await import("./webchat.ts");
 
+function buildAgent(overrides: Record<string, unknown> = {}) {
+  return {
+    path: "/webchat/thread-default",
+    workingDirectory: "/workspace/repo",
+    metadata: null,
+    activeRoute: null,
+    ...overrides,
+  };
+}
+
 describe("webchat router", () => {
   const fetchSpy = vi.fn();
 
@@ -42,6 +52,11 @@ describe("webchat router", () => {
     getOrCreateAgentMock.mockReset();
     getAgentMock.mockReset();
     subscribeToAgentChangesMock.mockReset();
+    getOrCreateAgentMock.mockResolvedValue({
+      wasNewlyCreated: false,
+      route: null,
+      agent: buildAgent(),
+    });
     vi.stubGlobal("fetch", fetchSpy);
   });
 
@@ -51,7 +66,11 @@ describe("webchat router", () => {
 
   describe("/webhook — new message (no duplicate)", () => {
     it("creates agent and returns success for new thread", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent(),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -72,7 +91,11 @@ describe("webchat router", () => {
     });
 
     it("does not subscribe when agent already existed", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: "/webchat/thread-existing" }),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const response = await webchatRouter.request("/webhook", {
@@ -90,7 +113,11 @@ describe("webchat router", () => {
     });
 
     it("subscribes to agent changes when agent is newly created", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent(),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -110,7 +137,11 @@ describe("webchat router", () => {
     });
 
     it("preserves provided threadId", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: "/webchat/my-thread-42" }),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const response = await webchatRouter.request("/webhook", {
@@ -125,7 +156,11 @@ describe("webchat router", () => {
 
     it("preserves provided messageId", async () => {
       selectLimitQueue.push([]); // duplicate check: not found
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: false, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent(),
+      });
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const response = await webchatRouter.request("/webhook", {
@@ -159,7 +194,11 @@ describe("webchat router", () => {
     });
 
     it("skips duplicate check when no messageId provided", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent(),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -202,7 +241,11 @@ describe("webchat router", () => {
     });
 
     it("accepts message with only attachments (no text)", async () => {
-      getOrCreateAgentMock.mockResolvedValue({ wasNewlyCreated: true, route: null });
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent(),
+      });
       subscribeToAgentChangesMock.mockResolvedValue({});
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
@@ -233,8 +276,21 @@ describe("webchat router", () => {
   });
 
   describe("/webhook — agent commands", () => {
-    it("handles !debug without creating/forwarding to agent", async () => {
-      getAgentMock.mockResolvedValue(null);
+    it("handles !debug without forwarding to agent prompt", async () => {
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({
+          path: "/webchat/thread-debug",
+          activeRoute: {
+            destination: "/opencode/sessions/sess_debug",
+            metadata: {
+              agentHarness: "opencode",
+              opencodeSessionId: "sess_debug",
+            },
+          },
+        }),
+      });
 
       const response = await webchatRouter.request("/webhook", {
         method: "POST",
@@ -255,8 +311,11 @@ describe("webchat router", () => {
       expect(body.assistantMessageId).toBeDefined();
       expect(body.assistantEventId).toBeDefined();
 
-      expect(getAgentMock).toHaveBeenCalledWith({ path: "/webchat/thread-debug" });
-      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(getOrCreateAgentMock).toHaveBeenCalledWith({
+        agentPath: "/webchat/thread-debug",
+        createWithEvents: [],
+      });
+      expect(getAgentMock).not.toHaveBeenCalled();
       expect(subscribeToAgentChangesMock).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
