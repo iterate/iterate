@@ -69,6 +69,11 @@ function getDevTunnelConfig() {
   const raw = process.env.DEV_TUNNEL?.trim() ?? "";
   const lower = raw.toLowerCase();
   if (!raw || lower === "0" || lower === "false" || lower === "undefined") return null;
+  if (lower === "1" || lower === "true") {
+    throw new Error(
+      'DEV_TUNNEL auto mode is disabled. Set an explicit subdomain, e.g. DEV_TUNNEL="dev-$ITERATE_USER-os".',
+    );
+  }
 
   const subdomain = raw.replace(/^\*\./, "").replace(/\.dev\.iterate\.com$/i, "");
 
