@@ -263,9 +263,7 @@ export const adminRouter = router({
       .mutation(async ({ ctx, input }) => {
         return ctx.db.transaction(async (tx) => {
           const result = await tx.execute(sql`select now()::text as now`);
-          const rows = Array.isArray(result)
-            ? result
-            : (result as { rows: { now: string }[] }).rows;
+          const rows = result.rows as { now: string }[];
           const dbtime = rows[0]?.now ?? new Date().toISOString();
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
           return ctx.sendTrpc(tx, { dbtime, reply });
@@ -276,9 +274,7 @@ export const adminRouter = router({
       .mutation(async ({ ctx, input }) => {
         await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
           const result = await tx.execute(sql`select now()::text as now`);
-          const rows = Array.isArray(result)
-            ? result
-            : (result as { rows: { now: string }[] }).rows;
+          const rows = result.rows as { now: string }[];
           const dbtime = String(rows[0]?.now ?? new Date().toISOString());
           return {
             payload: { dbtime, message: `${input.message} at ${new Date().toISOString()}` },
@@ -442,7 +438,7 @@ export const adminRouter = router({
         `;
 
         // Main query: get events with their consumer messages as a JSON array
-        const rows = (await ctx.db.execute(sql`
+        const result = await ctx.db.execute(sql`
           with all_consumers as (${allConsumersSql})
           select
             e.id,
@@ -472,7 +468,8 @@ export const adminRouter = router({
           ${orderSql}
           limit ${limit}
           offset ${offset}
-        `)) as {
+        `);
+        const rows = result.rows as {
           id: number;
           name: string;
           payload: Record<string, unknown>;
@@ -488,27 +485,31 @@ export const adminRouter = router({
         }[];
 
         // Also get a total count for pagination
-        const countResult = (await ctx.db.execute(sql`
-          with all_consumers as (${allConsumersSql})
-          select count(*)::int as total from outbox_event e ${whereSql}
-        `)) as { total: number }[];
-        const total = countResult[0]?.total ?? 0;
+        const countRows = (
+          await ctx.db.execute(sql`
+            with all_consumers as (${allConsumersSql})
+            select count(*)::int as total from outbox_event e ${whereSql}
+          `)
+        ).rows as { total: number }[];
+        const total = countRows[0]?.total ?? 0;
 
         // Get distinct event names for filter dropdowns
-        const eventNamesResult = (await ctx.db.execute(
-          sql`select distinct name from outbox_event order by name`,
-        )) as { name: string }[];
-        const eventNames = eventNamesResult.map((r) => r.name);
+        const eventNamesRows = (
+          await ctx.db.execute(sql`select distinct name from outbox_event order by name`)
+        ).rows as { name: string }[];
+        const eventNames = eventNamesRows.map((r) => r.name);
 
         // Get distinct consumer names
-        const consumerNamesResult = (await ctx.db.execute(sql`
-          with all_consumers as (${allConsumersSql})
-          select distinct message->>'consumer_name' as name
-          from all_consumers
-          where message->>'consumer_name' is not null
-          order by name
-        `)) as { name: string }[];
-        const consumerNames = consumerNamesResult.map((r) => r.name);
+        const consumerNamesRows = (
+          await ctx.db.execute(sql`
+            with all_consumers as (${allConsumersSql})
+            select distinct message->>'consumer_name' as name
+            from all_consumers
+            where message->>'consumer_name' is not null
+            order by name
+          `)
+        ).rows as { name: string }[];
+        const consumerNames = consumerNamesRows.map((r) => r.name);
 
         return { events: rows, total, eventNames, consumerNames };
       }),
