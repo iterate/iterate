@@ -331,6 +331,14 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
+    // Command interceptions do not forward prompts to the agent, so there is no
+    // agent lifecycle callback to clean up any tracked deterministic emoji.
+    const slackContext = slackThreadContextByAgentPath.get(agentPath);
+    if (slackContext) {
+      await unacknowledge(slackContext);
+      slackThreadContextByAgentPath.delete(agentPath);
+    }
+
     const channel = event.channel || "";
     if (!channel) {
       return c.json({

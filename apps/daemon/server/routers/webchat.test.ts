@@ -319,5 +319,40 @@ describe("webchat router", () => {
       expect(subscribeToAgentChangesMock).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    it("returns created=true for !debug when command creates the thread agent", async () => {
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({
+          path: "/webchat/thread-debug-new",
+          activeRoute: {
+            destination: "/opencode/sessions/sess_debug_new",
+            metadata: {
+              agentHarness: "opencode",
+              opencodeSessionId: "sess_debug_new",
+            },
+          },
+        }),
+      });
+
+      const response = await webchatRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "!debug",
+          threadId: "thread-debug-new",
+          messageId: "msg-debug-new-1",
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+      expect(body.created).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 });

@@ -549,6 +549,15 @@ describe("slack router", () => {
       expect(postMessageCall![1][2]).toContain("sess_abc123");
       expect(postMessageCall![1][2]).toContain("Harness Web UI (direct proxy)");
       expect(postMessageCall![1][2]).toContain("terminal?command=");
+
+      const removeCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.remove"),
+      );
+      expect(removeCall).toBeDefined();
+      expect(removeCall![1][2]).toContain("thinking_face");
     });
 
     it("does not run !debug when no agent exists for non-mention FYI messages", async () => {

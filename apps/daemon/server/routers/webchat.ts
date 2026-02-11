@@ -204,7 +204,7 @@ webchatRouter.post("/webhook", async (c) => {
       threadId: webchatThreadId,
       messageId,
       eventId,
-      created: false,
+      created: wasNewlyCreated,
       queued: false,
       case: `${commandResult.command}_command`,
       assistantMessageId,
