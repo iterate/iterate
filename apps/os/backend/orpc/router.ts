@@ -220,30 +220,9 @@ export const reportStatus = os.machines.reportStatus
 
 export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input, context }) => {
   const { db, env, apiKey } = context;
-  const requestStartedAt = nowMs();
-  const stepDurationsMs: Record<string, number> = {};
-
-  const timedStep = async <T>(stepName: string, fn: () => Promise<T>): Promise<T> => {
-    const stepStartedAt = nowMs();
-    try {
-      return await fn();
-    } finally {
-      const durationMs = Math.round(nowMs() - stepStartedAt);
-      stepDurationsMs[stepName] = durationMs;
-      if (durationMs >= 10_000) {
-        logger.warn("getEnv slow step", {
-          stepName,
-          durationMs,
-          machineId: input.machineId,
-        });
-      }
-    }
-  };
 
   // Authenticate and get machine
-  const { machine } = await timedStep("authenticateApiKey", () =>
-    authenticateApiKey(db, apiKey, input.machineId),
-  );
+  const { machine } = await authenticateApiKey(db, apiKey, input.machineId);
   const { project } = machine;
   const machineId = machine.id;
 
@@ -255,34 +234,28 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
   }
 
   // Get unified env vars using shared function
-  const [unifiedEnvVars, githubConnection, projectRepos] = await Promise.all([
-    timedStep("getUnifiedEnvVars", () =>
-      getUnifiedEnvVars(db, project.id, {
-        dangerousRawSecrets,
-        encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
-      }),
-    ),
-    timedStep("queryProjectGitHubConnection", () =>
-      db.query.projectConnection.findFirst({
-        where: (conn, { and: whereAnd, eq: whereEq }) =>
-          whereAnd(whereEq(conn.projectId, project.id), whereEq(conn.provider, "github-app")),
-      }),
-    ),
-    timedStep("queryProjectRepos", () =>
-      db.query.projectRepo.findMany({
-        where: eq(schema.projectRepo.projectId, project.id),
-      }),
-    ),
-  ]);
+  const unifiedEnvVars = await getUnifiedEnvVars(db, project.id, {
+    dangerousRawSecrets,
+    encryptionSecret: dangerousRawSecrets ? env.ENCRYPTION_SECRET : undefined,
+  });
+  const projectData = await db.query.project.findFirst({
+    where: eq(schema.project.id, project.id),
+    with: {
+      connections: {
+        where: (connection, { eq: whereEq }) => whereEq(connection.provider, "github-app"),
+      },
+      projectRepos: true,
+    },
+  });
+  const githubConnection = projectData?.connections[0] ?? null;
+  const projectRepos = projectData?.projectRepos ?? [];
 
   // In raw secrets mode, refresh all connector tokens (GitHub, Google) up front.
   // The returned map contains fresh values keyed by "secretKey:userId".
   // Without the egress proxy there's no 401→refresh flow, so tokens go stale.
   let installationToken: string | null = null;
   if (dangerousRawSecrets) {
-    const freshTokens = await timedStep("refreshStaleConnectorTokens", () =>
-      refreshStaleConnectorTokens(db, env, project.id, unifiedEnvVars),
-    );
+    const freshTokens = await refreshStaleConnectorTokens(db, env, project.id, unifiedEnvVars);
     // Project-scoped GitHub token (null userId → empty string in map key)
     installationToken = freshTokens.get("github.access_token:") ?? null;
   }
@@ -292,13 +265,8 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     const providerData = githubConnection.providerData as { installationId?: number };
     const installationId = providerData.installationId;
     if (installationId) {
-      let tokenDiagnostics:
-        | Awaited<ReturnType<typeof getGitHubInstallationTokenWithDiagnostics>>
-        | undefined;
-      await timedStep("getGitHubInstallationToken", async () => {
-        tokenDiagnostics = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
-        installationToken = tokenDiagnostics.token;
-      });
+      const tokenDiagnostics = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
+      installationToken = tokenDiagnostics.token;
 
       if (tokenDiagnostics) {
         const totalMs = tokenDiagnostics.diagnostics.totalMs;
@@ -334,24 +302,22 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
 
   const repoResults =
     installationToken && projectRepos.length > 0
-      ? await timedStep("fetchRepositoryInfo", () =>
-          Promise.all(
-            projectRepos.map(async (repo): Promise<RepoInfo | null> => {
-              const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
-              if (!repoInfo) {
-                logger.warn("Could not fetch repo info", { repoId: repo.externalId });
-                return null;
-              }
-              return {
-                // Plain URL - auth is handled by GIT_CONFIG_* env vars which rewrite to include magic string
-                url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
-                branch: repoInfo.defaultBranch,
-                path: `/home/iterate/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
-                owner: repoInfo.owner,
-                name: repoInfo.name,
-              };
-            }),
-          ),
+      ? await Promise.all(
+          projectRepos.map(async (repo): Promise<RepoInfo | null> => {
+            const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
+            if (!repoInfo) {
+              logger.warn("Could not fetch repo info", { repoId: repo.externalId });
+              return null;
+            }
+            return {
+              // Plain URL - auth is handled by GIT_CONFIG_* env vars which rewrite to include magic string
+              url: `https://github.com/${repoInfo.owner}/${repoInfo.name}.git`,
+              branch: repoInfo.defaultBranch,
+              path: `/home/iterate/src/github.com/${repoInfo.owner}/${repoInfo.name}`,
+              owner: repoInfo.owner,
+              name: repoInfo.name,
+            };
+          }),
         )
       : [];
 
@@ -380,12 +346,9 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     },
   ];
 
-  const totalDurationMs = Math.round(nowMs() - requestStartedAt);
   logger.info("Returning env data for machine", {
     machineId,
     projectId: project.id,
-    totalDurationMs,
-    stepDurationsMs,
     envVarCount: daemonEnvVars.length,
     repoCount: repos.length,
     skipProxy: dangerousRawSecrets,
@@ -429,22 +392,6 @@ async function refreshStaleConnectorTokens(
   projectId: string,
   envVars: UnifiedEnvVar[],
 ): Promise<Map<string, string>> {
-  const refreshStartedAt = nowMs();
-  const stepDurationsMs: Record<string, number> = {};
-
-  const timedRefreshStep = async <T>(stepName: string, fn: () => Promise<T>): Promise<T> => {
-    const stepStartedAt = nowMs();
-    try {
-      return await fn();
-    } finally {
-      const durationMs = Math.round(nowMs() - stepStartedAt);
-      stepDurationsMs[stepName] = durationMs;
-      if (durationMs >= 10_000) {
-        logger.warn("refreshStaleConnectorTokens slow step", { projectId, stepName, durationMs });
-      }
-    }
-  };
-
   // Refreshable connector secret keys from the registry
   const refreshableKeys = new Set(
     Object.values(CONNECTORS)
@@ -466,15 +413,13 @@ async function refreshStaleConnectorTokens(
   const secretKeysToQuery = [...new Set(toRefresh.map((v) => v.secret!.secretKey))];
 
   // Query ALL matching secrets for the project (both project-scoped and user-scoped).
-  const secrets = await timedRefreshStep("querySecretsForRefresh", () =>
-    db.query.secret.findMany({
-      where: and(
-        eq(schema.secret.projectId, projectId),
-        or(...secretKeysToQuery.map((k) => eq(schema.secret.key, k))),
-      ),
-      columns: { id: true, key: true, userId: true },
-    }),
-  );
+  const secrets = await db.query.secret.findMany({
+    where: and(
+      eq(schema.secret.projectId, projectId),
+      or(...secretKeysToQuery.map((k) => eq(schema.secret.key, k))),
+    ),
+    columns: { id: true, key: true, userId: true },
+  });
 
   if (secrets.length === 0) return emptyMap;
 
@@ -498,32 +443,20 @@ async function refreshStaleConnectorTokens(
   };
 
   // Refresh all in parallel
-  const results = await timedRefreshStep("attemptSecretRefreshAll", () =>
-    Promise.allSettled(
-      secrets.map(async (secret) => {
-        const url = connectorURLs.get(secret.key);
-        if (!url) return null;
-        const secretRefreshStartedAt = nowMs();
-        const result = await attemptSecretRefresh(db, secret.id, url, refreshContext);
-        const secretRefreshDurationMs = Math.round(nowMs() - secretRefreshStartedAt);
-        if (secretRefreshDurationMs >= 10_000) {
-          logger.warn("Slow attemptSecretRefresh call", {
-            projectId,
-            secretId: secret.id,
-            secretKey: secret.key,
-            secretRefreshDurationMs,
-          });
-        }
-        if (!result.ok) {
-          logger.warn("Failed to refresh connector token for raw mode", {
-            secretKey: secret.key,
-            code: result.code,
-          });
-          return null;
-        }
-        return { key: secret.key, userId: secret.userId, value: result.newValue };
-      }),
-    ),
+  const results = await Promise.allSettled(
+    secrets.map(async (secret) => {
+      const url = connectorURLs.get(secret.key);
+      if (!url) return null;
+      const result = await attemptSecretRefresh(db, secret.id, url, refreshContext);
+      if (!result.ok) {
+        logger.warn("Failed to refresh connector token for raw mode", {
+          secretKey: secret.key,
+          code: result.code,
+        });
+        return null;
+      }
+      return { key: secret.key, userId: secret.userId, value: result.newValue };
+    }),
   );
 
   // Build lookup: "secretKey:userId" → fresh value
@@ -542,19 +475,10 @@ async function refreshStaleConnectorTokens(
 
   logger.info("Completed refreshStaleConnectorTokens", {
     projectId,
-    totalDurationMs: Math.round(nowMs() - refreshStartedAt),
-    stepDurationsMs,
     refreshableEnvVarCount: toRefresh.length,
     queriedSecretCount: secrets.length,
     successfulRefreshCount: freshValues.size,
   });
 
   return freshValues;
-}
-
-function nowMs(): number {
-  if (typeof performance !== "undefined") {
-    return performance.now();
-  }
-  return Date.now();
 }
