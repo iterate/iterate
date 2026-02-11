@@ -10,6 +10,7 @@ ARG SANDBOX_BUN_VERSION=1.3.6
 ARG SANDBOX_GO_VERSION=1.23.4
 ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
 ARG SANDBOX_JAEGER_VERSION=1.67.0
+ARG SANDBOX_PROCESS_EXPORTER_VERSION=0.8.4
 
 # Install curl first (may not be present in all base images)
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -55,6 +56,15 @@ RUN ARCH=$(dpkg --print-architecture) && \
     tar -xzf /tmp/jaeger.tgz -C /tmp && \
     install -m 0755 "/tmp/jaeger-${SANDBOX_JAEGER_VERSION}-linux-${JAEGER_ARCH}/jaeger-all-in-one" /usr/local/bin/jaeger-all-in-one && \
     rm -rf "/tmp/jaeger-${SANDBOX_JAEGER_VERSION}-linux-${JAEGER_ARCH}" /tmp/jaeger.tgz
+
+# Install process-exporter for per-process CPU/memory metrics.
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then PROCESS_EXPORTER_ARCH="arm64"; else PROCESS_EXPORTER_ARCH="amd64"; fi && \
+    TMP_DIR=$(mktemp -d) && \
+    curl -fsSL "https://github.com/ncabatoff/process-exporter/releases/download/v${SANDBOX_PROCESS_EXPORTER_VERSION}/process-exporter-${SANDBOX_PROCESS_EXPORTER_VERSION}.linux-${PROCESS_EXPORTER_ARCH}.tar.gz" -o "$TMP_DIR/process-exporter.tgz" && \
+    tar -xzf "$TMP_DIR/process-exporter.tgz" -C "$TMP_DIR" && \
+    install "$TMP_DIR/process-exporter-${SANDBOX_PROCESS_EXPORTER_VERSION}.linux-${PROCESS_EXPORTER_ARCH}/process-exporter" /usr/local/bin/process-exporter && \
+    rm -rf "$TMP_DIR"
 
 RUN corepack enable
 

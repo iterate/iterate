@@ -19,6 +19,7 @@ import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
+import { FlyMachineMetrics } from "../../components/fly-machine-metrics.tsx";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -446,6 +447,14 @@ function MachineDetailPage() {
       </section>
 
       <ProviderDetailsCard details={providerDetails} onCopy={copyToClipboard} />
+
+      {machine.type === "fly" && flyMachineId && (
+        <FlyMachineMetrics
+          projectSlug={params.projectSlug}
+          machineId={params.machineId}
+          flyMachineId={flyMachineId}
+        />
+      )}
 
       <section className="space-y-4 border-b pb-6">
         <h2 className="text-sm font-medium">Machine Tools</h2>

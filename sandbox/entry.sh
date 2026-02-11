@@ -10,6 +10,14 @@ if [[ -n "${DOCKER_HOST_SYNC_ENABLED:-}" ]]; then
   bash "${ITERATE_REPO}/sandbox/providers/docker/sync-repo-from-host.sh"
 fi
 
+PROCESS_EXPORTER_CONFIG="${PROCESS_EXPORTER_CONFIG:-$HOME/.iterate/process-exporter.yml}"
+if command -v process-exporter >/dev/null 2>&1 && [[ -f "$PROCESS_EXPORTER_CONFIG" ]]; then
+  process-exporter \
+    --config.path "$PROCESS_EXPORTER_CONFIG" \
+    --web.listen-address "0.0.0.0:9256" \
+    > /var/log/pidnap/process-exporter.log 2>&1 &
+fi
+
 # This is primarily useful for tests of the docker provider,
 # where we want to exec commands in the container _after_ the initial sync.
 touch /tmp/reached-entrypoint

@@ -284,6 +284,8 @@ const Env = z.object({
   FLY_DEFAULT_MEMORY_MB: Optional,
   FLY_NETWORK: Optional,
   FLY_BASE_DOMAIN: Optional,
+  FLY_METRICS_TOKEN: Optional,
+  FLY_METRICS_ORG_SLUG: Optional,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
