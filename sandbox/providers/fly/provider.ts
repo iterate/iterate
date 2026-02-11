@@ -564,16 +564,8 @@ export class FlySandbox extends Sandbox {
     } catch {
       // best effort cleanup
     }
-
-    try {
-      await flyApi({
-        env: this.env,
-        method: "DELETE",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}`,
-      });
-    } catch {
-      // best effort cleanup
-    }
+    // Intentionally do not delete Fly apps here.
+    // Apps are shared per environment (`iterate-dev`/`iterate-stg`/`iterate-prd`).
   }
 }
 
