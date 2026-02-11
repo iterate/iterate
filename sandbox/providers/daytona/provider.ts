@@ -31,6 +31,38 @@ const DaytonaEnv = z.object({
 
 type DaytonaEnv = z.infer<typeof DaytonaEnv>;
 const DAYTONA_CREATE_TIMEOUT_SECONDS = 180;
+const DAYTONA_SANDBOX_NAME_MAX_LENGTH = 63;
+
+function randomSuffix(length: number): string {
+  return Math.random()
+    .toString(36)
+    .slice(2, 2 + length);
+}
+
+export function buildDaytonaSandboxName(params: {
+  config: string;
+  project: string;
+  machine: string;
+  suffix?: string;
+}): string {
+  const configSlug = slugify(params.config).slice(0, 20);
+  const projectSlug = slugify(params.project).slice(0, 15);
+  const machineSlug = slugify(params.machine) || "machine";
+  const suffix = params.suffix ?? randomSuffix(6);
+
+  const machineWithSuffix = `${machineSlug}-${suffix}`;
+  if (machineWithSuffix.length > DAYTONA_SANDBOX_NAME_MAX_LENGTH) {
+    if (machineSlug.length <= DAYTONA_SANDBOX_NAME_MAX_LENGTH) return machineSlug;
+    return machineSlug.slice(0, DAYTONA_SANDBOX_NAME_MAX_LENGTH);
+  }
+
+  const maxPrefixLength = DAYTONA_SANDBOX_NAME_MAX_LENGTH - machineWithSuffix.length - 2;
+  if (maxPrefixLength <= 0) return machineWithSuffix;
+
+  const prefix = `${configSlug}--${projectSlug}`.slice(0, maxPrefixLength).replace(/-+$/, "");
+  if (!prefix) return machineWithSuffix;
+  return `${prefix}--${machineWithSuffix}`;
+}
 
 /**
  * Daytona sandbox implementation.
@@ -160,19 +192,11 @@ export class DaytonaProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<DaytonaSandbox> {
-    // Build sandbox name from config and options
-    const configSlug = slugify(this.env.DOPPLER_CONFIG ?? this.env.APP_STAGE ?? "unknown").slice(
-      0,
-      20,
-    );
-    const projectSlug = slugify(opts.envVars["ITERATE_PROJECT_SLUG"] ?? "project").slice(0, 15);
-    const machineSlug = slugify(opts.id ?? opts.name).slice(0, 15);
-    // Add random suffix to avoid name collisions in concurrent test runs
-    const randomSuffix = Math.random().toString(36).slice(2, 8);
-    const sandboxName = `${configSlug}--${projectSlug}--${machineSlug}-${randomSuffix}`.slice(
-      0,
-      63,
-    );
+    const sandboxName = buildDaytonaSandboxName({
+      config: this.env.DOPPLER_CONFIG ?? this.env.APP_STAGE ?? "unknown",
+      project: opts.envVars["ITERATE_PROJECT_SLUG"] ?? "project",
+      machine: opts.id ?? opts.name,
+    });
 
     const autoStopInterval = this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES
       ? Number(this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES)
