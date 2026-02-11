@@ -421,6 +421,15 @@ export const machineRouter = router({
         ctx.env,
       );
 
+      // Best-effort provider cleanup first — don't block DB deletion if provider fails
+      // (e.g. sandbox already deleted, invalid externalId, provider API down)
+      await runtime.delete().catch((err) => {
+        logger.warn("Failed to delete provider sandbox, proceeding with DB cleanup", {
+          machineId: input.machineId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       // Delete machine from DB (token is shared across project, so we keep it)
       const deleted = await ctx.db
         .delete(schema.machine)
@@ -435,13 +444,6 @@ export const machineRouter = router({
           message: "Machine not found",
         });
       }
-
-      await runtime.delete().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
 
       return { success: true };
     }),
