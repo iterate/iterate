@@ -11,7 +11,7 @@ neonConfig.wsProxy = (host, port) =>
     ? `localhost:${env.LOCAL_DOCKER_NEON_PROXY_PORT}/v2?address=${host}:${port}`
     : `${host}/v2?address=${host}:${port}`;
 
-const createPool = (databaseUrl: string) => new Pool({ connectionString: databaseUrl });
+const createPool = (databaseUrl: string) => new Pool({ connectionString: databaseUrl, max: 3 });
 
 export const getDb = () =>
   drizzle({ client: createPool(env.DATABASE_URL), schema, casing: "snake_case" });
