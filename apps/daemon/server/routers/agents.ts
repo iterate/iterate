@@ -403,32 +403,66 @@ export const agentTrpcRouter = createTRPCRouter({
           });
         }
 
-        const { route: routePath, sessionId } = (await createResponse.json()) as {
+        const created = (await createResponse.json()) as {
           route: string;
           sessionId?: string;
+          metadata?: {
+            agentHarness?: unknown;
+            opencodeSessionId?: unknown;
+          } | null;
         };
-
-        const routeMetadata =
-          typeof sessionId === "string"
+        const routePath = created.route;
+        const metadataFromProvider =
+          created.metadata?.agentHarness === "opencode" &&
+          typeof created.metadata?.opencodeSessionId === "string" &&
+          created.metadata.opencodeSessionId.length > 0
             ? ({
-                harness: routePath.startsWith("/opencode/") ? "opencode" : "unknown",
-                harnessHandle: sessionId,
-                sessionId,
+                agentHarness: "opencode",
+                opencodeSessionId: created.metadata.opencodeSessionId,
               } satisfies Record<string, unknown>)
-            : undefined;
+            : null;
+        const metadataFromRouteAndSession =
+          routePath.startsWith("/opencode/") &&
+          typeof created.sessionId === "string" &&
+          created.sessionId.length > 0
+            ? ({
+                agentHarness: "opencode",
+                opencodeSessionId: created.sessionId,
+              } satisfies Record<string, unknown>)
+            : null;
+        // Current contract: store harness metadata only on the agent row.
+        // Future: each harness provider should return structured deep-link metadata.
+        const metadataForAgent = metadataFromProvider ?? metadataFromRouteAndSession;
 
         const newRoute = db
           .update(schema.agentRoutes)
-          .set({ destination: routePath, metadata: routeMetadata, updatedAt: new Date() })
+          .set({ destination: routePath, updatedAt: new Date() })
           .where(eq(schema.agentRoutes.id, result.pendingRoute!.id))
           .returning()
           .get();
+
+        let nextAgent = result.agent;
+        if (metadataForAgent) {
+          const mergedAgentMetadata = {
+            ...(result.agent.metadata ?? {}),
+            ...metadataForAgent,
+          } satisfies Record<string, unknown>;
+
+          const updatedAgent = db
+            .update(schema.agents)
+            .set({ metadata: mergedAgentMetadata, updatedAt: new Date() })
+            .where(eq(schema.agents.path, agentPath))
+            .returning()
+            .get();
+
+          if (updatedAgent) nextAgent = updatedAgent;
+        }
 
         const finalRoute = newRoute ?? result.pendingRoute!;
         resolveInflight!(finalRoute);
 
         return {
-          agent: serializeAgent(result.agent, finalRoute),
+          agent: serializeAgent(nextAgent, finalRoute),
           route: serializeAgentRoute(finalRoute),
           wasNewlyCreated: true,
         };

@@ -7,6 +7,7 @@
  * Flow:
  *   1. OS worker receives Slack event, forwards to POST /webhook
  *   2. We parse & classify (mention / FYI / reaction / ignored)
+ *   2.5. We intercept agent commands (primary: !debug) before agent forwarding
  *   3. For mentions: immediately fire-and-forget eyes emoji, then getOrCreateAgent
  *      For FYI: getAgent (skip if none), then fire-and-forget thinking_face emoji
  *      For reactions: getAgent (skip if none), then fire-and-forget eyes emoji
@@ -48,6 +49,7 @@ import type {
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { trpcRouter } from "../trpc/router.ts";
+import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -254,6 +256,41 @@ slackRouter.post("/webhook", async (c) => {
   const agentPath = getAgentPath(threadTs);
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
+  const commandResult = await runAgentCommand({
+    message: event.text || "",
+    agentPath,
+    getAgent: caller.getAgent,
+    rendererHint: "apps/daemon/server/routers/slack.ts",
+  });
+
+  if (commandResult) {
+    const channel = event.channel || "";
+    if (!channel) {
+      return c.json({
+        success: true,
+        message: "Ignored: command message missing channel",
+        case: `${commandResult.command}_command`,
+        eventId,
+        requestId,
+      });
+    }
+
+    await postSlackThreadMessage({
+      channel,
+      threadTs,
+      text: commandResult.resultMarkdown,
+      requestId,
+    });
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: false,
+      case: `${commandResult.command}_command`,
+      eventId,
+      requestId,
+    });
+  }
 
   // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
   // which can be slow (it blocks waiting for an OpenCode session to be created).
@@ -485,6 +522,22 @@ async function runSlackCommand(code: string, requestId?: string): Promise<void> 
     requestId,
     preview: code.slice(0, 80),
   });
+}
+
+async function postSlackThreadMessage(params: {
+  channel: string;
+  threadTs: string;
+  text: string;
+  requestId?: string;
+}): Promise<void> {
+  await runSlackCommand(
+    `await slack.chat.postMessage(${JSON.stringify({
+      channel: params.channel,
+      thread_ts: params.threadTs,
+      text: params.text,
+    })})`,
+    params.requestId,
+  );
 }
 
 // ──────────────────────────── Parsing / routing ─────────────────────────────

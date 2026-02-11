@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const selectLimitQueue: unknown[][] = [];
 
 const getOrCreateAgentMock = vi.fn();
+const getAgentMock = vi.fn();
 const subscribeToAgentChangesMock = vi.fn();
 
 vi.mock("../trpc/router.ts", () => ({
   trpcRouter: {
     createCaller: vi.fn(() => ({
       getOrCreateAgent: getOrCreateAgentMock,
+      getAgent: getAgentMock,
       subscribeToAgentChanges: subscribeToAgentChangesMock,
     })),
   },
@@ -38,6 +40,7 @@ describe("webchat router", () => {
     selectLimitQueue.length = 0;
     fetchSpy.mockReset();
     getOrCreateAgentMock.mockReset();
+    getAgentMock.mockReset();
     subscribeToAgentChangesMock.mockReset();
     vi.stubGlobal("fetch", fetchSpy);
   });
@@ -226,6 +229,36 @@ describe("webchat router", () => {
       expect(response.status).toBe(400);
       const body = await response.json();
       expect(body.error).toContain("Invalid");
+    });
+  });
+
+  describe("/webhook — agent commands", () => {
+    it("handles !debug without creating/forwarding to agent", async () => {
+      getAgentMock.mockResolvedValue(null);
+
+      const response = await webchatRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "!debug",
+          threadId: "thread-debug",
+          messageId: "msg-debug-1",
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+      expect(body.created).toBe(false);
+      expect(body.assistantMessageId).toBeDefined();
+      expect(body.assistantEventId).toBeDefined();
+
+      expect(getAgentMock).toHaveBeenCalledWith({ path: "/webchat/thread-debug" });
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(subscribeToAgentChangesMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });

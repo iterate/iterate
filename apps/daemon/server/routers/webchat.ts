@@ -37,6 +37,7 @@ import { z } from "zod/v4";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { trpcRouter } from "../trpc/router.ts";
+import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
 // Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
@@ -148,7 +149,6 @@ webchatRouter.post("/webhook", async (c) => {
 
   const agentPath = getAgentPathForThread(webchatThreadId);
   const caller = trpcRouter.createCaller({});
-  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
   const userMessage: StoredMessage = {
     threadId: webchatThreadId,
@@ -162,6 +162,44 @@ webchatRouter.post("/webhook", async (c) => {
   };
 
   const eventId = await storeEvent("webchat:user-message", userMessage, messageId);
+  const commandResult = await runAgentCommand({
+    message: payload.text || "",
+    agentPath,
+    getAgent: caller.getAgent,
+    rendererHint: "apps/daemon/server/routers/webchat.ts",
+  });
+
+  if (commandResult) {
+    const assistantMessageId = `msg_${nanoid(12)}`;
+    const assistantText = commandResult.resultMarkdown;
+    const assistantMessage: StoredMessage = {
+      threadId: webchatThreadId,
+      messageId: assistantMessageId,
+      role: "assistant",
+      text: assistantText,
+      createdAt: Date.now(),
+    };
+    const assistantEventId = await storeEvent(
+      "webchat:assistant-message",
+      assistantMessage,
+      assistantMessageId,
+    );
+
+    return c.json({
+      success: true,
+      duplicate: false,
+      threadId: webchatThreadId,
+      messageId,
+      eventId,
+      created: false,
+      queued: false,
+      case: `${commandResult.command}_command`,
+      assistantMessageId,
+      assistantEventId,
+    });
+  }
+
+  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
 
   const formattedMessage = formatIncomingMessage({
     payload,

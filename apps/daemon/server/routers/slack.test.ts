@@ -54,6 +54,7 @@ describe("slack router", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   describe("new thread @mention (case 1)", () => {
@@ -444,6 +445,122 @@ describe("slack router", () => {
       expect(body.message).toContain("Duplicate");
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("!debug command", () => {
+    it("handles !debug in-thread without forwarding prompt and posts debug details", async () => {
+      const threadTs = "2121212121.212121";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
+      vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
+      vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
+      vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getAgentMock.mockResolvedValue({
+        path: agentPath,
+        workingDirectory: "/workspace/repo",
+        metadata: {
+          agentHarness: "opencode",
+          opencodeSessionId: "sess_abc123",
+        },
+        activeRoute: {
+          destination: "/opencode/sessions/sess_abc123",
+          metadata: null,
+        },
+      });
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_1",
+          event: {
+            type: "message",
+            thread_ts: threadTs,
+            ts: "2121212121.313131",
+            text: "!debug",
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "2121212121.313131",
+            channel_type: "channel",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+
+      expect(getAgentMock).toHaveBeenCalledTimes(1);
+      expect(getAgentMock).toHaveBeenCalledWith({ path: agentPath });
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      const postMessageCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("chat.postMessage"),
+      );
+      expect(postMessageCall).toBeDefined();
+      expect(postMessageCall![1][2]).toContain("sess_abc123");
+      expect(postMessageCall![1][2]).toContain("OpenCode Web UI (direct proxy)");
+      expect(postMessageCall![1][2]).toContain("terminal?command=");
+    });
+
+    it("returns deterministic no-agent explanation for !debug when agent does not exist", async () => {
+      const threadTs = "3131313131.313131";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getAgentMock.mockResolvedValue(null);
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_2",
+          event: {
+            type: "message",
+            thread_ts: threadTs,
+            ts: "3131313131.414141",
+            text: "<@U_BOT> !debug",
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "3131313131.414141",
+            channel_type: "channel",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+
+      const postMessageCall = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("chat.postMessage"),
+      );
+      expect(postMessageCall).toBeDefined();
+      expect(postMessageCall![1][2]).toContain(agentPath);
+      expect(postMessageCall![1][2]).toContain("no agent was returned");
+
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
