@@ -28,12 +28,15 @@ import { decrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
 import { linkExternalIdToGroups } from "../../lib/posthog.ts";
+import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import {
   PROJECT_SANDBOX_PROVIDER,
   getAvailableProjectSandboxProviders,
   getDefaultProjectSandboxProvider,
   getProjectSandboxProviderOptions,
 } from "../../utils/sandbox-providers.ts";
+import { waitUntil } from "../../../env.ts";
+import { logger } from "../../tag-logger.ts";
 
 export const projectRouter = router({
   getAvailableSandboxProviders: publicProcedure.query(({ ctx }) => {
@@ -541,6 +544,21 @@ export const projectRouter = router({
             );
         }
       });
+
+      // Refresh env in both projects: target gains token, source loses token.
+      const projectIdsToRefresh =
+        sourceProjectId === targetProjectId
+          ? [targetProjectId]
+          : [targetProjectId, sourceProjectId];
+      waitUntil(
+        Promise.all(
+          projectIdsToRefresh.map((projectId) =>
+            pokeRunningMachinesToRefresh(ctx.db, projectId, ctx.env),
+          ),
+        ).catch((err) => {
+          logger.error("[project.transferSlackConnection] Failed to poke machines", err);
+        }),
+      );
 
       return {
         success: true,
