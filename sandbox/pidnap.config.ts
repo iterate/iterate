@@ -93,7 +93,7 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        inheritGlobalEnv: false,
+        // Keep reload disabled to avoid restart loops when daemon rewrites ~/.iterate/.env.
         reloadDelay: false,
       },
     },
