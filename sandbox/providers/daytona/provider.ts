@@ -6,7 +6,6 @@
 
 import { Daytona, type Sandbox as DaytonaSDKSandbox } from "@daytonaio/sdk";
 import { z } from "zod/v4";
-import { resolveDaytonaSandboxByIdentifier } from "./resolve-sandbox.ts";
 import {
   Sandbox,
   SandboxProvider,
@@ -15,6 +14,7 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
+import { resolveDaytonaSandboxByIdentifier } from "./resolve-sandbox.ts";
 
 /**
  * Zod schema for Daytona provider environment variables.
