@@ -230,6 +230,12 @@ function MachineDetailPage() {
     flyAppName && flyMachineId
       ? `https://fly.io/apps/${flyAppName}/machines/${flyMachineId}`
       : null;
+  const flyRealtimeLogsUrl =
+    flyAppName && flyMachineId
+      ? `https://fly.io/apps/${flyAppName}/monitoring?${new URLSearchParams({
+          instance: flyMachineId,
+        }).toString()}`
+      : null;
   const flyGrafanaOrgId = import.meta.env.VITE_FLY_GRAFANA_ORG_ID ?? "1440139";
   const flyGrafanaMetricsUrl = flyAppName
     ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
@@ -308,6 +314,9 @@ function MachineDetailPage() {
           ...(flyMachineUrl ? [{ label: "Fly Machine", url: flyMachineUrl }] : []),
           ...(flyGrafanaMetricsUrl
             ? [{ label: "Grafana (Metrics)", url: flyGrafanaMetricsUrl }]
+            : []),
+          ...(flyRealtimeLogsUrl
+            ? [{ label: "Fly Logs (Realtime)", url: flyRealtimeLogsUrl }]
             : []),
           ...(flyGrafanaLogsUrl ? [{ label: "Grafana (Logs)", url: flyGrafanaLogsUrl }] : []),
           ...(flyGrafanaNetworkingUrl
