@@ -61,26 +61,32 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
   });
 
   // Build service options for each daemon with web UI
-  const services = await Promise.all(
+  const serviceResults = await Promise.all(
     getDaemonsWithWebUI().map(async (daemon) => {
-      const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
-      const proxyUrl = buildProxyUrl(daemon.internalPort);
-      const options: ServiceOption[] = [];
+      try {
+        const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
+        const proxyUrl = buildProxyUrl(daemon.internalPort);
+        const options: ServiceOption[] = [];
 
-      // Add native URL if different from proxy (e.g., Daytona has direct access)
-      if (nativeUrl && !nativeUrl.startsWith("/")) {
-        options.push({ label: "Direct", url: nativeUrl });
+        // Add native URL if different from proxy (e.g., Daytona has direct access)
+        if (nativeUrl && !nativeUrl.startsWith("/")) {
+          options.push({ label: "Direct", url: nativeUrl });
+        }
+        options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
+
+        return {
+          id: daemon.id,
+          name: daemon.name,
+          port: daemon.internalPort,
+          options,
+        };
+      } catch {
+        // Port not mapped (e.g. Jaeger not exposed in older docker containers) — skip
+        return null;
       }
-      options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
-
-      return {
-        id: daemon.id,
-        name: daemon.name,
-        port: daemon.internalPort,
-        options,
-      };
     }),
   );
+  const services = serviceResults.filter((s) => s !== null);
 
   return {
     ...machine,

@@ -166,10 +166,10 @@ if (shouldUpdateDoppler) {
   for (const config of configs) {
     if (!config) continue;
     console.log(
-      `Updating Doppler (${dopplerProject}/${config}): DOCKER_DEFAULT_IMAGE=${localImageTag}`,
+      `Updating Doppler (${dopplerProject}/${config}): DOCKER_DEFAULT_IMAGE=${depotImageTag}`,
     );
     execSync(
-      `doppler secrets set DOCKER_DEFAULT_IMAGE=${localImageTag} --project ${dopplerProject} --config ${config}`,
+      `doppler secrets set DOCKER_DEFAULT_IMAGE=${depotImageTag} --project ${dopplerProject} --config ${config}`,
       { cwd: repoRoot, stdio: "inherit" },
     );
     if (pushTags.includes(flyImageTag)) {

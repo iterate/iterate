@@ -35,6 +35,8 @@ const DAEMON_PORTS = [
   { id: "iterate-daemon", internalPort: 3000 },
   { id: "iterate-daemon-server", internalPort: 3001 },
   { id: "opencode", internalPort: 4096 },
+  { id: "jaeger-ui", internalPort: 16686 },
+  { id: "jaeger-otlp-http", internalPort: 4318 },
 ] as const;
 type DockerServiceTransport = "port-map" | "cloudflare-tunnel";
 
@@ -513,7 +515,8 @@ async function resolveHostPorts(params: {
     const bindings = ports[key];
     const hostPortRaw = Array.isArray(bindings) ? bindings[0]?.HostPort : undefined;
     if (!hostPortRaw) {
-      throw new Error(`No host port mapped for ${key}`);
+      // Port not exposed in this container (e.g. older image without Jaeger) — skip
+      continue;
     }
     const hostPort = Number(hostPortRaw);
     if (Number.isNaN(hostPort)) {
