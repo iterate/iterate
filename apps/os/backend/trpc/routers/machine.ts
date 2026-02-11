@@ -31,6 +31,14 @@ function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetc
   });
 }
 
+function parsePositiveIntegerOrDefault(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return fallback;
+}
+
 /** Service URL options for a daemon */
 interface ServiceOption {
   label: string;
@@ -463,11 +471,14 @@ export const machineRouter = router({
   }),
 
   // Get default snapshot/image for each provider (used by create-machine UI)
-  getDefaultSnapshots: publicProcedure.query(({ ctx }) => ({
-    daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
-    fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
-    docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
-  })),
+  getDefaultSnapshots: publicProcedure.query(({ ctx }) => {
+    return {
+      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
+      fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
+      docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
+      flyMachineCpus: parsePositiveIntegerOrDefault(ctx.env.FLY_DEFAULT_CPUS, 4),
+    };
+  }),
 
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
