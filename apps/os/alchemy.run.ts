@@ -582,6 +582,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       APPROVAL_COORDINATOR,
       PROXY_ROOT_DOMAIN,
       PROXY_WORKER: proxyWorker,
+      LOCAL_DOCKER_NEON_PROXY_PORT: process.env.LOCAL_DOCKER_NEON_PROXY_PORT || "",
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
