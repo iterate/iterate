@@ -1,6 +1,6 @@
 # Project ingress proxy
 
-- Iterate projects should be reachable via public hostnames under .iterate.app . For example misha.iterate.app
+- Iterate projects should be reachable via public hostnames under both `.iterate.town` and `.iterate.app`
 - This should work consistently across all machine providers (fly, daytona, docker, whatever)
 - Individual services running within a project machine should be reachable via hostname, too
 
@@ -8,12 +8,14 @@
 
 # Step 0 - what we're doing today
 
-We will support the following hostname patterns:
+We support the following hostname patterns:
 
-- mach_123.machines.iterate.app -> machine mach_123
-- 4096\_\_mach_123.machines.iterate.app -> machine mach_123
-- misha.iterate.app -> port 3000 (default) of the currently attached machine of the project with slug "misha"
-- 4096\_\_misha.iterate.app -> port 4096 of the currently attached machine of the project with slug "misha"
+- mach_123.machines.iterate.town -> machine mach_123
+- 4096\_\_mach_123.machines.iterate.town -> machine mach_123
+- misha.iterate.town -> port 3000 (default) of the active machine of project slug "misha"
+- 4096\_\_misha.iterate.town -> port 4096 of the active machine of project slug "misha"
+
+The same matcher logic exists for `.iterate.app` hosts in code, but we cannot run live validation there yet.
 
 ## How it works
 
@@ -21,25 +23,38 @@ We will support the following hostname patterns:
 
 Inside each machine we run new `apps/project-ingress-proxy` process under pidnap supervision. Listens on port 8080. It receives HTTP requests proxied from the os worker with original hostname stored in `X-Iterate-Proxy-Target-Host` header.
 
-It parses the port from the front of the hostname and proxies to localhost:<port>.
+It parses the target from the header and proxies to `localhost:<port>`.
+
+Supported `X-Iterate-Proxy-Target-Host` forms:
+
+- `<port>__<hostname>`
+- `localhost:<port>`
+- `127.0.0.1:<port>`
+
+Non-local explicit host:port targets are rejected.
 
 ### Os
 
-We have a \*.iterate.app CNAME record pointing at our `os` worker (in the future this could be a skinnier worker)
+We route wildcard hostnames to the `os` worker.
 
-When the `os` worker sees a `*.iterate.app` hostname, it tries to resolve the \* to a "machine".
+When the `os` worker sees a supported hostname, it resolves the host to a machine record.
 
-It doesn't care about the port - the project ingress proxy on the machine handles this.
+It does not connect directly to target service ports.
 
-It then uses the machine provider abstraction to get a fetcher for the machine (which uses a machine provider specific mechanism under the hood).
+It always forwards via machine ingress on port `8080` and puts the original host in `X-Iterate-Proxy-Target-Host`.
 
-Then it stores the original hostname in `X-Iterate-Proxy-Target-Host` header and sends through the fetcher.
+The machine ingress proxy then routes to the final local service port.
 
-Behind the scenes this (currently) takes a different path depending on machine provider:
+Behind the scenes:
 
-- docker: uses mapped port on host machine
-- fly: uses fly public url for the "app" - which connects to port 8080 on the "sandbox" machine
-- daytona: uses daytona preview url for port 8080
+- docker: fetch transport uses host-mapped URL for container port `8080`
+- fly: ingress goes through app ingress to container port `8080`
+- daytona: ingress uses preview URL for port `8080`
+
+## Infra tasks
+
+- [ ] Create `*.machines.iterate.app` wildcard CNAME to OS ingress target
+- [ ] Enable Cloudflare Total TLS for `iterate.town` (wildcard cert auto-issuance)
 
 # Future improvements
 

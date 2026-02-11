@@ -32,6 +32,7 @@ const TUNNEL_RATE_LIMIT_MARKER = "__CLOUDFLARE_TUNNEL_RATE_LIMIT__";
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
+  { id: "project-ingress-proxy", internalPort: 8080 },
   { id: "iterate-daemon", internalPort: 3000 },
   { id: "iterate-daemon-server", internalPort: 3001 },
   { id: "opencode", internalPort: 4096 },
