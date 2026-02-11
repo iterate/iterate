@@ -371,34 +371,132 @@ export async function getGitHubInstallationToken(
   env: CloudflareEnv,
   installationId: number,
 ): Promise<string | null> {
-  try {
-    const jwt = await generateGitHubAppJWT(env);
+  const result = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
+  return result.token;
+}
 
-    const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "Iterate-OS",
-        },
+export type GitHubInstallationTokenDiagnostics = {
+  jwtMs: number;
+  fetchMs: number;
+  parseMs: number;
+  totalMs: number;
+};
+
+export type GitHubInstallationTokenResult = {
+  token: string | null;
+  status: number | null;
+  request: {
+    url: string;
+    method: "POST";
+    installationId: number;
+  };
+  diagnostics: GitHubInstallationTokenDiagnostics;
+  responseHeaders: {
+    xGitHubRequestId: string | null;
+    xRateLimitLimit: string | null;
+    xRateLimitRemaining: string | null;
+    xRateLimitReset: string | null;
+  };
+  error: string | null;
+};
+
+export async function getGitHubInstallationTokenWithDiagnostics(
+  env: CloudflareEnv,
+  installationId: number,
+): Promise<GitHubInstallationTokenResult> {
+  const startedAt = nowMs();
+  const diagnostics: GitHubInstallationTokenDiagnostics = {
+    jwtMs: 0,
+    fetchMs: 0,
+    parseMs: 0,
+    totalMs: 0,
+  };
+
+  const emptyHeaders = {
+    xGitHubRequestId: null,
+    xRateLimitLimit: null,
+    xRateLimitRemaining: null,
+    xRateLimitReset: null,
+  };
+
+  const request = {
+    url: `https://api.github.com/app/installations/${installationId}/access_tokens`,
+    method: "POST" as const,
+    installationId,
+  };
+
+  try {
+    const jwtStartedAt = nowMs();
+    const jwt = await generateGitHubAppJWT(env);
+    diagnostics.jwtMs = Math.round(nowMs() - jwtStartedAt);
+
+    const fetchStartedAt = nowMs();
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "Iterate-OS",
       },
-    );
+    });
+    diagnostics.fetchMs = Math.round(nowMs() - fetchStartedAt);
+
+    const responseHeaders = {
+      xGitHubRequestId: response.headers.get("x-github-request-id"),
+      xRateLimitLimit: response.headers.get("x-ratelimit-limit"),
+      xRateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+      xRateLimitReset: response.headers.get("x-ratelimit-reset"),
+    };
 
     if (!response.ok) {
+      const parseStartedAt = nowMs();
+      const errorBody = await response.text();
+      diagnostics.parseMs = Math.round(nowMs() - parseStartedAt);
+      diagnostics.totalMs = Math.round(nowMs() - startedAt);
+
       logger.error(
-        `Failed to get installation token for ${installationId}: ${response.status} ${await response.text()}`,
+        `Failed to get installation token for ${installationId}: ${response.status} ${errorBody}`,
       );
-      return null;
+      return {
+        token: null,
+        status: response.status,
+        request,
+        diagnostics,
+        responseHeaders,
+        error: `GitHub responded ${response.status}`,
+      };
     }
 
+    const parseStartedAt = nowMs();
     const data = (await response.json()) as { token: string; expires_at: string };
-    return data.token;
+    diagnostics.parseMs = Math.round(nowMs() - parseStartedAt);
+    diagnostics.totalMs = Math.round(nowMs() - startedAt);
+
+    return {
+      token: data.token,
+      status: response.status,
+      request,
+      diagnostics,
+      responseHeaders,
+      error: null,
+    };
   } catch (error) {
+    diagnostics.totalMs = Math.round(nowMs() - startedAt);
     logger.error(`Error getting installation token for ${installationId}:`, error);
-    return null;
+    return {
+      token: null,
+      status: null,
+      request,
+      diagnostics,
+      responseHeaders: emptyHeaders,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function nowMs(): number {
+  if (typeof performance !== "undefined") return performance.now();
+  return Date.now();
 }
 
 export type GitHubRepository = {
