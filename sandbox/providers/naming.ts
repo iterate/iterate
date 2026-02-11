@@ -24,6 +24,10 @@ export function shortenKeepingEnds(params: {
   if (params.maxLength <= 0) return "";
 
   const preserveEnd = Math.max(0, params.preserveEnd);
+  if (preserveEnd === 0) {
+    return sanitized.slice(0, params.maxLength).replace(/-+$/, "");
+  }
+
   const end = sanitized.slice(-preserveEnd);
   const startBudget = params.maxLength - end.length - 1;
   if (startBudget <= 0) {
@@ -54,7 +58,11 @@ export function buildCanonicalMachineExternalId(params: {
     );
   }
 
-  const shortenedProjectSlug = projectSlug.slice(0, maxProjectSlugLength).replace(/-+$/, "");
+  const shortenedProjectSlug = shortenKeepingEnds({
+    value: projectSlug,
+    maxLength: maxProjectSlugLength,
+    preserveEnd: 0,
+  });
   if (!shortenedProjectSlug) {
     throw new Error(`Project slug '${projectSlug}' cannot be represented safely`);
   }

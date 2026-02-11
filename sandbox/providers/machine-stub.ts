@@ -45,6 +45,9 @@ type DockerMetadata = {
     imageName?: string;
     syncRepo?: boolean;
   };
+  docker?: {
+    containerRef?: string;
+  };
   snapshotName?: string;
   ports?: Record<string, number>;
   port?: number;
@@ -270,8 +273,10 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
   const localDockerConfig = typedMetadata.localDocker ?? {};
+  const dockerMetadata = asRecord(typedMetadata.docker);
   const imageName = asString(localDockerConfig.imageName) ?? asString(typedMetadata.snapshotName);
   const syncRepo = asBoolean(localDockerConfig.syncRepo);
+  const knownContainerRef = asString(dockerMetadata.containerRef);
 
   const provider = new DockerProvider(
     toRawEnv({
@@ -287,7 +292,10 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const knownPorts = resolveDockerPortsFromMetadata(typedMetadata);
   const providerHandle: SandboxHandleProvider<DockerSandbox> = {
     get(providerId) {
-      return provider.getWithPorts({ providerId, knownPorts: { ...knownPorts } });
+      return provider.getWithPorts({
+        providerId: knownContainerRef ?? providerId,
+        knownPorts: { ...knownPorts },
+      });
     },
   };
 

@@ -2,7 +2,8 @@
  * Daytona SDK integration - preview token management.
  */
 import { eq, and } from "drizzle-orm";
-import { Daytona, type Sandbox as DaytonaSandbox } from "@daytonaio/sdk";
+import { Daytona } from "@daytonaio/sdk";
+import { resolveDaytonaSandboxByIdentifier } from "@iterate-com/sandbox/providers/daytona/resolve-sandbox";
 import * as schema from "../../db/schema.ts";
 import type { DB } from "../../db/client.ts";
 
@@ -10,22 +11,6 @@ export type TokenDeps = {
   db: DB;
   daytona: Daytona;
 };
-
-async function resolveSandboxByIdentifier(
-  daytona: Daytona,
-  sandboxIdentifier: string,
-): Promise<DaytonaSandbox> {
-  try {
-    return await daytona.get(sandboxIdentifier);
-  } catch {
-    const response = await daytona.list();
-    const match = (response.items ?? []).find((sandbox) => sandbox.name === sandboxIdentifier);
-    if (!match?.id) {
-      throw new Error(`Daytona sandbox not found for identifier '${sandboxIdentifier}'`);
-    }
-    return daytona.get(match.id);
-  }
-}
 
 /**
  * Get cached preview token or fetch fresh from Daytona SDK
@@ -59,7 +44,7 @@ export async function refreshPreviewToken(
   sandboxIdentifier: string,
   port: number,
 ): Promise<string> {
-  const sandbox = await resolveSandboxByIdentifier(deps.daytona, sandboxIdentifier);
+  const sandbox = await resolveDaytonaSandboxByIdentifier(deps.daytona, sandboxIdentifier);
   const previewInfo = await sandbox.getPreviewLink(port);
 
   await deps.db

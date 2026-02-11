@@ -21,6 +21,12 @@ describe("shortenKeepingEnds", () => {
     expect(shortened.endsWith("90pqrs")).toBe(true);
     expect(shortened.length).toBeLessThanOrEqual(25);
   });
+
+  it("handles preserveEnd=0 by truncating from the front", () => {
+    expect(shortenKeepingEnds({ value: "alpha-beta-gamma", maxLength: 10, preserveEnd: 0 })).toBe(
+      "alpha-beta",
+    );
+  });
 });
 
 describe("buildCanonicalMachineExternalId", () => {

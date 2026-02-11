@@ -33,21 +33,10 @@ const PIDNAP_PROCESSES = [
   "trace-viewer",
 ] as const;
 
-function parseFlyExternalId(externalId: string): { appName: string; machineId?: string } | null {
+function parseFlyExternalId(externalId: string): { appName: string } | null {
   const trimmed = externalId.trim();
   if (!trimmed) return null;
-
-  const separatorIndex = trimmed.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    // Current model: externalId is the Fly app name.
-    return { appName: trimmed };
-  }
-
-  // Legacy model: externalId encoded as app:machine.
-  return {
-    appName: trimmed.slice(0, separatorIndex),
-    machineId: trimmed.slice(separatorIndex + 1),
-  };
+  return { appName: trimmed };
 }
 
 type MachineMetadata = {
@@ -235,7 +224,7 @@ function MachineDetailPage() {
   const opencodeBaseUrl = opencodeService?.options[0]?.url;
 
   const flyExternal = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
-  const flyMachineId = flyExternal?.machineId ?? metadata.fly?.machineId;
+  const flyMachineId = metadata.fly?.machineId;
   const flyAppName = flyExternal?.appName ?? null;
   const flyMachineUrl =
     flyAppName && flyMachineId

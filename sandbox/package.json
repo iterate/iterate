@@ -8,6 +8,7 @@
     "./providers/naming": "./providers/naming.ts",
     "./providers/docker/api": "./providers/docker/api.ts",
     "./providers/docker": "./providers/docker/provider.ts",
+    "./providers/daytona/resolve-sandbox": "./providers/daytona/resolve-sandbox.ts",
     "./providers/daytona": "./providers/daytona/provider.ts",
     "./providers/fly": "./providers/fly/provider.ts"
   },

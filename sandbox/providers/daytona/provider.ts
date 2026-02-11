@@ -6,6 +6,7 @@
 
 import { Daytona, type Sandbox as DaytonaSDKSandbox } from "@daytonaio/sdk";
 import { z } from "zod/v4";
+import { resolveDaytonaSandboxByIdentifier } from "./resolve-sandbox.ts";
 import {
   Sandbox,
   SandboxProvider,
@@ -53,23 +54,11 @@ export class DaytonaSandbox extends Sandbox {
 
   private async resolveSandboxId(): Promise<string> {
     if (this.resolvedSandboxId) return this.resolvedSandboxId;
-
-    try {
-      const direct = await this.daytona.get(this.providerId);
-      if (direct.id) {
-        this.resolvedSandboxId = direct.id;
-        return this.resolvedSandboxId;
-      }
-    } catch {
-      // External ID might be a canonical name, not Daytona's internal sandbox ID.
+    const sandbox = await resolveDaytonaSandboxByIdentifier(this.daytona, this.providerId);
+    if (!sandbox.id) {
+      throw new Error(`Daytona sandbox resolved without id for identifier '${this.providerId}'`);
     }
-
-    const response = await this.daytona.list();
-    const match = (response.items ?? []).find((sandbox) => sandbox.name === this.providerId);
-    if (!match?.id) {
-      throw new Error(`Daytona sandbox not found for external ID '${this.providerId}'`);
-    }
-    this.resolvedSandboxId = match.id;
+    this.resolvedSandboxId = sandbox.id;
     return this.resolvedSandboxId;
   }
 
