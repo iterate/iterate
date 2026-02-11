@@ -1,5 +1,5 @@
-import alchemy from "alchemy";
 import { spawn } from "node:child_process";
+import alchemy from "alchemy";
 import { Tunnel, Worker } from "alchemy/cloudflare";
 
 /**
