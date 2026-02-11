@@ -86,16 +86,18 @@ export class DockerSandbox extends Sandbox {
     this.serviceTransport = serviceTransport;
   }
 
+  private portsResolved = false;
+
   private async ensurePortsResolved(): Promise<void> {
     if (!this.providerId) {
       throw new Error("Cannot resolve ports: machine is still provisioning (no container ID yet)");
     }
-    const hasAllPorts = this.internalPorts.every((internalPort) => this.ports[internalPort]);
-    if (hasAllPorts) return;
+    if (this.portsResolved) return;
     this.ports = await resolveHostPorts({
       containerId: this.providerId,
       internalPorts: this.internalPorts,
     });
+    this.portsResolved = true;
   }
 
   private async getCloudflarePreviewUrl(port: number): Promise<string> {

@@ -45,6 +45,7 @@ type DockerMetadata = {
     imageName?: string;
     syncRepo?: boolean;
   };
+  snapshotName?: string;
   ports?: Record<string, number>;
   port?: number;
 };
@@ -256,7 +257,7 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
   const localDockerConfig = typedMetadata.localDocker ?? {};
-  const imageName = asString(localDockerConfig.imageName);
+  const imageName = asString(localDockerConfig.imageName) ?? asString(typedMetadata.snapshotName);
   const syncRepo = asBoolean(localDockerConfig.syncRepo);
 
   const provider = new DockerProvider(
