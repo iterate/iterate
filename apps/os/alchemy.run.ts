@@ -120,6 +120,8 @@ async function ensureDevTunnelWildcardDns(
 
   const wildcardHostname = config.wildcardHostname;
   const wildcardTarget = `${tunnelId}.cfargotunnel.com`;
+  const edgeCertificatesUrl =
+    "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.com/ssl-tls/edge-certificates";
   const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
   const findResponse = await fetch(
     `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
@@ -157,6 +159,9 @@ async function ensureDevTunnelWildcardDns(
       throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
     }
     console.log(`Updated wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+    console.log(
+      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+    );
   } else {
     const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
       method: "POST",
@@ -167,6 +172,9 @@ async function ensureDevTunnelWildcardDns(
       throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
     }
     console.log(`Created wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+    console.log(
+      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+    );
   }
 
   // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
