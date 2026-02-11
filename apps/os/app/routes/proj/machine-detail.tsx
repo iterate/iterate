@@ -30,6 +30,7 @@ const PIDNAP_PROCESSES = [
   "daemon-frontend",
   "opencode",
   "egress-proxy",
+  "project-ingress-proxy",
   "trace-viewer",
 ] as const;
 
