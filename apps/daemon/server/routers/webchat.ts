@@ -179,7 +179,6 @@ webchatRouter.post("/webhook", async (c) => {
     message: payload.text || "",
     agentPath,
     agent,
-    rendererHint: "apps/daemon/server/routers/webchat.ts",
   });
 
   if (commandResult) {

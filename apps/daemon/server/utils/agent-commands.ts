@@ -8,7 +8,6 @@ export type AgentCommandEnvironment = {
   // Channels must resolve agent context before invoking commands.
   // Command matching/execution is intentionally skipped when no agent exists.
   agent: SerializedAgent;
-  rendererHint?: string;
 };
 
 type AgentCommandRunOutput<T = unknown> = {
@@ -31,29 +30,26 @@ const AGENT_COMMANDS = [
     async run(env: AgentCommandEnvironment) {
       const session = resolveAgentSession(env.agent);
       const result = {
-        status: "ok",
-        agentPath: env.agentPath,
-        agentHarness: session.agentHarness,
-        sessionSource: session.source,
+        agent: env.agent,
         terminalUrl: session.terminalUrl ?? null,
         webUrl: session.webUrl ?? null,
       } as const;
 
       const lines = [
-        `Agent path: ${result.agentPath}`,
-        `Agent harness: ${result.agentHarness ?? "unknown"}`,
-        `Session source: ${result.sessionSource ?? "none"}`,
+        `Agent path: ${env.agentPath}`,
+        `Agent harness: ${session.agentHarness ?? "unknown"}`,
+        `Session source: ${session.source ?? "none"}`,
       ];
 
       if (result.webUrl) {
-        lines.push(`Harness Web UI (direct proxy): <${result.webUrl}|Open session>`);
-      } else if (result.agentHarness) {
+        lines.push(`Harness Web UI (direct proxy): ${result.webUrl}`);
+      } else if (session.agentHarness) {
         lines.push("Harness Web UI (direct proxy): unavailable (missing machine link env)");
       }
 
       if (result.terminalUrl) {
-        lines.push(`Open Terminal UI: <${result.terminalUrl}|Open terminal attach>`);
-      } else if (result.agentHarness) {
+        lines.push(`Open Terminal UI: ${result.terminalUrl}`);
+      } else if (session.agentHarness) {
         lines.push("Open Terminal UI: unavailable (missing machine link env)");
       }
 

@@ -602,6 +602,90 @@ describe("slack router", () => {
       expect(getOrCreateAgentMock).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    it("waits for pending reactions.add before cleanup remove on !debug intercept", async () => {
+      const threadTs = "4141414141.414141";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+      let releaseAdd: () => void = () => {};
+      let hasPendingAdd = false;
+
+      tinyexecMock.mockImplementation((...args: unknown[]) => {
+        const code = Array.isArray(args[1]) ? args[1][2] : undefined;
+        if (typeof code === "string" && code.includes("reactions.add")) {
+          return new Promise((resolve) => {
+            hasPendingAdd = true;
+            releaseAdd = () => resolve({ exitCode: 0, stdout: "", stderr: "" });
+          });
+        }
+
+        return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+      });
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: {
+          path: agentPath,
+          workingDirectory: "/workspace/repo",
+          metadata: null,
+          activeRoute: {
+            destination: "/opencode/sessions/sess_race",
+            metadata: {
+              agentHarness: "opencode",
+              opencodeSessionId: "sess_race",
+            },
+          },
+        },
+      });
+
+      const responsePromise = slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_race_1",
+          event: {
+            type: "app_mention",
+            thread_ts: threadTs,
+            ts: "4141414141.515151",
+            text: `<@${botUserId}> !debug`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: "4141414141.515151",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      for (let i = 0; i < 10 && !hasPendingAdd; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const removeBeforeRelease = tinyexecMock.mock.calls.find(
+        (call: unknown[]) =>
+          Array.isArray(call[1]) &&
+          typeof call[1][2] === "string" &&
+          call[1][2].includes("reactions.remove"),
+      );
+      expect(removeBeforeRelease).toBeUndefined();
+
+      expect(hasPendingAdd).toBe(true);
+      releaseAdd();
+
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+
+      const commandCalls = tinyexecMock.mock.calls
+        .map((call: unknown[]) => (Array.isArray(call[1]) ? call[1][2] : ""))
+        .filter((value): value is string => typeof value === "string");
+      const addIndex = commandCalls.findIndex((call) => call.includes("reactions.add"));
+      const removeIndex = commandCalls.findIndex((call) => call.includes("reactions.remove"));
+
+      expect(addIndex).toBeGreaterThanOrEqual(0);
+      expect(removeIndex).toBeGreaterThan(addIndex);
+    });
   });
 
   describe("immediate emoji reaction", () => {

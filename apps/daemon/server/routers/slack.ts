@@ -74,6 +74,8 @@ type SlackThreadContext = {
   /** The emoji name we added (e.g. "eyes", "thinking_face"). */
   emoji: string;
   requestId?: string;
+  /** Tracks the in-flight reactions.add call so remove waits and avoids no_reaction races. */
+  acknowledgePromise?: Promise<void>;
 };
 
 const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
@@ -228,7 +230,7 @@ slackRouter.post("/webhook", async (c) => {
         requestId,
       };
       slackThreadContextByAgentPath.set(agentPath, ctx);
-      void acknowledge(ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
     }
 
     // Fire-and-forget prompt to the agent.
@@ -273,7 +275,7 @@ slackRouter.post("/webhook", async (c) => {
         requestId,
       };
       slackThreadContextByAgentPath.set(agentPath, ctx);
-      void acknowledge(ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
     }
 
     // Mentions always get-or-create an agent, matching the webchat pattern.
@@ -302,7 +304,7 @@ slackRouter.post("/webhook", async (c) => {
         requestId,
       };
       slackThreadContextByAgentPath.set(agentPath, ctx);
-      void acknowledge(ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
     }
   }
 
@@ -320,7 +322,6 @@ slackRouter.post("/webhook", async (c) => {
     message: event.text || "",
     agentPath,
     agent,
-    rendererHint: "apps/daemon/server/routers/slack.ts",
   });
 
   if (commandResult) {
@@ -471,6 +472,8 @@ async function acknowledge(context: SlackThreadContext): Promise<void> {
  * Shells out to `iterate tool slack` — see comment above for why.
  */
 async function unacknowledge(context: SlackThreadContext): Promise<void> {
+  await context.acknowledgePromise;
+
   try {
     await runSlackCommand(
       `await slack.reactions.remove(${JSON.stringify({
