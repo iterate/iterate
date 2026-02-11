@@ -162,12 +162,14 @@ export const reportStatus = os.machines.reportStatus
       };
 
       if (!machineWithOrg.externalId) {
+        // externalId not yet set — provision consumer will enqueue readiness
+        // after persisting the provider resource ID.
         await db
           .update(schema.machine)
           .set({ metadata: verifyingMetadata })
           .where(eq(schema.machine.id, machine.id));
 
-        logger.info("Deferring readiness probe until machine provisioning completes", {
+        logger.info("Deferring readiness probe, externalId empty (provision pending)", {
           machineId: machine.id,
           projectId: machineWithOrg.projectId,
         });

@@ -1,11 +1,9 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
-import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
-import { waitUntil, type CloudflareEnv } from "../../env.ts";
+import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { createConsumerClient, type DBLike } from "../outbox/pgmq-lib.ts";
-import { queuer } from "../outbox/outbox-queuer.ts";
+import { outboxClient } from "../outbox/client.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -70,21 +68,10 @@ export type CreateMachineParams = {
   metadata?: Record<string, unknown>;
 };
 
-type MachineCreationEventTypes = {
-  "machine:verify-readiness": {
-    machineId: string;
-    projectId: string;
-  };
-};
-
-const machineCreationOutbox = createConsumerClient<MachineCreationEventTypes, DBLike>(queuer, {
-  waitUntil,
-});
-
 /**
  * Build the full env var map for a new machine.
  */
-async function buildMachineEnvVars(params: {
+export async function buildMachineEnvVars(params: {
   db: DB;
   env: CloudflareEnv;
   projectId: string;
@@ -135,19 +122,17 @@ async function buildMachineEnvVars(params: {
 
 /**
  * Create a machine for a project.
- * This is the core machine creation logic shared between tRPC and webhooks.
  *
- * The DB record is created immediately and a `provisionPromise` is returned
- * for background provisioning. Callers should pass this to `waitUntil()` or
- * `await` it directly.
+ * Inserts the DB row with `state=starting, externalId=""` and enqueues a
+ * durable `machine:provision` outbox event in the same transaction.
+ * Actual provider resource creation happens in the provision consumer.
+ *
+ * Returns immediately — no `waitUntil` or background promise needed.
  */
 export async function createMachineForProject(params: CreateMachineParams): Promise<{
   machine: typeof schema.machine.$inferSelect;
-  apiKey?: string;
-  provisionPromise?: Promise<void>;
 }> {
-  const { db, env, projectId, organizationId, organizationSlug, projectSlug, name, metadata } =
-    params;
+  const { db, projectId, organizationId, organizationSlug, projectSlug, name, metadata } = params;
 
   const machineId = typeid("mach").toString();
 
@@ -160,125 +145,43 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
   }
   const type = projectRecord.sandboxProvider;
 
-  // Get or create the project-level access token
-  const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
-
-  const fullEnvVars = await buildMachineEnvVars({
-    db,
-    env,
-    projectId,
-    organizationId,
-    organizationSlug,
-    projectSlug,
-    machineId,
-    name,
-    apiKey,
-  });
-
-  // Detach older starting machines first to avoid concurrent readiness probes.
-  const [newMachine] = await db.transaction(async (tx) => {
+  // Detach older starting machines, insert new row, and enqueue provision — all in one tx.
+  await outboxClient.sendTx(db, "machine:provision", async (tx) => {
     await tx
       .update(schema.machine)
       .set({ state: "detached" })
       .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "starting")));
 
-    return tx
-      .insert(schema.machine)
-      .values({
-        id: machineId,
-        name,
-        type,
+    await tx.insert(schema.machine).values({
+      id: machineId,
+      name,
+      type,
+      projectId,
+      state: "starting",
+      metadata: metadata ?? {},
+      externalId: "",
+    });
+
+    return {
+      payload: {
+        machineId,
         projectId,
-        state: "starting",
+        organizationId,
+        organizationSlug,
+        projectSlug,
+        name,
         metadata: metadata ?? {},
-        externalId: "",
-      })
-      .returning();
+      },
+    };
   });
 
+  // Read back the inserted machine (after tx commit).
+  const newMachine = await db.query.machine.findFirst({
+    where: eq(schema.machine.id, machineId),
+  });
   if (!newMachine) throw new Error("Failed to create machine");
-  logger.info("Machine record created, starting provisioning", { machineId, projectId, type });
 
-  const provisionPromise = (async () => {
-    try {
-      const runtime = await createMachineStub({
-        type,
-        env,
-        externalId: "",
-        metadata: metadata ?? {},
-      });
-      const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
+  logger.info("Machine record created, provision event enqueued", { machineId, projectId, type });
 
-      // Read current metadata — daemon status may have changed while provisioning.
-      const latestMachine = await db.query.machine.findFirst({
-        where: eq(schema.machine.id, machineId),
-      });
-      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
-      const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
-      const daemonStatus = latestMetadata.daemonStatus;
-      const shouldEnqueueDeferredReadiness =
-        latestMachine?.state === "starting" &&
-        (daemonStatus === "verifying" || daemonStatus === "ready");
-
-      if (shouldEnqueueDeferredReadiness) {
-        const verifyingMetadata = {
-          ...latestMachineMetadata,
-          daemonStatus: "verifying",
-          daemonStatusMessage: "Running readiness probe...",
-          daemonReadyAt: null,
-        };
-
-        await machineCreationOutbox.sendTx(db, "machine:verify-readiness", async (tx) => {
-          await tx
-            .update(schema.machine)
-            .set({
-              externalId: runtimeResult.externalId,
-              metadata: verifyingMetadata,
-            })
-            .where(eq(schema.machine.id, machineId));
-
-          return { payload: { machineId, projectId } };
-        });
-
-        logger.info("Machine provisioned, deferred readiness probe enqueued", {
-          machineId,
-          projectId,
-          type,
-        });
-      } else {
-        await db
-          .update(schema.machine)
-          .set({
-            externalId: runtimeResult.externalId,
-            metadata: latestMachineMetadata,
-          })
-          .where(eq(schema.machine.id, machineId));
-      }
-
-      logger.info("Machine provisioned", { machineId, projectId, type });
-    } catch (err) {
-      logger.error("Machine provisioning failed", { machineId, projectId, type, err });
-      // Store provisioning error in metadata while preserving any concurrent daemon state updates.
-      const currentMachine = await db.query.machine.findFirst({
-        where: eq(schema.machine.id, machineId),
-      });
-      const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      await db
-        .update(schema.machine)
-        .set({
-          metadata: {
-            ...currentMetadata,
-            provisioningError: errorMessage,
-            daemonStatus: "error",
-            daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
-            daemonReadyAt: null,
-          },
-        })
-        .where(eq(schema.machine.id, machineId))
-        .catch(() => {});
-    }
-  })();
-
-  return { machine: newMachine, provisionPromise };
+  return { machine: newMachine };
 }

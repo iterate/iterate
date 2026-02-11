@@ -1,5 +1,5 @@
 ---
-state: todo
+state: in-progress
 priority: high
 size: large
 dependsOn: []

@@ -17,7 +17,7 @@ interface Machine {
   id: string;
   name: string;
   type: string;
-  state: "starting" | "active" | "detached" | "archived";
+  state: "starting" | "active" | "detached" | "archived" | "failed";
   externalId: string;
   createdAt: Date;
   metadata: {
@@ -114,7 +114,9 @@ export function MachineTable({
                         ? "fill-yellow-500 text-yellow-500"
                         : machine.state === "detached"
                           ? "fill-blue-500 text-blue-500"
-                          : "fill-muted text-muted"
+                          : machine.state === "failed"
+                            ? "fill-red-500 text-red-500"
+                            : "fill-muted text-muted"
                   }`}
                 />
                 <span className="font-medium truncate">{machine.name}</span>

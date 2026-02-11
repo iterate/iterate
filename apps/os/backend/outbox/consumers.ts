@@ -5,11 +5,169 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 import { probeMachineReadiness } from "../services/machine-readiness-probe.ts";
+import {
+  getOrCreateProjectMachineToken,
+  buildMachineEnvVars,
+} from "../services/machine-creation.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
+
+  // Step 0: Provision the actual provider resource (Daytona sandbox / Docker / Fly)
+  cc.registerConsumer({
+    name: "provisionMachine",
+    on: "machine:provision",
+    visibilityTimeout: 300, // provider creation can be slow (image pull, etc.)
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: 15 };
+      return { retry: false, reason: "provisioning failed after retries" };
+    },
+    async handler(params) {
+      const {
+        machineId,
+        projectId,
+        organizationId,
+        organizationSlug,
+        projectSlug,
+        name,
+        metadata,
+      } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      // Skip if machine is no longer starting (e.g. detached by newer creation)
+      if (machine.state !== "starting") {
+        logger.info("[outbox] Skipping provision, machine no longer starting", {
+          machineId,
+          state: machine.state,
+        });
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      try {
+        // Get API key for the machine's project
+        const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
+
+        // Build env vars
+        const fullEnvVars = await buildMachineEnvVars({
+          db,
+          env,
+          projectId,
+          organizationId,
+          organizationSlug,
+          projectSlug,
+          machineId,
+          name,
+          apiKey,
+        });
+
+        // Create the provider resource
+        const runtime = await createMachineStub({
+          type: machine.type,
+          env,
+          externalId: "",
+          metadata,
+        });
+        const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
+
+        // Read current metadata — daemon status may have changed while provisioning.
+        const latestMachine = await db.query.machine.findFirst({
+          where: eq(schema.machine.id, machineId),
+        });
+        const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+        const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
+        const daemonStatus = latestMetadata.daemonStatus;
+        const shouldEnqueueReadiness =
+          latestMachine?.state === "starting" &&
+          (daemonStatus === "verifying" || daemonStatus === "ready");
+
+        if (shouldEnqueueReadiness) {
+          // Persist externalId and enqueue readiness probe atomically
+          const verifyingMetadata = {
+            ...latestMachineMetadata,
+            daemonStatus: "verifying",
+            daemonStatusMessage: "Running readiness probe...",
+            daemonReadyAt: null,
+          };
+
+          await cc.sendTx(db, "machine:verify-readiness", async (tx) => {
+            await tx
+              .update(schema.machine)
+              .set({
+                externalId: runtimeResult.externalId,
+                metadata: verifyingMetadata,
+              })
+              .where(eq(schema.machine.id, machineId));
+
+            return { payload: { machineId, projectId } };
+          });
+
+          logger.info("[outbox] Machine provisioned, deferred readiness probe enqueued", {
+            machineId,
+            projectId,
+          });
+        } else {
+          // Persist externalId without readiness probe — daemon hasn't reported ready yet
+          await db
+            .update(schema.machine)
+            .set({
+              externalId: runtimeResult.externalId,
+              metadata: latestMachineMetadata,
+            })
+            .where(eq(schema.machine.id, machineId));
+        }
+
+        await broadcastInvalidation(env).catch(() => {});
+        logger.info("[outbox] Machine provisioned", { machineId, projectId });
+        return `provisioned machine ${machineId}`;
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        logger.error("[outbox] Machine provisioning failed", {
+          machineId,
+          projectId,
+          attempt: params.job.attempt,
+          error: errorMessage,
+        });
+
+        const isLastAttempt = params.job.attempt >= 3;
+
+        // Preserve concurrent daemon state updates.
+        const currentMachine = await db.query.machine.findFirst({
+          where: eq(schema.machine.id, machineId),
+        });
+        const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
+
+        await db
+          .update(schema.machine)
+          .set({
+            // On final failure, move to terminal `failed` state
+            ...(isLastAttempt ? { state: "failed" as const } : {}),
+            metadata: {
+              ...currentMetadata,
+              provisioningError: errorMessage,
+              daemonStatus: isLastAttempt ? "error" : "retrying",
+              daemonStatusMessage: isLastAttempt
+                ? `Provisioning failed: ${errorMessage}`
+                : `Provisioning attempt ${params.job.attempt} failed, retrying...`,
+              daemonReadyAt: null,
+            },
+          })
+          .where(eq(schema.machine.id, machineId))
+          .catch(() => {});
+
+        await broadcastInvalidation(env).catch(() => {});
+
+        // Throw so the outbox retry machinery kicks in
+        throw new Error(`provisioning failed: ${errorMessage}`);
+      }
+    },
+  });
 
   // Step 1: Verify a machine actually works before activating it
   cc.registerConsumer({

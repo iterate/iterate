@@ -11,7 +11,7 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { waitUntil, type CloudflareEnv } from "../../../env.ts";
+import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
@@ -128,12 +128,30 @@ async function getProviderForMachine(
     });
   }
 
-  const runtime = await createMachineStub({
-    type: machine.type,
-    env: cloudflareEnv,
-    externalId: machine.externalId,
-    metadata: (machine.metadata as Record<string, unknown>) ?? {},
-  });
+  if (!machine.externalId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        machine.state === "failed"
+          ? "Machine provisioning failed"
+          : "Machine is still being provisioned",
+    });
+  }
+
+  let runtime: MachineStub;
+  try {
+    runtime = await createMachineStub({
+      type: machine.type,
+      env: cloudflareEnv,
+      externalId: machine.externalId,
+      metadata: (machine.metadata as Record<string, unknown>) ?? {},
+    });
+  } catch (err) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Machine provider resource is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 
   return { runtime, machine };
 }
@@ -256,16 +274,6 @@ export const machineRouter = router({
           name: input.name,
           metadata: input.metadata,
         });
-
-        // Provision in background — the DB record is already created
-        if (result.provisionPromise) {
-          waitUntil(result.provisionPromise);
-        }
-
-        // Return apiKey for local machines - user needs this to configure their daemon
-        if (result.apiKey) {
-          return { ...result.machine, apiKey: result.apiKey };
-        }
 
         return result.machine;
       } catch (err) {
@@ -513,24 +521,61 @@ export const machineRouter = router({
         });
       }
 
-      const runtime = await createMachineStub({
-        type: machineRecord.type,
-        env: ctx.env,
-        externalId: machineRecord.externalId,
-        metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
-      });
-      const [daemonBaseUrl, daemonFetcher] = await Promise.all([
-        runtime.getBaseUrl(3000),
-        runtime.getFetcher(3000),
-      ]);
-      const daemonClient = createDaemonTrpcClient({
-        baseUrl: daemonBaseUrl,
-        fetcher: daemonFetcher,
-      });
-      const [agents, serverInfo] = await Promise.all([
-        daemonClient.listAgents.query(),
-        daemonClient.getServerCwd.query(),
-      ]);
-      return { agents, customerRepoPath: serverInfo.customerRepoPath };
+      // Machine must have an externalId to be reachable
+      if (!machineRecord.externalId) {
+        const metadata = (machineRecord.metadata as Record<string, unknown>) ?? {};
+        if (machineRecord.state === "starting") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Machine is still being provisioned",
+          });
+        }
+        if (machineRecord.state === "failed") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Machine provisioning failed: ${(metadata.provisioningError as string) ?? "unknown error"}`,
+          });
+        }
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Machine has no provider resource and cannot be reached",
+        });
+      }
+
+      let runtime: Awaited<ReturnType<typeof createMachineStub>>;
+      try {
+        runtime = await createMachineStub({
+          type: machineRecord.type,
+          env: ctx.env,
+          externalId: machineRecord.externalId,
+          metadata: (machineRecord.metadata as Record<string, unknown>) ?? {},
+        });
+      } catch (err) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Machine provider resource is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+
+      try {
+        const [daemonBaseUrl, daemonFetcher] = await Promise.all([
+          runtime.getBaseUrl(3000),
+          runtime.getFetcher(3000),
+        ]);
+        const daemonClient = createDaemonTrpcClient({
+          baseUrl: daemonBaseUrl,
+          fetcher: daemonFetcher,
+        });
+        const [agents, serverInfo] = await Promise.all([
+          daemonClient.listAgents.query(),
+          daemonClient.getServerCwd.query(),
+        ]);
+        return { agents, customerRepoPath: serverInfo.customerRepoPath };
+      } catch (err) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Machine is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     }),
 });

@@ -105,18 +105,69 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   const externalId = machineRecord.externalId;
   const metadata = machineRecord.metadata as Record<string, unknown>;
 
-  // 4. Build target URL using provider
+  // 4. Check machine availability before proxying
+  if (!externalId) {
+    const state = machineRecord.state;
+    if (state === "starting") {
+      return c.json({ error: "Machine is still being provisioned", machineState: state }, 503);
+    }
+    if (state === "failed") {
+      return c.json(
+        {
+          error: "Machine provisioning failed",
+          machineState: state,
+          detail: (metadata.provisioningError as string) ?? null,
+        },
+        410,
+      );
+    }
+    return c.json({ error: "Machine has no provider resource", machineState: state }, 410);
+  }
+
+  // 5. Build target URL using provider
   const url = new URL(c.req.url);
   const pathMatch = url.pathname.match(new RegExp(`/proxy/${port}(/.*)$`));
   const path = pathMatch?.[1] ?? "/";
 
-  const runtime = await createMachineStub({
-    type: machineRecord.type,
-    env: c.env,
-    externalId,
-    metadata,
-  });
-  const baseUrl = await runtime.getBaseUrl(portNum);
+  let runtime: Awaited<ReturnType<typeof createMachineStub>>;
+  try {
+    runtime = await createMachineStub({
+      type: machineRecord.type,
+      env: c.env,
+      externalId,
+      metadata,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("Machine provider resource unavailable", {
+      machineId: machineRecord.id,
+      error: msg,
+    });
+    return c.json(
+      {
+        error:
+          "Machine provider resource is unavailable. The sandbox may have been deleted or replaced.",
+        detail: msg,
+      },
+      410,
+    );
+  }
+
+  let baseUrl: string;
+  try {
+    baseUrl = await runtime.getBaseUrl(portNum);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error("Failed to resolve machine base URL", { machineId: machineRecord.id, error: msg });
+    return c.json(
+      {
+        error:
+          "Machine provider resource is unavailable. The sandbox may have been deleted or replaced.",
+        detail: msg,
+      },
+      410,
+    );
+  }
   const targetUrl = `${baseUrl}${path}`;
   const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
   const pathWithQuery = url.search ? `${path}${url.search}` : path;

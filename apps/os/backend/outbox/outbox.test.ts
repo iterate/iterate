@@ -59,6 +59,23 @@ test("internal event types are type-safe", () => {
   );
 });
 
+test("machine:provision event type", () => {
+  const db = {} as DBLike;
+  expectTypeOf(outboxClient.send).toBeCallableWith(
+    { transaction: db, parent: db },
+    "machine:provision",
+    {
+      machineId: "mach_123",
+      projectId: "prj_123",
+      organizationId: "org_123",
+      organizationSlug: "my-org",
+      projectSlug: "my-proj",
+      name: "ci-abc1234",
+      metadata: {},
+    },
+  );
+});
+
 test("machine:archive event type", () => {
   const db = {} as DBLike;
   expectTypeOf(outboxClient.send).toBeCallableWith(
