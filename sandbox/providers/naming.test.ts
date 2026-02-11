@@ -33,15 +33,26 @@ describe("buildCanonicalMachineExternalId", () => {
     expect(externalId).toBe("dev-my-project-mach-01k8j0abcdxyz1234567890pqrs");
   });
 
-  it("respects the hostname-safe max length and preserves machine-id tail", () => {
+  it("respects max length by truncating only project slug", () => {
+    const machineId = "mach_01k8j0abcdxyz1234567890pqrs";
     const externalId = buildCanonicalMachineExternalId({
       prefix: "stg",
       projectSlug: "project-with-a-really-really-really-really-really-long-slug",
-      machineId: "mach_01k8j0abcdxyz1234567890pqrs",
+      machineId,
     });
 
     expect(externalId.length).toBeLessThanOrEqual(MAX_CANONICAL_MACHINE_NAME_LENGTH);
     expect(externalId.startsWith("stg-")).toBe(true);
-    expect(externalId.endsWith("90pqrs")).toBe(true);
+    expect(externalId.endsWith(`-${machineId.replaceAll("_", "-")}`)).toBe(true);
+  });
+
+  it("throws when full machine id cannot fit with prefix", () => {
+    expect(() =>
+      buildCanonicalMachineExternalId({
+        prefix: "dev",
+        projectSlug: "project",
+        machineId: `mach_${"a".repeat(80)}`,
+      }),
+    ).toThrow(/too long/i);
   });
 });

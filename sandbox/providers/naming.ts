@@ -1,5 +1,4 @@
 export const MAX_CANONICAL_MACHINE_NAME_LENGTH = 63;
-const DEFAULT_MACHINE_ID_TAIL_LENGTH = 6;
 
 function sanitizeNamePart(value: string): string {
   return value
@@ -41,32 +40,26 @@ export function buildCanonicalMachineExternalId(params: {
   projectSlug: string;
   machineId: string;
   maxLength?: number;
-  machineIdTailLength?: number;
 }): string {
   const maxLength = params.maxLength ?? MAX_CANONICAL_MACHINE_NAME_LENGTH;
   const prefix = coalescePart(params.prefix, "dev");
   const projectSlug = coalescePart(params.projectSlug, "project");
   const machineId = coalescePart(params.machineId, "machine");
-  const machineIdTailLength = params.machineIdTailLength ?? DEFAULT_MACHINE_ID_TAIL_LENGTH;
 
-  const maxBodyLength = maxLength - prefix.length - 1;
-  if (maxBodyLength <= 0) {
+  const prefixMachineLength = prefix.length + machineId.length + 2;
+  const maxProjectSlugLength = maxLength - prefixMachineLength;
+  if (maxProjectSlugLength < 1) {
     throw new Error(
-      `SANDBOX_NAME_PREFIX '${prefix}' is too long for max machine name length ${maxLength}`,
+      `Machine id '${machineId}' is too long for max machine name length ${maxLength} with prefix '${prefix}'`,
     );
   }
 
-  const body = `${projectSlug}-${machineId}`;
-  const shortenedBody =
-    body.length <= maxBodyLength
-      ? body
-      : shortenKeepingEnds({
-          value: body,
-          maxLength: maxBodyLength,
-          preserveEnd: Math.max(1, machineIdTailLength),
-        });
+  const shortenedProjectSlug = projectSlug.slice(0, maxProjectSlugLength).replace(/-+$/, "");
+  if (!shortenedProjectSlug) {
+    throw new Error(`Project slug '${projectSlug}' cannot be represented safely`);
+  }
 
-  const canonical = `${prefix}-${shortenedBody}`.slice(0, maxLength).replace(/-+$/, "");
+  const canonical = `${prefix}-${shortenedProjectSlug}-${machineId}`;
   if (!canonical) {
     throw new Error("Failed to build canonical machine external id");
   }
