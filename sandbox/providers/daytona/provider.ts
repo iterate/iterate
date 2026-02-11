@@ -14,7 +14,6 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
-import { resolveDaytonaSandboxByIdentifier } from "./resolve-sandbox.ts";
 
 /**
  * Zod schema for Daytona provider environment variables.
@@ -54,7 +53,7 @@ export class DaytonaSandbox extends Sandbox {
 
   private async resolveSandboxId(): Promise<string> {
     if (this.resolvedSandboxId) return this.resolvedSandboxId;
-    const sandbox = await resolveDaytonaSandboxByIdentifier(this.daytona, this.providerId);
+    const sandbox = await this.daytona.get(this.providerId);
     if (!sandbox.id) {
       throw new Error(`Daytona sandbox resolved without id for identifier '${this.providerId}'`);
     }
