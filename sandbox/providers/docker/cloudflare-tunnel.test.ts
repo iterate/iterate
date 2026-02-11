@@ -17,6 +17,7 @@ describe.runIf(RUN_DOCKER_CLOUDFLARE_TUNNEL_TESTS)("Docker Cloudflare Tunnel", (
       DOCKER_TUNNEL_PORTS: "3000",
     },
     sandboxOptions: {
+      externalId: "test-docker-cloudflare-tunnel",
       id: "docker-cloudflare-tunnel-test",
       name: "Docker Cloudflare Tunnel Test",
       envVars: {},

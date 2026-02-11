@@ -1,6 +1,7 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import { buildCanonicalMachineExternalId } from "@iterate-com/sandbox/providers/naming";
 import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -150,6 +151,11 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     params;
 
   const machineId = typeid("mach").toString();
+  const machineExternalId = buildCanonicalMachineExternalId({
+    prefix: env.SANDBOX_NAME_PREFIX,
+    projectSlug,
+    machineId,
+  });
 
   const projectRecord = await db.query.project.findFirst({
     where: eq(schema.project.id, projectId),
@@ -191,7 +197,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         projectId,
         state: "starting",
         metadata: metadata ?? {},
-        externalId: "",
+        externalId: machineExternalId,
       })
       .returning();
   });
@@ -204,10 +210,15 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       const runtime = await createMachineStub({
         type,
         env,
-        externalId: "",
+        externalId: machineExternalId,
         metadata: metadata ?? {},
       });
-      const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
+      const runtimeResult = await runtime.create({
+        machineId,
+        externalId: machineExternalId,
+        name,
+        envVars: fullEnvVars,
+      });
 
       // Read current metadata — daemon status may have changed while provisioning.
       const latestMachine = await db.query.machine.findFirst({
@@ -232,7 +243,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
           await tx
             .update(schema.machine)
             .set({
-              externalId: runtimeResult.externalId,
               metadata: verifyingMetadata,
             })
             .where(eq(schema.machine.id, machineId));
@@ -249,7 +259,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         await db
           .update(schema.machine)
           .set({
-            externalId: runtimeResult.externalId,
             metadata: latestMachineMetadata,
           })
           .where(eq(schema.machine.id, machineId));

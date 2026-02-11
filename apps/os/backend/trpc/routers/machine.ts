@@ -46,7 +46,7 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
 ) {
   const metadata = (machine.metadata as Record<string, unknown>) ?? {};
 
-  // Machines still being provisioned have no externalId yet — skip provider enrichment
+  // Old rows created before canonical external IDs may still have empty externalId.
   if (!machine.externalId) {
     return { ...machine, metadata, services: [] };
   }

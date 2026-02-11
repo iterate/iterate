@@ -17,7 +17,7 @@ export type TokenDeps = {
 export async function getPreviewToken(
   deps: TokenDeps,
   machineId: string,
-  sandboxId: string,
+  sandboxIdentifier: string,
   port: number,
 ): Promise<string> {
   const cached = await deps.db.query.daytonaPreviewToken.findFirst({
@@ -31,7 +31,7 @@ export async function getPreviewToken(
     return cached.token;
   }
 
-  return refreshPreviewToken(deps, machineId, sandboxId, port);
+  return refreshPreviewToken(deps, machineId, sandboxIdentifier, port);
 }
 
 /**
@@ -40,10 +40,10 @@ export async function getPreviewToken(
 export async function refreshPreviewToken(
   deps: TokenDeps,
   machineId: string,
-  sandboxId: string,
+  sandboxIdentifier: string,
   port: number,
 ): Promise<string> {
-  const sandbox = await deps.daytona.get(sandboxId);
+  const sandbox = await deps.daytona.get(sandboxIdentifier);
   const previewInfo = await sandbox.getPreviewLink(port);
 
   await deps.db

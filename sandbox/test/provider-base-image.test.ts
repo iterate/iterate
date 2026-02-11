@@ -20,6 +20,7 @@ describe
           ? { DAYTONA_DEFAULT_SNAPSHOT: TEST_BASE_SNAPSHOT_ID }
           : {},
       sandboxOptions: {
+        externalId: "test-base-image-test",
         id: "base-image-test",
         name: "Base Image Test",
         envVars: {},
