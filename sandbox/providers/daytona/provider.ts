@@ -14,7 +14,6 @@ import {
   type SandboxInfo,
   type SnapshotInfo,
 } from "../types.ts";
-import { slugify } from "../utils.ts";
 
 /**
  * Zod schema for Daytona provider environment variables.
@@ -31,38 +30,6 @@ const DaytonaEnv = z.object({
 
 type DaytonaEnv = z.infer<typeof DaytonaEnv>;
 const DAYTONA_CREATE_TIMEOUT_SECONDS = 180;
-const DAYTONA_SANDBOX_NAME_MAX_LENGTH = 63;
-
-function randomSuffix(length: number): string {
-  return Math.random()
-    .toString(36)
-    .slice(2, 2 + length);
-}
-
-export function buildDaytonaSandboxName(params: {
-  config: string;
-  project: string;
-  machine: string;
-  suffix?: string;
-}): string {
-  const configSlug = slugify(params.config).slice(0, 20);
-  const projectSlug = slugify(params.project).slice(0, 15);
-  const machineSlug = slugify(params.machine) || "machine";
-  const suffix = params.suffix ?? randomSuffix(6);
-
-  const machineWithSuffix = `${machineSlug}-${suffix}`;
-  if (machineWithSuffix.length > DAYTONA_SANDBOX_NAME_MAX_LENGTH) {
-    if (machineSlug.length <= DAYTONA_SANDBOX_NAME_MAX_LENGTH) return machineSlug;
-    return machineSlug.slice(0, DAYTONA_SANDBOX_NAME_MAX_LENGTH);
-  }
-
-  const maxPrefixLength = DAYTONA_SANDBOX_NAME_MAX_LENGTH - machineWithSuffix.length - 2;
-  if (maxPrefixLength <= 0) return machineWithSuffix;
-
-  const prefix = `${configSlug}--${projectSlug}`.slice(0, maxPrefixLength).replace(/-+$/, "");
-  if (!prefix) return machineWithSuffix;
-  return `${prefix}--${machineWithSuffix}`;
-}
 
 /**
  * Daytona sandbox implementation.
@@ -71,23 +38,51 @@ export function buildDaytonaSandboxName(params: {
 export class DaytonaSandbox extends Sandbox {
   readonly providerId: string;
   readonly type = "daytona" as const;
+  readonly runtimeSandboxId: string | undefined;
 
   private readonly daytona: Daytona;
+  private resolvedSandboxId: string | null = null;
 
-  constructor(daytona: Daytona, sandboxId: string) {
+  constructor(daytona: Daytona, externalId: string, sandboxId?: string) {
     super();
     this.daytona = daytona;
-    this.providerId = sandboxId;
+    this.providerId = externalId;
+    this.runtimeSandboxId = sandboxId;
+    this.resolvedSandboxId = sandboxId ?? null;
+  }
+
+  private async resolveSandboxId(): Promise<string> {
+    if (this.resolvedSandboxId) return this.resolvedSandboxId;
+
+    try {
+      const direct = await this.daytona.get(this.providerId);
+      if (direct.id) {
+        this.resolvedSandboxId = direct.id;
+        return this.resolvedSandboxId;
+      }
+    } catch {
+      // External ID might be a canonical name, not Daytona's internal sandbox ID.
+    }
+
+    const response = await this.daytona.list();
+    const match = (response.items ?? []).find((sandbox) => sandbox.name === this.providerId);
+    if (!match?.id) {
+      throw new Error(`Daytona sandbox not found for external ID '${this.providerId}'`);
+    }
+    this.resolvedSandboxId = match.id;
+    return this.resolvedSandboxId;
   }
 
   async getBaseUrl(opts: { port: number }): Promise<string> {
-    return `https://${opts.port}-${this.providerId}.proxy.daytona.works`;
+    const sandboxId = await this.resolveSandboxId();
+    return `https://${opts.port}-${sandboxId}.proxy.daytona.works`;
   }
 
   // === Lifecycle ===
 
   private async getSdkSandbox(): Promise<DaytonaSDKSandbox> {
-    return this.daytona.get(this.providerId);
+    const sandboxId = await this.resolveSandboxId();
+    return this.daytona.get(sandboxId);
   }
 
   async exec(cmd: string[]): Promise<string> {
@@ -192,11 +187,10 @@ export class DaytonaProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<DaytonaSandbox> {
-    const sandboxName = buildDaytonaSandboxName({
-      config: this.env.DOPPLER_CONFIG ?? this.env.APP_STAGE ?? "unknown",
-      project: opts.envVars["ITERATE_PROJECT_SLUG"] ?? "project",
-      machine: opts.id ?? opts.name,
-    });
+    const sandboxName = opts.externalId;
+    if (!sandboxName) {
+      throw new Error("Daytona create requires externalId");
+    }
 
     const autoStopInterval = this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES
       ? Number(this.env.DAYTONA_DEFAULT_AUTO_STOP_MINUTES)
@@ -226,12 +220,16 @@ export class DaytonaProvider extends SandboxProvider {
       { timeout: DAYTONA_CREATE_TIMEOUT_SECONDS },
     );
 
-    return new DaytonaSandbox(this.daytona, sdkSandbox.id);
+    return new DaytonaSandbox(this.daytona, sandboxName, sdkSandbox.id);
   }
 
   get(providerId: string): DaytonaSandbox | null {
-    // Return a handle - operations will fail if sandbox doesn't exist
-    return new DaytonaSandbox(this.daytona, providerId);
+    return this.getWithSandboxId({ providerId });
+  }
+
+  getWithSandboxId(params: { providerId: string; sandboxId?: string }): DaytonaSandbox | null {
+    const { providerId, sandboxId } = params;
+    return new DaytonaSandbox(this.daytona, providerId, sandboxId);
   }
 
   async listSandboxes(): Promise<SandboxInfo[]> {
@@ -240,7 +238,7 @@ export class DaytonaProvider extends SandboxProvider {
     const sandboxes = response.items ?? [];
     return sandboxes.map((s) => ({
       type: "daytona" as const,
-      providerId: s.id,
+      providerId: s.name ?? s.id,
       name: s.name ?? s.id,
       state: s.state ?? "unknown",
     }));

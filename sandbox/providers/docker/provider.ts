@@ -5,7 +5,6 @@
  * Supports both development (with host repo sync) and test environments.
  */
 
-import { randomBytes } from "node:crypto";
 import { z } from "zod/v4";
 import {
   Sandbox,
@@ -68,19 +67,22 @@ type DockerEnv = z.infer<typeof DockerEnv>;
 export class DockerSandbox extends Sandbox {
   readonly providerId: string;
   readonly type = "docker" as const;
+  readonly runtimeId?: string;
 
   private ports: Record<number, number>;
   private readonly internalPorts: number[];
   private readonly serviceTransport: DockerServiceTransport;
 
   constructor(
-    containerId: string,
+    containerRef: string,
     ports: Record<number, number>,
     internalPorts: number[],
     serviceTransport: DockerServiceTransport,
+    runtimeId?: string,
   ) {
     super();
-    this.providerId = containerId;
+    this.providerId = containerRef;
+    this.runtimeId = runtimeId;
     this.ports = ports;
     this.internalPorts = internalPorts;
     this.serviceTransport = serviceTransport;
@@ -311,9 +313,10 @@ export class DockerProvider extends SandboxProvider {
     portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: "0" }];
     exposedPorts[`${PIDNAP_PORT}/tcp`] = {};
 
-    const suffix = randomBytes(4).toString("hex");
-    const sanitizedName = (opts.id ?? opts.name).replace(/[^a-zA-Z0-9_.-]/g, "-");
-    const containerName = `sandbox-${sanitizedName}-${suffix}`.slice(0, 63);
+    const containerName = opts.externalId;
+    if (!containerName) {
+      throw new Error("Docker create requires externalId");
+    }
 
     const binds: string[] = [];
     if (this.gitInfo) {
@@ -376,10 +379,11 @@ export class DockerProvider extends SandboxProvider {
     const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
     const ports = await resolveHostPorts({ containerId, internalPorts });
     const sandbox = new DockerSandbox(
-      containerId,
+      containerName,
       ports,
       internalPorts,
       this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
+      containerId,
     );
     const maxWaitMs = 30000;
 
@@ -467,7 +471,8 @@ export class DockerProvider extends SandboxProvider {
 
     return containers.map((c) => ({
       type: "docker" as const,
-      providerId: c.Id,
+      providerId:
+        c.Labels?.["com.iterate.container_name"] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id,
       name: c.Names[0]?.replace(/^\//, "") ?? c.Id.slice(0, 12),
       state: c.State,
     }));

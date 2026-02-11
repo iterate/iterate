@@ -142,12 +142,13 @@ async function main() {
   const provider = new FlyProvider({
     ...process.env,
     FLY_API_TOKEN: flyApiToken,
-    FLY_APP_NAME_PREFIX: process.env.FLY_APP_NAME_PREFIX ?? "iterate-sandbox-fly-proof3",
+    SANDBOX_NAME_PREFIX: process.env.SANDBOX_NAME_PREFIX ?? "dev",
     FLY_DEFAULT_CPUS: process.env.FLY_DEFAULT_CPUS ?? "2",
     FLY_DEFAULT_MEMORY_MB: process.env.FLY_DEFAULT_MEMORY_MB ?? "4096",
   });
 
   const sandbox = await provider.create({
+    externalId: `dev-slack-proof-${Date.now()}`,
     id: `slack-proof-${Date.now()}`,
     name: "Slack Proof",
     envVars: {

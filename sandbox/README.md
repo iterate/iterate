@@ -39,13 +39,14 @@ Both Fly and Depot registries are pushed to automatically when their respective 
 Two separate concepts:
 
 1. Machine app names (runtime):
-   - Controlled by `FLY_APP_NAME_PREFIX` (per Doppler config)
+   - Controlled by `SANDBOX_NAME_PREFIX` (per Doppler config)
    - Expected values:
-     - `dev`: `iterate-dev`
-     - `stg`: `iterate-stg`
-     - `prd`: `iterate-prd`
-   - Current behavior: each environment uses exactly one Fly app (all machines in that stage share the same app).
-   - This is temporary and may be changed later.
+     - `dev`: `dev`
+     - `stg`: `stg`
+     - `prd`: `prd`
+   - Current behavior: one Fly app per machine.
+   - App name format: `<prefix>-<project-slug>-<machine-id>` (shortened to <=63 chars).
+   - Fly machine name inside each app: fixed to `sandbox`.
 2. Image registry app (build/push):
    - Controlled by `SANDBOX_FLY_REGISTRY_APP`
    - Shared across all environments
@@ -54,7 +55,7 @@ Two separate concepts:
 
 Why split:
 
-- runtime isolation by environment (`iterate-dev`, `iterate-stg`, `iterate-prd`)
+- runtime isolation by machine (`<prefix>-<project>-<machine>`)
 - one shared image artifact source (`iterate-sandbox`)
 - simpler CI image build/push flow
 
@@ -203,12 +204,12 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 ```bash
 # Create/ensure Fly apps and sync Doppler
 # - shared image app: iterate-sandbox
-# - machine app prefixes: iterate-dev, iterate-stg, iterate-prd
+# - machine name prefixes: dev, stg, prd
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
-pnpm sandbox fly:cleanup -- 24h stop iterate-dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- 7d delete iterate-stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
 ```
 
 ## Testing

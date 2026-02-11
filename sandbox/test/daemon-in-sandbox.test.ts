@@ -240,6 +240,7 @@ describe.runIf(RUN_SANDBOX_TESTS)("Pidnap Integration", () => {
 describe.runIf(RUN_SANDBOX_TESTS)("Daemon Integration", () => {
   test.scoped({
     sandboxOptions: {
+      externalId: "test-daemon-test",
       id: "daemon-test",
       name: "Daemon Test",
       envVars: { ITERATE_CUSTOMER_REPO_PATH: ITERATE_REPO_PATH },

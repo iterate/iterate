@@ -5,6 +5,7 @@
   "exports": {
     "./providers/types": "./providers/types.ts",
     "./providers/machine-stub": "./providers/machine-stub.ts",
+    "./providers/naming": "./providers/naming.ts",
     "./providers/docker/api": "./providers/docker/api.ts",
     "./providers/docker": "./providers/docker/provider.ts",
     "./providers/daytona": "./providers/daytona/provider.ts",
