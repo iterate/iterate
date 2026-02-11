@@ -499,6 +499,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
+    DOCKER_HOST_OS_PORT: "",
     /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
@@ -530,6 +531,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
       DOCKER_HOST_GIT_COMMIT: gitCommit,
       DOCKER_HOST_GIT_BRANCH: gitBranch,
+      DOCKER_HOST_OS_PORT: process.env.DOCKER_HOST_OS_PORT ?? "",
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
         process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,

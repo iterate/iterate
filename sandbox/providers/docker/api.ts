@@ -11,6 +11,11 @@ interface DockerHostConfig {
   url: string;
 }
 
+export interface RewriteLocalhostOptions {
+  /** Local OS dev server port to use when rewriting *.dev.iterate.com URLs. */
+  devIteratePort?: number;
+}
+
 function parseDockerHost(): DockerHostConfig {
   const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
 
@@ -287,8 +292,19 @@ export function sanitizeEnvVars(envVars: Record<string, string>): string[] {
 }
 
 /**
- * Rewrite localhost URLs to host.docker.internal for container access.
+ * Rewrite local-development hostnames so containers resolve them via the Docker host gateway.
+ * `*.dev.iterate.com` is dev-only; use direct host-gateway path for lower latency and fewer tunnel hops.
  */
-export function rewriteLocalhost(value: string): string {
-  return value.replace(/localhost/g, "host.docker.internal");
+export function rewriteLocalhost(value: string, options: RewriteLocalhostOptions = {}): string {
+  const devIteratePort =
+    Number.isInteger(options.devIteratePort) && (options.devIteratePort ?? 0) > 0
+      ? options.devIteratePort
+      : 5173;
+  return value
+    .replace(/localhost/g, "host.docker.internal")
+    .replace(
+      /https?:\/\/(?:[a-z0-9-]+\.)+dev\.iterate\.com(?::(\d+))?/gi,
+      (_match, explicitPort) =>
+        `http://host.docker.internal:${explicitPort ?? String(devIteratePort)}`,
+    );
 }

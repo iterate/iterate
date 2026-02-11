@@ -609,6 +609,10 @@ export class FlyProvider extends SandboxProvider {
   }
 
   async create(opts: CreateSandboxOptions): Promise<FlySandbox> {
+    // Fly app names can be rejected by abuse filters even when they are technically valid
+    // (for example names containing certain phishing-related words). Our canonical
+    // external ID currently includes project slug; if this becomes noisy in production,
+    // switch the canonical builder to use project ID instead of project slug.
     const appName = sanitizeFlyAppName(opts.externalId);
     if (!appName) {
       throw new Error("Fly create requires a non-empty externalId");
