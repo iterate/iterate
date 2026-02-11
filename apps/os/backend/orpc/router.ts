@@ -275,9 +275,20 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     ),
   ]);
 
-  // Get GitHub installation token (needed for repos)
+  // In raw secrets mode, refresh all connector tokens (GitHub, Google) up front.
+  // The returned map contains fresh values keyed by "secretKey:userId".
+  // Without the egress proxy there's no 401→refresh flow, so tokens go stale.
   let installationToken: string | null = null;
-  if (githubConnection) {
+  if (dangerousRawSecrets) {
+    const freshTokens = await timedStep("refreshStaleConnectorTokens", () =>
+      refreshStaleConnectorTokens(db, env, project.id, unifiedEnvVars),
+    );
+    // Project-scoped GitHub token (null userId → empty string in map key)
+    installationToken = freshTokens.get("github.access_token:") ?? null;
+  }
+
+  // Fall back to requesting a fresh installation token directly
+  if (!installationToken && githubConnection) {
     const providerData = githubConnection.providerData as { installationId?: number };
     const installationId = providerData.installationId;
     if (installationId) {
@@ -345,15 +356,6 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       : [];
 
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
-
-  // In raw secrets mode, proactively refresh all connector tokens (GitHub, Google, Slack).
-  // Without the egress proxy, there's no 401→refresh flow, so tokens go stale.
-  // attemptSecretRefresh also saves the fresh token to the DB for future calls.
-  if (dangerousRawSecrets) {
-    await timedStep("refreshStaleConnectorTokens", () =>
-      refreshStaleConnectorTokens(db, env, project.id, unifiedEnvVars),
-    );
-  }
 
   // Add daemon-specific env vars not shown in frontend
   const daemonEnvVars: typeof unifiedEnvVars = [
@@ -426,7 +428,7 @@ async function refreshStaleConnectorTokens(
   env: CloudflareEnv,
   projectId: string,
   envVars: UnifiedEnvVar[],
-): Promise<void> {
+): Promise<Map<string, string>> {
   const refreshStartedAt = nowMs();
   const stepDurationsMs: Record<string, number> = {};
 
@@ -454,9 +456,11 @@ async function refreshStaleConnectorTokens(
       .map((c) => c.secretKey),
   );
 
+  const emptyMap = new Map<string, string>();
+
   // Env vars that come from refreshable connectors
   const toRefresh = envVars.filter((v) => v.secret && refreshableKeys.has(v.secret.secretKey));
-  if (toRefresh.length === 0) return;
+  if (toRefresh.length === 0) return emptyMap;
 
   // Unique secret keys to query (deduped)
   const secretKeysToQuery = [...new Set(toRefresh.map((v) => v.secret!.secretKey))];
@@ -472,7 +476,7 @@ async function refreshStaleConnectorTokens(
     }),
   );
 
-  if (secrets.length === 0) return;
+  if (secrets.length === 0) return emptyMap;
 
   // Representative URLs for connector detection (attemptSecretRefresh uses getConnectorForUrl)
   const connectorURLs = new Map(
@@ -544,6 +548,8 @@ async function refreshStaleConnectorTokens(
     queriedSecretCount: secrets.length,
     successfulRefreshCount: freshValues.size,
   });
+
+  return freshValues;
 }
 
 function nowMs(): number {
