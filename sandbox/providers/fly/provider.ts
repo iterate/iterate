@@ -32,7 +32,7 @@ const FlyEnv = z.object({
   FLY_DEFAULT_IMAGE: z
     .string()
     .describe(
-      "Fully-qualified image tag, e.g. registry.fly.io/iterate-sandbox-image:sha-abc123. Set via Doppler.",
+      "Fully-qualified image tag, e.g. registry.fly.io/iterate-sandbox:sha-abc123. Set via Doppler.",
     ),
   FLY_DEFAULT_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
   FLY_DEFAULT_MEMORY_MB: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_MEMORY_MB),
@@ -154,28 +154,15 @@ function sanitizeAppNamePart(value: string): string {
   return slugify(value).replace(/^-+/, "").replace(/-+$/, "");
 }
 
-function buildSandboxAppName(params: { prefix: string; base: string; suffix: string }): string {
-  const prefix = sanitizeAppNamePart(params.prefix) || "iterate-sandbox";
-  const base = sanitizeAppNamePart(params.base) || "sandbox";
-  const suffix = sanitizeAppNamePart(params.suffix) || "id";
-
-  const suffixSegment = suffix.slice(0, 12);
-  let appName = `${prefix}-${base}-${suffixSegment}`;
-
-  if (appName.length > APP_NAME_MAX_LENGTH) {
-    const maxStemLength = APP_NAME_MAX_LENGTH - suffixSegment.length - 1;
-    const stem = `${prefix}-${base}`.slice(0, Math.max(1, maxStemLength)).replace(/-+$/, "");
-    appName = `${stem}-${suffixSegment}`;
-  }
-
-  appName = appName.slice(0, APP_NAME_MAX_LENGTH).replace(/-+$/, "");
-  return appName || `iterate-sandbox-${suffixSegment}`;
+function resolveSandboxAppName(prefix: string): string {
+  // Temporary model: one Fly app per stage. Keep env var name for forward compatibility.
+  const appName = sanitizeAppNamePart(prefix).slice(0, APP_NAME_MAX_LENGTH).replace(/-+$/, "");
+  return appName || "iterate-sandbox";
 }
 
 function isSandboxAppName(params: { env: FlyEnv; appName: string }): boolean {
   const { env, appName } = params;
-  const appNamePrefix = env.FLY_APP_NAME_PREFIX;
-  return appName === appNamePrefix || appName.startsWith(`${appNamePrefix}-`);
+  return appName === resolveSandboxAppName(env.FLY_APP_NAME_PREFIX);
 }
 
 async function flyApi<T = unknown>(params: {
@@ -577,16 +564,8 @@ export class FlySandbox extends Sandbox {
     } catch {
       // best effort cleanup
     }
-
-    try {
-      await flyApi({
-        env: this.env,
-        method: "DELETE",
-        path: `/v1/apps/${encodeURIComponent(this.appName)}`,
-      });
-    } catch {
-      // best effort cleanup
-    }
+    // Intentionally do not delete Fly apps here.
+    // Apps are shared per environment (`iterate-dev`/`iterate-stg`/`iterate-prd`).
   }
 }
 
@@ -616,11 +595,7 @@ export class FlyProvider extends SandboxProvider {
         opts.envVars?.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS ?? ".fly.dev",
     };
 
-    const appName = buildSandboxAppName({
-      prefix: this.env.FLY_APP_NAME_PREFIX,
-      base,
-      suffix,
-    });
+    const appName = resolveSandboxAppName(this.env.FLY_APP_NAME_PREFIX);
 
     await ensureFlyAppExists({ env: this.env, appName });
     await ensureFlyIngress({ env: this.env, appName });
@@ -664,9 +639,10 @@ export class FlyProvider extends SandboxProvider {
   }
 
   get(providerId: string): FlySandbox | null {
+    const fallbackAppName = resolveSandboxAppName(this.env.FLY_APP_NAME_PREFIX);
     const decoded = decodeProviderId({
       providerId,
-      fallbackAppName: this.env.FLY_APP_NAME_PREFIX,
+      fallbackAppName,
     });
     if (!decoded) return null;
 

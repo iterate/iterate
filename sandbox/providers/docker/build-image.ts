@@ -41,7 +41,10 @@ const builtBy = process.env.ITERATE_USER ?? "unknown";
 
 // --- Fly registry ---
 const flyApiToken = process.env.FLY_API_TOKEN;
-const flyRegistryApp = process.env.SANDBOX_FLY_REGISTRY_APP ?? "iterate-sandbox-image";
+const flyRegistryApp = process.env.SANDBOX_FLY_REGISTRY_APP;
+if (!flyRegistryApp) {
+  throw new Error("SANDBOX_FLY_REGISTRY_APP is required");
+}
 const flyRegistryRepository = `registry.fly.io/${flyRegistryApp}`;
 const pushFlyRegistryEnv = process.env.SANDBOX_PUSH_FLY_REGISTRY;
 const shouldPushFlyRegistry =

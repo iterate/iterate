@@ -97,7 +97,7 @@ export default workflow({
           run: [
             "set -euo pipefail",
             'short_sha="$(git rev-parse --short=7 HEAD)"',
-            'fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain 2>/dev/null || echo iterate-sandbox-image)"',
+            'fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"',
             'image_tag="iterate-sandbox:sha-${short_sha}"',
             'fly_image_tag="registry.fly.io/${fly_registry_app}:sha-${short_sha}"',
             'echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"',
