@@ -57,6 +57,7 @@ type DockerMetadata = {
 type FlyMetadata = {
   snapshotName?: string;
   providerSnapshotId?: string;
+  flyMachineCpus?: number;
   fly?: {
     machineId?: string;
   };
@@ -90,6 +91,19 @@ function asBoolean(value: unknown): boolean | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function parsePortFromUrl(url: string): number {
@@ -381,9 +395,15 @@ function createDaytonaStub(options: CreateMachineStubOptions): MachineStub {
 
 function createFlyStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
-  const provider = new FlyProvider(toRawEnv({ env }));
   const typedMetadata = metadata as FlyMetadata;
   const snapshotName = typedMetadata.providerSnapshotId ?? typedMetadata.snapshotName;
+  const flyMachineCpus = asPositiveInteger(typedMetadata.flyMachineCpus);
+  const provider = new FlyProvider(
+    toRawEnv({
+      env,
+      overrides: flyMachineCpus ? { FLY_DEFAULT_CPUS: String(flyMachineCpus) } : {},
+    }),
+  );
   const flyMetadata = asRecord(typedMetadata.fly);
   const knownMachineId = asString(flyMetadata.machineId);
 
