@@ -57,17 +57,115 @@ const isPreview =
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
+const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
+const ITERATE_ZONE_NAME = "iterate.com";
+
+type CloudflareApiResponse<T> = {
+  success: boolean;
+  result: T;
+  errors?: Array<{ message: string }>;
+};
+type CloudflareDnsRecord = {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  proxied: boolean;
+  ttl: number;
+  comment?: string | null;
+};
+
 /**
- * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
- * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
+ * DEV_TUNNEL:
+ * - disabled: "", "0", "false", "undefined"
+ * - otherwise: custom subdomain, with optional "*." and optional ".dev.iterate.com" suffix
  */
 function getDevTunnelConfig() {
-  const devTunnel = process.env.DEV_TUNNEL;
-  if (!devTunnel || devTunnel === "0" || devTunnel === "false") return null;
+  const raw = process.env.DEV_TUNNEL?.trim() ?? "";
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "0" || lower === "false" || lower === "undefined") return null;
 
-  const subdomain = devTunnel === "1" || devTunnel === "true" ? `${app.stage}-os` : devTunnel;
+  const subdomain = raw.replace(/^\*\./, "").replace(/\.dev\.iterate\.com$/i, "");
 
-  return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
+  if (!/^[a-z0-9-]+$/i.test(subdomain)) {
+    throw new Error(
+      `Invalid DEV_TUNNEL value "${subdomain}". Use letters, numbers, and hyphens only.`,
+    );
+  }
+
+  const hostname = `${subdomain}.dev.iterate.com`;
+  const wildcardHostname = `*.${subdomain}.dev.iterate.com`;
+
+  return { hostname, wildcardHostname, subdomain };
+}
+
+async function ensureDevTunnelWildcardDns(
+  config: ReturnType<typeof getDevTunnelConfig>,
+  tunnelId: string,
+) {
+  if (!config) return;
+
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!token)
+    throw new Error("CLOUDFLARE_API_TOKEN is required to manage dev tunnel wildcard DNS records");
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  const zoneResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+    { headers },
+  );
+  const zonePayload = (await zoneResponse.json()) as CloudflareApiResponse<Array<{ id: string }>>;
+  const zoneId = zonePayload.result[0]?.id;
+  if (!zoneResponse.ok || !zonePayload.success || !zoneId) {
+    const errorMessage =
+      zonePayload.errors?.map((error) => error.message).join(", ") || "unknown error";
+    throw new Error(`Cloudflare zone lookup failed: ${errorMessage}`);
+  }
+
+  const wildcardHostname = config.wildcardHostname;
+  const wildcardTarget = `${tunnelId}.cfargotunnel.com`;
+  const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
+  const findResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
+    { headers },
+  );
+  const findPayload = (await findResponse.json()) as CloudflareApiResponse<CloudflareDnsRecord[]>;
+  if (!findResponse.ok || !findPayload.success) {
+    const errorMessage =
+      findPayload.errors?.map((error) => error.message).join(", ") || "unknown error";
+    throw new Error(`Cloudflare wildcard lookup failed: ${errorMessage}`);
+  }
+  const existing = findPayload.result[0];
+  const body = JSON.stringify({
+    type: "CNAME",
+    name: wildcardHostname,
+    content: wildcardTarget,
+    proxied: true,
+    ttl: 1,
+    comment,
+  });
+
+  if (existing) {
+    await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`, {
+      method: "PUT",
+      headers,
+      body,
+    });
+    console.log(`Updated wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+  } else {
+    await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    console.log(`Created wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+  }
+
+  // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
+  // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
 }
 
 function parseComposePublishedPort(
@@ -150,16 +248,27 @@ async function createDevTunnel(vitePort: number) {
   const config = getDevTunnelConfig();
   if (!config) return null;
 
-  console.log(`Creating dev tunnel: ${config.hostname} -> localhost:${vitePort}`);
+  console.log(
+    `Creating dev tunnel (${config.subdomain}): ${config.hostname}, ${config.wildcardHostname} -> localhost:${vitePort}`,
+  );
 
   const tunnel = await Tunnel(`dev-tunnel-${config.subdomain}`, {
     name: config.subdomain,
     adopt: true, // Don't fail if tunnel already exists from previous session
+    delete: false, // Never auto-delete dev tunnels; cleanup should be explicit/manual.
     ingress: [
       { hostname: config.hostname, service: `http://localhost:${vitePort}` },
+      { hostname: config.wildcardHostname, service: `http://localhost:${vitePort}` },
       { service: "http_status:404" },
     ],
   });
+
+  try {
+    await ensureDevTunnelWildcardDns(config, tunnel.tunnelId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Could not configure wildcard DNS for ${config.hostname}: ${message}`);
+  }
 
   return { tunnel, config, vitePort };
 }
