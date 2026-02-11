@@ -60,21 +60,6 @@ const isPreview =
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const ITERATE_ZONE_NAME = "iterate.com";
 
-type CloudflareApiResponse<T> = {
-  success: boolean;
-  result: T;
-  errors?: Array<{ message: string }>;
-};
-type CloudflareDnsRecord = {
-  id: string;
-  type: string;
-  name: string;
-  content: string;
-  proxied: boolean;
-  ttl: number;
-  comment?: string | null;
-};
-
 /**
  * DEV_TUNNEL:
  * - disabled: "", "0", "false", "undefined"
@@ -117,12 +102,15 @@ async function ensureDevTunnelWildcardDns(
     `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
     { headers },
   );
-  const zonePayload = (await zoneResponse.json()) as CloudflareApiResponse<Array<{ id: string }>>;
-  const zoneId = zonePayload.result[0]?.id;
-  if (!zoneResponse.ok || !zonePayload.success || !zoneId) {
-    const errorMessage =
-      zonePayload.errors?.map((error) => error.message).join(", ") || "unknown error";
-    throw new Error(`Cloudflare zone lookup failed: ${errorMessage}`);
+  const zonePayload = (await zoneResponse.json()) as {
+    result?: Array<{ id?: string }>;
+    errors?: unknown;
+  };
+  const zoneId = zonePayload?.result?.[0]?.id;
+  if (!zoneResponse.ok || !zoneId) {
+    throw new Error(
+      `Cloudflare zone lookup failed: ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
+    );
   }
 
   const wildcardHostname = config.wildcardHostname;
@@ -132,13 +120,16 @@ async function ensureDevTunnelWildcardDns(
     `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
     { headers },
   );
-  const findPayload = (await findResponse.json()) as CloudflareApiResponse<CloudflareDnsRecord[]>;
-  if (!findResponse.ok || !findPayload.success) {
-    const errorMessage =
-      findPayload.errors?.map((error) => error.message).join(", ") || "unknown error";
-    throw new Error(`Cloudflare wildcard lookup failed: ${errorMessage}`);
+  const findPayload = (await findResponse.json()) as {
+    result?: Array<{ id?: string }>;
+    errors?: unknown;
+  };
+  if (!findResponse.ok) {
+    throw new Error(
+      `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
+    );
   }
-  const existing = findPayload.result[0];
+  const existing = findPayload?.result?.[0];
   const body = JSON.stringify({
     type: "CNAME",
     name: wildcardHostname,
@@ -149,18 +140,27 @@ async function ensureDevTunnelWildcardDns(
   });
 
   if (existing) {
-    await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`, {
-      method: "PUT",
-      headers,
-      body,
-    });
+    const updateResponse = await fetch(
+      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
+      {
+        method: "PUT",
+        headers,
+        body,
+      },
+    );
+    if (!updateResponse.ok) {
+      throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+    }
     console.log(`Updated wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
   } else {
-    await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
+    const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
       method: "POST",
       headers,
       body,
     });
+    if (!createResponse.ok) {
+      throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
+    }
     console.log(`Created wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
   }
 

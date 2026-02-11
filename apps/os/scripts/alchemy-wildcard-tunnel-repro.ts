@@ -20,31 +20,6 @@ const app = await alchemy("os-tunnel-wildcard-repro", {
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const ITERATE_ZONE_NAME = "iterate.com";
 
-type CloudflareApiResponse<T> = {
-  success: boolean;
-  result: T;
-  errors?: Array<{ message: string }>;
-};
-type CloudflareZone = { id: string; name: string };
-type CloudflareDnsRecord = { id: string; name: string; content: string; proxied: boolean };
-
-async function cloudflareRequest<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${CLOUDFLARE_API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const payload = (await response.json()) as CloudflareApiResponse<T>;
-  if (!response.ok || !payload.success) {
-    const errors = payload.errors?.map((error) => error.message).join(", ") || "unknown error";
-    throw new Error(`Cloudflare API ${init?.method ?? "GET"} ${path} failed: ${errors}`);
-  }
-  return payload.result;
-}
-
 const baseHostname = "boop.dev.iterate.com";
 const wildcardHostname = "*.boop.dev.iterate.com";
 const workerPort = Number(process.env.REPRO_WORKER_PORT ?? "8788");
@@ -52,7 +27,6 @@ const workerPort = Number(process.env.REPRO_WORKER_PORT ?? "8788");
 const echoWorker = await Worker("boop-echo-worker", {
   name: "boop-echo-worker",
   adopt: true,
-  delete: false,
   dev: { port: workerPort },
   script: `
 export default {
@@ -93,19 +67,39 @@ if (!cloudflareApiToken) {
   );
 }
 
-const zones = await cloudflareRequest<CloudflareZone[]>(
-  cloudflareApiToken,
-  `/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+const headers = {
+  Authorization: `Bearer ${cloudflareApiToken}`,
+  "Content-Type": "application/json",
+};
+const zoneResponse = await fetch(
+  `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+  { headers },
 );
-const zoneId = zones[0]?.id;
-if (!zoneId) {
-  throw new Error(`Could not find active Cloudflare zone ${ITERATE_ZONE_NAME}`);
+const zonePayload = (await zoneResponse.json()) as {
+  result?: Array<{ id?: string }>;
+  errors?: unknown;
+};
+const zoneId = zonePayload?.result?.[0]?.id;
+if (!zoneResponse.ok || !zoneId) {
+  throw new Error(
+    `Cloudflare zone lookup failed: ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
+  );
 }
 
-const wildcardRecords = await cloudflareRequest<CloudflareDnsRecord[]>(
-  cloudflareApiToken,
-  `/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
+const findResponse = await fetch(
+  `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
+  { headers },
 );
+const findPayload = (await findResponse.json()) as {
+  result?: Array<{ id?: string }>;
+  errors?: unknown;
+};
+if (!findResponse.ok) {
+  throw new Error(
+    `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
+  );
+}
+const existing = findPayload?.result?.[0];
 
 const wildcardTarget = `${tunnel.tunnelId}.cfargotunnel.com`;
 const recordBody = {
@@ -117,17 +111,27 @@ const recordBody = {
   comment: "Managed by alchemy-wildcard-tunnel-repro.ts",
 };
 
-if (wildcardRecords[0]) {
-  await cloudflareRequest<CloudflareDnsRecord>(
-    cloudflareApiToken,
-    `/zones/${zoneId}/dns_records/${wildcardRecords[0].id}`,
-    { method: "PUT", body: JSON.stringify(recordBody) },
+if (existing) {
+  const updateResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
+    {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(recordBody),
+    },
   );
+  if (!updateResponse.ok) {
+    throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+  }
 } else {
-  await cloudflareRequest<CloudflareDnsRecord>(cloudflareApiToken, `/zones/${zoneId}/dns_records`, {
+  const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
     method: "POST",
+    headers,
     body: JSON.stringify(recordBody),
   });
+  if (!createResponse.ok) {
+    throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
+  }
 }
 
 // Why we do this manually: Alchemy Tunnel currently skips wildcard ingress hostnames
