@@ -30,8 +30,8 @@
  *   stale contexts from blocking cleanup of the new emoji.
  *
  * Staleness handling:
- *   Shell commands (`iterate tool slack`) are slow (~1-30s). Multiple
- *   agent-change callbacks run concurrently, each awaiting shell commands.
+ *   Slack Web API calls can be slow. Multiple agent-change callbacks run
+ *   concurrently, each awaiting Slack API responses.
  *   When isWorking=false arrives, it deletes the context from the map
  *   BEFORE running cleanup. In-flight isWorking=true callbacks detect this
  *   via a reference check after each await and bail if the context changed.
@@ -241,40 +241,8 @@ slackRouter.post("/webhook", async (c) => {
       requestId,
     };
     slackThreadContextByAgentPath.set(agentPath, ctx);
-    if (oldReactionCtx) {
-      void (async () => {
-        try {
-          await getSlackClient().reactions.remove({
-            channel: oldReactionCtx.channel,
-            timestamp: oldReactionCtx.emojiTimestamp,
-            name: oldReactionCtx.emoji,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("no_reaction")) {
-            logger.error("[slack] remove old reaction failed", {
-              context: oldReactionCtx,
-              error: message,
-            });
-          }
-        }
-      })();
-    }
-
-    void (async () => {
-      try {
-        await getSlackClient().reactions.add({
-          channel: ctx.channel,
-          timestamp: ctx.emojiTimestamp,
-          name: ctx.emoji,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("already_reacted")) {
-          logger.error("[slack] acknowledge failed", { context: ctx, error: message });
-        }
-      }
-    })();
+    if (oldReactionCtx) void removeReaction(oldReactionCtx);
+    void addReaction(ctx);
 
     // Fire-and-forget prompt to the agent.
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
@@ -316,40 +284,8 @@ slackRouter.post("/webhook", async (c) => {
       requestId,
     };
     slackThreadContextByAgentPath.set(agentPath, ctx);
-    if (oldMentionCtx) {
-      void (async () => {
-        try {
-          await getSlackClient().reactions.remove({
-            channel: oldMentionCtx.channel,
-            timestamp: oldMentionCtx.emojiTimestamp,
-            name: oldMentionCtx.emoji,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("no_reaction")) {
-            logger.error("[slack] remove old reaction failed", {
-              context: oldMentionCtx,
-              error: message,
-            });
-          }
-        }
-      })();
-    }
-
-    void (async () => {
-      try {
-        await getSlackClient().reactions.add({
-          channel: ctx.channel,
-          timestamp: ctx.emojiTimestamp,
-          name: ctx.emoji,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("already_reacted")) {
-          logger.error("[slack] acknowledge failed", { context: ctx, error: message });
-        }
-      }
-    })();
+    if (oldMentionCtx) void removeReaction(oldMentionCtx);
+    void addReaction(ctx);
   }
 
   let wasNewlyCreated = false;
@@ -381,40 +317,8 @@ slackRouter.post("/webhook", async (c) => {
       requestId,
     };
     slackThreadContextByAgentPath.set(agentPath, fyiCtx);
-    if (oldFyiCtx) {
-      void (async () => {
-        try {
-          await getSlackClient().reactions.remove({
-            channel: oldFyiCtx.channel,
-            timestamp: oldFyiCtx.emojiTimestamp,
-            name: oldFyiCtx.emoji,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("no_reaction")) {
-            logger.error("[slack] remove old reaction failed", {
-              context: oldFyiCtx,
-              error: message,
-            });
-          }
-        }
-      })();
-    }
-
-    void (async () => {
-      try {
-        await getSlackClient().reactions.add({
-          channel: fyiCtx.channel,
-          timestamp: fyiCtx.emojiTimestamp,
-          name: fyiCtx.emoji,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("already_reacted")) {
-          logger.error("[slack] acknowledge failed", { context: fyiCtx, error: message });
-        }
-      }
-    })();
+    if (oldFyiCtx) void removeReaction(oldFyiCtx);
+    void addReaction(fyiCtx);
   }
 
   // Subscribe to agent-change callbacks once, when the agent is first created.
@@ -506,35 +410,10 @@ async function handleDebouncedAgentChange(agentPath: string): Promise<void> {
     // Capture context reference to detect staleness across awaits.
     const capturedContext = slackContext;
 
-    try {
-      await getSlackClient().reactions.add({
-        channel: capturedContext.channel,
-        timestamp: capturedContext.emojiTimestamp,
-        name: capturedContext.emoji,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("already_reacted")) {
-        logger.error("[slack] acknowledge failed", { context: capturedContext, error: message });
-      }
-    }
+    await addReaction(capturedContext);
     if (slackThreadContextByAgentPath.get(agentPath) !== capturedContext) return;
 
-    const { status, loading_messages } = toSlackStatus(latest.shortStatus || "Working");
-    try {
-      await getSlackClient().apiCall("assistant.threads.setStatus", {
-        channel_id: capturedContext.channel,
-        thread_ts: capturedContext.threadTs,
-        status,
-        ...(loading_messages ? { loading_messages } : {}),
-      });
-    } catch (error) {
-      logger.error("[slack] setStatus failed", {
-        context: capturedContext,
-        status,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await setThreadStatus(capturedContext, latest.shortStatus || "Working");
     return;
   }
 
@@ -545,66 +424,16 @@ async function handleDebouncedAgentChange(agentPath: string): Promise<void> {
   //   1. New webhooks can create fresh context immediately
   //   2. In-flight callbacks detect staleness after their next await
   slackThreadContextByAgentPath.delete(agentPath);
-  try {
-    await getSlackClient().reactions.remove({
-      channel: slackContext.channel,
-      timestamp: slackContext.emojiTimestamp,
-      name: slackContext.emoji,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("no_reaction")) {
-      logger.error("[slack] removeReaction failed", { context: slackContext, error: message });
-    }
-  }
-
-  // Clear thread status after removing emoji.
-  try {
-    await getSlackClient().apiCall("assistant.threads.setStatus", {
-      channel_id: slackContext.channel,
-      thread_ts: slackContext.threadTs,
-      status: "",
-    });
-  } catch (error) {
-    logger.error("[slack] clearStatus failed", {
-      context: slackContext,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await removeReaction(slackContext);
+  await setThreadStatus(slackContext, "");
 
   // Belt-and-suspenders: retry cleanup after a delay. In-flight callbacks that
   // started before the delete may re-add the emoji or re-set status during the window.
   setTimeout(() => {
     if (!slackThreadContextByAgentPath.has(agentPath)) {
       void (async () => {
-        try {
-          await getSlackClient().reactions.remove({
-            channel: slackContext.channel,
-            timestamp: slackContext.emojiTimestamp,
-            name: slackContext.emoji,
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!message.includes("no_reaction")) {
-            logger.error("[slack] removeReaction failed", {
-              context: slackContext,
-              error: message,
-            });
-          }
-        }
-
-        try {
-          await getSlackClient().apiCall("assistant.threads.setStatus", {
-            channel_id: slackContext.channel,
-            thread_ts: slackContext.threadTs,
-            status: "",
-          });
-        } catch (error) {
-          logger.error("[slack] clearStatus failed", {
-            context: slackContext,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        await removeReaction(slackContext);
+        await setThreadStatus(slackContext, "");
       })();
     }
   }, 5000);
@@ -625,6 +454,48 @@ function getSlackClient(): WebClient {
   return slackClient;
 }
 
+async function addReaction(context: SlackThreadContext): Promise<void> {
+  try {
+    await getSlackClient().reactions.add({
+      channel: context.channel,
+      timestamp: context.emojiTimestamp,
+      name: context.emoji,
+    });
+    logger.log("[slack] addReaction ok", {
+      requestId: context.requestId,
+      channel: context.channel,
+      timestamp: context.emojiTimestamp,
+      name: context.emoji,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("already_reacted")) {
+      logger.error("[slack] addReaction failed", { context, error: message });
+    }
+  }
+}
+
+async function removeReaction(context: SlackThreadContext): Promise<void> {
+  try {
+    await getSlackClient().reactions.remove({
+      channel: context.channel,
+      timestamp: context.emojiTimestamp,
+      name: context.emoji,
+    });
+    logger.log("[slack] removeReaction ok", {
+      requestId: context.requestId,
+      channel: context.channel,
+      timestamp: context.emojiTimestamp,
+      name: context.emoji,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("no_reaction")) {
+      logger.error("[slack] removeReaction failed", { context, error: message });
+    }
+  }
+}
+
 /**
  * Map raw agent shortStatus to a Slack-friendly display status and optional
  * loading_messages array. The shortStatus comes from opencode.ts and may
@@ -642,6 +513,31 @@ function toSlackStatus(rawStatus: string): { status: string; loading_messages?: 
 
   // Tool use or generic working status
   return { status: "is working...", loading_messages: [`${rawStatus}...`] };
+}
+
+async function setThreadStatus(context: SlackThreadContext, rawStatus: string): Promise<void> {
+  const { status, loading_messages } = toSlackStatus(rawStatus);
+
+  try {
+    await getSlackClient().apiCall("assistant.threads.setStatus", {
+      channel_id: context.channel,
+      thread_ts: context.threadTs,
+      status,
+      ...(loading_messages ? { loading_messages } : {}),
+    });
+    logger.log("[slack] setThreadStatus ok", {
+      requestId: context.requestId,
+      channel: context.channel,
+      threadTs: context.threadTs,
+      status,
+    });
+  } catch (error) {
+    logger.error("[slack] setThreadStatus failed", {
+      context,
+      status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 // ──────────────────────────── Parsing / routing ─────────────────────────────
