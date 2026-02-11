@@ -16,14 +16,13 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machine
   component: MachineDetailPage,
 });
 
-/** Pidnap-managed processes — mirrors apps/os/sandbox/pidnap.config.ts */
+/** Pidnap-managed processes — mirrors sandbox/pidnap.config.ts */
 const PIDNAP_PROCESSES = [
   "daemon-backend",
   "daemon-frontend",
   "opencode",
   "egress-proxy",
   "trace-viewer",
-  "task-install-jaeger",
 ] as const;
 
 function parseFlyExternalId(externalId: string): { appName: string; machineId: string } | null {

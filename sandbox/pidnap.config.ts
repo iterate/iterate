@@ -12,7 +12,6 @@ const proxyPort = "8888";
 const githubMagicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
 const cloudflareTunnelHostname = process.env.CLOUDFLARE_TUNNEL_HOSTNAME?.trim();
 const cloudflareTunnelUrl = process.env.CLOUDFLARE_TUNNEL_URL?.trim() || "http://127.0.0.1:3000";
-const jaegerVersion = "1.67.0";
 
 // ITERATE_SKIP_PROXY is set by the control plane at machine creation when
 // DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
@@ -56,38 +55,6 @@ export default defineConfig({
     ...proxyEnv,
   },
   processes: [
-    {
-      name: "task-install-jaeger",
-      definition: {
-        command: "bash",
-        args: [
-          "-lc",
-          `
-set -euo pipefail
-BIN_DIR="$HOME/.local/bin"
-BIN_PATH="$BIN_DIR/jaeger-all-in-one"
-if [ -x "$BIN_PATH" ]; then
-  exit 0
-fi
-mkdir -p "$BIN_DIR"
-ARCH=$(uname -m)
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-  JAEGER_ARCH="arm64"
-else
-  JAEGER_ARCH="amd64"
-fi
-URL="https://github.com/jaegertracing/jaeger/releases/download/v${jaegerVersion}/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}.tar.gz"
-TMP_DIR=$(mktemp -d)
-curl -fsSL "$URL" -o "$TMP_DIR/jaeger.tgz"
-tar -xzf "$TMP_DIR/jaeger.tgz" -C "$TMP_DIR"
-cp "$TMP_DIR/jaeger-${jaegerVersion}-linux-\${JAEGER_ARCH}/jaeger-all-in-one" "$BIN_PATH"
-chmod +x "$BIN_PATH"
-rm -rf "$TMP_DIR"
-`,
-        ],
-      },
-      options: { restartPolicy: "never" },
-    },
     {
       name: "egress-proxy",
       definition: {
@@ -185,7 +152,6 @@ rm -rf "$TMP_DIR"
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["task-install-jaeger"],
     },
     {
       name: "trace-viewer",
@@ -205,7 +171,6 @@ rm -rf "$TMP_DIR"
         restartPolicy: "always",
         backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
       },
-      dependsOn: ["task-install-jaeger"],
     },
     ...(cloudflareTunnelHostname
       ? [

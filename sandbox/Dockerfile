@@ -9,6 +9,7 @@ ARG SANDBOX_PI_CODING_AGENT_VERSION=0.52.8
 ARG SANDBOX_BUN_VERSION=1.3.6
 ARG SANDBOX_GO_VERSION=1.23.4
 ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
+ARG SANDBOX_JAEGER_VERSION=1.67.0
 
 # Install curl first (may not be present in all base images)
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -46,6 +47,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" && \
     dpkg -i /tmp/cloudflared.deb && \
     rm /tmp/cloudflared.deb
+
+# Install Jaeger all-in-one (trace viewer + OTLP collector)
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then JAEGER_ARCH="arm64"; else JAEGER_ARCH="amd64"; fi && \
+    curl -fsSL "https://github.com/jaegertracing/jaeger/releases/download/v${SANDBOX_JAEGER_VERSION}/jaeger-${SANDBOX_JAEGER_VERSION}-linux-${JAEGER_ARCH}.tar.gz" -o /tmp/jaeger.tgz && \
+    tar -xzf /tmp/jaeger.tgz -C /tmp && \
+    install -m 0755 "/tmp/jaeger-${SANDBOX_JAEGER_VERSION}-linux-${JAEGER_ARCH}/jaeger-all-in-one" /usr/local/bin/jaeger-all-in-one && \
+    rm -rf "/tmp/jaeger-${SANDBOX_JAEGER_VERSION}-linux-${JAEGER_ARCH}" /tmp/jaeger.tgz
 
 RUN corepack enable
 
