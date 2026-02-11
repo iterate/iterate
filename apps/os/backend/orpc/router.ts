@@ -8,7 +8,10 @@ import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
-import { getGitHubInstallationToken, getRepositoryById } from "../integrations/github/github.ts";
+import {
+  getGitHubInstallationTokenWithDiagnostics,
+  getRepositoryById,
+} from "../integrations/github/github.ts";
 import { CONNECTORS } from "../services/connectors.ts";
 import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-refresh.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
@@ -278,9 +281,34 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
     const providerData = githubConnection.providerData as { installationId?: number };
     const installationId = providerData.installationId;
     if (installationId) {
-      installationToken = await timedStep("getGitHubInstallationToken", () =>
-        getGitHubInstallationToken(env, installationId),
-      );
+      let tokenDiagnostics:
+        | Awaited<ReturnType<typeof getGitHubInstallationTokenWithDiagnostics>>
+        | undefined;
+      await timedStep("getGitHubInstallationToken", async () => {
+        tokenDiagnostics = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
+        installationToken = tokenDiagnostics.token;
+      });
+
+      if (tokenDiagnostics) {
+        const totalMs = tokenDiagnostics.diagnostics.totalMs;
+        const details = {
+          machineId,
+          projectId: project.id,
+          installationId,
+          githubRequestUrl: tokenDiagnostics.request.url,
+          githubRequestMethod: tokenDiagnostics.request.method,
+          tokenStatus: tokenDiagnostics.status,
+          tokenError: tokenDiagnostics.error,
+          ...tokenDiagnostics.diagnostics,
+          ...tokenDiagnostics.responseHeaders,
+        };
+
+        if (!tokenDiagnostics.token) {
+          logger.warn("getGitHubInstallationToken failed in getEnv", details);
+        } else if (totalMs >= 5_000) {
+          logger.warn("getGitHubInstallationToken slow in getEnv", details);
+        }
+      }
     }
   }
 
@@ -298,7 +326,7 @@ export const getEnv = os.machines.getEnv.use(withApiKey).handler(async ({ input,
       ? await timedStep("fetchRepositoryInfo", () =>
           Promise.all(
             projectRepos.map(async (repo): Promise<RepoInfo | null> => {
-              const repoInfo = await getRepositoryById(installationToken, repo.externalId);
+              const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
               if (!repoInfo) {
                 logger.warn("Could not fetch repo info", { repoId: repo.externalId });
                 return null;
