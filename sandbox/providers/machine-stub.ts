@@ -427,6 +427,7 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
     async createResult({ sandbox }): Promise<Record<string, unknown>> {
       return {
         snapshotName: snapshotName ?? provider.defaultSnapshotId,
+        ...(flyMachineCpus ? { flyMachineCpus } : {}),
         fly: {
           machineId: sandbox.machineId,
         },
