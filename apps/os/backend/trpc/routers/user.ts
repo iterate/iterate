@@ -1,9 +1,25 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { router, protectedProcedure } from "../trpc.ts";
+import { TRPCError } from "@trpc/server";
+import { router, protectedProcedure, publicProcedure } from "../trpc.ts";
 import { user, organizationUserMembership } from "../../db/schema.ts";
+import { getAuth } from "../../auth/auth.ts";
 
 export const userRouter = router({
+  superadmin: publicProcedure.mutation(async ({ ctx }) => {
+    const authHeader = ctx.rawRequest.headers.get("Authorization");
+    if (authHeader !== `Bearer ${process.env.SERVICE_AUTH_TOKEN}`) {
+      throw new TRPCError({ code: "UNAUTHORIZED" });
+    }
+    const session = await getAuth(ctx.db).api.signInEmailOTP({
+      body: {
+        email: "superadmin@nustom.com",
+        otp: "123456",
+      },
+      // userId: ctx.user.id,
+      // expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
+    });
+  }),
   // Get current user
   me: protectedProcedure.query(async ({ ctx }) => {
     return ctx.user;

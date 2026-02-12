@@ -40,6 +40,11 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
   const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
 
   return betterAuth({
+    logger: {
+      disabled: false,
+      level: "debug",
+      log: console.log,
+    },
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
     secret: envParam.BETTER_AUTH_SECRET,
@@ -105,6 +110,10 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
           },
         },
       },
+    },
+    emailAndPassword: {
+      enabled: true,
+      // disableSignUp: true,
     },
     plugins: [
       admin(),

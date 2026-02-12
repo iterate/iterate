@@ -305,7 +305,7 @@ const Env = z.object({
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
-  // SERVICE_AUTH_TOKEN: Required,
+  SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
   APP_STAGE: Required,
@@ -361,7 +361,7 @@ async function setupDatabase() {
     }
   };
 
-  const seedGlobalSecrets = async (origin: string) => {
+  const seedGlobalStuff = async (origin: string) => {
     // Seed global secrets (OpenAI, Anthropic keys) into the database
     // These are the lowest priority secrets, overridable at org/project/user level
 
@@ -376,8 +376,21 @@ async function setupDatabase() {
     });
 
     if (res.exitCode !== 0) {
-      console.warn(`Warning: Failed to seed global secrets: ${res.stderr}`);
-      // Don't fail deployment if seeding fails - secrets can be added manually
+      throw new Error(`Warning: Failed to seed global secrets: ${res.stderr}`);
+    }
+
+    const res2 = await Exec("db-seed-superadmin", {
+      env: {
+        PSCALE_DATABASE_URL: origin,
+        DATABASE_URL: origin,
+        ENCRYPTION_SECRET: process.env.ENCRYPTION_SECRET,
+        ...Object.fromEntries(GLOBAL_SECRETS_CONFIG.map((c) => [c.envVar, process.env[c.envVar]])),
+      },
+      command: "tsx ./scripts/seed-superadmin.ts --run",
+    });
+
+    if (res2.exitCode !== 0) {
+      throw new Error(`Warning: Failed to seed global secrets: ${res.stderr}`);
     }
   };
 
@@ -391,7 +404,7 @@ async function setupDatabase() {
     }
     const origin = `postgres://postgres:postgres@localhost:${localDockerPostgresPort}/os`;
     await migrate(origin);
-    await seedGlobalSecrets(origin);
+    await seedGlobalStuff(origin);
     return {
       DATABASE_URL: origin,
     };
@@ -423,7 +436,7 @@ async function setupDatabase() {
       delete: true,
     });
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
+    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -447,7 +460,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
+    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -471,7 +484,7 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrlPooled.unencrypted);
-    await seedGlobalSecrets(role.connectionUrlPooled.unencrypted);
+    await seedGlobalStuff(role.connectionUrlPooled.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,

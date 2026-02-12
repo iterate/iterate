@@ -59,8 +59,6 @@ async function buildPreviewUrl(
 async function sendProbeMessage(
   previewUrl: string,
 ): Promise<{ ok: true; threadId: string; messageId: string } | { ok: false; detail: string }> {
-  const url = `${previewUrl}/api/integrations/webchat/webhook`;
-
   // Retry the initial send — the daemon may still be booting internal services
   // (e.g. OpenCode server) even though its HTTP server is already accepting
   // connections, so 5xx / connection-refused are expected for a short window.
@@ -82,7 +80,7 @@ async function sendProbeMessage(
     };
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(`${previewUrl}/api/integrations/webchat/webhook`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

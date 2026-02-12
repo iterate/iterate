@@ -108,7 +108,12 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+app.all("/api/auth/*", async (c) => {
+  console.log("auth", c.req.raw.url, c.req.raw.headers);
+  const x = await c.var.auth.handler(c.req.raw);
+  console.log("auth response", x.status, x.headers, await x.clone().text());
+  return x;
+});
 
 // tRPC endpoint
 app.all("/api/trpc/*", (c) => {
