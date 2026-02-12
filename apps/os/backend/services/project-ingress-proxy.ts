@@ -346,10 +346,11 @@ async function proxyWithFetcher(
 ): Promise<Response> {
   const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
   if (isWebSocket) {
-    return fetcher(request, {
+    const proxyRequest = new Request(new URL(pathWithQuery, request.url), {
       method: request.method,
       headers: filterWebSocketHeaders(request, targetHost),
     });
+    return fetcher(proxyRequest);
   }
 
   const response = await fetcher(pathWithQuery, {
@@ -363,7 +364,7 @@ async function proxyWithFetcher(
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+      responseHeaders.append(key, value);
     }
   });
 
