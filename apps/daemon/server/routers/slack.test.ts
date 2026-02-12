@@ -564,9 +564,7 @@ describe("slack router", () => {
       expect(postMessageText).toContain("Harness Web UI (direct proxy)");
       expect(postMessageText).toContain("terminal?command=");
 
-      expect(reactionsRemoveMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: "2121212121.313131", name: "thinking_face" }),
-      );
+      expect(reactionsRemoveMock).not.toHaveBeenCalled();
     });
 
     it("does not run !debug when no agent exists for non-mention FYI messages", async () => {
@@ -717,7 +715,7 @@ describe("slack router", () => {
       );
     });
 
-    it("sends thinking_face emoji on FYI message after confirming agent exists", async () => {
+    it("does not send deterministic emoji on FYI message", async () => {
       const ts = "5050505050.222222";
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${ts.replace(".", "-")}`;
@@ -745,17 +743,15 @@ describe("slack router", () => {
         }),
       });
 
-      // Flush fire-and-forget addReaction
+      // Flush fire-and-forget tasks
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(reactionsAddMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: ts, name: "thinking_face" }),
-      );
+      expect(reactionsAddMock).not.toHaveBeenCalled();
     });
   });
 
-  describe("emoji context replacement", () => {
-    it("replaces emoji context when second webhook arrives for same thread", async () => {
+  describe("emoji context lifecycle", () => {
+    it("does not add a second deterministic eyes emoji while thread context is active", async () => {
       const threadTs = "4444444444.444444";
       const secondTs = "4444444444.555555";
       const botUserId = "U_BOT";
@@ -798,8 +794,9 @@ describe("slack router", () => {
       );
 
       // ── Second webhook: mid-thread mention (same thread, different message) ──
-      // The second webhook REPLACES the context and removes the old emoji.
+      // No replacement: deterministic emoji should only be added once per cycle.
       reactionsAddMock.mockClear();
+      reactionsRemoveMock.mockClear();
       selectLimitQueue.push([]); // storeEvent dedup check
       getOrCreateAgentMock.mockResolvedValue({
         wasNewlyCreated: false,
@@ -833,12 +830,11 @@ describe("slack router", () => {
       // Flush fire-and-forget calls
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // Old emoji should have been removed (fire-and-forget)
-      expect(reactionsRemoveMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
-      );
+      // No additional deterministic emoji add/remove while context is active.
+      expect(reactionsAddMock).not.toHaveBeenCalled();
+      expect(reactionsRemoveMock).not.toHaveBeenCalled();
 
-      // ── Agent goes idle: debounced callback removes SECOND message's emoji ──
+      // ── Agent goes idle: cleanup removes the tracked emoji from first mention ──
       const callbackResponse = await slackRouter.request("/agent-change-callback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -850,15 +846,209 @@ describe("slack router", () => {
 
       const callbackBody = await callbackResponse.json();
       expect(callbackBody.success).toBe(true);
-      expect(callbackBody.debounced).toBe(true);
 
-      // Wait for debounce (200ms) + async cleanup
+      // Wait for async cleanup
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Verify the first mention's deterministic emoji was removed during cleanup
+      expect(reactionsRemoveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
+      );
+    });
+  });
+
+  describe("thread status updates", () => {
+    it("does not defer idle cleanup when callback arrives before context exists", async () => {
+      const threadTs = "5757575757.575757";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      const earlyIdleResponse = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "", isWorking: false },
+        }),
+      });
+      expect((await earlyIdleResponse.json()).ignored).toBe(true);
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_status_no_context_idle_1",
+          event: {
+            type: "app_mention",
+            ts: threadTs,
+            text: `<@${botUserId}> run`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: threadTs,
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      // No deferred cleanup should run later and remove the fresh context.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(reactionsAddMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
+      );
+      expect(reactionsRemoveMock).not.toHaveBeenCalled();
+    });
+
+    it("ignores stale callback when payload.updatedAt predates current context", async () => {
+      const threadTs = "5858585858.585858";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_status_stale_updated_at_1",
+          event: {
+            type: "app_mention",
+            ts: threadTs,
+            text: `<@${botUserId}> run`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: threadTs,
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      // Flush fire-and-forget addReaction so subsequent remove calls are attributable.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      reactionsRemoveMock.mockClear();
+
+      const staleResponse = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: {
+            path: agentPath,
+            shortStatus: "",
+            isWorking: false,
+            updatedAt: "2000-01-01T00:00:00.000Z",
+          },
+        }),
+      });
+      const staleBody = await staleResponse.json();
+      expect(staleBody.ignored).toBe(true);
+      expect(staleBody.stale).toBe(true);
+      expect(reactionsRemoveMock).not.toHaveBeenCalled();
+
+      const freshResponse = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: {
+            path: agentPath,
+            shortStatus: "",
+            isWorking: false,
+            updatedAt: "2100-01-01T00:00:00.000Z",
+          },
+        }),
+      });
+      expect((await freshResponse.json()).success).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(reactionsRemoveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
+      );
+    });
+
+    it("debounces and dedupes working status updates", async () => {
+      const threadTs = "5656565656.565656";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_status_1",
+          event: {
+            type: "app_mention",
+            ts: threadTs,
+            text: `<@${botUserId}> run`,
+            user: "U_USER",
+            channel: "C_TEST",
+            event_ts: threadTs,
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      const workingResponse = await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "🤔 Thinking", isWorking: true },
+        }),
+      });
+      const workingBody = await workingResponse.json();
+      expect(workingBody.success).toBe(true);
+      expect(workingBody.scheduled).toBe(true);
+
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Verify the SECOND message's emoji was removed during cleanup
-      expect(reactionsRemoveMock).toHaveBeenCalledWith(
-        expect.objectContaining({ timestamp: secondTs }),
+      const statusCallsAfterFirst = apiCallMock.mock.calls.filter(
+        (call) => call[0] === "assistant.threads.setStatus",
       );
+      expect(statusCallsAfterFirst).toHaveLength(1);
+
+      await slackRouter.request("/agent-change-callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "iterate:agent-updated",
+          payload: { path: agentPath, shortStatus: "🤔 Thinking", isWorking: true },
+        }),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const statusCallsAfterSecond = apiCallMock.mock.calls.filter(
+        (call) => call[0] === "assistant.threads.setStatus",
+      );
+      expect(statusCallsAfterSecond).toHaveLength(1);
     });
   });
 });
