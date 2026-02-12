@@ -2,7 +2,7 @@
  * Machine proxy route.
  *
  * Provides authenticated proxy access to services running inside machines
- * (Daytona sandboxes, local Docker containers, etc).
+ * (Daytona, Docker, Fly, etc).
  *
  * Route: /org/:org/proj/:project/:machine/proxy/:port/*
  */
@@ -159,7 +159,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     return rewriteHTMLUrls(response, proxyBasePath);
   }
 
-  // For non-Daytona machines (docker, fly, local), simple proxy without auth
+  // For non-Daytona machines (docker/fly), simple proxy without auth
   const fetcher = await runtime.getFetcher(portNum);
   const response = await proxyWithFetcher(c.req.raw, pathWithQuery, fetcher);
   return rewriteHTMLUrls(response, proxyBasePath);

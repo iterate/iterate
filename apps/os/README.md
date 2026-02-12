@@ -6,9 +6,9 @@ Sandbox docs are centralized in [`sandbox/README.md`](../../sandbox/README.md).
 
 Use that doc for:
 
-- Docker/Daytona/Fly provider behavior
+- Docker/Fly provider behavior (Daytona is optional/manual-only)
 - Image + snapshot tag formats
-- Doppler defaults (`DOCKER_DEFAULT_IMAGE`, `DAYTONA_DEFAULT_SNAPSHOT`, `FLY_DEFAULT_IMAGE`)
+- Doppler defaults (`DOCKER_DEFAULT_IMAGE`, `FLY_DEFAULT_IMAGE`)
 - Build/push/bootstrap/test commands
 
 Keep sandbox details out of this file to avoid drift.

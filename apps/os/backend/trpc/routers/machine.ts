@@ -234,7 +234,6 @@ export const machineRouter = router({
     }),
 
   // Create a new machine
-  // Returns apiKey for local machines (user needs to configure daemon manually)
   create: projectProtectedMutation
     .input(
       z.object({
@@ -260,7 +259,7 @@ export const machineRouter = router({
           waitUntil(result.provisionPromise);
         }
 
-        // Return apiKey for local machines - user needs this to configure their daemon
+        // Return machine API key when available
         if (result.apiKey) {
           return { ...result.machine, apiKey: result.apiKey };
         }
@@ -484,10 +483,6 @@ export const machineRouter = router({
         label: provider.label,
         disabledReason: provider.disabledReason,
       });
-    }
-
-    if (import.meta.env.DEV) {
-      types.push({ type: "local", label: "Local (Host:Port)" });
     }
 
     return types;

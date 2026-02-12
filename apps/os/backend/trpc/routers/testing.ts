@@ -17,6 +17,7 @@ import {
   event,
 } from "../../db/schema.ts";
 import { slugifyWithSuffix } from "../../utils/slug.ts";
+import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd } from "../../../env.ts";
 
 /** Generate a DiceBear avatar URL using a hash of the email as seed */
@@ -124,12 +125,14 @@ export const testingRouter = router({
       });
 
       const projSlug = slugifyWithSuffix(input.projectName || "default");
+      const sandboxProvider = getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
       const [newProject] = await ctx.db
         .insert(project)
         .values({
           name: input.projectName || "Default Project",
           slug: projSlug,
           organizationId: newOrg.id,
+          sandboxProvider,
         })
         .returning();
 

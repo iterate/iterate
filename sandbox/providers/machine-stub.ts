@@ -35,18 +35,10 @@ export interface CreateMachineStubOptions {
   metadata: Record<string, unknown>;
 }
 
-type LocalMetadata = {
-  host?: string;
-  ports?: Record<string, number>;
-  port?: number;
-};
-
 type DockerMetadata = {
-  localDocker?: {
+  docker?: {
     imageName?: string;
     syncRepo?: boolean;
-  };
-  docker?: {
     containerRef?: string;
   };
   snapshotName?: string;
@@ -133,68 +125,8 @@ function toRawEnv(params: {
   };
 }
 
-function createUrlFetcher(baseUrl: string): SandboxFetcher {
-  return async (input: string | Request | URL, init?: RequestInit) => {
-    const url =
-      typeof input === "string" && !/^https?:\/\//.test(input) ? `${baseUrl}${input}` : input;
-    return fetch(url, init);
-  };
-}
-
-function createLocalStub(metadata: Record<string, unknown>): MachineStub {
-  const typedMetadata = metadata as LocalMetadata;
-  const host = typedMetadata.host ?? "localhost";
-  const ports = typedMetadata.ports ?? {};
-
-  const getBaseUrl = async (port: number): Promise<string> => {
-    const serviceKey = LOCAL_SERVICE_KEY_BY_PORT[port];
-    if (serviceKey && ports[serviceKey]) {
-      return `http://${host}:${ports[serviceKey]}`;
-    }
-
-    const explicitPort = ports[String(port)];
-    if (explicitPort) {
-      return `http://${host}:${explicitPort}`;
-    }
-
-    if (port === 3000 && typedMetadata.port) {
-      return `http://${host}:${typedMetadata.port}`;
-    }
-
-    if (ports["iterate-daemon"]) {
-      return `http://${host}:${ports["iterate-daemon"]}`;
-    }
-
-    return `http://${host}:${port}`;
-  };
-
-  return {
-    type: "local",
-    async create(): Promise<MachineStubResult> {
-      return {
-        metadata: {
-          host,
-          ports,
-          daemonStatus: "ready",
-          daemonReadyAt: new Date().toISOString(),
-        },
-      };
-    },
-    async start(): Promise<void> {},
-    async stop(): Promise<void> {},
-    async restart(): Promise<void> {},
-    async archive(): Promise<void> {},
-    async delete(): Promise<void> {},
-    async getFetcher(port: number): Promise<SandboxFetcher> {
-      const baseUrl = await getBaseUrl(port);
-      return createUrlFetcher(baseUrl);
-    },
-    getBaseUrl,
-  };
-}
-
 function createSandboxStub<TSandbox extends Sandbox>(options: {
-  type: Exclude<MachineType, "local">;
+  type: MachineType;
   externalId: string;
   provider: SandboxHandleProvider<TSandbox>;
   createSandbox(config: CreateMachineConfig): Promise<TSandbox>;
@@ -281,10 +213,9 @@ function resolveDockerPortsFromMetadata(metadata: DockerMetadata): Record<number
 function createDockerStub(options: CreateMachineStubOptions): MachineStub {
   const { env, externalId, metadata } = options;
   const typedMetadata = metadata as DockerMetadata;
-  const localDockerConfig = typedMetadata.localDocker ?? {};
   const dockerMetadata = asRecord(typedMetadata.docker);
-  const imageName = asString(localDockerConfig.imageName) ?? asString(typedMetadata.snapshotName);
-  const syncRepo = asBoolean(localDockerConfig.syncRepo);
+  const imageName = asString(dockerMetadata.imageName) ?? asString(typedMetadata.snapshotName);
+  const syncRepo = asBoolean(dockerMetadata.syncRepo);
   const knownContainerRef = asString(dockerMetadata.containerRef);
 
   const provider = new DockerProvider(
@@ -338,16 +269,10 @@ function createDockerStub(options: CreateMachineStubOptions): MachineStub {
       ]);
 
       return {
-        ...(imageName || syncRepo !== undefined
-          ? {
-              localDocker: {
-                ...(imageName ? { imageName } : {}),
-                ...(syncRepo === undefined ? {} : { syncRepo }),
-              },
-            }
-          : {}),
         ports,
         docker: {
+          ...(imageName ? { imageName } : {}),
+          ...(syncRepo === undefined ? {} : { syncRepo }),
           containerRef: sandbox.runtimeId ?? sandbox.providerId,
         },
       };
@@ -438,11 +363,9 @@ function createFlyStub(options: CreateMachineStubOptions): MachineStub {
 }
 
 export async function createMachineStub(options: CreateMachineStubOptions): Promise<MachineStub> {
-  const { type, metadata } = options;
+  const { type } = options;
 
   switch (type) {
-    case "local":
-      return createLocalStub(metadata);
     case "docker":
       return createDockerStub(options);
     case "daytona":
