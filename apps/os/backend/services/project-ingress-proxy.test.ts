@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildControlPlaneProjectIngressProxyLoginUrl,
   getProjectIngressRequestHostname,
   handleProjectIngressRequest,
+  normalizeProjectIngressProxyRedirectPath,
   PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
   parseProjectIngressProxyHostMatchers,
   resolveIngressHostname,
@@ -85,6 +87,30 @@ describe("project ingress request hostname", () => {
     });
 
     expect(getProjectIngressRequestHostname(request)).toBe("4096__mach_abc.dev.iterate.com");
+  });
+});
+
+describe("project ingress auth bridge helpers", () => {
+  it("normalizes invalid redirect path values to root", () => {
+    expect(normalizeProjectIngressProxyRedirectPath(undefined)).toBe("/");
+    expect(normalizeProjectIngressProxyRedirectPath("https://example.com/path")).toBe("/");
+    expect(normalizeProjectIngressProxyRedirectPath("javascript:alert(1)")).toBe("/");
+  });
+
+  it("builds control-plane login url with normalized project ingress redirect path", () => {
+    const loginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
+      controlPlanePublicUrl: "https://os.iterate.com",
+      projectIngressProxyHost: "misha.iterate.town",
+      redirectPath: "https://evil.example/path",
+    });
+    expect(loginUrl.origin).toBe("https://os.iterate.com");
+    expect(loginUrl.pathname).toBe("/login");
+    const loginRedirectPath = loginUrl.searchParams.get("redirectUrl");
+    expect(loginRedirectPath).toBeTruthy();
+    const bridgeStartUrl = new URL(loginRedirectPath!, "https://os.iterate.com");
+    expect(bridgeStartUrl.pathname).toBe(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH);
+    expect(bridgeStartUrl.searchParams.get("projectIngressProxyHost")).toBe("misha.iterate.town");
+    expect(bridgeStartUrl.searchParams.get("redirectPath")).toBe("/");
   });
 });
 

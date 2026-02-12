@@ -168,6 +168,37 @@ export function buildCanonicalProjectIngressProxyHostname(params: {
   return `${hostToken}.${canonicalProjectIngressProxyBaseHost}`;
 }
 
+export function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
+  if (!rawPath) return "/";
+  try {
+    const parsed = new URL(rawPath, "https://project-ingress-proxy.local");
+    if (parsed.origin !== "https://project-ingress-proxy.local") return "/";
+    const normalizedPath = `${parsed.pathname}${parsed.search}`;
+    if (!normalizedPath.startsWith("/")) return "/";
+    return normalizedPath;
+  } catch {
+    return "/";
+  }
+}
+
+export function buildControlPlaneProjectIngressProxyLoginUrl(params: {
+  controlPlanePublicUrl: string;
+  projectIngressProxyHost: string;
+  redirectPath: string;
+}): URL {
+  const { controlPlanePublicUrl, projectIngressProxyHost, redirectPath } = params;
+  const controlPlaneBridgeStartPath = new URLSearchParams({
+    projectIngressProxyHost,
+    redirectPath: normalizeProjectIngressProxyRedirectPath(redirectPath),
+  });
+  const controlPlaneLoginUrl = new URL("/login", controlPlanePublicUrl);
+  controlPlaneLoginUrl.searchParams.set(
+    "redirectUrl",
+    `${PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH}?${controlPlaneBridgeStartPath.toString()}`,
+  );
+  return controlPlaneLoginUrl;
+}
+
 function isUnauthenticatedControlPlanePath(pathname: string): boolean {
   if (UNAUTHENTICATED_CONTROL_PLANE_PATHS.has(pathname)) return true;
   return UNAUTHENTICATED_CONTROL_PLANE_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -488,15 +519,11 @@ export async function handleProjectIngressRequest(
     if (isUnauthenticatedControlPlanePath(url.pathname)) {
       return null;
     }
-    const controlPlaneBridgeStartPath = new URLSearchParams({
+    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
+      controlPlanePublicUrl: env.VITE_PUBLIC_URL,
       projectIngressProxyHost: canonicalProjectIngressProxyHostname,
       redirectPath: `${url.pathname}${url.search}`,
     });
-    const controlPlaneLoginUrl = new URL("/login", env.VITE_PUBLIC_URL);
-    controlPlaneLoginUrl.searchParams.set(
-      "redirectUrl",
-      `${PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH}?${controlPlaneBridgeStartPath.toString()}`,
-    );
     return Response.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 

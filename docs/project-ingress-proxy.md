@@ -7,4 +7,3 @@ Canonical project ingress proxy host request decision tree lives under `Request 
 Tracked follow-up tasks:
 
 - `tasks/project-ingress-proxy-improvements.md`
-- `tasks/project-ingress-proxy-secret-auth.md`

@@ -35,10 +35,12 @@ import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 import {
+  buildControlPlaneProjectIngressProxyLoginUrl,
   buildCanonicalProjectIngressProxyHostname,
   getProjectIngressRequestHostname,
   getProjectIngressProxyHostMatchers,
   handleProjectIngressRequest,
+  normalizeProjectIngressProxyRedirectPath,
   PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
   resolveIngressHostname,
   shouldHandleProjectIngressHostname,
@@ -110,19 +112,6 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
-  if (!rawPath) return "/";
-  try {
-    const parsed = new URL(rawPath, "https://project-ingress-proxy.local");
-    if (parsed.origin !== "https://project-ingress-proxy.local") return "/";
-    const normalizedPath = `${parsed.pathname}${parsed.search}`;
-    if (!normalizedPath.startsWith("/")) return "/";
-    return normalizedPath;
-  } catch {
-    return "/";
-  }
-}
-
 app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
   const requestedProjectIngressProxyHost = c.req.query("projectIngressProxyHost");
   if (!requestedProjectIngressProxyHost) {
@@ -154,15 +143,11 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
   const redirectPath = normalizeProjectIngressProxyRedirectPath(c.req.query("redirectPath"));
 
   if (!c.var.session) {
-    const controlPlaneLoginUrl = new URL("/login", c.env.VITE_PUBLIC_URL);
-    const controlPlaneBridgeStartQuery = new URLSearchParams({
+    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
+      controlPlanePublicUrl: c.env.VITE_PUBLIC_URL,
       projectIngressProxyHost: canonicalProjectIngressProxyHost,
       redirectPath,
     });
-    controlPlaneLoginUrl.searchParams.set(
-      "redirectUrl",
-      `${PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH}?${controlPlaneBridgeStartQuery.toString()}`,
-    );
     return c.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 

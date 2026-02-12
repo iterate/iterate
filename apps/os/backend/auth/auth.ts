@@ -13,6 +13,7 @@ import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
+import { normalizeProjectIngressProxyRedirectPath } from "../services/project-ingress-proxy.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -56,19 +57,6 @@ function matchesHostMatcher(hostname: string, patterns: string[]) {
       noglobstar: false,
     }),
   );
-}
-
-function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
-  if (!rawPath) return "/";
-  try {
-    const parsed = new URL(rawPath, "https://project-ingress-proxy.local");
-    if (parsed.origin !== "https://project-ingress-proxy.local") return "/";
-    const normalizedPath = `${parsed.pathname}${parsed.search}`;
-    if (!normalizedPath.startsWith("/")) return "/";
-    return normalizedPath;
-  } catch {
-    return "/";
-  }
 }
 
 function projectIngressProxyOneTimeTokenExchangePlugin() {
