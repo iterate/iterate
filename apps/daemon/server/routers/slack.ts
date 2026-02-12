@@ -67,9 +67,9 @@ export const slackRouter = new Hono();
 /**
  * Per-agent Slack thread context stored in memory, keyed by agent path.
  *
- * Set: mention webhook adds deterministic eyes emoji
- *       and stores channel + timestamp here so we know what to clean up.
- *       If an active entry already exists, mention webhooks skip adding another.
+ * Set: message webhooks establish a context cycle for status updates.
+ *      Mentions additionally add deterministic eyes emoji.
+ *      If an active entry already exists, we keep it and avoid re-adding emoji.
  * Cleared: agent-change callback with `isWorking: false` marks closing, clears
  *          emoji + status, then removes the entry from the map if it is still
  *          the same cycle.
@@ -77,15 +77,15 @@ export const slackRouter = new Hono();
 type SlackThreadContext = {
   channel: string;
   threadTs: string;
-  /** The `ts` of the Slack message we reacted to (so we can remove the reaction later). */
-  emojiTimestamp: string;
-  /** The emoji name we added (e.g. "eyes"). */
-  emoji: string;
+  /** The `ts` of the Slack message we reacted to (if deterministic emoji was added). */
+  emojiTimestamp?: string;
+  /** The emoji name we added (e.g. "eyes"), if any. */
+  emoji?: string;
   /** Local creation timestamp used to ignore stale agent callbacks. */
   createdAtMs: number;
   requestId?: string;
   /** Tracks the in-flight reactions.add call so remove waits and avoids no_reaction races. */
-  addEmojiPromise?: Promise<void>;
+  addEmojiPromise: Promise<void>;
   /** Cycle guard to avoid stale async callbacks mutating a newer context. */
   cycleId: string;
   /** True while idle cleanup is running. */
@@ -266,13 +266,14 @@ slackRouter.post("/webhook", async (c) => {
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
 
-  // For @mentions, send eyes emoji immediately (only once per active thread cycle).
+  // For @mentions, start a context cycle and add eyes immediately.
   if (isMention) {
-    ensureMentionEmojiContext({
+    ensureSlackThreadContext({
       agentPath,
       channel: event.channel || "",
       threadTs,
-      messageTs,
+      emojiTimestamp: messageTs,
+      emoji: "eyes",
       requestId,
     });
   }
@@ -297,7 +298,13 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    // FYI messages do not add deterministic emoji; mentions own the emoji lifecycle.
+    // FYI messages start a fresh status cycle but do not add deterministic emoji.
+    ensureSlackThreadContext({
+      agentPath,
+      channel: event.channel || "",
+      threadTs,
+      requestId,
+    });
   }
 
   if (!agent) {
@@ -434,11 +441,12 @@ slackRouter.post("/agent-change-callback", async (c) => {
   return c.json({ success: true });
 });
 
-function ensureMentionEmojiContext(params: {
+function ensureSlackThreadContext(params: {
   agentPath: string;
   channel: string;
   threadTs: string;
-  messageTs: string;
+  emojiTimestamp?: string;
+  emoji?: string;
   requestId?: string;
 }): void {
   const existing = slackThreadContextByAgentPath.get(params.agentPath);
@@ -449,19 +457,22 @@ function ensureMentionEmojiContext(params: {
   const context: SlackThreadContext = {
     channel: params.channel,
     threadTs: params.threadTs,
-    emojiTimestamp: params.messageTs,
-    emoji: "eyes",
+    emojiTimestamp: params.emojiTimestamp,
+    emoji: params.emoji,
     createdAtMs: Date.now(),
     requestId: params.requestId,
+    addEmojiPromise: Promise.resolve(),
     cycleId: `slk-${nanoid(8)}`,
     closing: false,
     lastStatusKey: "",
   };
 
   slackThreadContextByAgentPath.set(params.agentPath, context);
-  const addEmojiPromise = addReaction(context);
-  context.addEmojiPromise = addEmojiPromise;
-  void addEmojiPromise;
+  if (context.emoji && context.emojiTimestamp) {
+    const addEmojiPromise = addReaction(context);
+    context.addEmojiPromise = addEmojiPromise;
+    void addEmojiPromise;
+  }
 }
 
 function scheduleThreadStatusUpdate(
@@ -534,6 +545,8 @@ function getSlackClient(): WebClient {
 }
 
 async function addReaction(context: SlackThreadContext): Promise<void> {
+  if (!context.emoji || !context.emojiTimestamp) return;
+
   try {
     await getSlackClient().reactions.add({
       channel: context.channel,
@@ -555,6 +568,8 @@ async function addReaction(context: SlackThreadContext): Promise<void> {
 }
 
 async function removeReaction(context: SlackThreadContext): Promise<void> {
+  if (!context.emoji || !context.emojiTimestamp) return;
+
   await context.addEmojiPromise;
   try {
     await getSlackClient().reactions.remove({

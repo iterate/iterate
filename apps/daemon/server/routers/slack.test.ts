@@ -1050,5 +1050,174 @@ describe("slack router", () => {
       );
       expect(statusCallsAfterSecond).toHaveLength(1);
     });
+
+    it("starts a new status cycle for a later FYI message after prior cleanup", async () => {
+      const threadTs = "5959595959.595959";
+      const secondTs = "5959595959.696969";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      const nowSpy = vi.spyOn(Date, "now");
+      let nowMs = 1_735_000_000_000;
+      nowSpy.mockImplementation(() => nowMs);
+
+      try {
+        selectLimitQueue.push([]); // storeEvent dedup check
+        getOrCreateAgentMock.mockResolvedValue({
+          wasNewlyCreated: true,
+          route: null,
+          agent: buildAgent({ path: agentPath }),
+        });
+        subscribeToAgentChangesMock.mockResolvedValue({});
+        fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+        await slackRouter.request("/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "event_callback",
+            event_id: "evt_status_cycle_1",
+            event: {
+              type: "app_mention",
+              ts: threadTs,
+              text: `<@${botUserId}> first run`,
+              user: "U_USER",
+              channel: "C_TEST",
+              event_ts: threadTs,
+            },
+            authorizations: [{ user_id: botUserId, is_bot: true }],
+          }),
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        const firstWorkingResponse = await slackRouter.request("/agent-change-callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "iterate:agent-updated",
+            payload: { path: agentPath, shortStatus: "🤔 Thinking", isWorking: true },
+          }),
+        });
+        expect((await firstWorkingResponse.json()).scheduled).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        let statusCalls = apiCallMock.mock.calls.filter(
+          (call) => call[0] === "assistant.threads.setStatus",
+        );
+        expect(statusCalls).toHaveLength(1);
+        expect(statusCalls[0]?.[1]).toMatchObject({
+          channel_id: "C_TEST",
+          thread_ts: threadTs,
+          status: "is thinking...",
+        });
+
+        const firstIdleResponse = await slackRouter.request("/agent-change-callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "iterate:agent-updated",
+            payload: { path: agentPath, shortStatus: "", isWorking: false },
+          }),
+        });
+        expect((await firstIdleResponse.json()).success).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        statusCalls = apiCallMock.mock.calls.filter(
+          (call) => call[0] === "assistant.threads.setStatus",
+        );
+        expect(statusCalls).toHaveLength(2);
+        expect(statusCalls[1]?.[1]).toMatchObject({
+          channel_id: "C_TEST",
+          thread_ts: threadTs,
+          status: "",
+        });
+        expect(reactionsRemoveMock).toHaveBeenCalledWith(
+          expect.objectContaining({ timestamp: threadTs, name: "eyes" }),
+        );
+
+        // Five minutes later, same thread gets an FYI message (no @mention).
+        nowMs += 5 * 60 * 1000;
+        apiCallMock.mockClear();
+        reactionsAddMock.mockClear();
+        reactionsRemoveMock.mockClear();
+
+        selectLimitQueue.push([]); // storeEvent dedup check
+        getAgentMock.mockResolvedValue({ path: agentPath });
+        fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+        const secondWebhookResponse = await slackRouter.request("/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "event_callback",
+            event_id: "evt_status_cycle_2",
+            event: {
+              type: "message",
+              thread_ts: threadTs,
+              ts: secondTs,
+              text: "follow-up without mention",
+              user: "U_USER",
+              channel: "C_TEST",
+              event_ts: secondTs,
+              channel_type: "channel",
+            },
+            authorizations: [{ user_id: botUserId, is_bot: true }],
+          }),
+        });
+        expect(secondWebhookResponse.status).toBe(200);
+        expect((await secondWebhookResponse.json()).case).toBe("fyi_message");
+
+        const secondWorkingResponse = await slackRouter.request("/agent-change-callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "iterate:agent-updated",
+            payload: { path: agentPath, shortStatus: "🔧 Running tests", isWorking: true },
+          }),
+        });
+        expect((await secondWorkingResponse.json()).scheduled).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        let secondCycleStatusCalls = apiCallMock.mock.calls.filter(
+          (call) => call[0] === "assistant.threads.setStatus",
+        );
+        expect(secondCycleStatusCalls).toHaveLength(1);
+        expect(secondCycleStatusCalls[0]?.[1]).toMatchObject({
+          channel_id: "C_TEST",
+          thread_ts: threadTs,
+          status: "is working...",
+        });
+        expect(reactionsAddMock).not.toHaveBeenCalled();
+
+        const secondIdleResponse = await slackRouter.request("/agent-change-callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "iterate:agent-updated",
+            payload: { path: agentPath, shortStatus: "", isWorking: false },
+          }),
+        });
+        expect((await secondIdleResponse.json()).success).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        secondCycleStatusCalls = apiCallMock.mock.calls.filter(
+          (call) => call[0] === "assistant.threads.setStatus",
+        );
+        expect(secondCycleStatusCalls).toHaveLength(2);
+        expect(secondCycleStatusCalls[1]?.[1]).toMatchObject({
+          channel_id: "C_TEST",
+          thread_ts: threadTs,
+          status: "",
+        });
+        expect(reactionsRemoveMock).not.toHaveBeenCalled();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 });
