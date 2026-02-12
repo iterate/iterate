@@ -1,7 +1,14 @@
+type URLSearchQueryInit =
+  | string
+  | string[][]
+  | Record<string, string>
+  | URLSearchParams
+  | undefined;
+
 export function buildProjectIngressLink(params: {
   baseUrl: string;
   path: string;
-  query?: URLSearchParams | URLSearchParamsInit;
+  query?: URLSearchQueryInit;
 }): string {
   const { baseUrl, path, query } = params;
   const url = new URL(baseUrl);
