@@ -125,7 +125,7 @@ async function ensureDevTunnelWildcardDns(
 
   async function upsertWildcardDnsRecord(name: string) {
     const findResponse = await fetch(
-      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=1`,
+      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(name)}&per_page=1`,
       { headers },
     );
     const findPayload = (await findResponse.json()) as {
