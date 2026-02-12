@@ -52,9 +52,32 @@ OS-side ingress resolution/proxying lives in `apps/os/backend/services/project-i
 Key points:
 
 - Host matching is controlled by `PROJECT_INGRESS_PROXY_HOST_MATCHERS`
+- Canonical service link host is set by `PROJECT_INGRESS_PROXY_CANONICAL_HOST`
 - Worker route patterns are controlled by `OS_WORKER_ROUTES`
-- Both env vars are required (no fallback defaults)
+- All three env vars are required (no fallback defaults)
 - OS always fetches into machine ingress port `8080`
+
+Canonical service links use:
+
+- `<port>__<machine_id>.<PROJECT_INGRESS_PROXY_CANONICAL_HOST>`
+- Example: `4096__mach_123.p.os.iterate.com`
+
+## Ingress env vars
+
+- `PROJECT_INGRESS_PROXY_CANONICAL_HOST`
+  - Single canonical base host used when constructing machine service links.
+  - Must be a hostname only (no wildcard, scheme, port, or path).
+  - Must be covered by `PROJECT_INGRESS_PROXY_HOST_MATCHERS`.
+- `PROJECT_INGRESS_PROXY_HOST_MATCHERS`
+  - Comma-separated hostname glob patterns used to decide if OS should handle ingress routing.
+  - Match full incoming hostnames (for example `*.p.os.iterate.com`).
+- `OS_WORKER_ROUTES`
+  - Comma-separated Cloudflare route host patterns bound to the `os` worker.
+  - Must include patterns that cover ingress hostnames.
+- `DEV_TUNNEL` (local development)
+  - Explicit local tunnel subdomain used by `alchemy.run.ts` (for example `dev-$ITERATE_USER-os`).
+  - Canonical host can be set from it in Doppler:
+    - `PROJECT_INGRESS_PROXY_CANONICAL_HOST=${DEV_TUNNEL}.dev.iterate.com`
 
 Provider path to machine ingress:
 

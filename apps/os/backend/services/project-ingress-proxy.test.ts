@@ -7,7 +7,7 @@ import {
 
 describe("project ingress hostname matching", () => {
   const hostMatchers = parseProjectIngressProxyHostMatchers(
-    "*.local.iterate.town,*.*.dev.iterate.com,*.iterate.town,*.iterate.app",
+    "*.local.iterate.town,*.*.dev.iterate.com,*.iterate.town,*.iterate.app,*.p.os.iterate.com",
   );
 
   it("matches project slug host under iterate.town", () => {
@@ -36,6 +36,10 @@ describe("project ingress hostname matching", () => {
 
   it("does not match unrelated hostnames", () => {
     expect(shouldHandleProjectIngressHostname("google.com", hostMatchers)).toBe(false);
+  });
+
+  it("matches p.os.iterate.com hostnames", () => {
+    expect(shouldHandleProjectIngressHostname("misha.p.os.iterate.com", hostMatchers)).toBe(true);
   });
 });
 

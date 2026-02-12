@@ -20,6 +20,10 @@ import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
+import {
+  isCanonicalIngressHostCoveredByMatchers,
+  normalizeProjectIngressCanonicalHost,
+} from "./backend/utils/project-ingress-url.ts";
 import { workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
@@ -57,6 +61,8 @@ const isPreview =
 
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const ITERATE_ZONE_NAME = "iterate.com";
+const PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS = ["*.p.os.iterate.com"];
+const PROD_OS_WORKER_EXTRA_ROUTES = ["*.p.os.iterate.com"];
 
 /**
  * DEV_TUNNEL:
@@ -427,6 +433,7 @@ const Env = z.object({
   POSTHOG_PUBLIC_KEY: Optional,
   // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
+  PROJECT_INGRESS_PROXY_CANONICAL_HOST: Required,
   VITE_APP_STAGE: Required,
   APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
@@ -689,11 +696,44 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     );
   }
 
+  const rawProjectIngressCanonicalHost = process.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST;
+  const projectIngressCanonicalHost = normalizeProjectIngressCanonicalHost(
+    rawProjectIngressCanonicalHost ?? "",
+  );
+  if (!projectIngressCanonicalHost) {
+    throw new Error(
+      "PROJECT_INGRESS_PROXY_CANONICAL_HOST is required and must be a hostname (no wildcard, scheme, port, or path).",
+    );
+  }
+
+  const effectiveProjectIngressProxyHostMatchers = [
+    ...new Set([
+      ...projectIngressProxyHostMatchers,
+      ...(isProduction ? PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS : []),
+    ]),
+  ];
+  if (
+    !isCanonicalIngressHostCoveredByMatchers({
+      canonicalHost: projectIngressCanonicalHost,
+      hostMatchers: effectiveProjectIngressProxyHostMatchers,
+    })
+  ) {
+    throw new Error(
+      `PROJECT_INGRESS_PROXY_CANONICAL_HOST='${projectIngressCanonicalHost}' is not covered by PROJECT_INGRESS_PROXY_HOST_MATCHERS.`,
+    );
+  }
+
   const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
   if (osWorkerRoutes.length === 0) {
     throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
   }
-  const routeHosts = [...new Set([...osWorkerRoutes, ...domains])];
+  const routeHosts = [
+    ...new Set([
+      ...osWorkerRoutes,
+      ...domains,
+      ...(isProduction ? PROD_OS_WORKER_EXTRA_ROUTES : []),
+    ]),
+  ];
 
   const worker = await TanStackStart("os", {
     bindings: {
@@ -704,7 +744,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
-      PROJECT_INGRESS_PROXY_HOST_MATCHERS: projectIngressProxyHostMatchers.join(","),
+      PROJECT_INGRESS_PROXY_HOST_MATCHERS: effectiveProjectIngressProxyHostMatchers.join(","),
+      PROJECT_INGRESS_PROXY_CANONICAL_HOST: projectIngressCanonicalHost,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
