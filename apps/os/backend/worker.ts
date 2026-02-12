@@ -92,6 +92,15 @@ app.use("*", async (c, next) => {
   return next();
 });
 
+app.use("*", async (c, next) => {
+  const requestDomain = new URL(c.req.url).hostname;
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
+    return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+  }
+  return next();
+});
+
 app.onError((err, c) => {
   logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
 
@@ -258,15 +267,6 @@ export default class extends WorkerEntrypoint {
   declare env: CloudflareEnv;
 
   fetch(request: Request) {
-    const requestDomain = new URL(request.url).hostname;
-    const hostMatchers = getProjectIngressProxyHostMatchers(this.env);
-
-    // Route ingress hostnames through the backend ingress resolver/proxy.
-    if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
-      return handleProjectIngressRequest(request, this.env);
-    }
-
-    // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
   }
 

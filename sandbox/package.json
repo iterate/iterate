@@ -12,7 +12,7 @@
     "./providers/fly": "./providers/fly/provider.ts"
   },
   "scripts": {
-    "build": "SANDBOX_BUILD_PLATFORM=${SANDBOX_BUILD_PLATFORM:-linux/amd64,linux/arm64} tsx providers/docker/build-image.ts",
+    "build": "doppler run -- tsx providers/docker/build-image.ts",
     "daytona:push": "doppler run -- sh -c 'tsx providers/daytona/push-snapshot.ts \"$@\"' --",
     "shell": "doppler run -- tsx providers/docker/shell.ts",
     "fly:bootstrap-apps": "doppler run -- sh -c 'tsx providers/fly/bootstrap-apps.ts \"$@\"' --",

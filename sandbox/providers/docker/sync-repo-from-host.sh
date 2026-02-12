@@ -48,4 +48,6 @@ if [[ -f "${ITERATE_REPO}/.git/commondir" || -f "${ITERATE_REPO}/.git/gitdir" ]]
   rm -f "${ITERATE_REPO}/.git/commondir" "${ITERATE_REPO}/.git/gitdir"
 fi
 
+# Keep workspace dependencies aligned with host-synced package/lock changes.
+(cd "${ITERATE_REPO}" && pnpm install --frozen-lockfile --prefer-offline)
 bash "${ITERATE_REPO}/sandbox/after-repo-sync-steps.sh"
