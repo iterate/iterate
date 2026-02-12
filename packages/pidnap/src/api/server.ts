@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
 import type { RestartingProcess } from "../restarting-process.ts";
@@ -7,6 +7,7 @@ import {
   type RestartingProcessInfo,
   type ManagerStatus,
   type WaitForRunningResponse,
+  type TailLogsEvent,
 } from "./contract.ts";
 
 const os = implement(api).$context<{ manager: Manager }>();
@@ -123,12 +124,86 @@ const removeProcess = os.processes.remove.handler(async ({ input, context }) => 
   return { success: true };
 });
 
+function resolveProcessNameByTarget(manager: Manager, target: string | number): string {
+  if (typeof target === "string") return target;
+  const process = manager.getProcessByTarget(target);
+  if (!process) {
+    throw new ORPCError("NOT_FOUND", { message: `Process not found: ${target}` });
+  }
+  return process.name;
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function splitLogLines(content: string): string[] {
+  const normalized = content.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const lines = normalized.split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function readFileDelta(
+  filePath: string,
+  previousOffset: number,
+): { nextOffset: number; chunk: string; reset: boolean } {
+  if (!existsSync(filePath)) {
+    return {
+      nextOffset: 0,
+      chunk: "",
+      reset: previousOffset > 0,
+    };
+  }
+
+  const fileSize = statSync(filePath).size;
+  const offset = fileSize < previousOffset ? 0 : previousOffset;
+  const bytesToRead = fileSize - offset;
+  if (bytesToRead <= 0) {
+    return {
+      nextOffset: fileSize,
+      chunk: "",
+      reset: offset === 0 && previousOffset > 0,
+    };
+  }
+
+  const fd = openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    readSync(fd, buffer, 0, bytesToRead, offset);
+    return {
+      nextOffset: fileSize,
+      chunk: buffer.toString("utf-8"),
+      reset: offset === 0 && previousOffset > 0,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Read last N lines from a file */
 function tailFile(filePath: string, lines: number): string | undefined {
   if (!existsSync(filePath)) return undefined;
   try {
     const content = readFileSync(filePath, "utf-8");
-    const allLines = content.split("\n");
+    const allLines = splitLogLines(content);
     const tailLines = allLines.slice(-lines);
     return tailLines.join("\n");
   } catch {
@@ -220,6 +295,68 @@ const waitForRunning = os.processes.waitForRunning.handler(
   },
 );
 
+const tailLogs = os.processes.tailLogs.handler(async function* ({ input, context, signal }) {
+  const processName = resolveProcessNameByTarget(context.manager, input.target);
+  const logPath = context.manager.getProcessLogPath(processName);
+  const initialLines = Math.max(1, Math.min(input.lines ?? 200, 5000));
+  const intervalMs = Math.max(200, input.intervalMs ?? 1000);
+  let seq = 0;
+  let offset = 0;
+  let pendingPartialLine = "";
+
+  const initialTail = tailFile(logPath, initialLines);
+  if (initialTail) {
+    for (const line of splitLogLines(initialTail)) {
+      const event: TailLogsEvent = {
+        processName,
+        seq,
+        emittedAt: new Date().toISOString(),
+        line,
+      };
+      yield event;
+      seq += 1;
+    }
+  }
+
+  if (existsSync(logPath)) {
+    offset = statSync(logPath).size;
+  }
+
+  if (input.follow === false) {
+    return;
+  }
+
+  while (!signal?.aborted) {
+    await sleepWithSignal(intervalMs, signal);
+    if (signal?.aborted) break;
+
+    const delta = readFileDelta(logPath, offset);
+    offset = delta.nextOffset;
+    if (delta.reset) {
+      pendingPartialLine = "";
+    }
+    if (!delta.chunk) {
+      continue;
+    }
+
+    const mergedChunk = pendingPartialLine + delta.chunk;
+    const normalizedChunk = mergedChunk.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+    const chunkLines = normalizedChunk.split("\n");
+    pendingPartialLine = chunkLines.pop() ?? "";
+
+    for (const line of chunkLines) {
+      const event: TailLogsEvent = {
+        processName,
+        seq,
+        emittedAt: new Date().toISOString(),
+        line,
+      };
+      yield event;
+      seq += 1;
+    }
+  }
+});
+
 // Simple health check endpoint
 const health = os.health.handler(async () => {
   return { status: "ok" as const };
@@ -240,5 +377,6 @@ export const router = os.router({
     reload: reloadProcess,
     remove: removeProcess,
     waitForRunning: waitForRunning,
+    tailLogs: tailLogs,
   },
 });

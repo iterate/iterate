@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createFileRoute, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { createClient as createPidnapClient } from "pidnap/client";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
@@ -19,10 +21,13 @@ import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
-
-export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
-  component: MachineDetailPage,
-});
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../components/ui/sheet.tsx";
 
 /** Pidnap-managed processes — mirrors sandbox/pidnap.config.ts */
 const PIDNAP_PROCESSES = [
@@ -32,6 +37,19 @@ const PIDNAP_PROCESSES = [
   "egress-proxy",
   "trace-viewer",
 ] as const;
+type PidnapProcessName = (typeof PIDNAP_PROCESSES)[number];
+type LogStreamState = "idle" | "connecting" | "streaming";
+
+const MAX_TAIL_LINES = 500;
+
+const Search = z.object({
+  tail: z.enum(PIDNAP_PROCESSES).optional(),
+});
+
+export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
+  validateSearch: Search,
+  component: MachineDetailPage,
+});
 
 function parseFlyExternalId(externalId: string): { appName: string } | null {
   const trimmed = externalId.trim();
@@ -123,9 +141,18 @@ function ProviderDetailsCard(props: {
 
 function MachineDetailPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
+  const search = useSearch({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [tailLines, setTailLines] = useState<string[]>([]);
+  const [tailStreamState, setTailStreamState] = useState<LogStreamState>("idle");
+  const tailAbortControllerRef = useRef<AbortController | null>(null);
+  const tailSessionIdRef = useRef(0);
+  const tailLogViewportRef = useRef<HTMLDivElement | null>(null);
+
+  const tailProcess = search.tail ?? null;
+  const tailSheetOpen = tailProcess !== null;
 
   const machineQueryKey = trpc.machine.byId.queryKey({
     projectSlug: params.projectSlug,
@@ -220,6 +247,12 @@ function MachineDetailPage() {
 
   const iterateDaemonService = services.find((service) => service.id === "iterate-daemon");
   const daemonBaseUrl = iterateDaemonService?.options[0]?.url;
+  const iterateDaemonProxyUrl = iterateDaemonService?.options.find((option) =>
+    option.url.includes("/proxy/3000/"),
+  )?.url;
+  const pidnapRpcUrl = iterateDaemonProxyUrl
+    ? iterateDaemonProxyUrl.replace("/proxy/3000/", "/proxy/9876/rpc")
+    : null;
   const opencodeService = services.find((service) => service.id === "opencode");
   const opencodeBaseUrl = opencodeService?.options[0]?.url;
 
@@ -382,6 +415,132 @@ function MachineDetailPage() {
 
   const machineJson = JSON.stringify(machine, null, 2);
 
+  const stopTailStream = useCallback(() => {
+    tailAbortControllerRef.current?.abort();
+    tailAbortControllerRef.current = null;
+    tailSessionIdRef.current += 1;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopTailStream();
+    };
+  }, [stopTailStream]);
+
+  const startTailStream = useCallback(
+    async (processName: PidnapProcessName) => {
+      if (!pidnapRpcUrl) {
+        setTailStreamState("idle");
+        return;
+      }
+
+      const resolvedPidnapRpcUrl = (() => {
+        if (pidnapRpcUrl.startsWith("http://") || pidnapRpcUrl.startsWith("https://")) {
+          return pidnapRpcUrl;
+        }
+        if (typeof window === "undefined") return null;
+        try {
+          return new URL(pidnapRpcUrl, window.location.origin).toString();
+        } catch {
+          return null;
+        }
+      })();
+
+      if (!resolvedPidnapRpcUrl) {
+        setTailStreamState("idle");
+        toast.error("Failed to resolve pidnap RPC URL");
+        return;
+      }
+
+      stopTailStream();
+      const abortController = new AbortController();
+      tailAbortControllerRef.current = abortController;
+      const sessionId = tailSessionIdRef.current + 1;
+      tailSessionIdRef.current = sessionId;
+
+      setTailLines([]);
+      setTailStreamState("connecting");
+
+      try {
+        const client = createPidnapClient({ url: resolvedPidnapRpcUrl });
+        const iterator = await client.processes.tailLogs(
+          {
+            target: processName,
+            lines: 200,
+            follow: true,
+            intervalMs: 700,
+          },
+          { signal: abortController.signal },
+        );
+
+        if (tailSessionIdRef.current !== sessionId || abortController.signal.aborted) {
+          return;
+        }
+
+        setTailStreamState("streaming");
+        for await (const event of iterator) {
+          if (tailSessionIdRef.current !== sessionId || abortController.signal.aborted) {
+            break;
+          }
+
+          setTailLines((previous) => {
+            const next = [...previous, event.line];
+            if (next.length <= MAX_TAIL_LINES) return next;
+            return next.slice(next.length - MAX_TAIL_LINES);
+          });
+        }
+
+        if (tailSessionIdRef.current === sessionId && !abortController.signal.aborted) {
+          setTailStreamState("idle");
+        }
+      } catch (error) {
+        if (tailSessionIdRef.current !== sessionId || abortController.signal.aborted) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        setTailStreamState("idle");
+        toast.error(`Failed to tail ${processName}: ${message}`);
+      }
+    },
+    [pidnapRpcUrl, stopTailStream],
+  );
+
+  useEffect(() => {
+    if (!tailProcess) {
+      stopTailStream();
+      setTailLines([]);
+      setTailStreamState("idle");
+      return;
+    }
+
+    void startTailStream(tailProcess);
+  }, [startTailStream, stopTailStream, tailProcess]);
+
+  useEffect(() => {
+    if (!tailLogViewportRef.current) return;
+    tailLogViewportRef.current.scrollTop = tailLogViewportRef.current.scrollHeight;
+  }, [tailLines]);
+
+  const openTailSheet = (processName: PidnapProcessName) => {
+    navigate({
+      search: (previous) => ({ ...previous, tail: processName }),
+      replace: true,
+    });
+  };
+
+  const onTailSheetOpenChange = (open: boolean) => {
+    if (open) return;
+
+    navigate({
+      search: (previous) => {
+        const { tail: _tail, ...rest } = previous;
+        return rest;
+      },
+      replace: true,
+    });
+  };
+
   return (
     <div className="space-y-8 p-4">
       <section className="space-y-3 border-b pb-6">
@@ -520,24 +679,22 @@ function MachineDetailPage() {
 
         <div>
           <h3 className="mb-2 text-xs font-medium text-muted-foreground">Pidnap Logs</h3>
-          {daemonBaseUrl ? (
+          {pidnapRpcUrl ? (
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
               {PIDNAP_PROCESSES.map((processName) => (
-                <a
+                <Button
                   key={processName}
-                  href={buildTerminalUrl(
-                    `tail -n 200 -f /var/log/pidnap/process/${processName}.log`,
-                  )}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
+                  variant="outline"
+                  size="sm"
+                  className="justify-start truncate"
+                  onClick={() => openTailSheet(processName)}
                 >
-                  {processName}
-                </a>
+                  Tail {processName}
+                </Button>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Daemon shell URL not available yet.</p>
+            <p className="text-xs text-muted-foreground">Pidnap RPC URL not available yet.</p>
           )}
         </div>
       </section>
@@ -662,6 +819,37 @@ function MachineDetailPage() {
         onConfirm={() => deleteMachine.mutate()}
         destructive
       />
+
+      <Sheet open={tailSheetOpen} onOpenChange={onTailSheetOpenChange}>
+        <SheetContent className="w-[80vw] max-w-[80vw] sm:max-w-[80vw]">
+          <SheetHeader>
+            <SheetTitle>Tail Logs: {tailProcess ?? "process"}</SheetTitle>
+            <SheetDescription>
+              Streaming via pidnap oRPC through the authenticated machine proxy.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="min-h-0 flex-1 px-4 pb-4">
+            <div className="mb-2 text-xs text-muted-foreground">
+              {tailStreamState === "connecting" && "Connecting..."}
+              {tailStreamState === "streaming" && "Streaming..."}
+              {tailStreamState === "idle" && "Idle"}
+            </div>
+            <div
+              ref={tailLogViewportRef}
+              className="h-full overflow-auto rounded-md border bg-muted/20 p-3 font-mono text-xs whitespace-pre-wrap"
+            >
+              {!pidnapRpcUrl
+                ? "Pidnap RPC URL not available yet."
+                : tailLines.length > 0
+                  ? tailLines.join("\n")
+                  : tailStreamState === "connecting"
+                    ? "Opening stream..."
+                    : "No log lines yet."}
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

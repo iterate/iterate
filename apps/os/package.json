@@ -83,6 +83,7 @@
     "next-themes": "^0.4.6",
     "nuqs": "^2.8.1",
     "partysocket": "^1.1.6",
+    "pidnap": "workspace:*",
     "postgres": "^3.4.7",
     "posthog-js": "^1.313.0",
     "radix-ui": "^1.4.3",
