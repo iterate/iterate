@@ -17800,7 +17800,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
 
   '@types/chai@5.2.2':
     dependencies:
@@ -18050,7 +18050,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
 
   '@types/yargs-parser@21.0.3': {}
 

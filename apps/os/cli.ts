@@ -3,8 +3,8 @@ import * as os from "os";
 import * as fs from "fs";
 import { adminClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/client";
-import { createCli, TrpcCliMeta } from "trpc-cli";
-import { proxify } from "trpc-cli/dist/proxify";
+import { createCli, type TrpcCliMeta } from "trpc-cli";
+import { proxify } from "trpc-cli/dist/proxify.js";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import superjson from "superjson";
 import { initTRPC } from "@trpc/server";
@@ -40,17 +40,40 @@ const IterateConfig = z.object({
   /** e.g. usr_01kh6wb0y8f6frrwx7he4ma94s */
   userId: z.string(),
 });
+
+const IterateConfigFileShape = z.object({
+  // global: IterateConfig.optional(), // could add something like this mebe
+
+  workspaces: z.record(z.string().describe("workspace dir path"), IterateConfig),
+});
+
 const getIterateConfigFilePath = () => {
   return path.join(os.homedir(), ".iterate/.iterate.json");
 };
 
-const getIterateConfig = () => {
+const getIterateConfigFile = async () => {
   const configFile = getIterateConfigFilePath();
   if (!fs.existsSync(configFile)) {
-    throw new Error(`Config file ${configFile} does not exist`);
+    return null;
   }
-  const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
-  return IterateConfig.parse(config);
+  const raw = JSON.parse(await fs.promises.readFile(configFile, "utf8"));
+  return IterateConfigFileShape.parse(raw);
+};
+
+const getIterateConfig = async () => {
+  const file = await getIterateConfigFile();
+  if (!file) {
+    throw new Error(
+      `Config file ${getIterateConfigFilePath()} does not exist. Have you run \`iterate setup\`?`,
+    );
+  }
+  const config = file.workspaces[process.cwd()];
+  if (!config) {
+    throw new Error(
+      `Config file ${getIterateConfigFilePath()} does not contain a config for the current working directory. Have you run \`iterate setup\`?`,
+    );
+  }
+  return config;
 };
 
 /** Set-Cookie → Cookie header: extract name=value, merge same keys (last wins). */
@@ -67,7 +90,7 @@ const setCookiesToCookieHeader = (setCookies: string[] | undefined): string => {
 };
 
 const authDance = async () => {
-  const config = getIterateConfig();
+  const config = await getIterateConfig();
   let superadminSetCookie!: string[];
   const authClient = createAuthClient({
     baseURL: config.baseUrl,
@@ -132,9 +155,25 @@ const authDance = async () => {
 
 const router = t.router({
   setup: t.procedure.input(IterateConfig).mutation(async ({ input }) => {
+    const file = await getIterateConfigFile().catch((e) => {
+      if (e instanceof z.ZodError) {
+        throw new Error(
+          `${getIterateConfigFilePath()} is not valid: ${z.prettifyError(e)}. Please fix it manually or delete it.`,
+        );
+      }
+      return null;
+    });
+
     const configPath = getIterateConfigFilePath();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(input, null, 2));
+    const newFile = {
+      ...file,
+      workspaces: {
+        ...file?.workspaces,
+        [process.cwd()]: input,
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(newFile, null, 2));
     return configPath;
   }),
   checkAuth: t.procedure.mutation(async () => {
@@ -151,4 +190,6 @@ export const cli = createCli({
   description: "Iterate CLI - Daemon and agent management",
 });
 
-cli.run({ prompts });
+cli.run({
+  prompts,
+});
