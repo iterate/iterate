@@ -97,7 +97,8 @@ app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
   const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
   if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
-    return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+    if (ingressResponse) return ingressResponse;
   }
   return next();
 });

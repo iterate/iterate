@@ -57,6 +57,24 @@ Key points:
 - All three env vars are required (no fallback defaults)
 - OS always fetches into machine ingress port `8080`
 
+### Request ingress flow (authoritative)
+
+For any request whose host matches `PROJECT_INGRESS_PROXY_HOST_MATCHERS`, OS applies this decision tree:
+
+1. Parse ingress target from hostname (`projectSlug` or `machineId`, plus optional port token).
+2. Compute canonical ingress hostname using `PROJECT_INGRESS_PROXY_CANONICAL_HOST`.
+3. If request host is not canonical: `301` redirect to canonical host (same path + query).
+4. If request host is canonical:
+   - if no Better Auth session: redirect to canonical `/login?redirectUrl=...`
+   - if session exists: check project/machine authorization
+   - if authorized: proxy request into machine ingress (`:8080`)
+   - if unauthorized/not found/not routable: return structured error response
+
+Notes:
+
+- Login/auth/static-asset paths are allowed to pass through to the OS app on canonical ingress host.
+- No separate ingress session concept exists in code; auth behavior is normal Better Auth session behavior on the canonical host.
+
 Canonical service links use:
 
 - `<port>__<machine_id>.<PROJECT_INGRESS_PROXY_CANONICAL_HOST>`

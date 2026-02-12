@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getProjectIngressRequestHostname,
+  handleProjectIngressRequest,
   parseProjectIngressProxyHostMatchers,
   resolveIngressHostname,
   shouldHandleProjectIngressHostname,
@@ -83,5 +84,56 @@ describe("project ingress request hostname", () => {
     });
 
     expect(getProjectIngressRequestHostname(request)).toBe("4096__mach_abc.dev.iterate.com");
+  });
+});
+
+describe("project ingress canonical/auth flow", () => {
+  const env = {
+    PROJECT_INGRESS_PROXY_HOST_MATCHERS: "*.iterate.town,*.iterate.app",
+    PROJECT_INGRESS_PROXY_CANONICAL_HOST: "iterate.town",
+  } as any;
+
+  it("redirects alias hostname to canonical hostname before auth", async () => {
+    const response = await handleProjectIngressRequest(
+      new Request("https://misha.iterate.app/console?tab=logs"),
+      env,
+      null,
+    );
+
+    expect(response?.status).toBe(301);
+    expect(response?.headers.get("location")).toBe("https://misha.iterate.town/console?tab=logs");
+  });
+
+  it("redirects unauthenticated canonical ingress request to canonical login", async () => {
+    const response = await handleProjectIngressRequest(
+      new Request("https://misha.iterate.town/console?tab=logs"),
+      env,
+      null,
+    );
+
+    expect(response?.status).toBe(302);
+    expect(response?.headers.get("location")).toBe(
+      "https://misha.iterate.town/login?redirectUrl=%2Fconsole%3Ftab%3Dlogs",
+    );
+  });
+
+  it("passes through canonical login request when unauthenticated", async () => {
+    const response = await handleProjectIngressRequest(
+      new Request("https://misha.iterate.town/login?redirectUrl=%2F"),
+      env,
+      null,
+    );
+
+    expect(response).toBeNull();
+  });
+
+  it("passes through canonical better-auth api request when unauthenticated", async () => {
+    const response = await handleProjectIngressRequest(
+      new Request("https://misha.iterate.town/api/auth/session"),
+      env,
+      null,
+    );
+
+    expect(response).toBeNull();
   });
 });
