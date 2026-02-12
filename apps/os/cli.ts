@@ -51,17 +51,17 @@ const getIterateConfigFilePath = () => {
   return path.join(os.homedir(), ".iterate/.iterate.json");
 };
 
-const getIterateConfigFile = async () => {
+const getIterateConfigFile = () => {
   const configFile = getIterateConfigFilePath();
   if (!fs.existsSync(configFile)) {
     return null;
   }
-  const raw = JSON.parse(await fs.promises.readFile(configFile, "utf8"));
+  const raw = JSON.parse(fs.readFileSync(configFile, "utf8"));
   return IterateConfigFileShape.parse(raw);
 };
 
-const getIterateConfig = async () => {
-  const file = await getIterateConfigFile();
+const getIterateConfig = () => {
+  const file = getIterateConfigFile();
   if (!file) {
     throw new Error(
       `Config file ${getIterateConfigFilePath()} does not exist. Have you run \`iterate setup\`?`,
@@ -155,14 +155,16 @@ const authDance = async () => {
 
 const router = t.router({
   setup: t.procedure.input(IterateConfig).mutation(async ({ input }) => {
-    const file = await getIterateConfigFile().catch((e) => {
-      if (e instanceof z.ZodError) {
-        throw new Error(
-          `${getIterateConfigFilePath()} is not valid: ${z.prettifyError(e)}. Please fix it manually or delete it.`,
-        );
-      }
-      return null;
-    });
+    const file = await Promise.resolve()
+      .then(() => getIterateConfigFile())
+      .catch((e) => {
+        if (e instanceof z.ZodError) {
+          throw new Error(
+            `${getIterateConfigFilePath()} is not valid: ${z.prettifyError(e)}. Please fix it manually or delete it.`,
+          );
+        }
+        return null;
+      });
 
     const configPath = getIterateConfigFilePath();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -176,7 +178,7 @@ const router = t.router({
     fs.writeFileSync(configPath, JSON.stringify(newFile, null, 2));
     return configPath;
   }),
-  checkAuth: t.procedure.mutation(async () => {
+  whoami: t.procedure.mutation(async () => {
     const { userClient } = await authDance();
     return await userClient.getSession();
   }),
