@@ -6,6 +6,7 @@ describe
   .concurrent("Daytona Entrypoint Arguments", () => {
     test.scoped({
       sandboxOptions: {
+        externalId: "test-daytona-entrypoint-arguments",
         id: "daytona-entrypoint-arguments",
         name: "Daytona Entrypoint Arguments",
         envVars: {},

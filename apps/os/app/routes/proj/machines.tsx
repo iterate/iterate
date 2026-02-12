@@ -92,10 +92,16 @@ function ProjectMachinesPage() {
     trpc.machine.getDefaultSnapshots.queryOptions(),
   );
   const defaultSnapshotForProvider =
-    defaultSnapshots[sandboxProvider as keyof typeof defaultSnapshots] ?? "";
+    sandboxProvider === "daytona"
+      ? (defaultSnapshots.daytona ?? "")
+      : sandboxProvider === "fly"
+        ? (defaultSnapshots.fly ?? "")
+        : (defaultSnapshots.docker ?? "");
+  const defaultFlyMachineCpus = defaultSnapshots.flyMachineCpus;
 
   const [newMachineName, setNewMachineName] = useState(`${sandboxProvider}-${dateSlug()}`);
   const [snapshotOverride, setSnapshotOverride] = useState(defaultSnapshotForProvider);
+  const [flyMachineCpus, setFlyMachineCpus] = useState(String(defaultFlyMachineCpus));
 
   const machineListQueryOptions = trpc.machine.list.queryOptions({
     projectSlug: params.projectSlug,
@@ -122,6 +128,7 @@ function ProjectMachinesPage() {
       setCreateSheetOpen(false);
       setNewMachineName(`${sandboxProvider}-${dateSlug()}`);
       setSnapshotOverride(defaultSnapshotForProvider);
+      setFlyMachineCpus(String(defaultFlyMachineCpus));
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryOptions.queryKey });
     },
@@ -184,20 +191,32 @@ function ProjectMachinesPage() {
 
     const snapshot = snapshotOverride.trim();
     const meta = SNAPSHOT_META[sandboxProvider];
+    const metadata: Record<string, unknown> = {};
 
     // Build metadata from the snapshot override
-    let metadata: Record<string, unknown> | undefined;
     if (snapshot && meta) {
       if (meta.key.includes(".")) {
         // Nested key like "localDocker.imageName"
         const [parent, child] = meta.key.split(".");
-        metadata = { [parent]: { [child]: snapshot } };
+        metadata[parent] = { [child]: snapshot };
       } else {
-        metadata = { [meta.key]: snapshot };
+        metadata[meta.key] = snapshot;
       }
     }
 
-    createMachine.mutate({ name: trimmedName, metadata });
+    if (sandboxProvider === "fly") {
+      const parsedFlyMachineCpus = Number.parseInt(flyMachineCpus.trim(), 10);
+      if (!Number.isInteger(parsedFlyMachineCpus) || parsedFlyMachineCpus <= 0) {
+        toast.error("CPU count must be a positive whole number");
+        return;
+      }
+      metadata.flyMachineCpus = parsedFlyMachineCpus;
+    }
+
+    createMachine.mutate({
+      name: trimmedName,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    });
   };
 
   const createSheet = (
@@ -243,6 +262,25 @@ function ProjectMachinesPage() {
                 <p className="text-xs text-muted-foreground">
                   Override the default {SNAPSHOT_META[sandboxProvider].label.toLowerCase()}. Leave
                   blank to use the Doppler default.
+                </p>
+              </div>
+            )}
+            {sandboxProvider === "fly" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">CPUs</label>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={flyMachineCpus}
+                  onChange={(e) => setFlyMachineCpus(e.target.value)}
+                  disabled={createMachine.isPending}
+                  autoComplete="off"
+                  data-1p-ignore
+                />
+                <p className="text-xs text-muted-foreground">
+                  Default comes from `FLY_DEFAULT_CPUS` and is pre-populated.
                 </p>
               </div>
             )}

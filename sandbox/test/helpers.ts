@@ -33,6 +33,7 @@
  *
  * Fly provider requires (typically from Doppler):
  *   - FLY_API_TOKEN
+ *   - SANDBOX_NAME_PREFIX (dev|stg|prd)
  *   - FLY_DEFAULT_IMAGE (optional, defaults to registry.fly.io/iterate-sandbox:main)
  *
  * ## Usage Examples
@@ -330,6 +331,7 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
     case "daytona":
       return new DaytonaProvider(env);
     case "fly":
+      env.SANDBOX_NAME_PREFIX ??= "dev";
       return new FlyProvider(env);
     default:
       throw new Error(`Unknown provider: ${TEST_CONFIG.provider}`);
@@ -350,6 +352,7 @@ export async function withSandbox<T>(params: {
 
   // Use default options if none provided
   const opts = sandboxOptions ?? {
+    externalId: `test-${Date.now()}`,
     id: `test-${Date.now()}`,
     name: `test-sandbox`,
     envVars: {},

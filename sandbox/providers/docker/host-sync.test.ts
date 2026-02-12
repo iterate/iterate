@@ -28,6 +28,7 @@ describe
         DOCKER_HOST_GIT_REPO_ROOT: ITERATE_REPO_PATH_ON_HOST,
       },
       sandboxOptions: {
+        externalId: "test-host-sync",
         id: "host-sync-test",
         name: "Host Sync Test",
         envVars: {},
@@ -84,6 +85,7 @@ describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
                 DOCKER_HOST_SYNC_ENABLED: "true",
               },
               sandboxOptions: {
+                externalId: "test-worktree",
                 id: "worktree-test",
                 name: "Worktree Test",
                 envVars: {},

@@ -37,6 +37,7 @@ import { z } from "zod/v4";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { trpcRouter } from "../trpc/router.ts";
+import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
 // Ephemeral per-thread status shown in webchat UI (similar UX to Slack's transient activity text).
@@ -148,7 +149,19 @@ webchatRouter.post("/webhook", async (c) => {
 
   const agentPath = getAgentPathForThread(webchatThreadId);
   const caller = trpcRouter.createCaller({});
-  const { wasNewlyCreated } = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+  const { agent, wasNewlyCreated } = await caller.getOrCreateAgent({
+    agentPath,
+    createWithEvents: [],
+  });
+
+  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
+
+  if (wasNewlyCreated) {
+    void caller.subscribeToAgentChanges({
+      agentPath,
+      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
+    });
+  }
 
   const userMessage: StoredMessage = {
     threadId: webchatThreadId,
@@ -162,6 +175,41 @@ webchatRouter.post("/webhook", async (c) => {
   };
 
   const eventId = await storeEvent("webchat:user-message", userMessage, messageId);
+  const commandResult = await runAgentCommand({
+    message: payload.text || "",
+    agentPath,
+    agent,
+  });
+
+  if (commandResult) {
+    const assistantMessageId = `msg_${nanoid(12)}`;
+    const assistantText = commandResult.resultMarkdown;
+    const assistantMessage: StoredMessage = {
+      threadId: webchatThreadId,
+      messageId: assistantMessageId,
+      role: "assistant",
+      text: assistantText,
+      createdAt: Date.now(),
+    };
+    const assistantEventId = await storeEvent(
+      "webchat:assistant-message",
+      assistantMessage,
+      assistantMessageId,
+    );
+
+    return c.json({
+      success: true,
+      duplicate: false,
+      threadId: webchatThreadId,
+      messageId,
+      eventId,
+      created: wasNewlyCreated,
+      queued: false,
+      case: `${commandResult.command}_command`,
+      assistantMessageId,
+      assistantEventId,
+    });
+  }
 
   const formattedMessage = formatIncomingMessage({
     payload,
@@ -170,15 +218,6 @@ webchatRouter.post("/webhook", async (c) => {
     eventId,
     isFirstMessageInThread: wasNewlyCreated,
   });
-
-  webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
-
-  if (wasNewlyCreated) {
-    void caller.subscribeToAgentChanges({
-      agentPath,
-      callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
-    });
-  }
 
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",

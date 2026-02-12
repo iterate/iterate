@@ -7,6 +7,7 @@
  * Flow:
  *   1. OS worker receives Slack event, forwards to POST /webhook
  *   2. We parse & classify (mention / FYI / reaction / ignored)
+ *   2.5. We intercept agent commands (primary: !debug) before agent forwarding
  *   3. For mentions: immediately fire-and-forget eyes emoji, then getOrCreateAgent
  *      For FYI: getAgent (skip if none), then fire-and-forget thinking_face emoji
  *      For reactions: getAgent (skip if none), then fire-and-forget eyes emoji
@@ -48,6 +49,7 @@ import type {
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { trpcRouter } from "../trpc/router.ts";
+import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -72,6 +74,8 @@ type SlackThreadContext = {
   /** The emoji name we added (e.g. "eyes", "thinking_face"). */
   emoji: string;
   requestId?: string;
+  /** Tracks the in-flight reactions.add call so remove waits and avoids no_reaction races. */
+  acknowledgePromise?: Promise<void>;
 };
 
 const slackThreadContextByAgentPath = new Map<string, SlackThreadContext>();
@@ -226,7 +230,7 @@ slackRouter.post("/webhook", async (c) => {
         requestId,
       };
       slackThreadContextByAgentPath.set(agentPath, ctx);
-      void acknowledge(ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
     }
 
     // Fire-and-forget prompt to the agent.
@@ -254,32 +258,33 @@ slackRouter.post("/webhook", async (c) => {
   const agentPath = getAgentPath(threadTs);
   const isMention = parsed.case === "new_thread_mention" || parsed.case === "mid_thread_mention";
   const messageTs = event.ts || threadTs;
-
-  // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
-  // which can be slow (it blocks waiting for an OpenCode session to be created).
-  // The user should see the reaction ~instantly as confirmation we received their message.
-  // Skip if an emoji is already pending — avoid clobbering the tracked context.
-  if (isMention && !slackThreadContextByAgentPath.has(agentPath)) {
-    const ctx: SlackThreadContext = {
-      channel: event.channel || "",
-      threadTs,
-      emojiTimestamp: messageTs,
-      emoji: "eyes",
-      requestId,
-    };
-    slackThreadContextByAgentPath.set(agentPath, ctx);
-    void acknowledge(ctx);
-  }
-
   let wasNewlyCreated = false;
+  let agent: Awaited<ReturnType<typeof caller.getAgent>> = null;
 
   if (isMention) {
+    // For @mentions, send the eyes emoji reaction immediately — before getOrCreateAgent
+    // which can be slow (it blocks waiting for an OpenCode session to be created).
+    // The user should see the reaction ~instantly as confirmation we received their message.
+    // Skip if an emoji is already pending — avoid clobbering the tracked context.
+    if (!slackThreadContextByAgentPath.has(agentPath)) {
+      const ctx: SlackThreadContext = {
+        channel: event.channel || "",
+        threadTs,
+        emojiTimestamp: messageTs,
+        emoji: "eyes",
+        requestId,
+      };
+      slackThreadContextByAgentPath.set(agentPath, ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
+    }
+
     // Mentions always get-or-create an agent, matching the webchat pattern.
     const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
     wasNewlyCreated = result.wasNewlyCreated;
+    agent = result.agent;
   } else {
     // FYI messages (no @mention) in a thread — only forward if an agent already exists.
-    const agent = await caller.getAgent({ path: agentPath });
+    agent = await caller.getAgent({ path: agentPath });
     if (!agent) {
       return c.json({
         success: true,
@@ -299,8 +304,68 @@ slackRouter.post("/webhook", async (c) => {
         requestId,
       };
       slackThreadContextByAgentPath.set(agentPath, ctx);
-      void acknowledge(ctx);
+      ctx.acknowledgePromise = acknowledge(ctx);
     }
+  }
+
+  if (!agent) {
+    return c.json({
+      success: true,
+      message: "Ignored: no resolved agent",
+      eventId,
+      requestId,
+    });
+  }
+
+  // Commands are agent-scoped. If no agent exists, callers should return early above.
+  const commandResult = await runAgentCommand({
+    message: event.text || "",
+    agentPath,
+    agent,
+  });
+
+  if (commandResult) {
+    if (wasNewlyCreated) {
+      void caller.subscribeToAgentChanges({
+        agentPath,
+        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
+      });
+    }
+
+    // Command interceptions do not forward prompts to the agent, so there is no
+    // agent lifecycle callback to clean up any tracked deterministic emoji.
+    const slackContext = slackThreadContextByAgentPath.get(agentPath);
+    if (slackContext) {
+      await unacknowledge(slackContext);
+      slackThreadContextByAgentPath.delete(agentPath);
+    }
+
+    const channel = event.channel || "";
+    if (!channel) {
+      return c.json({
+        success: true,
+        message: "Ignored: command message missing channel",
+        case: `${commandResult.command}_command`,
+        eventId,
+        requestId,
+      });
+    }
+
+    await postSlackThreadMessage({
+      channel,
+      threadTs,
+      text: commandResult.resultMarkdown,
+      requestId,
+    });
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: wasNewlyCreated,
+      case: `${commandResult.command}_command`,
+      eventId,
+      requestId,
+    });
   }
 
   // Subscribe to agent-change callbacks once, when the agent is first created.
@@ -407,6 +472,8 @@ async function acknowledge(context: SlackThreadContext): Promise<void> {
  * Shells out to `iterate tool slack` — see comment above for why.
  */
 async function unacknowledge(context: SlackThreadContext): Promise<void> {
+  await context.acknowledgePromise;
+
   try {
     await runSlackCommand(
       `await slack.reactions.remove(${JSON.stringify({
@@ -485,6 +552,22 @@ async function runSlackCommand(code: string, requestId?: string): Promise<void> 
     requestId,
     preview: code.slice(0, 80),
   });
+}
+
+async function postSlackThreadMessage(params: {
+  channel: string;
+  threadTs: string;
+  text: string;
+  requestId?: string;
+}): Promise<void> {
+  await runSlackCommand(
+    `await slack.chat.postMessage(${JSON.stringify({
+      channel: params.channel,
+      thread_ts: params.threadTs,
+      text: params.text,
+    })})`,
+    params.requestId,
+  );
 }
 
 // ──────────────────────────── Parsing / routing ─────────────────────────────

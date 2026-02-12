@@ -59,10 +59,16 @@ opencodeRouter.post("/new", async (c) => {
   }
 
   const opencodeSessionId = response.data.id;
+  // Canonical harness metadata contract used by debug links/commands.
+  const metadata = {
+    agentHarness: "opencode",
+    opencodeSessionId,
+  } as const;
 
   return c.json({
     route: `/opencode/sessions/${opencodeSessionId}`,
     sessionId: opencodeSessionId,
+    metadata,
     workingDirectory,
     tui: `opencode attach ${OPENCODE_BASE_URL} -s ${opencodeSessionId}`,
   });

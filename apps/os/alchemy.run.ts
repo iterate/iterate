@@ -55,17 +55,128 @@ const isPreview =
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
+const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
+const ITERATE_ZONE_NAME = "iterate.com";
+
 /**
- * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
- * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
+ * DEV_TUNNEL:
+ * - disabled: "", "0", "false", "undefined"
+ * - otherwise: custom subdomain, with optional "*." and optional ".dev.iterate.com" suffix
  */
 function getDevTunnelConfig() {
-  const devTunnel = process.env.DEV_TUNNEL;
-  if (!devTunnel || devTunnel === "0" || devTunnel === "false") return null;
+  const raw = process.env.DEV_TUNNEL?.trim() ?? "";
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "0" || lower === "false" || lower === "undefined") return null;
+  if (lower === "1" || lower === "true") {
+    throw new Error(
+      'DEV_TUNNEL auto mode is disabled. Set an explicit subdomain, e.g. DEV_TUNNEL="dev-$ITERATE_USER-os".',
+    );
+  }
 
-  const subdomain = devTunnel === "1" || devTunnel === "true" ? `${app.stage}-os` : devTunnel;
+  const subdomain = raw.replace(/^\*\./, "").replace(/\.dev\.iterate\.com$/i, "");
 
-  return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
+  if (!/^[a-z0-9-]+$/i.test(subdomain)) {
+    throw new Error(
+      `Invalid DEV_TUNNEL value "${subdomain}". Use letters, numbers, and hyphens only.`,
+    );
+  }
+
+  const hostname = `${subdomain}.dev.iterate.com`;
+  const wildcardHostname = `*.${subdomain}.dev.iterate.com`;
+
+  return { hostname, wildcardHostname, subdomain };
+}
+
+async function ensureDevTunnelWildcardDns(
+  config: ReturnType<typeof getDevTunnelConfig>,
+  tunnelId: string,
+) {
+  if (!config) return;
+
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!token)
+    throw new Error("CLOUDFLARE_API_TOKEN is required to manage dev tunnel wildcard DNS records");
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  const zoneResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+    { headers },
+  );
+  const zonePayload = (await zoneResponse.json()) as {
+    result?: Array<{ id?: string }>;
+    errors?: unknown;
+  };
+  const zoneId = zonePayload?.result?.[0]?.id;
+  if (!zoneResponse.ok || !zoneId) {
+    throw new Error(
+      `Cloudflare zone lookup failed: ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
+    );
+  }
+
+  const wildcardHostname = config.wildcardHostname;
+  const wildcardTarget = `${tunnelId}.cfargotunnel.com`;
+  const edgeCertificatesUrl =
+    "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.com/ssl-tls/edge-certificates";
+  const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
+  const findResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
+    { headers },
+  );
+  const findPayload = (await findResponse.json()) as {
+    result?: Array<{ id?: string }>;
+    errors?: unknown;
+  };
+  if (!findResponse.ok) {
+    throw new Error(
+      `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
+    );
+  }
+  const existing = findPayload?.result?.[0];
+  const body = JSON.stringify({
+    type: "CNAME",
+    name: wildcardHostname,
+    content: wildcardTarget,
+    proxied: true,
+    ttl: 1,
+    comment,
+  });
+
+  if (existing) {
+    const updateResponse = await fetch(
+      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
+      {
+        method: "PUT",
+        headers,
+        body,
+      },
+    );
+    if (!updateResponse.ok) {
+      throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+    }
+    console.log(`Updated wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+    console.log(
+      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+    );
+  } else {
+    const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    if (!createResponse.ok) {
+      throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
+    }
+    console.log(`Created wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
+    console.log(
+      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+    );
+  }
+
+  // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
+  // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
 }
 
 function parseComposePublishedPort(
@@ -148,16 +259,27 @@ async function createDevTunnel(vitePort: number) {
   const config = getDevTunnelConfig();
   if (!config) return null;
 
-  console.log(`Creating dev tunnel: ${config.hostname} -> localhost:${vitePort}`);
+  console.log(
+    `Creating dev tunnel (${config.subdomain}): ${config.hostname}, ${config.wildcardHostname} -> localhost:${vitePort}`,
+  );
 
   const tunnel = await Tunnel(`dev-tunnel-${config.subdomain}`, {
     name: config.subdomain,
     adopt: true, // Don't fail if tunnel already exists from previous session
+    delete: false, // Never auto-delete dev tunnels; cleanup should be explicit/manual.
     ingress: [
       { hostname: config.hostname, service: `http://localhost:${vitePort}` },
+      { hostname: config.wildcardHostname, service: `http://localhost:${vitePort}` },
       { service: "http_status:404" },
     ],
   });
+
+  try {
+    await ensureDevTunnelWildcardDns(config, tunnel.tunnelId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Could not configure wildcard DNS for ${config.hostname}: ${message}`);
+  }
 
   return { tunnel, config, vitePort };
 }
@@ -273,13 +395,13 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
   FLY_DEFAULT_REGION: Optional,
   FLY_DEFAULT_IMAGE: Optional,
   FLY_DEFAULT_CPUS: Optional,
   FLY_DEFAULT_MEMORY_MB: Optional,
-  FLY_APP_NAME_PREFIX: Optional,
   FLY_NETWORK: Optional,
   FLY_BASE_DOMAIN: Optional,
   GOOGLE_CLIENT_ID: Required,
@@ -497,6 +619,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
+    LOCAL_DOCKER_NEON_PROXY_PORT: "",
+    DOCKER_HOST_OS_PORT: "",
     /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
@@ -514,6 +638,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
+    const localDockerNeonProxyPort = process.env.LOCAL_DOCKER_NEON_PROXY_PORT ?? "";
     // No implicit fallback here: if DOCKER_DEFAULT_IMAGE isn't set, we want it to be obvious
     // (the Docker provider is strict and will throw when attempting to create a machine).
     const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
@@ -528,6 +653,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
       DOCKER_HOST_GIT_COMMIT: gitCommit,
       DOCKER_HOST_GIT_BRANCH: gitBranch,
+      LOCAL_DOCKER_NEON_PROXY_PORT: localDockerNeonProxyPort,
+      DOCKER_HOST_OS_PORT: process.env.DOCKER_HOST_OS_PORT ?? "",
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
         process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,
@@ -578,7 +705,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_PROXY_HOST_MATCHERS: projectIngressProxyHostMatchers.join(","),
-      LOCAL_DOCKER_NEON_PROXY_PORT: process.env.LOCAL_DOCKER_NEON_PROXY_PORT || "",
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,

@@ -5,7 +5,6 @@
  * Supports both development (with host repo sync) and test environments.
  */
 
-import { randomBytes } from "node:crypto";
 import { z } from "zod/v4";
 import {
   Sandbox,
@@ -29,6 +28,10 @@ const PIDNAP_PORT = 9876;
 const LIFECYCLE_TIMEOUT_MS = 120_000;
 const TUNNEL_URL_TIMEOUT_MS = 120_000;
 const TUNNEL_RATE_LIMIT_MARKER = "__CLOUDFLARE_TUNNEL_RATE_LIMIT__";
+const DEFAULT_LOCAL_OS_PORT = 5173;
+const LOCAL_OS_PORT_SCAN_RANGE = 10;
+const DEV_ITERATE_HOST_PATTERN = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)+dev\.iterate\.com(?::\d+)?/i;
+const DEV_ITERATE_HOST_CAPTURE = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+dev\.iterate\.com)(?::\d+)?/i;
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
@@ -53,6 +56,7 @@ const DockerEnv = z.object({
   DOCKER_HOST_GIT_COMMIT: z.string().optional(),
   DOCKER_HOST_GIT_BRANCH: z.string().optional(),
   DOCKER_DEFAULT_SERVICE_TRANSPORT: z.enum(["port-map", "cloudflare-tunnel"]).default("port-map"),
+  DOCKER_HOST_OS_PORT: z.string().optional(),
   DOCKER_TUNNEL_PORTS: z.string().optional(),
   DOCKER_HOST_SYNC_ENABLED: z
     .string()
@@ -69,19 +73,22 @@ type DockerEnv = z.infer<typeof DockerEnv>;
 export class DockerSandbox extends Sandbox {
   readonly providerId: string;
   readonly type = "docker" as const;
+  readonly runtimeId?: string;
 
   private ports: Record<number, number>;
   private readonly internalPorts: number[];
   private readonly serviceTransport: DockerServiceTransport;
 
   constructor(
-    containerId: string,
+    containerRef: string,
     ports: Record<number, number>,
     internalPorts: number[],
     serviceTransport: DockerServiceTransport,
+    runtimeId?: string,
   ) {
     super();
-    this.providerId = containerId;
+    this.providerId = containerRef;
+    this.runtimeId = runtimeId;
     this.ports = ports;
     this.internalPorts = internalPorts;
     this.serviceTransport = serviceTransport;
@@ -312,9 +319,10 @@ export class DockerProvider extends SandboxProvider {
     portBindings[`${PIDNAP_PORT}/tcp`] = [{ HostPort: "0" }];
     exposedPorts[`${PIDNAP_PORT}/tcp`] = {};
 
-    const suffix = randomBytes(4).toString("hex");
-    const sanitizedName = (opts.id ?? opts.name).replace(/[^a-zA-Z0-9_.-]/g, "-");
-    const containerName = `sandbox-${sanitizedName}-${suffix}`.slice(0, 63);
+    const containerName = opts.externalId;
+    if (!containerName) {
+      throw new Error("Docker create requires externalId");
+    }
 
     const binds: string[] = [];
     if (this.gitInfo) {
@@ -323,9 +331,26 @@ export class DockerProvider extends SandboxProvider {
       binds.push(`${this.gitInfo.commonDir}:/host/commondir:ro`);
     }
 
+    const shouldResolveLocalOsPort = Object.values(opts.envVars).some((value) =>
+      DEV_ITERATE_HOST_PATTERN.test(String(value)),
+    );
+    const expectedDevIterateHostname = Object.values(opts.envVars)
+      .map((value) => String(value).match(DEV_ITERATE_HOST_CAPTURE)?.[1])
+      .find((hostname): hostname is string => Boolean(hostname));
+
+    const localOsPort = shouldResolveLocalOsPort
+      ? await resolveLocalOsPort({
+          configuredPort: this.env.DOCKER_HOST_OS_PORT,
+          expectedDevIterateHostname,
+        })
+      : undefined;
+
     // Rewrite localhost references so the container can reach host services
     const rewrittenEnvVars = Object.fromEntries(
-      Object.entries(opts.envVars).map(([key, value]) => [key, rewriteLocalhost(String(value))]),
+      Object.entries(opts.envVars).map(([key, value]) => [
+        key,
+        rewriteLocalhost(String(value), { devIteratePort: localOsPort }),
+      ]),
     );
 
     const dockerEnv: Record<string, string> = {
@@ -369,6 +394,8 @@ export class DockerProvider extends SandboxProvider {
         HostConfig: hostConfig,
         Labels: labels,
       },
+    }).catch((error) => {
+      throw withDockerImagePullHint({ error, imageName });
     });
 
     const containerId = createResponse.Id;
@@ -377,10 +404,11 @@ export class DockerProvider extends SandboxProvider {
     const internalPorts = [...DAEMON_PORTS.map((daemon) => daemon.internalPort), PIDNAP_PORT];
     const ports = await resolveHostPorts({ containerId, internalPorts });
     const sandbox = new DockerSandbox(
-      containerId,
+      containerName,
       ports,
       internalPorts,
       this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
+      containerId,
     );
     const maxWaitMs = 30000;
 
@@ -468,7 +496,8 @@ export class DockerProvider extends SandboxProvider {
 
     return containers.map((c) => ({
       type: "docker" as const,
-      providerId: c.Id,
+      providerId:
+        c.Labels?.["com.iterate.container_name"] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id,
       name: c.Names[0]?.replace(/^\//, "") ?? c.Id.slice(0, 12),
       state: c.State,
     }));
@@ -530,6 +559,25 @@ async function resolveHostPorts(params: {
   return resolved;
 }
 
+function quoteShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function withDockerImagePullHint(params: { error: unknown; imageName: string }): Error {
+  const { error, imageName } = params;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/No such image:/i.test(message)) {
+    return error instanceof Error ? error : new Error(message);
+  }
+
+  const dockerHost = process.env.DOCKER_HOST ?? "tcp://127.0.0.1:2375";
+  const pullCommand = `DOCKER_HOST=${quoteShellArg(dockerHost)} docker pull ${quoteShellArg(imageName)}`;
+
+  return new Error(
+    `${message}\n\nImage is missing from the local Docker daemon. Pull it first:\n${pullCommand}`,
+  );
+}
+
 async function waitForEntrypointSignal(params: {
   sandbox: Sandbox;
   timeoutMs: number;
@@ -545,6 +593,81 @@ async function waitForEntrypointSignal(params: {
     }
   }
   throw new Error("Timeout waiting for /tmp/reached-entrypoint");
+}
+
+function parseValidPort(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) return undefined;
+  return parsed;
+}
+
+async function resolveLocalOsPort(params: {
+  configuredPort?: string;
+  expectedDevIterateHostname?: string;
+}): Promise<number> {
+  const configuredPort = parseValidPort(params.configuredPort);
+  if (configuredPort) return configuredPort;
+
+  const candidatePorts = [
+    DEFAULT_LOCAL_OS_PORT,
+    ...Array.from(
+      { length: LOCAL_OS_PORT_SCAN_RANGE },
+      (_, idx) => DEFAULT_LOCAL_OS_PORT + idx + 1,
+    ),
+  ];
+
+  for (const port of candidatePorts) {
+    if (
+      await isHttpPortReachable({
+        port,
+        expectedDevIterateHostname: params.expectedDevIterateHostname,
+      })
+    ) {
+      return port;
+    }
+  }
+
+  return DEFAULT_LOCAL_OS_PORT;
+}
+
+async function isHttpPortReachable(params: {
+  port: number;
+  expectedDevIterateHostname?: string;
+}): Promise<boolean> {
+  const { port, expectedDevIterateHostname } = params;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 500);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/observability`, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    if (response.status < 300 || response.status >= 400) {
+      return false;
+    }
+
+    const location = response.headers.get("location") ?? "";
+    if (!location) {
+      return false;
+    }
+
+    if (!expectedDevIterateHostname) {
+      return location.includes(".dev.iterate.com");
+    }
+
+    try {
+      const locationUrl = new URL(location);
+      return locationUrl.hostname.toLowerCase() === expectedDevIterateHostname.toLowerCase();
+    } catch {
+      return location.toLowerCase().includes(expectedDevIterateHostname.toLowerCase());
+    }
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function withTimeout<T>(params: {
