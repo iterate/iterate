@@ -111,7 +111,8 @@ export const projectRouter = router({
           message: "No sandbox providers are enabled",
         });
       }
-      const sandboxProvider = input.sandboxProvider ?? availableProviders[0];
+      const sandboxProvider =
+        input.sandboxProvider ?? getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
       if (!availableProviders.includes(sandboxProvider)) {
         throw new TRPCError({
           code: "BAD_REQUEST",

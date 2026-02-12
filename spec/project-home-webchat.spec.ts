@@ -96,12 +96,12 @@ test.describe("project home webchat", () => {
     await createOrganization(page);
     await createProject(page);
 
-    // Create a local-docker machine (needs a real daemon to handle webchat)
+    // Create a docker machine (needs a real daemon to handle webchat)
     await sidebarButton(page, "Machines").click();
     await page.getByRole("link", { name: "Create Machine" }).click();
 
     await page.getByRole("combobox").click();
-    await page.getByRole("option", { name: /Local Docker/i }).click();
+    await page.getByRole("option", { name: /^Docker$/i }).click();
 
     await page.getByPlaceholder("Machine name").fill(machineName);
     await page.getByRole("button", { name: "Create" }).click();

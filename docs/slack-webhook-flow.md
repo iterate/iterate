@@ -58,11 +58,10 @@ Daemon (/api/integrations/slack/webhook)
 
 ## Machine Types for Forwarding
 
-| Type      | URL Format                                                                     |
-| --------- | ------------------------------------------------------------------------------ |
-| `local`   | `http://{metadata.host}:{metadata.port}/api/integrations/slack/webhook`        |
-| `docker`  | `http://localhost:{metadata.port}/api/integrations/slack/webhook`              |
-| `daytona` | `https://3001-{externalId}.proxy.daytona.works/api/integrations/slack/webhook` |
+| Type     | URL Format                                                                 |
+| -------- | -------------------------------------------------------------------------- |
+| `docker` | `http://localhost:{metadata.port}/api/integrations/slack/webhook`          |
+| `fly`    | `https://3001__{machineId}.{canonicalHost}/api/integrations/slack/webhook` |
 
 ## tRPC Endpoints
 

@@ -40,7 +40,7 @@ const SNAPSHOT_META: Record<string, { key: string; label: string; placeholder: s
     placeholder: "registry.fly.io/iterate-sandbox:sha-<shortSha> (leave blank for default)",
   },
   docker: {
-    key: "localDocker.imageName",
+    key: "docker.imageName",
     label: "Image",
     placeholder: "iterate-sandbox:sha-<shortSha> (leave blank for default)",
   },
@@ -196,7 +196,7 @@ function ProjectMachinesPage() {
     // Build metadata from the snapshot override
     if (snapshot && meta) {
       if (meta.key.includes(".")) {
-        // Nested key like "localDocker.imageName"
+        // Nested key like "docker.imageName"
         const [parent, child] = meta.key.split(".");
         metadata[parent] = { [child]: snapshot };
       } else {

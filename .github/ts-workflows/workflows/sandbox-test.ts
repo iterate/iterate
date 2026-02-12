@@ -2,14 +2,14 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Build sandbox image and run provider tests:
- * 1) Build image + run Docker-provider tests (single job, avoids cross-runner image pull issues)
- * 2) Run Fly-provider tests (uses Fly registry image from build)
+ * Build sandbox image and run provider tests.
  *
- * Daytona provider tests are handled by the separate daytona-test.yml workflow.
+ * Docker tests must run in the same job as the build so they can reuse the
+ * freshly loaded local image (`--load`). Fly tests are started immediately
+ * after build metadata is available and run in parallel with Docker tests.
  */
 export default workflow({
-  name: "Sandbox Tests",
+  name: "Sandbox Build + Provider Tests",
   permissions: {
     contents: "read",
     "id-token": "write",
@@ -40,11 +40,23 @@ export default workflow({
           type: "string",
           default: "",
         },
+        run_docker_tests: {
+          description: "Run Docker provider tests after build",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
+        run_fly_tests: {
+          description: "Run Fly provider tests after build",
+          required: false,
+          type: "boolean",
+          default: true,
+        },
       },
     },
   },
   jobs: {
-    // Build + Docker tests in one job — avoids cross-runner Depot registry pull issues
+    // Build + Docker tests in one job — reuses loaded image on the same runner.
     "build-and-docker-tests": {
       ...utils.runsOnDepotUbuntuForContainerThings,
       outputs: {
@@ -105,27 +117,63 @@ export default workflow({
           ].join("\n"),
         },
         {
-          name: "Run Docker provider tests",
+          name: "Run provider tests (Docker + Fly in parallel)",
           env: {
-            RUN_SANDBOX_TESTS: "true",
-            SANDBOX_TEST_PROVIDER: "docker",
-            SANDBOX_TEST_SNAPSHOT_ID: "${{ steps.metadata.outputs.image_tag }}",
-            DOCKER_DEFAULT_IMAGE: "${{ steps.metadata.outputs.image_tag }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            DOCKER_HOST: "unix:///var/run/docker.sock",
+            IMAGE_TAG: "${{ steps.metadata.outputs.image_tag }}",
+            FLY_IMAGE_TAG: "${{ steps.metadata.outputs.fly_image_tag }}",
+            RUN_DOCKER_TESTS:
+              "${{ github.event_name == 'workflow_dispatch' && (inputs.run_docker_tests && 'true' || 'false') || 'true' }}",
+            RUN_FLY_TESTS:
+              "${{ github.event_name == 'workflow_dispatch' && (inputs.run_fly_tests && 'true' || 'false') || 'true' }}",
           },
-          run: "pnpm sandbox test:docker",
-        },
-        {
-          name: "Run Fly provider tests",
-          env: {
-            RUN_SANDBOX_TESTS: "true",
-            SANDBOX_TEST_PROVIDER: "fly",
-            SANDBOX_TEST_SNAPSHOT_ID: "${{ steps.metadata.outputs.fly_image_tag }}",
-            FLY_DEFAULT_IMAGE: "${{ steps.metadata.outputs.fly_image_tag }}",
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          run: "doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+          run: [
+            "set -euo pipefail",
+            "mkdir -p sandbox/test-results",
+            "",
+            "docker_status=0",
+            "fly_status=0",
+            'fly_log="sandbox/test-results/fly-provider-parallel.log"',
+            'fly_pid=""',
+            "",
+            'if [ "${RUN_FLY_TESTS}" = "true" ]; then',
+            '  echo "Starting Fly provider tests in background..."',
+            "  (",
+            "    RUN_SANDBOX_TESTS=true \\",
+            "    SANDBOX_TEST_PROVIDER=fly \\",
+            '    SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \\',
+            '    FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \\',
+            '    DOPPLER_TOKEN="${DOPPLER_TOKEN}" \\',
+            "    doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+            '  ) >"${fly_log}" 2>&1 &',
+            '  fly_pid="$!"',
+            "fi",
+            "",
+            'if [ "${RUN_DOCKER_TESTS}" = "true" ]; then',
+            '  echo "Running Docker provider tests on loaded image..."',
+            "  RUN_SANDBOX_TESTS=true \\",
+            "  SANDBOX_TEST_PROVIDER=docker \\",
+            '  SANDBOX_TEST_SNAPSHOT_ID="${IMAGE_TAG}" \\',
+            '  DOCKER_DEFAULT_IMAGE="${IMAGE_TAG}" \\',
+            '  DOCKER_HOST="unix:///var/run/docker.sock" \\',
+            '  DOPPLER_TOKEN="${DOPPLER_TOKEN}" \\',
+            "  pnpm sandbox test:docker || docker_status=$?",
+            "fi",
+            "",
+            'if [ -n "${fly_pid}" ]; then',
+            '  wait "${fly_pid}" || fly_status=$?',
+            '  if [ "${fly_status}" -ne 0 ]; then',
+            '    echo "::group::Fly provider test output"',
+            '    cat "${fly_log}" || true',
+            '    echo "::endgroup::"',
+            "  fi",
+            "fi",
+            "",
+            'if [ "${docker_status}" -ne 0 ] || [ "${fly_status}" -ne 0 ]; then',
+            '  echo "docker_status=${docker_status} fly_status=${fly_status}"',
+            "  exit 1",
+            "fi",
+          ].join("\n"),
         },
         {
           name: "Upload Docker test results",

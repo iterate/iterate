@@ -393,13 +393,13 @@ const Env = z.object({
   // you'll need CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and ALCHEMY_STATE_TOKEN for the deployment to work, but not at runtime
 
   BETTER_AUTH_SECRET: Required,
-  DAYTONA_API_KEY: Required,
+  DAYTONA_API_KEY: Optional,
   DAYTONA_DEFAULT_SNAPSHOT: Optional, // iterate-sandbox-{commitSha} - required at runtime for Daytona
   DAYTONA_ORG_ID: Optional,
 
-  // Policy knobs: require explicit values in Doppler (no hidden defaults in code).
-  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: Required, // minutes, 0 = disabled
-  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: Required, // minutes, -1 = disabled, 0 = delete on stop
+  // Optional unless the Daytona provider is explicitly enabled.
+  DAYTONA_DEFAULT_AUTO_STOP_MINUTES: Optional, // minutes, 0 = disabled
+  DAYTONA_DEFAULT_AUTO_DELETE_MINUTES: Optional, // minutes, -1 = disabled, 0 = delete on stop
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
