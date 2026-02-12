@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { login, test, createOrganization, createProject, sidebarButton } from "./test-helpers.ts";
 
 test.describe("project-level machine provider", () => {
@@ -13,7 +12,7 @@ test.describe("project-level machine provider", () => {
 
     await page.getByText("Provider is managed at project level.").waitFor();
     await page.getByText("Sandbox Provider").waitFor();
-    await expect(page.getByText(/^(fly|docker)$/)).toBeVisible();
-    await expect(page.getByText(/^daytona$/)).toHaveCount(0);
+    await page.getByText(/^(fly|docker)$/).waitFor();
+    await page.getByText(/^daytona$/).waitFor({ state: "hidden" });
   });
 });
