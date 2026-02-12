@@ -85,6 +85,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOCKER_HOST: unix:///var/run/docker.sock
         run: pnpm sandbox test:docker
+      - name: Run Fly provider tests
+        env:
+          RUN_SANDBOX_TESTS: "true"
+          SANDBOX_TEST_PROVIDER: fly
+          SANDBOX_TEST_SNAPSHOT_ID: ${{ steps.metadata.outputs.fly_image_tag }}
+          FLY_DEFAULT_IMAGE: ${{ steps.metadata.outputs.fly_image_tag }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
       - name: Upload Docker test results
         if: failure()
         uses: actions/upload-artifact@v4
@@ -92,40 +100,6 @@ jobs:
           name: docker-provider-test-logs
           path: sandbox/test-results
           retention-days: 7
-  fly-provider-tests:
-    needs:
-      - build-and-docker-tests
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-      - name: Setup Doppler
-        run: doppler setup --config dev --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Run Fly provider tests
-        env:
-          RUN_SANDBOX_TESTS: "true"
-          SANDBOX_TEST_PROVIDER: fly
-          SANDBOX_TEST_SNAPSHOT_ID: ${{ needs.build-and-docker-tests.outputs.fly_image_tag }}
-          FLY_DEFAULT_IMAGE: ${{ needs.build-and-docker-tests.outputs.fly_image_tag }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
       - name: Upload Fly test results
         if: failure()
         uses: actions/upload-artifact@v4
