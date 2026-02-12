@@ -15,6 +15,8 @@ const MAX_PORT = 65_535;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
 const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
+export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
+  "/api/project-ingress-proxy-auth/bridge-start";
 const UNAUTHENTICATED_CONTROL_PLANE_PATHS = new Set(["/login", "/api/auth"]);
 const UNAUTHENTICATED_CONTROL_PLANE_PATH_PREFIXES = ["/api/auth/", "/assets/"];
 
@@ -155,14 +157,15 @@ function parseTargetPort(rawPort: string): number | null {
   return port;
 }
 
-function getCanonicalIngressHostname(
-  target: IngressRouteTarget,
-  canonicalBaseHost: string,
-): string {
+export function buildCanonicalProjectIngressProxyHostname(params: {
+  target: IngressRouteTarget;
+  canonicalProjectIngressProxyBaseHost: string;
+}): string {
+  const { target, canonicalProjectIngressProxyBaseHost } = params;
   const identifier = target.kind === "project" ? target.projectSlug : target.machineId;
   const hostToken =
     target.targetPort === DEFAULT_TARGET_PORT ? identifier : `${target.targetPort}__${identifier}`;
-  return `${hostToken}.${canonicalBaseHost}`;
+  return `${hostToken}.${canonicalProjectIngressProxyBaseHost}`;
 }
 
 function isUnauthenticatedControlPlanePath(pathname: string): boolean {
@@ -457,10 +460,10 @@ export async function handleProjectIngressRequest(
     );
   }
 
-  const canonicalBaseHost = normalizeProjectIngressCanonicalHost(
+  const canonicalProjectIngressProxyBaseHost = normalizeProjectIngressCanonicalHost(
     env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
   );
-  if (!canonicalBaseHost) {
+  if (!canonicalProjectIngressProxyBaseHost) {
     logger.error("[project-ingress] Invalid PROJECT_INGRESS_PROXY_CANONICAL_HOST", {
       projectIngressProxyCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
     });
@@ -471,13 +474,13 @@ export async function handleProjectIngressRequest(
     });
   }
 
-  const canonicalIngressHostname = getCanonicalIngressHostname(
-    resolvedHost.target,
-    canonicalBaseHost,
-  );
-  if (requestHostname !== canonicalIngressHostname) {
+  const canonicalProjectIngressProxyHostname = buildCanonicalProjectIngressProxyHostname({
+    target: resolvedHost.target,
+    canonicalProjectIngressProxyBaseHost,
+  });
+  if (requestHostname !== canonicalProjectIngressProxyHostname) {
     const redirectUrl = new URL(url.toString());
-    redirectUrl.host = canonicalIngressHostname;
+    redirectUrl.host = canonicalProjectIngressProxyHostname;
     return Response.redirect(redirectUrl.toString(), 301);
   }
 
@@ -485,9 +488,16 @@ export async function handleProjectIngressRequest(
     if (isUnauthenticatedControlPlanePath(url.pathname)) {
       return null;
     }
-    const loginUrl = new URL(`${url.protocol}//${canonicalIngressHostname}/login`);
-    loginUrl.searchParams.set("redirectUrl", `${url.pathname}${url.search}`);
-    return Response.redirect(loginUrl.toString(), 302);
+    const controlPlaneBridgeStartPath = new URLSearchParams({
+      projectIngressProxyHost: canonicalProjectIngressProxyHostname,
+      redirectPath: `${url.pathname}${url.search}`,
+    });
+    const controlPlaneLoginUrl = new URL("/login", env.VITE_PUBLIC_URL);
+    controlPlaneLoginUrl.searchParams.set(
+      "redirectUrl",
+      `${PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH}?${controlPlaneBridgeStartPath.toString()}`,
+    );
+    return Response.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 
   const parseDetails = buildHostnameParseDetails({

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getProjectIngressRequestHostname,
   handleProjectIngressRequest,
+  PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
   parseProjectIngressProxyHostMatchers,
   resolveIngressHostname,
   shouldHandleProjectIngressHostname,
@@ -87,13 +88,14 @@ describe("project ingress request hostname", () => {
   });
 });
 
-describe("project ingress canonical/auth flow", () => {
+describe("project ingress canonical project ingress proxy host flow", () => {
   const env = {
     PROJECT_INGRESS_PROXY_HOST_MATCHERS: "*.iterate.town,*.iterate.app",
     PROJECT_INGRESS_PROXY_CANONICAL_HOST: "iterate.town",
+    VITE_PUBLIC_URL: "https://os.iterate.com",
   } as any;
 
-  it("redirects alias hostname to canonical hostname before auth", async () => {
+  it("redirects alias hostname to canonical project ingress proxy hostname before auth", async () => {
     const response = await handleProjectIngressRequest(
       new Request("https://misha.iterate.app/console?tab=logs"),
       env,
@@ -104,7 +106,7 @@ describe("project ingress canonical/auth flow", () => {
     expect(response?.headers.get("location")).toBe("https://misha.iterate.town/console?tab=logs");
   });
 
-  it("redirects unauthenticated canonical ingress request to canonical login", async () => {
+  it("redirects unauthenticated canonical project ingress proxy host request to control-plane login", async () => {
     const response = await handleProjectIngressRequest(
       new Request("https://misha.iterate.town/console?tab=logs"),
       env,
@@ -112,12 +114,20 @@ describe("project ingress canonical/auth flow", () => {
     );
 
     expect(response?.status).toBe(302);
-    expect(response?.headers.get("location")).toBe(
-      "https://misha.iterate.town/login?redirectUrl=%2Fconsole%3Ftab%3Dlogs",
-    );
+    const location = response?.headers.get("location");
+    expect(location).toBeTruthy();
+    const redirectUrl = new URL(location!);
+    expect(redirectUrl.origin).toBe("https://os.iterate.com");
+    expect(redirectUrl.pathname).toBe("/login");
+    const loginRedirectPath = redirectUrl.searchParams.get("redirectUrl");
+    expect(loginRedirectPath).toBeTruthy();
+    const bridgeStartUrl = new URL(loginRedirectPath!, "https://os.iterate.com");
+    expect(bridgeStartUrl.pathname).toBe(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH);
+    expect(bridgeStartUrl.searchParams.get("projectIngressProxyHost")).toBe("misha.iterate.town");
+    expect(bridgeStartUrl.searchParams.get("redirectPath")).toBe("/console?tab=logs");
   });
 
-  it("passes through canonical login request when unauthenticated", async () => {
+  it("passes through canonical project ingress proxy host login request when unauthenticated", async () => {
     const response = await handleProjectIngressRequest(
       new Request("https://misha.iterate.town/login?redirectUrl=%2F"),
       env,
@@ -127,7 +137,7 @@ describe("project ingress canonical/auth flow", () => {
     expect(response).toBeNull();
   });
 
-  it("passes through canonical better-auth api request when unauthenticated", async () => {
+  it("passes through canonical project ingress proxy host better-auth api request when unauthenticated", async () => {
     const response = await handleProjectIngressRequest(
       new Request("https://misha.iterate.town/api/auth/session"),
       env,

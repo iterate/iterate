@@ -62,18 +62,22 @@ Key points:
 For any request whose host matches `PROJECT_INGRESS_PROXY_HOST_MATCHERS`, OS applies this decision tree:
 
 1. Parse ingress target from hostname (`projectSlug` or `machineId`, plus optional port token).
-2. Compute canonical ingress hostname using `PROJECT_INGRESS_PROXY_CANONICAL_HOST`.
-3. If request host is not canonical: `301` redirect to canonical host (same path + query).
-4. If request host is canonical:
-   - if no Better Auth session: redirect to canonical `/login?redirectUrl=...`
+2. Compute canonical project ingress proxy hostname using `PROJECT_INGRESS_PROXY_CANONICAL_HOST`.
+3. If request host is not the canonical project ingress proxy hostname: `301` redirect to canonical project ingress proxy host (same path + query).
+4. If request host is the canonical project ingress proxy hostname:
+   - if no Better Auth session on the canonical project ingress proxy host:
+     - redirect to control-plane login on `VITE_PUBLIC_URL`
+     - after control-plane login, run one-time-token exchange
+     - set Better Auth session cookie on the canonical project ingress proxy host
+     - redirect back to original canonical project ingress proxy path
    - if session exists: check project/machine authorization
    - if authorized: proxy request into machine ingress (`:8080`)
    - if unauthorized/not found/not routable: return structured error response
 
 Notes:
 
-- Login/auth/static-asset paths are allowed to pass through to the OS app on canonical ingress host.
-- No separate ingress session concept exists in code; auth behavior is normal Better Auth session behavior on the canonical host.
+- Login/auth/static-asset paths are allowed to pass through to the OS app on the canonical project ingress proxy host.
+- Session establishment on project ingress uses Better Auth one-time-token exchange from control-plane host to canonical project ingress proxy host.
 
 Canonical service links use:
 
@@ -83,7 +87,7 @@ Canonical service links use:
 ## Ingress env vars
 
 - `PROJECT_INGRESS_PROXY_CANONICAL_HOST`
-  - Single canonical base host used when constructing machine service links.
+  - Single canonical project ingress proxy base host used when constructing machine service links.
   - Must be a hostname only (no wildcard, scheme, port, or path).
   - Must be covered by `PROJECT_INGRESS_PROXY_HOST_MATCHERS`.
 - `PROJECT_INGRESS_PROXY_HOST_MATCHERS`

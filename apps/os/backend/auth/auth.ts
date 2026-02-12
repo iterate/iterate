@@ -1,8 +1,12 @@
 import { betterAuth, APIError } from "better-auth";
+import { createAuthEndpoint } from "better-auth/api";
+import { setSessionCookie } from "better-auth/cookies";
 import { admin, emailOTP } from "better-auth/plugins";
+import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { minimatch } from "minimatch";
+import { z } from "zod/v4";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
@@ -52,6 +56,57 @@ function matchesHostMatcher(hostname: string, patterns: string[]) {
       noglobstar: false,
     }),
   );
+}
+
+function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
+  if (!rawPath) return "/";
+  try {
+    const parsed = new URL(rawPath, "https://project-ingress-proxy.local");
+    if (parsed.origin !== "https://project-ingress-proxy.local") return "/";
+    const normalizedPath = `${parsed.pathname}${parsed.search}`;
+    if (!normalizedPath.startsWith("/")) return "/";
+    return normalizedPath;
+  } catch {
+    return "/";
+  }
+}
+
+function projectIngressProxyOneTimeTokenExchangePlugin() {
+  return {
+    id: "project-ingress-proxy-one-time-token-exchange",
+    endpoints: {
+      exchangeProjectIngressProxyOneTimeToken: createAuthEndpoint(
+        "/project-ingress-proxy/one-time-token/exchange",
+        {
+          method: "GET",
+          query: z.object({
+            token: z.string().min(1),
+            redirectPath: z.string().optional(),
+          }),
+        },
+        async (ctx) => {
+          const verificationValue = await ctx.context.internalAdapter.findVerificationValue(
+            `one-time-token:${ctx.query.token}`,
+          );
+          if (!verificationValue) {
+            throw new APIError("BAD_REQUEST", { message: "Invalid one-time token" });
+          }
+          await ctx.context.internalAdapter.deleteVerificationValue(verificationValue.id);
+          if (verificationValue.expiresAt < new Date()) {
+            throw new APIError("BAD_REQUEST", { message: "One-time token expired" });
+          }
+          const verifiedSession = await ctx.context.internalAdapter.findSession(
+            verificationValue.value,
+          );
+          if (!verifiedSession) {
+            throw new APIError("BAD_REQUEST", { message: "Session not found for one-time token" });
+          }
+          await setSessionCookie(ctx, verifiedSession);
+          throw ctx.redirect(normalizeProjectIngressProxyRedirectPath(ctx.query.redirectPath));
+        },
+      ),
+    },
+  };
 }
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
@@ -147,6 +202,11 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     },
     plugins: [
       admin(),
+      oneTimeToken({
+        disableClientRequest: true,
+        storeToken: "plain",
+      }),
+      projectIngressProxyOneTimeTokenExchangePlugin(),
       ...(envParam.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
         ? [
             emailOTP({
