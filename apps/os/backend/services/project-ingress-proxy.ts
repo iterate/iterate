@@ -323,7 +323,6 @@ async function proxyWithFetcher(
     return fetcher(pathWithQuery, {
       method: request.method,
       headers: filterWebSocketHeaders(request, targetHost),
-      body: request.body,
     });
   }
 

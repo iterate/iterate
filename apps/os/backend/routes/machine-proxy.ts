@@ -254,7 +254,6 @@ async function proxyDaytonaWebSocket(
   return fetch(targetUrl, {
     method: request.method,
     headers,
-    body: request.body,
   });
 }
 
@@ -321,6 +320,5 @@ async function proxyWebSocketWithFetcher(
   return fetcher(targetPath, {
     method: request.method,
     headers,
-    body: request.body,
   });
 }
