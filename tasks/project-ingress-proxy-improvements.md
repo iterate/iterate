@@ -13,6 +13,7 @@ Follow-up work after initial step-0 ingress rollout.
 ## Immediate next steps
 
 - Enforce machine-side auth header validation on `apps/project-ingress-proxy`.
+- Add `iterate.config.ts` ingress hostname auth policy (`auth` vs `public`) so OS can skip Better Auth on explicitly public hosts.
 - Add request correlation + structured logs for end-to-end ingress debugging.
 - Add integration coverage for hostname forms in OS resolver + machine proxy path.
 - Validate and finalize `.iterate.app` ingress once domain ownership is available.
