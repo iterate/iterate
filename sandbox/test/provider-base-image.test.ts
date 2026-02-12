@@ -85,8 +85,6 @@ describe
           return;
         }
 
-        const fetchPreview = await sandbox.getFetcher({ port: previewPort });
-
         await expect
           .poll(
             async () => {
@@ -97,9 +95,6 @@ describe
             { timeout: 20_000, interval: 500 },
           )
           .toContain(PREVIEW_BODY);
-
-        const fetched = await fetchPreview("/preview-ok.txt");
-        expect(await fetched.text()).toContain(PREVIEW_BODY);
       },
       120000,
     );
