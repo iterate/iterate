@@ -118,51 +118,51 @@ async function ensureDevTunnelWildcardDns(
     );
   }
 
-  const wildcardHostname = config.wildcardHostname;
-  const wildcardTarget = `${tunnelId}.cfargotunnel.com`;
+  const target = `${tunnelId}.cfargotunnel.com`;
   const edgeCertificatesUrl =
     "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.com/ssl-tls/edge-certificates";
   const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
-  const findResponse = await fetch(
-    `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(wildcardHostname)}&per_page=1`,
-    { headers },
-  );
-  const findPayload = (await findResponse.json()) as {
-    result?: Array<{ id?: string }>;
-    errors?: unknown;
-  };
-  if (!findResponse.ok) {
-    throw new Error(
-      `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
-    );
-  }
-  const existing = findPayload?.result?.[0];
-  const body = JSON.stringify({
-    type: "CNAME",
-    name: wildcardHostname,
-    content: wildcardTarget,
-    proxied: true,
-    ttl: 1,
-    comment,
-  });
 
-  if (existing) {
-    const updateResponse = await fetch(
-      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
-      {
-        method: "PUT",
-        headers,
-        body,
-      },
+  async function upsertWildcardDnsRecord(name: string) {
+    const findResponse = await fetch(
+      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=1`,
+      { headers },
     );
-    if (!updateResponse.ok) {
-      throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+    const findPayload = (await findResponse.json()) as {
+      result?: Array<{ id?: string }>;
+      errors?: unknown;
+    };
+    if (!findResponse.ok) {
+      throw new Error(
+        `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
+      );
     }
-    console.log(`Updated wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
-    console.log(
-      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
-    );
-  } else {
+    const existing = findPayload?.result?.[0];
+    const body = JSON.stringify({
+      type: "CNAME",
+      name,
+      content: target,
+      proxied: true,
+      ttl: 1,
+      comment,
+    });
+
+    if (existing) {
+      const updateResponse = await fetch(
+        `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
+        {
+          method: "PUT",
+          headers,
+          body,
+        },
+      );
+      if (!updateResponse.ok) {
+        throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+      }
+      console.log(`Updated wildcard dev tunnel DNS: ${name} -> ${target}`);
+      return;
+    }
+
     const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
       method: "POST",
       headers,
@@ -171,11 +171,15 @@ async function ensureDevTunnelWildcardDns(
     if (!createResponse.ok) {
       throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
     }
-    console.log(`Created wildcard dev tunnel DNS: ${wildcardHostname} -> ${wildcardTarget}`);
-    console.log(
-      `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
-    );
+    console.log(`Created wildcard dev tunnel DNS: ${name} -> ${target}`);
   }
+
+  // Alchemy Tunnel auto-manages non-wildcard ingress hostnames.
+  // It intentionally skips wildcard hostnames, so we upsert that record here.
+  await upsertWildcardDnsRecord(config.wildcardHostname);
+  console.log(
+    `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${config.wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+  );
 
   // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
   // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
@@ -280,7 +284,7 @@ async function createDevTunnel(vitePort: number) {
     await ensureDevTunnelWildcardDns(config, tunnel.tunnelId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Could not configure wildcard DNS for ${config.hostname}: ${message}`);
+    console.warn(`Could not configure wildcard dev tunnel DNS for ${config.hostname}: ${message}`);
   }
 
   return { tunnel, config, vitePort };
