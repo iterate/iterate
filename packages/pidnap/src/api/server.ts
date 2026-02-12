@@ -186,10 +186,10 @@ function readFileDelta(
   const fd = openSync(filePath, "r");
   try {
     const buffer = Buffer.alloc(bytesToRead);
-    readSync(fd, buffer, 0, bytesToRead, offset);
+    const bytesRead = readSync(fd, buffer, 0, bytesToRead, offset);
     return {
-      nextOffset: fileSize,
-      chunk: buffer.toString("utf-8"),
+      nextOffset: offset + bytesRead,
+      chunk: buffer.toString("utf-8", 0, bytesRead),
       reset: offset === 0 && previousOffset > 0,
     };
   } finally {
