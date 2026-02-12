@@ -77,6 +77,24 @@ export default defineConfig({
       },
     },
     {
+      name: "project-ingress-proxy",
+      definition: {
+        command: "tsx",
+        args: ["server.ts"],
+        cwd: `${iterateRepo}/apps/project-ingress-proxy`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+      },
+    },
+    {
       name: "daemon-backend",
       definition: {
         command: "tsx",
@@ -93,7 +111,7 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        inheritGlobalEnv: false,
+        // Keep reload disabled to avoid restart loops when daemon rewrites ~/.iterate/.env.
         reloadDelay: false,
       },
     },

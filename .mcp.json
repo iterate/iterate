@@ -3,6 +3,14 @@
     "cloudflare-observability": {
       "type": "url",
       "url": "https://observability.mcp.cloudflare.com/mcp"
+    },
+    "exa": {
+      "type": "url",
+      "url": "https://mcp.exa.ai/mcp"
+    },
+    "context7": {
+      "type": "url",
+      "url": "https://mcp.context7.com/mcp"
     }
   }
 }

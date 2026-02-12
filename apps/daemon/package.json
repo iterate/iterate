@@ -29,7 +29,7 @@
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
     "db:reset": "rm -f db.sqlite && drizzle-kit migrate",
-    "super-reset": "rm -f db.sqlite && drizzle-kit migrate"
+    "super-reset": "pnpm db:reset"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.22",

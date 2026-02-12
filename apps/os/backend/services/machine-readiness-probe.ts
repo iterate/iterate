@@ -1,4 +1,5 @@
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
@@ -19,26 +20,26 @@ export async function probeMachineReadiness(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
 ): Promise<{ ok: boolean; detail: string }> {
-  const previewUrl = await buildPreviewUrl(machine, env);
-  if (!previewUrl) {
-    return { ok: false, detail: "Could not build preview URL for machine" };
+  const fetcher = await buildPreviewFetcher(machine, env);
+  if (!fetcher) {
+    return { ok: false, detail: "Could not build preview fetcher for machine" };
   }
 
   // 1. Send the probe message via webchat webhook (retries with fresh messageId each attempt)
-  const sendResult = await sendProbeMessage(previewUrl);
+  const sendResult = await sendProbeMessage(fetcher);
   if (!sendResult.ok) {
     return { ok: false, detail: `Failed to send probe: ${sendResult.detail}` };
   }
 
   // 2. Poll for a response containing "3" or "three"
-  const pollResult = await pollForAnswer(previewUrl, sendResult.threadId);
+  const pollResult = await pollForAnswer(fetcher, sendResult.threadId);
   return pollResult;
 }
 
-async function buildPreviewUrl(
+async function buildPreviewFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<string | null> {
+): Promise<SandboxFetcher | null> {
   try {
     const runtime = await createMachineStub({
       type: machine.type,
@@ -46,9 +47,9 @@ async function buildPreviewUrl(
       externalId: machine.externalId,
       metadata: (machine.metadata as Record<string, unknown>) ?? {},
     });
-    return await runtime.getBaseUrl(3000);
+    return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[readiness-probe] Failed to build preview URL", {
+    logger.warn("[readiness-probe] Failed to build preview fetcher", {
       machineId: machine.id,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -57,7 +58,7 @@ async function buildPreviewUrl(
 }
 
 async function sendProbeMessage(
-  previewUrl: string,
+  fetcher: SandboxFetcher,
 ): Promise<{ ok: true; threadId: string; messageId: string } | { ok: false; detail: string }> {
   // Retry the initial send — the daemon may still be booting internal services
   // (e.g. OpenCode server) even though its HTTP server is already accepting
@@ -80,7 +81,7 @@ async function sendProbeMessage(
     };
 
     try {
-      const response = await fetch(`${previewUrl}/api/integrations/webchat/webhook`, {
+      const response = await fetcher("/api/integrations/webchat/webhook", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -120,17 +121,17 @@ async function sendProbeMessage(
 }
 
 async function pollForAnswer(
-  previewUrl: string,
+  fetcher: SandboxFetcher,
   threadId: string,
 ): Promise<{ ok: boolean; detail: string }> {
-  const url = `${previewUrl}/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`;
+  const url = `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`;
   const deadline = Date.now() + MAX_WAIT_MS;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetcher(url, {
         method: "GET",
         signal: AbortSignal.timeout(10_000),
       });

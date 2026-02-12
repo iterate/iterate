@@ -10,6 +10,9 @@ import { describe } from "vitest";
 import { RUN_SANDBOX_TESTS, TEST_BASE_SNAPSHOT_ID, TEST_CONFIG, test } from "./helpers.ts";
 
 const PREVIEW_BODY = "preview-ok";
+const TEST_RUN_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const TEST_EXTERNAL_ID = `test-base-image-test-${TEST_RUN_SUFFIX}`;
+const TEST_ID = `base-image-test-${TEST_RUN_SUFFIX}`;
 
 describe
   .runIf(RUN_SANDBOX_TESTS)
@@ -20,7 +23,8 @@ describe
           ? { DAYTONA_DEFAULT_SNAPSHOT: TEST_BASE_SNAPSHOT_ID }
           : {},
       sandboxOptions: {
-        id: "base-image-test",
+        externalId: TEST_EXTERNAL_ID,
+        id: TEST_ID,
         name: "Base Image Test",
         envVars: {},
         providerSnapshotId: TEST_BASE_SNAPSHOT_ID,
@@ -84,8 +88,6 @@ describe
           return;
         }
 
-        const fetchPreview = await sandbox.getFetcher({ port: previewPort });
-
         await expect
           .poll(
             async () => {
@@ -96,9 +98,6 @@ describe
             { timeout: 20_000, interval: 500 },
           )
           .toContain(PREVIEW_BODY);
-
-        const fetched = await fetchPreview("/preview-ok.txt");
-        expect(await fetched.text()).toContain(PREVIEW_BODY);
       },
       120000,
     );

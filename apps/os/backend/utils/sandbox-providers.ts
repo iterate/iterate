@@ -22,11 +22,14 @@ export function getProjectSandboxProviderOptions(
   const daytonaEnabled = isEnabled(env.SANDBOX_DAYTONA_ENABLED, true);
   const dockerEnabled = isEnabled(env.SANDBOX_DOCKER_ENABLED, false);
   const flyEnabled = isEnabled(env.SANDBOX_FLY_ENABLED, false);
+  const hasSandboxNamePrefix = Boolean(env.SANDBOX_NAME_PREFIX);
+  const namingDisabledReason = hasSandboxNamePrefix ? undefined : "SANDBOX_NAME_PREFIX not set";
 
   if (daytonaEnabled) {
     options.push({
       type: "daytona",
       label: "Daytona (Cloud)",
+      disabledReason: namingDisabledReason,
     });
   }
 
@@ -34,17 +37,18 @@ export function getProjectSandboxProviderOptions(
     options.push({
       type: "docker",
       label: "Docker",
-      disabledReason: isDev ? undefined : "Docker provider only available in development",
+      disabledReason: !isDev
+        ? "Docker provider only available in development"
+        : namingDisabledReason,
     });
   }
 
   if (flyEnabled) {
     const hasFlyToken = Boolean(env.FLY_API_TOKEN);
-    const hasFlyAppName = Boolean(env.FLY_APP_NAME_PREFIX);
     const disabledReason = !hasFlyToken
       ? "FLY_API_TOKEN not set"
-      : !hasFlyAppName
-        ? "FLY_APP_NAME_PREFIX not set"
+      : !hasSandboxNamePrefix
+        ? "SANDBOX_NAME_PREFIX not set"
         : undefined;
     options.push({
       type: "fly",

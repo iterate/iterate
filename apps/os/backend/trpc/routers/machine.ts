@@ -16,6 +16,11 @@ import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import {
+  buildCanonicalMachineIngressUrl,
+  getIngressSchemeFromPublicUrl,
+  normalizeProjectIngressCanonicalHost,
+} from "../../utils/project-ingress-url.ts";
 import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
 import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
 
@@ -31,6 +36,14 @@ function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetc
   });
 }
 
+function parsePositiveIntegerOrDefault(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return fallback;
+}
+
 /** Service URL options for a daemon */
 interface ServiceOption {
   label: string;
@@ -41,52 +54,41 @@ interface ServiceOption {
 async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$inferSelect>(
   machine: T,
   cloudflareEnv: CloudflareEnv,
-  orgSlug: string,
-  projectSlug: string,
 ) {
   const metadata = (machine.metadata as Record<string, unknown>) ?? {};
 
-  // Machines still being provisioned have no externalId yet — skip provider enrichment
   if (!machine.externalId) {
     return { ...machine, metadata, services: [] };
   }
 
-  const buildProxyUrl = (port: number) =>
-    `/org/${orgSlug}/proj/${projectSlug}/${machine.id}/proxy/${port}/`;
-  const runtime = await createMachineStub({
-    type: machine.type,
-    env: cloudflareEnv,
-    externalId: machine.externalId,
-    metadata,
-  });
-
-  // Build service options for each daemon with web UI
-  const serviceResults = await Promise.all(
-    getDaemonsWithWebUI().map(async (daemon) => {
-      try {
-        const nativeUrl = await runtime.getBaseUrl(daemon.internalPort);
-        const proxyUrl = buildProxyUrl(daemon.internalPort);
-        const options: ServiceOption[] = [];
-
-        // Add native URL if different from proxy (e.g., Daytona has direct access)
-        if (nativeUrl && !nativeUrl.startsWith("/")) {
-          options.push({ label: "Direct", url: nativeUrl });
-        }
-        options.push({ label: options.length > 0 ? "Proxy" : "Open", url: proxyUrl });
-
-        return {
-          id: daemon.id,
-          name: daemon.name,
-          port: daemon.internalPort,
-          options,
-        };
-      } catch {
-        // Port not mapped (e.g. Jaeger not exposed in older docker containers) — skip
-        return null;
-      }
-    }),
+  const canonicalHost = normalizeProjectIngressCanonicalHost(
+    cloudflareEnv.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
   );
-  const services = serviceResults.filter((s) => s !== null);
+  if (!canonicalHost) {
+    logger.error("Invalid PROJECT_INGRESS_PROXY_CANONICAL_HOST in machine router", {
+      projectIngressProxyCanonicalHost: cloudflareEnv.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
+    });
+    return { ...machine, metadata, services: [] };
+  }
+
+  const scheme = getIngressSchemeFromPublicUrl(cloudflareEnv.VITE_PUBLIC_URL);
+
+  const services = getDaemonsWithWebUI().map((daemon) => {
+    const url = buildCanonicalMachineIngressUrl({
+      scheme,
+      canonicalHost,
+      machineId: machine.id,
+      port: daemon.internalPort,
+    });
+    const options: ServiceOption[] = [{ label: "Open", url }];
+
+    return {
+      id: daemon.id,
+      name: daemon.name,
+      port: daemon.internalPort,
+      options,
+    };
+  });
 
   return {
     ...machine,
@@ -166,11 +168,7 @@ export const machineRouter = router({
       });
 
       // Enrich each machine with provider info
-      return Promise.all(
-        machines.map((m) =>
-          enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug),
-        ),
-      );
+      return Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env)));
     }),
 
   // Get machine by ID
@@ -195,7 +193,7 @@ export const machineRouter = router({
         });
       }
 
-      return enrichMachineWithProviderInfo(m, ctx.env, ctx.organization.slug, ctx.project.slug);
+      return enrichMachineWithProviderInfo(m, ctx.env);
     }),
 
   // Get provider-level state (e.g., Daytona sandbox state)
@@ -463,11 +461,14 @@ export const machineRouter = router({
   }),
 
   // Get default snapshot/image for each provider (used by create-machine UI)
-  getDefaultSnapshots: publicProcedure.query(({ ctx }) => ({
-    daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
-    fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
-    docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
-  })),
+  getDefaultSnapshots: publicProcedure.query(({ ctx }) => {
+    return {
+      daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
+      fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
+      docker: ctx.env.DOCKER_DEFAULT_IMAGE ?? null,
+      flyMachineCpus: parsePositiveIntegerOrDefault(ctx.env.FLY_DEFAULT_CPUS, 4),
+    };
+  }),
 
   // Get available machine types (checks which providers are configured)
   getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {

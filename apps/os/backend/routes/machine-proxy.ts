@@ -123,11 +123,8 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
 
   // For Daytona, we need special auth handling
   if (machineRecord.type === "daytona") {
-    if (!/^[a-zA-Z0-9-]+$/.test(externalId)) {
-      logger.error("Invalid sandbox ID format", {
-        sandboxId: externalId,
-        machineId: machineRecord.id,
-      });
+    if (!externalId.trim()) {
+      logger.error("Invalid sandbox identifier", { externalId, machineId: machineRecord.id });
       return c.json({ error: "Invalid sandbox configuration" }, 500);
     }
 
@@ -147,7 +144,7 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     // Handle 401 - lazy refresh
     if (response.status === 401) {
       logger.info("Received 401 from Daytona, refreshing token", {
-        sandboxId: externalId,
+        sandboxIdentifier: externalId,
         port: portNum,
       });
       try {
@@ -219,7 +216,7 @@ async function proxyDaytona(request: Request, targetUrl: string, token: string):
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+      responseHeaders.append(key, value);
     }
   });
 
@@ -257,7 +254,6 @@ async function proxyDaytonaWebSocket(
   return fetch(targetUrl, {
     method: request.method,
     headers,
-    body: request.body,
   });
 }
 
@@ -291,7 +287,7 @@ async function proxyWithFetcher(
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+      responseHeaders.append(key, value);
     }
   });
 
@@ -321,9 +317,10 @@ async function proxyWebSocketWithFetcher(
     }
   });
 
-  return fetcher(targetPath, {
+  const proxyRequest = new Request(new URL(targetPath, request.url), {
     method: request.method,
     headers,
-    body: request.body,
   });
+
+  return fetcher(proxyRequest);
 }

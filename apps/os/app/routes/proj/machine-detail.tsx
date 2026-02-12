@@ -19,6 +19,7 @@ import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
+import { buildProjectIngressLink } from "../../lib/project-ingress-link.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -30,15 +31,14 @@ const PIDNAP_PROCESSES = [
   "daemon-frontend",
   "opencode",
   "egress-proxy",
+  "project-ingress-proxy",
   "trace-viewer",
 ] as const;
 
-function parseFlyExternalId(externalId: string): { appName: string; machineId: string } | null {
-  const separatorIndex = externalId.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === externalId.length - 1) return null;
-  const appName = externalId.slice(0, separatorIndex);
-  const machineId = externalId.slice(separatorIndex + 1);
-  return { appName, machineId };
+function parseFlyExternalId(externalId: string): { appName: string } | null {
+  const trimmed = externalId.trim();
+  if (!trimmed) return null;
+  return { appName: trimmed };
 }
 
 type MachineMetadata = {
@@ -49,11 +49,79 @@ type MachineMetadata = {
   containerName?: string;
   snapshotName?: string;
   sandboxName?: string;
+  fly?: {
+    machineId?: string;
+  };
   daemonStatus?: "ready" | "error" | "restarting" | "stopping" | "verifying" | "retrying";
   daemonReadyAt?: string;
   daemonStatusMessage?: string;
   provisioningError?: string;
 } & Record<string, unknown>;
+
+type ProviderDetailLink = {
+  label: string;
+  url: string;
+};
+
+type ProviderDetailRef = {
+  label: string;
+  value: string;
+};
+
+type ProviderDetails = {
+  title: string;
+  links: ProviderDetailLink[];
+  refs: ProviderDetailRef[];
+  emptyMessage: string;
+};
+
+function ProviderDetailsCard(props: {
+  details: ProviderDetails;
+  onCopy: (value: string) => Promise<void>;
+}) {
+  const { details, onCopy } = props;
+  const { title, links, refs, emptyMessage } = details;
+
+  return (
+    <section className="space-y-3 rounded-lg border p-4">
+      <h2 className="text-sm font-medium">{title}</h2>
+
+      {links.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {links.map((link) => (
+            <Button key={link.url} variant="outline" size="sm" asChild>
+              <a href={link.url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4" />
+                {link.label}
+              </a>
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {refs.length > 0 && (
+        <div className="space-y-2">
+          {refs.map((ref) => (
+            <div key={`${ref.label}-${ref.value}`} className="rounded-md border p-2">
+              <div className="text-[11px] text-muted-foreground">{ref.label}</div>
+              <div className="mt-1 flex items-start justify-between gap-2">
+                <code className="min-w-0 flex-1 break-all text-xs">{ref.value}</code>
+                <Button variant="ghost" size="sm" onClick={() => onCopy(ref.value)}>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {links.length === 0 && refs.length === 0 && (
+        <p className="text-xs text-muted-foreground">{emptyMessage}</p>
+      )}
+    </section>
+  );
+}
 
 function MachineDetailPage() {
   const params = useParams({ from: "/_auth/proj/$projectSlug/machines/$machineId" });
@@ -157,30 +225,55 @@ function MachineDetailPage() {
   const opencodeService = services.find((service) => service.id === "opencode");
   const opencodeBaseUrl = opencodeService?.options[0]?.url;
 
-  const flyMachine = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
-  const flyMachineUrl = flyMachine
-    ? `https://fly.io/apps/${flyMachine.appName}/machines/${flyMachine.machineId}`
-    : null;
+  const flyExternal = machine.type === "fly" ? parseFlyExternalId(machine.externalId) : null;
+  const flyMachineId = metadata.fly?.machineId;
+  const flyAppName = flyExternal?.appName ?? null;
+  const flyMachineUrl =
+    flyAppName && flyMachineId
+      ? `https://fly.io/apps/${flyAppName}/machines/${flyMachineId}`
+      : null;
+  const flyRealtimeLogsUrl =
+    flyAppName && flyMachineId
+      ? `https://fly.io/apps/${flyAppName}/monitoring?${new URLSearchParams({
+          instance: flyMachineId,
+        }).toString()}`
+      : null;
   const flyGrafanaOrgId = import.meta.env.VITE_FLY_GRAFANA_ORG_ID ?? "1440139";
-  const flyGrafanaUrl = flyMachine
+  const flyGrafanaMetricsUrl = flyAppName
     ? `https://fly-metrics.net/d/fly-app/fly-app?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-source": "prometheus_on_fly",
+        "var-app": flyAppName,
+        "var-region": "All",
+        "var-host": "All",
         orgId: flyGrafanaOrgId,
-        "var-app": flyMachine.appName,
       }).toString()}`
     : null;
-  const flyLogsUrl = flyMachine ? `https://fly.io/apps/${flyMachine.appName}/monitoring` : null;
-  const flyNetworkingUrl = flyMachine
-    ? `https://fly.io/apps/${flyMachine.appName}/networking`
+  const flyGrafanaLogsUrl = flyAppName
+    ? `https://fly-metrics.net/d/fly-logs/fly-logs?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-app": flyAppName,
+        orgId: flyGrafanaOrgId,
+      }).toString()}`
+    : null;
+  const flyGrafanaNetworkingUrl = flyAppName
+    ? `https://fly-metrics.net/d/fly-edge/fly-edge?${new URLSearchParams({
+        from: "now-1h",
+        to: "now",
+        "var-app": flyAppName,
+        orgId: flyGrafanaOrgId,
+      }).toString()}`
     : null;
 
   const buildTerminalUrl = (command: string) => {
     if (!daemonBaseUrl) return "#";
-    return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
-  };
-
-  const getServiceAccessLabel = (option: { label: string; url: string }) => {
-    if (option.label === "Open" && option.url.startsWith("/")) return "Proxy";
-    return option.label;
+    return buildProjectIngressLink({
+      baseUrl: daemonBaseUrl,
+      path: "/terminal",
+      query: { command, autorun: "true" },
+    });
   };
 
   const extractSessionId = (destination?: string | null) => {
@@ -203,7 +296,10 @@ function MachineDetailPage() {
   ): string | null => {
     if (!sessionId || !opencodeBaseUrl || !workingDirectory) return null;
     const encodedDir = btoa(workingDirectory).replace(/=+$/, "");
-    return `${opencodeBaseUrl}/${encodedDir}/session/${sessionId}`;
+    return buildProjectIngressLink({
+      baseUrl: opencodeBaseUrl,
+      path: `${encodedDir}/session/${sessionId}`,
+    });
   };
 
   const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -214,46 +310,68 @@ function MachineDetailPage() {
   const dockerInspectCommand = dockerContainerRef
     ? `docker inspect ${quoteShellArg(dockerContainerRef)}`
     : null;
-
-  const externalLinks = [
-    ...(flyMachineUrl ? [{ label: "Fly Machine", url: flyMachineUrl }] : []),
-    ...(flyLogsUrl ? [{ label: "Fly Logs", url: flyLogsUrl }] : []),
-    ...(flyGrafanaUrl ? [{ label: "Fly Grafana", url: flyGrafanaUrl }] : []),
-    ...(flyNetworkingUrl ? [{ label: "Fly Networking", url: flyNetworkingUrl }] : []),
-  ];
-
-  const externalRefs: Array<{ label: string; value: string }> = [];
-
-  if (machine.externalId) {
-    externalRefs.push({ label: "External ID", value: machine.externalId });
-  }
-
-  if (machine.type === "docker") {
-    if (metadata.containerName) {
-      externalRefs.push({ label: "Container Name", value: metadata.containerName });
+  const providerDetails: ProviderDetails = (() => {
+    if (machine.type === "fly") {
+      return {
+        title: "Fly Machine Details",
+        links: [
+          ...(flyMachineUrl ? [{ label: "Fly Machine", url: flyMachineUrl }] : []),
+          ...(flyGrafanaMetricsUrl
+            ? [{ label: "Grafana (Metrics)", url: flyGrafanaMetricsUrl }]
+            : []),
+          ...(flyRealtimeLogsUrl
+            ? [{ label: "Fly Logs (Realtime)", url: flyRealtimeLogsUrl }]
+            : []),
+          ...(flyGrafanaLogsUrl ? [{ label: "Grafana (Logs)", url: flyGrafanaLogsUrl }] : []),
+          ...(flyGrafanaNetworkingUrl
+            ? [{ label: "Grafana (Networking)", url: flyGrafanaNetworkingUrl }]
+            : []),
+        ],
+        refs: [
+          ...(flyAppName ? [{ label: "Fly App", value: flyAppName }] : []),
+          ...(flyMachineId ? [{ label: "Fly Machine ID", value: flyMachineId }] : []),
+        ],
+        emptyMessage: "No Fly details available yet.",
+      };
     }
-    if (metadata.containerId) {
-      externalRefs.push({ label: "Container ID", value: metadata.containerId });
-    }
-    if (dockerTailEntryLogsCommand) {
-      externalRefs.push({ label: "Tail entry logs", value: dockerTailEntryLogsCommand });
-    }
-    if (dockerInspectCommand) {
-      externalRefs.push({ label: "Inspect container", value: dockerInspectCommand });
-    }
-  }
 
-  if (machine.type === "daytona") {
-    const sandboxRef = metadata.sandboxName ?? machine.externalId;
-    if (sandboxRef) {
-      externalRefs.push({ label: "Sandbox", value: sandboxRef });
+    if (machine.type === "docker") {
+      return {
+        title: "Docker Machine Details",
+        links: [],
+        refs: [
+          ...(metadata.containerName
+            ? [{ label: "Container Name", value: metadata.containerName }]
+            : []),
+          ...(metadata.containerId ? [{ label: "Container ID", value: metadata.containerId }] : []),
+          ...(dockerTailEntryLogsCommand
+            ? [{ label: "Tail entry logs", value: dockerTailEntryLogsCommand }]
+            : []),
+          ...(dockerInspectCommand
+            ? [{ label: "Inspect container", value: dockerInspectCommand }]
+            : []),
+        ],
+        emptyMessage: "No Docker details available yet.",
+      };
     }
-  }
 
-  if (flyMachine) {
-    externalRefs.push({ label: "Fly App", value: flyMachine.appName });
-    externalRefs.push({ label: "Fly Machine ID", value: flyMachine.machineId });
-  }
+    if (machine.type === "daytona") {
+      const sandboxRef = metadata.sandboxName ?? machine.externalId;
+      return {
+        title: "Daytona Machine Details",
+        links: [],
+        refs: [...(sandboxRef ? [{ label: "Sandbox", value: sandboxRef }] : [])],
+        emptyMessage: "No Daytona details available yet.",
+      };
+    }
+
+    return {
+      title: "Provider Details",
+      links: [],
+      refs: [],
+      emptyMessage: "No provider-specific details available.",
+    };
+  })();
 
   const issueMessage =
     metadata.provisioningError ??
@@ -269,8 +387,8 @@ function MachineDetailPage() {
   const machineJson = JSON.stringify(machine, null, 2);
 
   return (
-    <div className="space-y-6 p-4">
-      <section className="space-y-3 rounded-lg border bg-card p-4">
+    <div className="space-y-8 p-4">
+      <section className="space-y-3 border-b pb-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">Current State</h2>
           <span className="text-xs text-muted-foreground">{machine.name}</span>
@@ -302,10 +420,14 @@ function MachineDetailPage() {
               />
             </dd>
           </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">External ID</dt>
-            <dd className="mt-1 truncate font-mono text-xs">{machine.externalId || "(pending)"}</dd>
-          </div>
+          {machine.type !== "fly" && (
+            <div>
+              <dt className="text-xs text-muted-foreground">External ID</dt>
+              <dd className="mt-1 truncate font-mono text-xs">
+                {machine.externalId || "(pending)"}
+              </dd>
+            </div>
+          )}
           <div>
             <dt className="text-xs text-muted-foreground">Created</dt>
             <dd className="mt-1 text-xs" title={new Date(machine.createdAt).toLocaleString()}>
@@ -327,51 +449,9 @@ function MachineDetailPage() {
         )}
       </section>
 
-      <section className="space-y-3 rounded-lg border bg-card p-4">
-        <h2 className="text-sm font-medium">External Links</h2>
+      <ProviderDetailsCard details={providerDetails} onCopy={copyToClipboard} />
 
-        {!machine.externalId && (
-          <p className="text-xs text-muted-foreground">External identifier not assigned yet.</p>
-        )}
-
-        {externalLinks.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {externalLinks.map((link) => (
-              <Button key={link.url} variant="outline" size="sm" asChild>
-                <a href={link.url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="h-4 w-4" />
-                  {link.label}
-                </a>
-              </Button>
-            ))}
-          </div>
-        )}
-
-        {externalRefs.length > 0 && (
-          <div className="space-y-2">
-            {externalRefs.map((ref) => (
-              <div key={`${ref.label}-${ref.value}`} className="rounded-md border p-2">
-                <div className="text-[11px] text-muted-foreground">{ref.label}</div>
-                <div className="mt-1 flex items-start justify-between gap-2">
-                  <code className="min-w-0 flex-1 break-all text-xs">{ref.value}</code>
-                  <Button variant="ghost" size="sm" onClick={() => copyToClipboard(ref.value)}>
-                    <Copy className="h-3.5 w-3.5" />
-                    Copy
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {externalLinks.length === 0 && externalRefs.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            No external links available for this machine yet.
-          </p>
-        )}
-      </section>
-
-      <section className="space-y-4 rounded-lg border bg-card p-4">
+      <section className="space-y-4 border-b pb-6">
         <h2 className="text-sm font-medium">Machine Tools</h2>
 
         <div className="flex flex-wrap gap-2">
@@ -410,10 +490,12 @@ function MachineDetailPage() {
             <p className="text-xs text-muted-foreground">No services available yet.</p>
           ) : (
             <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-              {services.flatMap((service) =>
-                service.options.map((option, index) => (
+              {services.map((service) => {
+                const option = service.options[0];
+                if (!option) return null;
+                return (
                   <a
-                    key={`${service.id}-${index}-${option.url}`}
+                    key={`${service.id}-${option.url}`}
                     href={option.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -421,16 +503,12 @@ function MachineDetailPage() {
                   >
                     <span>{service.name}</span>
                     <span className="text-xs text-muted-foreground"> :{service.port}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {" "}
-                      ({getServiceAccessLabel(option)})
-                    </span>
                   </a>
-                )),
-              )}
+                );
+              })}
               {daemonBaseUrl && (
                 <a
-                  href={`${daemonBaseUrl}/terminal`}
+                  href={buildProjectIngressLink({ baseUrl: daemonBaseUrl, path: "/terminal" })}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
@@ -466,7 +544,7 @@ function MachineDetailPage() {
         </div>
       </section>
 
-      <section className="space-y-3 rounded-lg border bg-card p-4">
+      <section className="space-y-3 border-b pb-6">
         <h2 className="text-sm font-medium">Agents</h2>
 
         {agentsLoading && (
@@ -566,7 +644,7 @@ function MachineDetailPage() {
         )}
       </section>
 
-      <section className="space-y-3 rounded-lg border bg-card p-4">
+      <section className="space-y-3">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-medium">Raw Machine Record</h2>
           <Button variant="outline" size="sm" onClick={() => copyToClipboard(machineJson)}>

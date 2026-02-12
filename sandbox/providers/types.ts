@@ -5,6 +5,9 @@ export type SandboxFetcher = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+const SANDBOX_INGRESS_PORT = 8080;
+const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
+
 /**
  * Provider types supported by the sandbox system.
  */
@@ -49,6 +52,8 @@ export interface SnapshotInfo {
  * Options for creating a new sandbox.
  */
 export interface CreateSandboxOptions {
+  /** Canonical, provider-agnostic external machine identifier. */
+  externalId: string;
   /** Unique identifier for the sandbox (used for naming) */
   id?: string;
   /** Human-readable name for the sandbox */
@@ -75,14 +80,57 @@ export abstract class Sandbox {
 
   /**
    * Get a fetcher for a specific port.
-   * Resolves relative paths against the base URL; absolute URLs pass through.
+   * All traffic enters the sandbox through the ingress proxy on port 8080.
+   * The requested target port is conveyed via X-Iterate-Proxy-Target-Host.
    */
   async getFetcher(opts: { port: number }): Promise<SandboxFetcher> {
-    const baseUrl = await this.getBaseUrl(opts);
+    const ingressBaseUrl = await this.getBaseUrl({ port: SANDBOX_INGRESS_PORT });
     return (input: string | Request | URL, init?: RequestInit) => {
-      const url =
-        typeof input === "string" && !/^https?:\/\//.test(input) ? `${baseUrl}${input}` : input;
-      return fetch(url, init);
+      const pathWithQuery = extractPathWithQuery(input);
+      const targetUrl = new URL(pathWithQuery, ingressBaseUrl).toString();
+
+      if (input instanceof Request) {
+        // Preserve request upgrade semantics (WebSocket in particular) by
+        // forwarding a Request object instead of rebuilding from URL + init.
+        const upstreamRequest = new Request(targetUrl, input);
+        const headers = new Headers(upstreamRequest.headers);
+        if (init?.headers) {
+          new Headers(init.headers).forEach((value, key) => {
+            headers.set(key, value);
+          });
+        }
+        if (!headers.has(TARGET_HOST_HEADER)) {
+          headers.set(TARGET_HOST_HEADER, `localhost:${opts.port}`);
+        }
+        headers.forEach((value, key) => {
+          upstreamRequest.headers.set(key, value);
+        });
+        return fetch(upstreamRequest);
+      }
+
+      const headers = new Headers();
+      if (init?.headers) {
+        new Headers(init.headers).forEach((value, key) => {
+          headers.set(key, value);
+        });
+      }
+      if (!headers.has(TARGET_HOST_HEADER)) {
+        headers.set(TARGET_HOST_HEADER, `localhost:${opts.port}`);
+      }
+
+      const requestInit: RequestInit = {
+        ...init,
+        headers,
+      };
+
+      const requestInitWithDuplex = requestInit as RequestInit & { duplex?: "half" };
+      const hasBody =
+        requestInitWithDuplex.body !== undefined && requestInitWithDuplex.body !== null;
+      if (hasBody && requestInitWithDuplex.duplex === undefined) {
+        requestInitWithDuplex.duplex = "half";
+      }
+
+      return fetch(targetUrl, requestInitWithDuplex);
     };
   }
 
@@ -97,6 +145,25 @@ export abstract class Sandbox {
   abstract delete(): Promise<void>;
   abstract exec(cmd: string[]): Promise<string>;
   abstract getState(): Promise<ProviderState>;
+}
+
+function extractPathWithQuery(input: string | Request | URL): string {
+  if (input instanceof Request) {
+    const url = new URL(input.url);
+    return `${url.pathname}${url.search}`;
+  }
+
+  if (input instanceof URL) {
+    return `${input.pathname}${input.search}`;
+  }
+
+  if (/^https?:\/\//.test(input)) {
+    const url = new URL(input);
+    return `${url.pathname}${url.search}`;
+  }
+
+  const normalized = input.startsWith("/") ? input : `/${input}`;
+  return normalized;
 }
 
 /**

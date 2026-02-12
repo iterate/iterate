@@ -403,19 +403,23 @@ export const agentTrpcRouter = createTRPCRouter({
           });
         }
 
-        const { route: routePath, sessionId } = (await createResponse.json()) as {
+        const created = (await createResponse.json()) as {
           route: string;
-          sessionId?: string;
+          metadata?: {
+            agentHarness?: unknown;
+            opencodeSessionId?: unknown;
+          } | null;
         };
-
+        const routePath = created.route;
         const routeMetadata =
-          typeof sessionId === "string"
+          created.metadata?.agentHarness === "opencode" &&
+          typeof created.metadata?.opencodeSessionId === "string" &&
+          created.metadata.opencodeSessionId.length > 0
             ? ({
-                harness: routePath.startsWith("/opencode/") ? "opencode" : "unknown",
-                harnessHandle: sessionId,
-                sessionId,
+                agentHarness: "opencode",
+                opencodeSessionId: created.metadata.opencodeSessionId,
               } satisfies Record<string, unknown>)
-            : undefined;
+            : null;
 
         const newRoute = db
           .update(schema.agentRoutes)

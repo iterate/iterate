@@ -15,6 +15,23 @@ Keep sandbox details out of this file to avoid drift.
 
 ---
 
+## Project ingress env vars
+
+These vars control machine service ingress hostnames:
+
+| Variable                               | Purpose                                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `PROJECT_INGRESS_PROXY_CANONICAL_HOST` | Canonical base host used to build service links: `<port>__<machine_id>.<canonical-host>` |
+| `PROJECT_INGRESS_PROXY_HOST_MATCHERS`  | Comma-separated glob patterns for incoming host matching in OS ingress routing           |
+| `OS_WORKER_ROUTES`                     | Comma-separated Cloudflare route host patterns mounted to the `os` worker                |
+| `DEV_TUNNEL`                           | Local tunnel subdomain input; use with Doppler expansion for canonical host              |
+
+Local dev default example:
+
+`PROJECT_INGRESS_PROXY_CANONICAL_HOST=${DEV_TUNNEL}.dev.iterate.com`
+
+---
+
 ## Analytics (PostHog)
 
 OS uses PostHog for product analytics, session replay, and group analytics with EU data residency. **PostHog is optional** - if no key is configured, the app works normally without analytics.

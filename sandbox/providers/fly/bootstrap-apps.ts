@@ -3,10 +3,10 @@ import { parseArgs } from "node:util";
 import { z } from "zod/v4";
 
 const FLY_API_BASE = "https://api.machines.dev";
-const APP_BY_DOPPLER_CONFIG = {
-  dev: "iterate-dev",
-  stg: "iterate-stg",
-  prd: "iterate-prd",
+const PREFIX_BY_DOPPLER_CONFIG = {
+  dev: "dev",
+  stg: "stg",
+  prd: "prd",
 } as const;
 const SHARED_IMAGE_REGISTRY_APP = "iterate-sandbox";
 
@@ -47,12 +47,12 @@ async function flyApi(params: {
   throw new Error(`${method} ${path} failed (${response.status}): ${text}`);
 }
 
-function updateDopplerSecrets(params: { project: string; config: string; appName: string }): void {
-  const { project, config, appName } = params;
+function updateDopplerSecrets(params: { project: string; config: string; prefix: string }): void {
+  const { project, config, prefix } = params;
   execSync(
     [
       "doppler secrets set",
-      `FLY_APP_NAME_PREFIX=${appName}`,
+      `SANDBOX_NAME_PREFIX=${prefix}`,
       `SANDBOX_FLY_REGISTRY_APP=${SHARED_IMAGE_REGISTRY_APP}`,
       "--project",
       project,
@@ -89,27 +89,15 @@ async function main(): Promise<void> {
   });
   console.log(`ensured shared fly image registry app '${SHARED_IMAGE_REGISTRY_APP}'`);
 
-  for (const [config, appName] of Object.entries(APP_BY_DOPPLER_CONFIG)) {
-    await flyApi({
-      token,
-      method: "POST",
-      path: "/v1/apps",
-      body: {
-        app_name: appName,
-        org_slug: env.FLY_ORG,
-        ...(env.FLY_NETWORK ? { network: env.FLY_NETWORK } : {}),
-      },
-    });
-    console.log(`ensured fly app '${appName}'`);
-
+  for (const [config, prefix] of Object.entries(PREFIX_BY_DOPPLER_CONFIG)) {
     if (!values["no-update-doppler"]) {
       updateDopplerSecrets({
         project: env.DOPPLER_PROJECT,
         config,
-        appName,
+        prefix,
       });
       console.log(
-        `set Doppler ${env.DOPPLER_PROJECT}/${config}: FLY_APP_NAME_PREFIX=${appName}, SANDBOX_FLY_REGISTRY_APP=${SHARED_IMAGE_REGISTRY_APP}`,
+        `set Doppler ${env.DOPPLER_PROJECT}/${config}: SANDBOX_NAME_PREFIX=${prefix}, SANDBOX_FLY_REGISTRY_APP=${SHARED_IMAGE_REGISTRY_APP}`,
       );
     }
   }

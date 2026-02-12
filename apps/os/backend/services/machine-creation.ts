@@ -1,12 +1,14 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import { buildCanonicalMachineExternalId } from "@iterate-com/sandbox/providers/naming";
 import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { createConsumerClient, type DBLike } from "../outbox/pgmq-lib.ts";
 import { queuer } from "../outbox/outbox-queuer.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
+import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { logger } from "../tag-logger.ts";
 
 /**
@@ -150,6 +152,11 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     params;
 
   const machineId = typeid("mach").toString();
+  const machineExternalId = buildCanonicalMachineExternalId({
+    prefix: env.SANDBOX_NAME_PREFIX,
+    projectSlug,
+    machineId,
+  });
 
   const projectRecord = await db.query.project.findFirst({
     where: eq(schema.project.id, projectId),
@@ -159,6 +166,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     throw new Error(`Project not found: ${projectId}`);
   }
   const type = projectRecord.sandboxProvider;
+  const initialMachineMetadata = stripMachineStateMetadata(metadata ?? {});
 
   // Get or create the project-level access token
   const { apiKey } = await getOrCreateProjectMachineToken(db, projectId);
@@ -190,8 +198,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         type,
         projectId,
         state: "starting",
-        metadata: metadata ?? {},
-        externalId: "",
+        metadata: initialMachineMetadata,
+        externalId: machineExternalId,
       })
       .returning();
   });
@@ -204,17 +212,26 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       const runtime = await createMachineStub({
         type,
         env,
-        externalId: "",
-        metadata: metadata ?? {},
+        externalId: machineExternalId,
+        metadata: initialMachineMetadata,
       });
-      const runtimeResult = await runtime.create({ machineId, name, envVars: fullEnvVars });
+      const runtimeResult = await runtime.create({
+        machineId,
+        externalId: machineExternalId,
+        name,
+        envVars: fullEnvVars,
+      });
 
       // Read current metadata — daemon status may have changed while provisioning.
       const latestMachine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
       });
       const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
-      const latestMachineMetadata = { ...latestMetadata, ...(runtimeResult.metadata ?? {}) };
+      const sanitizedLatestMetadata = stripMachineStateMetadata(latestMetadata);
+      const latestMachineMetadata = {
+        ...sanitizedLatestMetadata,
+        ...(runtimeResult.metadata ?? {}),
+      };
       const daemonStatus = latestMetadata.daemonStatus;
       const shouldEnqueueDeferredReadiness =
         latestMachine?.state === "starting" &&
@@ -232,7 +249,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
           await tx
             .update(schema.machine)
             .set({
-              externalId: runtimeResult.externalId,
               metadata: verifyingMetadata,
             })
             .where(eq(schema.machine.id, machineId));
@@ -249,7 +265,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         await db
           .update(schema.machine)
           .set({
-            externalId: runtimeResult.externalId,
             metadata: latestMachineMetadata,
           })
           .where(eq(schema.machine.id, machineId));
@@ -263,12 +278,13 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         where: eq(schema.machine.id, machineId),
       });
       const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
+      const sanitizedCurrentMetadata = stripMachineStateMetadata(currentMetadata);
       const errorMessage = err instanceof Error ? err.message : String(err);
       await db
         .update(schema.machine)
         .set({
           metadata: {
-            ...currentMetadata,
+            ...sanitizedCurrentMetadata,
             provisioningError: errorMessage,
             daemonStatus: "error",
             daemonStatusMessage: `Provisioning failed: ${errorMessage}`,

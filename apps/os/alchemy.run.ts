@@ -8,7 +8,6 @@ import {
   TanStackStart,
   Tunnel,
   WorkerLoader,
-  Worker,
   Self,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
@@ -21,7 +20,10 @@ import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
-import type { ProjectIngressProxy } from "./proxy/worker.ts";
+import {
+  isCanonicalIngressHostCoveredByMatchers,
+  normalizeProjectIngressCanonicalHost,
+} from "./backend/utils/project-ingress-url.ts";
 import { workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
@@ -57,17 +59,132 @@ const isPreview =
   app.stage.startsWith("dev-") ||
   app.stage.startsWith("local-");
 
+const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
+const ITERATE_ZONE_NAME = "iterate.com";
+const PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS = ["*.p.os.iterate.com"];
+const PROD_OS_WORKER_EXTRA_ROUTES = ["*.p.os.iterate.com"];
+
 /**
- * DEV_TUNNEL: "0"/"false"/empty = disabled, "1"/"true" = auto, other = custom subdomain
- * Auto mode uses stage (e.g., dev-jonas-os.dev.iterate.com)
+ * DEV_TUNNEL:
+ * - disabled: "", "0", "false", "undefined"
+ * - otherwise: custom subdomain, with optional "*." and optional ".dev.iterate.com" suffix
  */
 function getDevTunnelConfig() {
-  const devTunnel = process.env.DEV_TUNNEL;
-  if (!devTunnel || devTunnel === "0" || devTunnel === "false") return null;
+  const raw = process.env.DEV_TUNNEL?.trim() ?? "";
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "0" || lower === "false" || lower === "undefined") return null;
+  if (lower === "1" || lower === "true") {
+    throw new Error(
+      'DEV_TUNNEL auto mode is disabled. Set an explicit subdomain, e.g. DEV_TUNNEL="dev-$ITERATE_USER-os".',
+    );
+  }
 
-  const subdomain = devTunnel === "1" || devTunnel === "true" ? `${app.stage}-os` : devTunnel;
+  const subdomain = raw.replace(/^\*\./, "").replace(/\.dev\.iterate\.com$/i, "");
 
-  return { hostname: `${subdomain}.dev.iterate.com`, subdomain };
+  if (!/^[a-z0-9-]+$/i.test(subdomain)) {
+    throw new Error(
+      `Invalid DEV_TUNNEL value "${subdomain}". Use letters, numbers, and hyphens only.`,
+    );
+  }
+
+  const hostname = `${subdomain}.dev.iterate.com`;
+  const wildcardHostname = `*.${subdomain}.dev.iterate.com`;
+
+  return { hostname, wildcardHostname, subdomain };
+}
+
+async function ensureDevTunnelWildcardDns(
+  config: ReturnType<typeof getDevTunnelConfig>,
+  tunnelId: string,
+) {
+  if (!config) return;
+
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!token)
+    throw new Error("CLOUDFLARE_API_TOKEN is required to manage dev tunnel wildcard DNS records");
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  const zoneResponse = await fetch(
+    `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+    { headers },
+  );
+  const zonePayload = (await zoneResponse.json()) as {
+    result?: Array<{ id?: string }>;
+    errors?: unknown;
+  };
+  const zoneId = zonePayload?.result?.[0]?.id;
+  if (!zoneResponse.ok || !zoneId) {
+    throw new Error(
+      `Cloudflare zone lookup failed: ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
+    );
+  }
+
+  const target = `${tunnelId}.cfargotunnel.com`;
+  const edgeCertificatesUrl =
+    "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.com/ssl-tls/edge-certificates";
+  const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
+
+  async function upsertWildcardDnsRecord(name: string) {
+    const findResponse = await fetch(
+      `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(name)}&per_page=1`,
+      { headers },
+    );
+    const findPayload = (await findResponse.json()) as {
+      result?: Array<{ id?: string }>;
+      errors?: unknown;
+    };
+    if (!findResponse.ok) {
+      throw new Error(
+        `Cloudflare wildcard lookup failed: ${JSON.stringify(findPayload?.errors ?? findPayload)}`,
+      );
+    }
+    const existing = findPayload?.result?.[0];
+    const body = JSON.stringify({
+      type: "CNAME",
+      name,
+      content: target,
+      proxied: true,
+      ttl: 1,
+      comment,
+    });
+
+    if (existing) {
+      const updateResponse = await fetch(
+        `${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records/${existing.id}`,
+        {
+          method: "PUT",
+          headers,
+          body,
+        },
+      );
+      if (!updateResponse.ok) {
+        throw new Error(`Cloudflare wildcard update failed: ${await updateResponse.text()}`);
+      }
+      console.log(`Updated wildcard dev tunnel DNS: ${name} -> ${target}`);
+      return;
+    }
+    const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    if (!createResponse.ok) {
+      throw new Error(`Cloudflare wildcard create failed: ${await createResponse.text()}`);
+    }
+    console.log(`Created wildcard dev tunnel DNS: ${name} -> ${target}`);
+  }
+
+  // Alchemy Tunnel auto-manages non-wildcard ingress hostnames.
+  // It intentionally skips wildcard hostnames, so we upsert that record here.
+  await upsertWildcardDnsRecord(config.wildcardHostname);
+  console.log(
+    `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${config.wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
+  );
+  // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
+  // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
 }
 
 function parseComposePublishedPort(
@@ -150,16 +267,27 @@ async function createDevTunnel(vitePort: number) {
   const config = getDevTunnelConfig();
   if (!config) return null;
 
-  console.log(`Creating dev tunnel: ${config.hostname} -> localhost:${vitePort}`);
+  console.log(
+    `Creating dev tunnel (${config.subdomain}): ${config.hostname}, ${config.wildcardHostname} -> localhost:${vitePort}`,
+  );
 
   const tunnel = await Tunnel(`dev-tunnel-${config.subdomain}`, {
     name: config.subdomain,
     adopt: true, // Don't fail if tunnel already exists from previous session
+    delete: false, // Never auto-delete dev tunnels; cleanup should be explicit/manual.
     ingress: [
       { hostname: config.hostname, service: `http://localhost:${vitePort}` },
+      { hostname: config.wildcardHostname, service: `http://localhost:${vitePort}` },
       { service: "http_status:404" },
     ],
   });
+
+  try {
+    await ensureDevTunnelWildcardDns(config, tunnel.tunnelId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Could not configure wildcard dev tunnel DNS for ${config.hostname}: ${message}`);
+  }
 
   return { tunnel, config, vitePort };
 }
@@ -275,13 +403,13 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
   FLY_DEFAULT_REGION: Optional,
   FLY_DEFAULT_IMAGE: Optional,
   FLY_DEFAULT_CPUS: Optional,
   FLY_DEFAULT_MEMORY_MB: Optional,
-  FLY_APP_NAME_PREFIX: Optional,
   FLY_NETWORK: Optional,
   FLY_BASE_DOMAIN: Optional,
   GOOGLE_CLIENT_ID: Required,
@@ -307,6 +435,7 @@ const Env = z.object({
   POSTHOG_PUBLIC_KEY: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
+  PROJECT_INGRESS_PROXY_CANONICAL_HOST: Required,
   VITE_APP_STAGE: Required,
   APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
@@ -512,6 +641,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     DOCKER_HOST_GIT_COMMON_DIR: "",
     DOCKER_HOST_GIT_COMMIT: "",
     DOCKER_HOST_GIT_BRANCH: "",
+    LOCAL_DOCKER_NEON_PROXY_PORT: "",
+    DOCKER_HOST_OS_PORT: "",
     /** @deprecated use DOCKER_DEFAULT_IMAGE */
     LOCAL_DOCKER_IMAGE_NAME: "",
     LOCAL_DOCKER_COMPOSE_PROJECT_NAME: "",
@@ -529,6 +660,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       process.env.DOCKER_HOST_GIT_COMMIT ?? dockerEnvVars.DOCKER_HOST_GIT_COMMIT ?? "";
     const gitBranch =
       process.env.DOCKER_HOST_GIT_BRANCH ?? dockerEnvVars.DOCKER_HOST_GIT_BRANCH ?? "";
+    const localDockerNeonProxyPort = process.env.LOCAL_DOCKER_NEON_PROXY_PORT ?? "";
     // No implicit fallback here: if DOCKER_DEFAULT_IMAGE isn't set, we want it to be obvious
     // (the Docker provider is strict and will throw when attempting to create a machine).
     const imageName = process.env.DOCKER_DEFAULT_IMAGE ?? "";
@@ -543,6 +675,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       DOCKER_HOST_GIT_COMMON_DIR: commonDir,
       DOCKER_HOST_GIT_COMMIT: gitCommit,
       DOCKER_HOST_GIT_BRANCH: gitBranch,
+      LOCAL_DOCKER_NEON_PROXY_PORT: localDockerNeonProxyPort,
+      DOCKER_HOST_OS_PORT: process.env.DOCKER_HOST_OS_PORT ?? "",
       LOCAL_DOCKER_IMAGE_NAME: imageName,
       LOCAL_DOCKER_COMPOSE_PROJECT_NAME:
         process.env.LOCAL_DOCKER_COMPOSE_PROJECT_NAME ?? composeProjectName,
@@ -564,25 +698,57 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     sqlite: true,
   });
 
-  const PROXY_ROOT_DOMAIN = isDevelopment ? "local.iterate.town" : "iterate.town";
+  const parseCsv = (value: string | undefined): string[] =>
+    (value ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
 
-  const PROJECT_INGRESS_PROXY = DurableObjectNamespace<ProjectIngressProxy>(
-    "project-ingress-proxy",
-    {
-      className: "ProjectIngressProxy",
-      sqlite: true,
-    },
+  const projectIngressProxyHostMatchers = parseCsv(process.env.PROJECT_INGRESS_PROXY_HOST_MATCHERS);
+  if (projectIngressProxyHostMatchers.length === 0) {
+    throw new Error(
+      "PROJECT_INGRESS_PROXY_HOST_MATCHERS is required. Set it in Doppler for dev/stg/prd.",
+    );
+  }
+
+  const rawProjectIngressCanonicalHost = process.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST;
+  const projectIngressCanonicalHost = normalizeProjectIngressCanonicalHost(
+    rawProjectIngressCanonicalHost ?? "",
   );
+  if (!projectIngressCanonicalHost) {
+    throw new Error(
+      "PROJECT_INGRESS_PROXY_CANONICAL_HOST is required and must be a hostname (no wildcard, scheme, port, or path).",
+    );
+  }
 
-  const proxyWorker = await Worker("proxy", {
-    name: isProduction ? "os-proxy" : isStaging ? "os-proxy-staging" : undefined,
-    entrypoint: "./proxy/worker.ts",
-    bindings: {
-      PROJECT_INGRESS_PROXY,
-      PROXY_ROOT_DOMAIN,
-    },
-    adopt: true,
-  });
+  const effectiveProjectIngressProxyHostMatchers = [
+    ...new Set([
+      ...projectIngressProxyHostMatchers,
+      ...(isProduction ? PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS : []),
+    ]),
+  ];
+  if (
+    !isCanonicalIngressHostCoveredByMatchers({
+      canonicalHost: projectIngressCanonicalHost,
+      hostMatchers: effectiveProjectIngressProxyHostMatchers,
+    })
+  ) {
+    throw new Error(
+      `PROJECT_INGRESS_PROXY_CANONICAL_HOST='${projectIngressCanonicalHost}' is not covered by PROJECT_INGRESS_PROXY_HOST_MATCHERS.`,
+    );
+  }
+
+  const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
+  if (osWorkerRoutes.length === 0) {
+    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
+  }
+  const routeHosts = [
+    ...new Set([
+      ...osWorkerRoutes,
+      ...domains,
+      ...(isProduction ? PROD_OS_WORKER_EXTRA_ROUTES : []),
+    ]),
+  ];
 
   const worker = await TanStackStart("os", {
     bindings: {
@@ -593,9 +759,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
-      PROXY_ROOT_DOMAIN,
-      PROXY_WORKER: proxyWorker,
-      LOCAL_DOCKER_NEON_PROXY_PORT: process.env.LOCAL_DOCKER_NEON_PROXY_PORT || "",
+      PROJECT_INGRESS_PROXY_HOST_MATCHERS: effectiveProjectIngressProxyHostMatchers.join(","),
+      PROJECT_INGRESS_PROXY_CANONICAL_HOST: projectIngressCanonicalHost,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
@@ -612,18 +777,10 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       `,
     },
     routes: [
-      ...domains.map((domain) => ({
-        pattern: `${domain}/*`,
+      ...routeHosts.map((hostPattern) => ({
+        pattern: `${hostPattern}/*`,
         adopt: true,
       })),
-      {
-        pattern: `${PROXY_ROOT_DOMAIN}/*`,
-        adopt: true,
-      },
-      {
-        pattern: `*.${PROXY_ROOT_DOMAIN}/*`,
-        adopt: true,
-      },
     ],
     crons: Object.values(workerCrons),
     wrangler: {
@@ -638,7 +795,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     },
   });
 
-  return { worker, proxyWorker };
+  return { worker };
 }
 
 if (process.env.GITHUB_OUTPUT) {
@@ -674,7 +831,7 @@ const dbConfig = await setupDatabase();
 const envSecrets = await setupEnvironmentVariables();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)
-export const { worker, proxyWorker } = await deployWorker(dbConfig, envSecrets);
+export const { worker } = await deployWorker(dbConfig, envSecrets);
 
 // Create tunnel resource BEFORE finalize so it's properly tracked
 // (fixes bug where tunnel was created after finalize, causing orphan deletion)

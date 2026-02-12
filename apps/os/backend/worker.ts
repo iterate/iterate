@@ -34,6 +34,21 @@ import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
+import {
+  buildControlPlaneProjectIngressProxyLoginUrl,
+  buildCanonicalProjectIngressProxyHostname,
+  getProjectIngressRequestHostname,
+  getProjectIngressProxyHostMatchers,
+  handleProjectIngressRequest,
+  normalizeProjectIngressProxyRedirectPath,
+  PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
+  resolveIngressHostname,
+  shouldHandleProjectIngressHostname,
+} from "./services/project-ingress-proxy.ts";
+import {
+  getIngressSchemeFromPublicUrl,
+  normalizeProjectIngressCanonicalHost,
+} from "./utils/project-ingress-url.ts";
 
 export type { Variables };
 
@@ -85,6 +100,68 @@ app.use("*", async (c, next) => {
   const trpcCaller = appRouter.createCaller(createContext(c));
   c.set("trpcCaller", trpcCaller);
   return next();
+});
+
+app.use("*", async (c, next) => {
+  const requestDomain = getProjectIngressRequestHostname(c.req.raw);
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
+    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+    if (ingressResponse) return ingressResponse;
+  }
+  return next();
+});
+
+app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
+  const requestedProjectIngressProxyHost = c.req.query("projectIngressProxyHost");
+  if (!requestedProjectIngressProxyHost) {
+    return c.json({ error: "Missing projectIngressProxyHost" }, 400);
+  }
+  const normalizedRequestedProjectIngressProxyHost = requestedProjectIngressProxyHost
+    .trim()
+    .toLowerCase();
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (
+    !shouldHandleProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, hostMatchers)
+  ) {
+    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+  }
+  const parsedIngressHost = resolveIngressHostname(normalizedRequestedProjectIngressProxyHost);
+  if (!parsedIngressHost.ok) {
+    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+  }
+  const canonicalProjectIngressProxyBaseHost = normalizeProjectIngressCanonicalHost(
+    c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
+  );
+  if (!canonicalProjectIngressProxyBaseHost) {
+    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
+  }
+  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
+    target: parsedIngressHost.target,
+    canonicalProjectIngressProxyBaseHost,
+  });
+  const redirectPath = normalizeProjectIngressProxyRedirectPath(c.req.query("redirectPath"));
+
+  if (!c.var.session) {
+    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
+      controlPlanePublicUrl: c.env.VITE_PUBLIC_URL,
+      projectIngressProxyHost: canonicalProjectIngressProxyHost,
+      redirectPath,
+    });
+    return c.redirect(controlPlaneLoginUrl.toString(), 302);
+  }
+
+  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
+    headers: c.req.raw.headers,
+  });
+  const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
+  const exchangeUrl = new URL(
+    `${projectIngressProxyScheme}://${canonicalProjectIngressProxyHost}/api/auth/project-ingress-proxy/one-time-token/exchange`,
+  );
+  exchangeUrl.searchParams.set("token", oneTimeToken.token);
+  exchangeUrl.searchParams.set("redirectPath", redirectPath);
+
+  return c.redirect(exchangeUrl.toString(), 302);
 });
 
 app.onError((err, c) => {
@@ -258,18 +335,6 @@ export default class extends WorkerEntrypoint {
   declare env: CloudflareEnv;
 
   fetch(request: Request) {
-    const url = new URL(request.url);
-    const requestDomain = url.hostname;
-
-    // on root domain, redirect to the first allowed domain, which will be the os domain
-    if (requestDomain === this.env.PROXY_ROOT_DOMAIN)
-      return Response.redirect(`https://${this.env.ALLOWED_DOMAINS.split(",")[0]}${url.pathname}`);
-
-    // Check if the request is for the proxy worker
-    const [_, ...rest] = requestDomain.split(".");
-    if (rest.join(".") === this.env.PROXY_ROOT_DOMAIN) return this.env.PROXY_WORKER.fetch(request);
-
-    // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
   }
 

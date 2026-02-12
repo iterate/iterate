@@ -1,4 +1,4 @@
-import { eq, and, isNull, or } from "drizzle-orm";
+import { eq, isNull, or } from "drizzle-orm";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -124,39 +124,40 @@ export async function getUnifiedEnvVars(
     throw new Error("encryptionSecret is required when dangerousRawSecrets is enabled");
   }
 
-  // Fetch all data in parallel
-  const [connections, projectEnvVars, secrets] = await Promise.all([
-    // Project connections
-    db.query.projectConnection.findMany({
-      where: eq(schema.projectConnection.projectId, projectId),
-    }),
-    // User-defined env vars (project-level only, no machine-specific)
-    db.query.projectEnvVar.findMany({
-      where: and(
-        eq(schema.projectEnvVar.projectId, projectId),
-        isNull(schema.projectEnvVar.machineId),
-      ),
-      orderBy: (v, { asc }) => [asc(v.createdAt)],
-    }),
-    // Get all secrets for this project OR global secrets
-    // Include encryptedValue ONLY when dangerousRawSecrets is enabled
-    // Include user relation for user-scoped secrets (e.g., Google OAuth)
-    db.query.secret.findMany({
-      columns: {
-        key: true,
-        description: true,
-        egressProxyRule: true,
-        projectId: true,
-        userId: true,
-        // DANGEROUS: Only include encryptedValue when raw secrets mode is enabled
-        encryptedValue: dangerousRawSecrets ?? false,
+  // Fetch project-scoped rows together (single relation query), then secrets.
+  const projectData = await db.query.project.findFirst({
+    where: eq(schema.project.id, projectId),
+    columns: { id: true },
+    with: {
+      connections: true,
+      envVars: {
+        where: (v, { isNull: whereIsNull }) => whereIsNull(v.machineId),
+        orderBy: (v, { asc }) => [asc(v.createdAt)],
       },
-      where: or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
-      with: {
-        user: { columns: { email: true } },
-      },
-    }),
-  ]);
+    },
+  });
+
+  const connections = projectData?.connections ?? [];
+  const projectEnvVars = projectData?.envVars ?? [];
+
+  // Get all secrets for this project OR global secrets.
+  // Include encryptedValue ONLY when dangerousRawSecrets is enabled.
+  // Include user relation for user-scoped secrets (e.g., Google OAuth).
+  const secrets = await db.query.secret.findMany({
+    columns: {
+      key: true,
+      description: true,
+      egressProxyRule: true,
+      projectId: true,
+      userId: true,
+      // DANGEROUS: Only include encryptedValue when raw secrets mode is enabled
+      encryptedValue: dangerousRawSecrets ?? false,
+    },
+    where: or(eq(schema.secret.projectId, projectId), isNull(schema.secret.projectId)),
+    with: {
+      user: { columns: { email: true } },
+    },
+  });
 
   // Separate secrets by type
   const globalSecrets = secrets.filter((s) => s.projectId === null);

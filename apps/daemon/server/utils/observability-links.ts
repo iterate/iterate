@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 type SessionLinkEnv = {
   osBaseUrl: string;
   organizationSlug: string;
@@ -50,6 +52,18 @@ export function buildOpencodeAttachUrl(params: {
   const directory = params.workingDirectory || env.customerRepoPath;
   const command = `opencode attach 'http://localhost:4096' --session ${params.sessionId} --dir ${directory}`;
   return buildTerminalUrl(command);
+}
+
+export function buildOpencodeWebSessionUrl(params: {
+  sessionId: string;
+  workingDirectory?: string;
+}): string | undefined {
+  const env = getSessionLinkEnv();
+  if (!env) return undefined;
+  const directory = params.workingDirectory || env.customerRepoPath;
+  const encodedDirectory = Buffer.from(directory, "utf8").toString("base64url");
+  const opencodeProxyBase = buildMachineProxyBase(env, 4096);
+  return `${opencodeProxyBase}/${encodedDirectory}/session/${params.sessionId}`;
 }
 
 export function buildLogsSearchUrl(query: string): string | undefined {
