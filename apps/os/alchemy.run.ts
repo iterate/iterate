@@ -162,7 +162,6 @@ async function ensureDevTunnelWildcardDns(
       console.log(`Updated wildcard dev tunnel DNS: ${name} -> ${target}`);
       return;
     }
-
     const createResponse = await fetch(`${CLOUDFLARE_API_BASE}/zones/${zoneId}/dns_records`, {
       method: "POST",
       headers,
@@ -180,7 +179,6 @@ async function ensureDevTunnelWildcardDns(
   console.log(
     `Cloudflare Total SSL should generate a Let's Encrypt wildcard cert for ${config.wildcardHostname} shortly. If it does not appear, check: ${edgeCertificatesUrl}`,
   );
-
   // Total TLS note: once zone-level Total TLS is enabled (`PATCH /zones/{zone_id}/acm/total_tls`),
   // creating this proxied wildcard DNS record triggers wildcard edge cert issuance automatically.
 }
