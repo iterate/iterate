@@ -317,7 +317,9 @@ async function proxyWebSocketWithFetcher(
     }
   });
 
-  return fetcher(targetPath, {
+  const proxyRequest = new Request(new URL(targetPath, request.url), request);
+
+  return fetcher(proxyRequest, {
     method: request.method,
     headers,
   });

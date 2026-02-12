@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getProjectIngressRequestHostname,
   parseProjectIngressProxyHostMatchers,
   resolveIngressHostname,
   shouldHandleProjectIngressHostname,
@@ -57,5 +58,30 @@ describe("project ingress hostname resolution", () => {
       ok: false,
       error: "invalid_project_slug",
     });
+  });
+});
+
+describe("project ingress request hostname", () => {
+  it("prefers host header when request url host is localhost", () => {
+    const request = new Request("http://localhost/api/pty/ws", {
+      headers: {
+        host: "3000__mach_01kh7nrrtkfap865vjbmv559ta.jonas2.dev.iterate.com",
+      },
+    });
+
+    expect(getProjectIngressRequestHostname(request)).toBe(
+      "3000__mach_01kh7nrrtkfap865vjbmv559ta.jonas2.dev.iterate.com",
+    );
+  });
+
+  it("prefers x-forwarded-host over host", () => {
+    const request = new Request("http://localhost/", {
+      headers: {
+        host: "localhost:5173",
+        "x-forwarded-host": "4096__mach_abc.dev.iterate.com",
+      },
+    });
+
+    expect(getProjectIngressRequestHostname(request)).toBe("4096__mach_abc.dev.iterate.com");
   });
 });

@@ -42,6 +42,32 @@ function jsonError(status: number, error: string, details?: Record<string, unkno
   return Response.json(details ? { error, details } : { error }, { status });
 }
 
+function parseHostnameFromHeader(rawHost: string | null): string | null {
+  if (!rawHost) return null;
+  const first = rawHost.split(",")[0]?.trim();
+  if (!first) return null;
+  if (first.startsWith("[")) {
+    const endBracket = first.indexOf("]");
+    if (endBracket === -1) return null;
+    return first.slice(1, endBracket).toLowerCase();
+  }
+  const portSeparator = first.lastIndexOf(":");
+  if (portSeparator !== -1 && first.indexOf(":") === portSeparator) {
+    return first.slice(0, portSeparator).toLowerCase();
+  }
+  return first.toLowerCase();
+}
+
+export function getProjectIngressRequestHostname(request: Request): string {
+  const forwardedHost = parseHostnameFromHeader(request.headers.get("x-forwarded-host"));
+  if (forwardedHost) return forwardedHost;
+
+  const hostHeader = parseHostnameFromHeader(request.headers.get("host"));
+  if (hostHeader) return hostHeader;
+
+  return new URL(request.url).hostname.toLowerCase();
+}
+
 export function parseProjectIngressProxyHostMatchers(raw: string): string[] {
   const values = raw
     .split(",")
@@ -320,7 +346,7 @@ async function proxyWithFetcher(
 ): Promise<Response> {
   const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
   if (isWebSocket) {
-    return fetcher(pathWithQuery, {
+    return fetcher(request, {
       method: request.method,
       headers: filterWebSocketHeaders(request, targetHost),
     });
@@ -354,22 +380,20 @@ export async function handleProjectIngressRequest(
   session: AuthSession,
 ): Promise<Response> {
   const url = new URL(request.url);
+  const requestHostname = getProjectIngressRequestHostname(request);
   const hostMatchers = getProjectIngressProxyHostMatchers(env);
   if (hostMatchers.length === 0) {
     logger.error("[project-ingress] PROJECT_INGRESS_PROXY_HOST_MATCHERS is empty");
-    return jsonError(500, "ingress_not_configured", {
-      hostname: url.hostname,
-      hostMatchers,
-    });
+    return jsonError(500, "ingress_not_configured", { hostname: requestHostname, hostMatchers });
   }
 
-  const matchedHostMatcher = getMatchingProjectIngressHostMatcher(url.hostname, hostMatchers);
+  const matchedHostMatcher = getMatchingProjectIngressHostMatcher(requestHostname, hostMatchers);
   if (!matchedHostMatcher) {
     return jsonError(
       404,
       "not_found",
       buildHostnameParseDetails({
-        hostname: url.hostname,
+        hostname: requestHostname,
         hostMatchers,
         matchedHostMatcher,
       }),
@@ -381,21 +405,21 @@ export async function handleProjectIngressRequest(
       401,
       "unauthorized",
       buildHostnameParseDetails({
-        hostname: url.hostname,
+        hostname: requestHostname,
         hostMatchers,
         matchedHostMatcher,
       }),
     );
   }
 
-  const resolvedHost = resolveIngressHostname(url.hostname);
+  const resolvedHost = resolveIngressHostname(requestHostname);
   if (!resolvedHost.ok) {
     if (resolvedHost.error === "invalid_port") {
       return jsonError(
         400,
         "invalid_port",
         buildHostnameParseDetails({
-          hostname: url.hostname,
+          hostname: requestHostname,
           hostMatchers,
           matchedHostMatcher,
           resolvedHost,
@@ -407,7 +431,7 @@ export async function handleProjectIngressRequest(
         400,
         "invalid_project_slug",
         buildHostnameParseDetails({
-          hostname: url.hostname,
+          hostname: requestHostname,
           hostMatchers,
           matchedHostMatcher,
           resolvedHost,
@@ -418,7 +442,7 @@ export async function handleProjectIngressRequest(
       400,
       "invalid_hostname",
       buildHostnameParseDetails({
-        hostname: url.hostname,
+        hostname: requestHostname,
         hostMatchers,
         matchedHostMatcher,
         resolvedHost,
@@ -427,7 +451,7 @@ export async function handleProjectIngressRequest(
   }
 
   const parseDetails = buildHostnameParseDetails({
-    hostname: url.hostname,
+    hostname: requestHostname,
     hostMatchers,
     matchedHostMatcher,
     resolvedHost,
@@ -496,10 +520,10 @@ export async function handleProjectIngressRequest(
     });
     const fetcher = await runtime.getFetcher(SANDBOX_INGRESS_PORT);
     const pathWithQuery = `${url.pathname}${url.search}`;
-    return await proxyWithFetcher(request, pathWithQuery, fetcher, url.hostname);
+    return await proxyWithFetcher(request, pathWithQuery, fetcher, requestHostname);
   } catch (error) {
     logger.error("[project-ingress] Failed to proxy request", {
-      host: url.hostname,
+      host: requestHostname,
       rootDomain: resolvedHost.rootDomain,
       machineId: machine.id,
       machineType: machine.type,

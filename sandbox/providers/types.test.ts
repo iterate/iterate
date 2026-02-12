@@ -85,4 +85,39 @@ describe("Sandbox.getFetcher", () => {
       expect.any(Object),
     );
   });
+
+  it("forwards Request inputs as Request objects with rewritten url and merged headers", async () => {
+    const sandbox = new TestSandbox();
+    const fetchSpy = vi.fn<typeof fetch>(async () => new Response("ok"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const fetcher = await sandbox.getFetcher({ port: 3000 });
+    await fetcher(
+      new Request("https://origin.invalid/api/pty/ws?ptyId=123", {
+        headers: {
+          Upgrade: "websocket",
+          Connection: "Upgrade",
+          "Sec-WebSocket-Key": "abc",
+          "Sec-WebSocket-Version": "13",
+        },
+      }),
+      {
+        headers: {
+          Origin: "https://origin.invalid",
+        },
+      },
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [requestArg, initArg] = fetchSpy.mock.calls[0] ?? [];
+    expect(requestArg).toBeInstanceOf(Request);
+    expect(initArg).toBeUndefined();
+
+    const request = requestArg as Request;
+    expect(request.url).toBe("http://sandbox.local:8080/api/pty/ws?ptyId=123");
+    expect(request.headers.get("upgrade")).toBe("websocket");
+    expect(request.headers.get("connection")).toBe("Upgrade");
+    expect(request.headers.get("origin")).toBe("https://origin.invalid");
+    expect(request.headers.get("x-iterate-proxy-target-host")).toBe("localhost:3000");
+  });
 });

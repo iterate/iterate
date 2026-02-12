@@ -89,7 +89,26 @@ export abstract class Sandbox {
       const pathWithQuery = extractPathWithQuery(input);
       const targetUrl = new URL(pathWithQuery, ingressBaseUrl).toString();
 
-      const headers = new Headers(input instanceof Request ? input.headers : undefined);
+      if (input instanceof Request) {
+        // Preserve request upgrade semantics (WebSocket in particular) by
+        // forwarding a Request object instead of rebuilding from URL + init.
+        const upstreamRequest = new Request(targetUrl, input);
+        const headers = new Headers(upstreamRequest.headers);
+        if (init?.headers) {
+          new Headers(init.headers).forEach((value, key) => {
+            headers.set(key, value);
+          });
+        }
+        if (!headers.has(TARGET_HOST_HEADER)) {
+          headers.set(TARGET_HOST_HEADER, `localhost:${opts.port}`);
+        }
+        headers.forEach((value, key) => {
+          upstreamRequest.headers.set(key, value);
+        });
+        return fetch(upstreamRequest);
+      }
+
+      const headers = new Headers();
       if (init?.headers) {
         new Headers(init.headers).forEach((value, key) => {
           headers.set(key, value);
@@ -103,11 +122,6 @@ export abstract class Sandbox {
         ...init,
         headers,
       };
-
-      if (input instanceof Request) {
-        if (!init?.method) requestInit.method = input.method;
-        if (init?.body === undefined && input.body !== null) requestInit.body = input.body;
-      }
 
       const requestInitWithDuplex = requestInit as RequestInit & { duplex?: "half" };
       const hasBody =

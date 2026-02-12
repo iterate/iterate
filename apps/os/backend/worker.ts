@@ -35,6 +35,7 @@ import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 import {
+  getProjectIngressRequestHostname,
   getProjectIngressProxyHostMatchers,
   handleProjectIngressRequest,
   shouldHandleProjectIngressHostname,
@@ -93,7 +94,7 @@ app.use("*", async (c, next) => {
 });
 
 app.use("*", async (c, next) => {
-  const requestDomain = new URL(c.req.url).hostname;
+  const requestDomain = getProjectIngressRequestHostname(c.req.raw);
   const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
   if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
     return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
