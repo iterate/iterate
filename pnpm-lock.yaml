@@ -884,6 +884,9 @@ importers:
       partysocket:
         specifier: ^1.1.6
         version: 1.1.6
+      pidnap:
+        specifier: workspace:*
+        version: link:../../packages/pidnap
       postgres:
         specifier: ^3.4.7
         version: 3.4.7

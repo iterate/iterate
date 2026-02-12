@@ -20,9 +20,10 @@ export interface CreateClientOptions {
 export function createClient(
   urlOrOptions?: string | CreateClientOptions,
 ): ContractRouterClient<typeof api> {
+  const processEnv = typeof process === "undefined" ? undefined : process.env;
   const opts = typeof urlOrOptions === "string" ? { url: urlOrOptions } : urlOrOptions;
-  const url = opts?.url ?? process.env.PIDNAP_RPC_URL ?? "http://localhost:9876/rpc";
-  const authToken = process.env.PIDNAP_AUTH_TOKEN;
+  const url = opts?.url ?? processEnv?.PIDNAP_RPC_URL ?? "http://localhost:9876/rpc";
+  const authToken = processEnv?.PIDNAP_AUTH_TOKEN;
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
   const link = new RPCLink({ url, headers, ...(opts?.fetch ? { fetch: opts.fetch } : {}) });
   return createORPCClient(link);

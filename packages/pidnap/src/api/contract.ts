@@ -1,4 +1,4 @@
-import { oc as ocBase } from "@orpc/contract";
+import { eventIterator, oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessState } from "../restarting-process.ts";
@@ -53,6 +53,15 @@ export const WaitForRunningResponseSchema = v.object({
 
 export type WaitForRunningResponse = v.InferOutput<typeof WaitForRunningResponseSchema>;
 
+export const TailLogsEventSchema = v.object({
+  processName: v.string(),
+  seq: v.number(),
+  emittedAt: v.string(),
+  line: v.string(),
+});
+
+export type TailLogsEvent = v.InferOutput<typeof TailLogsEventSchema>;
+
 // API contract
 export const manager = {
   status: oc.output(ManagerStatusSchema),
@@ -92,6 +101,16 @@ export const processes = {
       }),
     )
     .output(WaitForRunningResponseSchema),
+  tailLogs: oc
+    .input(
+      v.object({
+        target: ResourceTarget,
+        lines: v.optional(v.number()), // default 200
+        follow: v.optional(v.boolean()), // default true
+        intervalMs: v.optional(v.number()), // default 1000
+      }),
+    )
+    .output(eventIterator(TailLogsEventSchema)),
 };
 
 // Simple health check response
