@@ -13,6 +13,7 @@ import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
@@ -873,6 +874,9 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
       const activeMachine = project.machines[0];
       const machineName = `ci-${shortSha}`;
       const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
+      const carriedMetadata = stripMachineStateMetadata(
+        (activeMachine.metadata as Record<string, unknown>) ?? {},
+      );
 
       const result = await createMachineForProject({
         db,
@@ -883,7 +887,7 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
         projectSlug: project.slug,
         name: machineName,
         metadata: {
-          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          ...carriedMetadata,
           ...(snapshotName ? { snapshotName } : {}),
         },
       });
@@ -996,6 +1000,9 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
       const activeMachine = project.machines[0];
       const machineName = `refresh-${shortSha}`;
       const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
+      const carriedMetadata = stripMachineStateMetadata(
+        (activeMachine.metadata as Record<string, unknown>) ?? {},
+      );
 
       const result = await createMachineForProject({
         db,
@@ -1006,7 +1013,7 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
         projectSlug: project.slug,
         name: machineName,
         metadata: {
-          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          ...carriedMetadata,
           ...(snapshotName ? { snapshotName } : {}),
           triggeredBy: `commit_comment:${comment.id}`,
           triggeredByUser: comment.user.login,
