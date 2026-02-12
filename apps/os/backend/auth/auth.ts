@@ -1,14 +1,19 @@
 import { betterAuth, APIError } from "better-auth";
+import { createAuthEndpoint } from "better-auth/api";
+import { setSessionCookie } from "better-auth/cookies";
 import { admin, emailOTP } from "better-auth/plugins";
+import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { minimatch } from "minimatch";
+import { z } from "zod/v4";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
+import { normalizeProjectIngressProxyRedirectPath } from "../services/project-ingress-proxy.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -36,8 +41,65 @@ function matchesEmailPattern(email: string, patterns: string[]) {
   return patterns.some((pattern) => minimatch(email, pattern));
 }
 
+function parseHostMatchers(value: string) {
+  return value
+    .split(",")
+    .map((p) => p.trim().toLowerCase())
+    .filter((p) => p.length > 0);
+}
+
+function matchesHostMatcher(hostname: string, patterns: string[]) {
+  return patterns.some((pattern) =>
+    minimatch(hostname, pattern, {
+      nocase: true,
+      dot: true,
+      noext: false,
+      noglobstar: false,
+    }),
+  );
+}
+
+function projectIngressProxyOneTimeTokenExchangePlugin() {
+  return {
+    id: "project-ingress-proxy-one-time-token-exchange",
+    endpoints: {
+      exchangeProjectIngressProxyOneTimeToken: createAuthEndpoint(
+        "/project-ingress-proxy/one-time-token/exchange",
+        {
+          method: "GET",
+          query: z.object({
+            token: z.string().min(1),
+            redirectPath: z.string().optional(),
+          }),
+        },
+        async (ctx) => {
+          const verificationValue = await ctx.context.internalAdapter.findVerificationValue(
+            `one-time-token:${ctx.query.token}`,
+          );
+          if (!verificationValue) {
+            throw new APIError("BAD_REQUEST", { message: "Invalid one-time token" });
+          }
+          await ctx.context.internalAdapter.deleteVerificationValue(verificationValue.id);
+          if (verificationValue.expiresAt < new Date()) {
+            throw new APIError("BAD_REQUEST", { message: "One-time token expired" });
+          }
+          const verifiedSession = await ctx.context.internalAdapter.findSession(
+            verificationValue.value,
+          );
+          if (!verifiedSession) {
+            throw new APIError("BAD_REQUEST", { message: "Session not found for one-time token" });
+          }
+          await setSessionCookie(ctx, verifiedSession);
+          throw ctx.redirect(normalizeProjectIngressProxyRedirectPath(ctx.query.redirectPath));
+        },
+      ),
+    },
+  };
+}
+
 function createAuth(db: DB, envParam: CloudflareEnv) {
   const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
+  const ingressHostMatchers = parseHostMatchers(envParam.PROJECT_INGRESS_PROXY_HOST_MATCHERS);
   const baseHostname = URL.canParse(envParam.VITE_PUBLIC_URL)
     ? new URL(envParam.VITE_PUBLIC_URL).hostname
     : null;
@@ -49,6 +111,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     telemetry: { enabled: false },
     secret: envParam.BETTER_AUTH_SECRET,
     trustedOrigins: (request) => {
+      const trustedOrigins = [envParam.VITE_PUBLIC_URL];
       // In non-prod, allow any localhost/127.0.0.1 origin (any port)
       if (isNonProd) {
         const origin = request?.headers.get("origin");
@@ -56,14 +119,28 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
           try {
             const url = new URL(origin);
             if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-              return [origin];
+              trustedOrigins.push(origin);
+              return [...new Set(trustedOrigins)];
             }
           } catch {
             // Invalid URL, fall through to default
           }
         }
       }
-      return [envParam.VITE_PUBLIC_URL];
+
+      const origin = request?.headers.get("origin");
+      if (origin) {
+        try {
+          const originHost = new URL(origin).hostname.toLowerCase();
+          if (matchesHostMatcher(originHost, ingressHostMatchers)) {
+            trustedOrigins.push(origin);
+          }
+        } catch {
+          // Ignore malformed origin
+        }
+      }
+
+      return [...new Set(trustedOrigins)];
     },
     database: drizzleAdapter(db, {
       provider: "pg",
@@ -113,6 +190,11 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     },
     plugins: [
       admin(),
+      oneTimeToken({
+        disableClientRequest: true,
+        storeToken: "plain",
+      }),
+      projectIngressProxyOneTimeTokenExchangePlugin(),
       ...(envParam.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
         ? [
             emailOTP({
