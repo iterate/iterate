@@ -125,7 +125,6 @@ const removeProcess = os.processes.remove.handler(async ({ input, context }) => 
 });
 
 function resolveProcessNameByTarget(manager: Manager, target: string | number): string {
-  if (typeof target === "string") return target;
   const process = manager.getProcessByTarget(target);
   if (!process) {
     throw new ORPCError("NOT_FOUND", { message: `Process not found: ${target}` });
@@ -208,6 +207,28 @@ function tailFile(filePath: string, lines: number): string | undefined {
     return tailLines.join("\n");
   } catch {
     return undefined;
+  }
+}
+
+function readTailSnapshot(
+  filePath: string,
+  lines: number,
+): { tailLines: string[]; nextOffset: number } {
+  if (!existsSync(filePath)) {
+    return { tailLines: [], nextOffset: 0 };
+  }
+
+  try {
+    const contentBuffer = readFileSync(filePath);
+    const nextOffset = contentBuffer.length;
+    const content = contentBuffer.toString("utf-8");
+    const allLines = splitLogLines(content);
+    return {
+      tailLines: allLines.slice(-lines),
+      nextOffset,
+    };
+  } catch {
+    return { tailLines: [], nextOffset: 0 };
   }
 }
 
@@ -301,25 +322,19 @@ const tailLogs = os.processes.tailLogs.handler(async function* ({ input, context
   const initialLines = Math.max(1, Math.min(input.lines ?? 200, 5000));
   const intervalMs = Math.max(200, input.intervalMs ?? 1000);
   let seq = 0;
-  let offset = 0;
   let pendingPartialLine = "";
 
-  const initialTail = tailFile(logPath, initialLines);
-  if (initialTail) {
-    for (const line of splitLogLines(initialTail)) {
-      const event: TailLogsEvent = {
-        processName,
-        seq,
-        emittedAt: new Date().toISOString(),
-        line,
-      };
-      yield event;
-      seq += 1;
-    }
-  }
-
-  if (existsSync(logPath)) {
-    offset = statSync(logPath).size;
+  const snapshot = readTailSnapshot(logPath, initialLines);
+  let offset = snapshot.nextOffset;
+  for (const line of snapshot.tailLines) {
+    const event: TailLogsEvent = {
+      processName,
+      seq,
+      emittedAt: new Date().toISOString(),
+      line,
+    };
+    yield event;
+    seq += 1;
   }
 
   if (input.follow === false) {
