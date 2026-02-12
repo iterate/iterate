@@ -216,7 +216,7 @@ async function proxyDaytona(request: Request, targetUrl: string, token: string):
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+      responseHeaders.append(key, value);
     }
   });
 
@@ -254,7 +254,6 @@ async function proxyDaytonaWebSocket(
   return fetch(targetUrl, {
     method: request.method,
     headers,
-    body: request.body,
   });
 }
 
@@ -288,7 +287,7 @@ async function proxyWithFetcher(
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {
     if (!EXCLUDE_RESPONSE_HEADERS.includes(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+      responseHeaders.append(key, value);
     }
   });
 
@@ -318,9 +317,10 @@ async function proxyWebSocketWithFetcher(
     }
   });
 
-  return fetcher(targetPath, {
+  const proxyRequest = new Request(new URL(targetPath, request.url), {
     method: request.method,
     headers,
-    body: request.body,
   });
+
+  return fetcher(proxyRequest);
 }

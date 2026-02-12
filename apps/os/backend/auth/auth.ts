@@ -38,6 +38,11 @@ function matchesEmailPattern(email: string, patterns: string[]) {
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
   const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
+  const baseHostname = URL.canParse(envParam.VITE_PUBLIC_URL)
+    ? new URL(envParam.VITE_PUBLIC_URL).hostname
+    : null;
+  const canUseCrossSubdomainCookies =
+    !!baseHostname && baseHostname !== "localhost" && baseHostname !== "127.0.0.1";
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -180,6 +185,14 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
       },
     },
     advanced: {
+      ...(canUseCrossSubdomainCookies
+        ? {
+            crossSubDomainCookies: {
+              enabled: true,
+              domain: baseHostname,
+            },
+          }
+        : {}),
       database: {
         generateId: (opts) => {
           const map = {

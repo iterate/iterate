@@ -35,6 +35,7 @@ const DEV_ITERATE_HOST_CAPTURE = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+dev\.iterate
 
 // Port definitions matching backend/daemons.ts
 const DAEMON_PORTS = [
+  { id: "project-ingress-proxy", internalPort: 8080 },
   { id: "iterate-daemon", internalPort: 3000 },
   { id: "iterate-daemon-server", internalPort: 3001 },
   { id: "opencode", internalPort: 4096 },

@@ -30,6 +30,7 @@ const PIDNAP_PROCESSES = [
   "daemon-frontend",
   "opencode",
   "egress-proxy",
+  "project-ingress-proxy",
   "trace-viewer",
 ] as const;
 
@@ -270,11 +271,6 @@ function MachineDetailPage() {
     return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
   };
 
-  const getServiceAccessLabel = (option: { label: string; url: string }) => {
-    if (option.label === "Open" && option.url.startsWith("/")) return "Proxy";
-    return option.label;
-  };
-
   const extractSessionId = (destination?: string | null) => {
     if (!destination) return null;
     const match = destination.match(/^\/opencode\/sessions\/(.+)$/);
@@ -486,10 +482,12 @@ function MachineDetailPage() {
             <p className="text-xs text-muted-foreground">No services available yet.</p>
           ) : (
             <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-              {services.flatMap((service) =>
-                service.options.map((option, index) => (
+              {services.map((service) => {
+                const option = service.options[0];
+                if (!option) return null;
+                return (
                   <a
-                    key={`${service.id}-${index}-${option.url}`}
+                    key={`${service.id}-${option.url}`}
                     href={option.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -497,13 +495,9 @@ function MachineDetailPage() {
                   >
                     <span>{service.name}</span>
                     <span className="text-xs text-muted-foreground"> :{service.port}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {" "}
-                      ({getServiceAccessLabel(option)})
-                    </span>
                   </a>
-                )),
-              )}
+                );
+              })}
               {daemonBaseUrl && (
                 <a
                   href={`${daemonBaseUrl}/terminal`}

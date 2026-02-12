@@ -75,6 +75,7 @@ type SandboxHandleProvider<TSandbox extends Sandbox> = {
 };
 
 const LOCAL_SERVICE_KEY_BY_PORT: Record<number, string> = {
+  8080: "project-ingress-proxy",
   3000: "iterate-daemon",
   3001: "iterate-daemon-server",
   4096: "opencode",

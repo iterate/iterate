@@ -1,0 +1,8 @@
+# Project ingress proxy
+
+Main doc moved to `apps/project-ingress-proxy/README.md`.
+
+Tracked follow-up tasks:
+
+- `tasks/project-ingress-proxy-improvements.md`
+- `tasks/project-ingress-proxy-secret-auth.md`

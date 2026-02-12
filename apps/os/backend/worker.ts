@@ -34,6 +34,12 @@ import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
+import {
+  getProjectIngressRequestHostname,
+  getProjectIngressProxyHostMatchers,
+  handleProjectIngressRequest,
+  shouldHandleProjectIngressHostname,
+} from "./services/project-ingress-proxy.ts";
 
 export type { Variables };
 
@@ -84,6 +90,15 @@ app.use("*", async (c, next) => {
   c.set("session", session);
   const trpcCaller = appRouter.createCaller(createContext(c));
   c.set("trpcCaller", trpcCaller);
+  return next();
+});
+
+app.use("*", async (c, next) => {
+  const requestDomain = getProjectIngressRequestHostname(c.req.raw);
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
+    return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+  }
   return next();
 });
 
@@ -253,18 +268,6 @@ export default class extends WorkerEntrypoint {
   declare env: CloudflareEnv;
 
   fetch(request: Request) {
-    const url = new URL(request.url);
-    const requestDomain = url.hostname;
-
-    // on root domain, redirect to the first allowed domain, which will be the os domain
-    if (requestDomain === this.env.PROXY_ROOT_DOMAIN)
-      return Response.redirect(`https://${this.env.ALLOWED_DOMAINS.split(",")[0]}${url.pathname}`);
-
-    // Check if the request is for the proxy worker
-    const [_, ...rest] = requestDomain.split(".");
-    if (rest.join(".") === this.env.PROXY_ROOT_DOMAIN) return this.env.PROXY_WORKER.fetch(request);
-
-    // Otherwise, handle the request as normal
     return app.fetch(request, this.env, this.ctx);
   }
 
