@@ -19,6 +19,7 @@ import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
+import { buildProjectIngressLink } from "../../lib/project-ingress-link.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -268,7 +269,11 @@ function MachineDetailPage() {
 
   const buildTerminalUrl = (command: string) => {
     if (!daemonBaseUrl) return "#";
-    return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+    return buildProjectIngressLink({
+      baseUrl: daemonBaseUrl,
+      path: "/terminal",
+      query: { command, autorun: "true" },
+    });
   };
 
   const extractSessionId = (destination?: string | null) => {
@@ -291,7 +296,10 @@ function MachineDetailPage() {
   ): string | null => {
     if (!sessionId || !opencodeBaseUrl || !workingDirectory) return null;
     const encodedDir = btoa(workingDirectory).replace(/=+$/, "");
-    return `${opencodeBaseUrl}/${encodedDir}/session/${sessionId}`;
+    return buildProjectIngressLink({
+      baseUrl: opencodeBaseUrl,
+      path: `${encodedDir}/session/${sessionId}`,
+    });
   };
 
   const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -500,7 +508,7 @@ function MachineDetailPage() {
               })}
               {daemonBaseUrl && (
                 <a
-                  href={`${daemonBaseUrl}/terminal`}
+                  href={buildProjectIngressLink({ baseUrl: daemonBaseUrl, path: "/terminal" })}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
