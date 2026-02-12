@@ -117,6 +117,17 @@ export default workflow({
           run: "pnpm sandbox test:docker",
         },
         {
+          name: "Run Fly provider tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "fly",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ steps.metadata.outputs.fly_image_tag }}",
+            FLY_DEFAULT_IMAGE: "${{ steps.metadata.outputs.fly_image_tag }}",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
+        },
+        {
           name: "Upload Docker test results",
           if: "failure()",
           ...uses("actions/upload-artifact@v4", {
@@ -124,26 +135,6 @@ export default workflow({
             path: "sandbox/test-results",
             "retention-days": 7,
           }),
-        },
-      ],
-    },
-
-    "fly-provider-tests": {
-      needs: ["build-and-docker-tests"],
-      ...utils.runsOnDepotUbuntuForContainerThings,
-      steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "dev" }),
-        {
-          name: "Run Fly provider tests",
-          env: {
-            RUN_SANDBOX_TESTS: "true",
-            SANDBOX_TEST_PROVIDER: "fly",
-            SANDBOX_TEST_SNAPSHOT_ID: "${{ needs.build-and-docker-tests.outputs.fly_image_tag }}",
-            FLY_DEFAULT_IMAGE: "${{ needs.build-and-docker-tests.outputs.fly_image_tag }}",
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          run: "doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
         },
         {
           name: "Upload Fly test results",
