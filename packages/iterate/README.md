@@ -31,7 +31,7 @@ Initial setup (writes auth + launcher config):
 npx iterate setup \
   --base-url https://dev-yourname-os.dev.iterate.com \
   --admin-password-env-var-name SERVICE_AUTH_TOKEN \
-  --user-id usr_... \
+  --user-email dev-yourname@iterate.com \
   --repo-path managed \
   --auto-install true \
   --scope global
@@ -72,7 +72,7 @@ Config shape:
     "/absolute/workspace/path": {
       "baseUrl": "https://dev-yourname-os.dev.iterate.com",
       "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
-      "userId": "usr_...",
+      "userEmail": "dev-yourname@iterate.com",
       "repoPath": "/absolute/path/to/iterate",
       "autoInstall": false
     }
@@ -116,7 +116,7 @@ You can pin explicitly:
 npx iterate setup \
   --base-url https://dev-yourname-os.dev.iterate.com \
   --admin-password-env-var-name SERVICE_AUTH_TOKEN \
-  --user-id usr_... \
+  --user-email dev-yourname@iterate.com \
   --repo-path local \
   --auto-install false \
   --scope workspace

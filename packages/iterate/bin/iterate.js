@@ -92,7 +92,7 @@ const SetupInput = z.object({
     .string()
     .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
   adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  userId: z.string().describe("User ID to impersonate for os calls"),
+  userEmail: z.string().describe("User email to impersonate for os calls"),
   repoPath: z.string().describe("Path to iterate checkout (or 'local' / 'managed' shortcuts)"),
   autoInstall: z.boolean().describe("Auto install dependencies when missing"),
   scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
@@ -101,7 +101,7 @@ const SetupInput = z.object({
 const AuthConfig = z.object({
   baseUrl: z.string(),
   adminPasswordEnvVarName: z.string(),
-  userId: z.string(),
+  userEmail: z.string(),
 });
 
 /** @param {string} message */
@@ -350,6 +350,77 @@ const setCookiesToCookieHeader = (setCookies) => {
   return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 };
 
+const impersonationUserIdCache = new Map();
+
+/**
+ * @param {{
+ *   superadminAuthClient: any;
+ *   userEmail: string;
+ *   baseUrl: string;
+ * }} options
+ */
+const resolveImpersonationUserId = async ({ superadminAuthClient, userEmail, baseUrl }) => {
+  const normalizedEmail = userEmail.trim().toLowerCase();
+  const cacheKey = `${baseUrl}::${normalizedEmail}`;
+  const cachedUserId = impersonationUserIdCache.get(cacheKey);
+  if (cachedUserId) {
+    return cachedUserId;
+  }
+
+  /** @type {any[]} */
+  let users = [];
+
+  try {
+    const result = await superadminAuthClient.admin.listUsers({
+      query: {
+        filterField: "email",
+        filterOperator: "eq",
+        filterValue: normalizedEmail,
+        limit: 10,
+      },
+      fetchOptions: {
+        throw: true,
+      },
+    });
+    users = Array.isArray(result?.users) ? result.users : [];
+  } catch {
+    const result = await superadminAuthClient.admin.listUsers({
+      query: {
+        searchField: "email",
+        searchOperator: "contains",
+        searchValue: normalizedEmail,
+        limit: 100,
+      },
+      fetchOptions: {
+        throw: true,
+      },
+    });
+    users = Array.isArray(result?.users) ? result.users : [];
+  }
+
+  const exactMatches = users.filter(
+    (user) =>
+      user &&
+      typeof user === "object" &&
+      "email" in user &&
+      typeof user.email === "string" &&
+      user.email.toLowerCase() === normalizedEmail &&
+      "id" in user &&
+      typeof user.id === "string",
+  );
+
+  if (exactMatches.length === 0) {
+    throw new Error(`No user found with email ${userEmail}`);
+  }
+  if (exactMatches.length > 1) {
+    throw new Error(`Multiple users found with email ${userEmail}`);
+  }
+
+  const resolvedUserId = exactMatches[0].id;
+  impersonationUserIdCache.set(cacheKey, resolvedUserId);
+  return resolvedUserId;
+};
+
 /** @param {z.infer<typeof AuthConfig>} authConfig */
 const authDance = async (authConfig) => {
   let superadminSetCookie;
@@ -387,9 +458,15 @@ const authDance = async (authConfig) => {
     plugins: [adminClient()],
   });
 
+  const userId = await resolveImpersonationUserId({
+    superadminAuthClient,
+    userEmail: authConfig.userEmail,
+    baseUrl: authConfig.baseUrl,
+  });
+
   let impersonateSetCookie;
   await superadminAuthClient.admin.impersonateUser({
-    userId: authConfig.userId,
+    userId,
     fetchOptions: {
       throw: true,
       onResponse: (ctx) => {
@@ -607,7 +684,7 @@ const launcherProcedures = {
         workspacePatch: {
           baseUrl: input.baseUrl,
           adminPasswordEnvVarName: input.adminPasswordEnvVarName,
-          userId: input.userId,
+          userEmail: input.userEmail,
         },
         scope: input.scope,
         workspacePath: process.cwd(),
