@@ -210,18 +210,24 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
 
 app.onError((err, c) => {
   const status = getErrorStatus(err);
-  logger.error(
-    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-    {
-      path: c.req.path,
-      method: c.req.method,
-      userId: c.var.session?.user?.id,
-      status,
-    },
-    err,
-  );
+  const detail = `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`;
+  const logContext = {
+    path: c.req.path,
+    method: c.req.method,
+    userId: c.var.session?.user?.id,
+    status,
+  };
 
-  return c.json({ error: "Internal Server Error" }, status);
+  if (status >= 500) {
+    logger.error(detail, logContext, err);
+  } else {
+    logger.warn("Hono handled client error", {
+      ...logContext,
+      detail,
+    });
+  }
+
+  return c.json({ error: status >= 500 ? "Internal Server Error" : "Request failed" }, status);
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
