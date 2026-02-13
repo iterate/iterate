@@ -107,11 +107,6 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     !!baseHostname && baseHostname !== "localhost" && baseHostname !== "127.0.0.1";
 
   return betterAuth({
-    logger: {
-      disabled: false,
-      level: "debug",
-      log: console.log,
-    },
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
     secret: envParam.BETTER_AUTH_SECRET,
