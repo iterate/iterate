@@ -190,7 +190,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     },
     emailAndPassword: {
       enabled: true,
-      // disableSignUp: true,
+      disableSignUp: true,
     },
     plugins: [
       admin(),
