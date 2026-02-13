@@ -123,7 +123,7 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+app.all("/api/auth/*", async (c) => c.var.auth.handler(c.req.raw));
 
 // tRPC endpoint
 app.all("/api/trpc/*", (c) => {

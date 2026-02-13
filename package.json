@@ -39,6 +39,7 @@
     "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
+    "publish-cli": "node packages/iterate/pubme.js publish",
     "super-reset": "pnpm i && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
   },
   "devDependencies": {
