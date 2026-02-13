@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -525,17 +525,17 @@ const installDependencies = async ({ repoDir }) => {
   }
 };
 
-/** @param {{ repoDir: string; args: string[] }} options */
-const runRepoCli = async ({ repoDir, args }) => {
-  const authConfig = readAuthConfig(process.cwd());
+/** @param {string} repoDir */
+const getRuntimeProcedures = async (repoDir) => {
   const appRouter = await loadAppRouter(repoDir);
   const proxiedRouter = proxify(appRouter, async () => {
     return createTRPCClient({
       links: [
         httpLink({
-          url: `${authConfig.baseUrl}/api/trpc/`,
+          url: `${readAuthConfig(process.cwd()).baseUrl}/api/trpc/`,
           transformer: superjson,
           fetch: async (request, init) => {
+            const authConfig = readAuthConfig(process.cwd());
             const { userCookies } = await authDance(authConfig);
             const headers = new Headers(init?.headers);
             headers.set("cookie", userCookies);
@@ -546,28 +546,17 @@ const runRepoCli = async ({ repoDir, args }) => {
     });
   });
 
-  const runtimeRouter = t.router({
+  return {
     whoami: t.procedure.mutation(async () => {
+      const authConfig = readAuthConfig(process.cwd());
       const { userClient } = await authDance(authConfig);
       return await userClient.getSession();
     }),
     os: proxiedRouter,
-  });
-
-  const runtimeCli = createCli({
-    router: runtimeRouter,
-    name: "iterate",
-    version: "0.0.1",
-    description: "Iterate CLI - Daemon and agent management",
-  });
-
-  process.argv = [process.argv[0], process.argv[1], ...args];
-  await runtimeCli.run({
-    prompts: isAgent ? undefined : prompts,
-  });
+  };
 };
 
-const launcherRouter = t.router({
+const launcherProcedures = {
   doctor: t.procedure
     .meta({ description: "Show launcher config and resolved runtime options" })
     .mutation(async () => {
@@ -627,25 +616,10 @@ const launcherRouter = t.router({
       await installDependencies({ repoDir: runtime.repoDir });
       return { repoDir: runtime.repoDir };
     }),
-});
-
-const launcherCli = createCli({
-  router: launcherRouter,
-  name: "iterate",
-  version: "0.0.1",
-  description: "Iterate bootstrap launcher commands",
-});
-
-/** @param {string[]} args */
-const runLauncherCli = async (args) => {
-  process.argv = [process.argv[0], process.argv[1], ...args];
-  await launcherCli.run({
-    prompts: isAgent ? undefined : prompts,
-  });
 };
 
 /** @param {string[]} args */
-const runForwardedCli = async (args) => {
+const runCli = async (args) => {
   const runtime = resolveRuntimeOptions();
   await ensureRepoCheckout(runtime);
 
@@ -653,27 +627,33 @@ const runForwardedCli = async (args) => {
     await installDependencies({ repoDir: runtime.repoDir });
   }
 
-  await runRepoCli({ repoDir: runtime.repoDir, args });
+  const runtimeProcedures = await getRuntimeProcedures(runtime.repoDir);
+  const router = t.router({
+    ...launcherProcedures,
+    ...runtimeProcedures,
+  });
+
+  const cli = createCli({
+    router,
+    name: "iterate",
+    version: "0.0.1",
+    description: "Iterate CLI",
+  });
+
+  process.argv = [process.argv[0], process.argv[1], ...args];
+  await cli.run({
+    prompts: isAgent ? undefined : prompts,
+  });
 };
 
 const main = async () => {
   const args = process.argv.slice(2);
 
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
-    await runLauncherCli(["--help"]);
-    return;
-  }
-
-  if (args[0] === "setup" || args[0] === "doctor" || args[0] === "install") {
-    await runLauncherCli(args);
-    return;
-  }
-
   if (args[0] === "launcher") {
-    await runLauncherCli(args.slice(1));
+    await runCli(args.slice(1));
     return;
   }
-  await runForwardedCli(args);
+  await runCli(args);
 };
 
 main().catch((error) => {
