@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import * as prompts from "@clack/prompts";
+import { createTRPCClient, httpLink } from "@trpc/client";
 import { initTRPC } from "@trpc/server";
+import { createAuthClient } from "better-auth/client";
+import { adminClient } from "better-auth/client/plugins";
+import superjson from "superjson";
 import { createCli } from "trpc-cli";
+import { proxify } from "trpc-cli/dist/proxify.js";
 import { z } from "zod/v4";
 
 const DEFAULT_REPO_URL = "https://github.com/iterate/iterate.git";
 const DEFAULT_REPO_DIR = join(homedir(), ".iterate", "repo");
 const CONFIG_PATH = join(homedir(), ".iterate", ".iterate.json");
-const OS_CLI_PATH = join("apps", "os", "cli.ts");
+const APP_ROUTER_PATH = join("apps", "os", "backend", "trpc", "root.ts");
 
 /**
  * @typedef {{
@@ -75,14 +81,18 @@ const t = initTRPC.meta().create();
 const SetupInput = z.object({
   baseUrl: z
     .string()
-    .describe("Base URL for os API (for example https://dev-foo-os.dev.iterate.com)"),
-  // e.g. SERVICE_AUTH_TOKEN
+    .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
   adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  // e.g. usr_01kh6wb0y8f6frrwx7he4ma94s
   userId: z.string().describe("User ID to impersonate for os calls"),
   repoPath: z.string().describe("Path to iterate checkout (or 'local' / 'managed' shortcuts)"),
   autoInstall: z.boolean().describe("Auto install dependencies when missing"),
   scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
+});
+
+const AuthConfig = z.object({
+  baseUrl: z.string(),
+  adminPasswordEnvVarName: z.string(),
+  userId: z.string(),
 });
 
 /** @param {string} message */
@@ -245,7 +255,7 @@ const isIterateRepo = (dir) => {
   return (
     existsSync(join(dir, ".git")) &&
     existsSync(join(dir, "pnpm-workspace.yaml")) &&
-    existsSync(join(dir, OS_CLI_PATH))
+    existsSync(join(dir, APP_ROUTER_PATH))
   );
 };
 
@@ -307,6 +317,109 @@ const resolveRuntimeOptions = () => {
   };
 };
 
+/** @param {string} workspacePath */
+const readAuthConfig = (workspacePath) => {
+  const configFile = readConfigFile();
+  const mergedConfig = getMergedWorkspaceConfig(configFile, workspacePath);
+  const parsed = AuthConfig.safeParse(mergedConfig);
+  if (!parsed.success) {
+    throw new Error(
+      `Config file ${CONFIG_PATH} is missing auth config for ${workspacePath}: ${z.prettifyError(parsed.error)}`,
+    );
+  }
+  return parsed.data;
+};
+
+/** @param {string[] | undefined} setCookies */
+const setCookiesToCookieHeader = (setCookies) => {
+  const byName = new Map();
+  for (const c of setCookies ?? []) {
+    const pair = c.split(";")[0]?.trim();
+    if (!pair) continue;
+    const eq = pair.indexOf("=");
+    if (eq === -1) continue;
+    byName.set(pair.slice(0, eq), pair.slice(eq + 1));
+  }
+  return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+};
+
+/** @param {z.infer<typeof AuthConfig>} authConfig */
+const authDance = async (authConfig) => {
+  let superadminSetCookie;
+  const authClient = createAuthClient({
+    baseURL: authConfig.baseUrl,
+    fetchOptions: {
+      throw: true,
+    },
+  });
+  const password = process.env[authConfig.adminPasswordEnvVarName];
+  if (!password) {
+    throw new Error(`Password not found in env var ${authConfig.adminPasswordEnvVarName}`);
+  }
+
+  await authClient.signIn.email({
+    email: "superadmin@nustom.com",
+    password,
+    fetchOptions: {
+      throw: true,
+      onResponse: (ctx) => {
+        superadminSetCookie = ctx.response.headers.getSetCookie();
+      },
+    },
+  });
+
+  const superadminAuthClient = createAuthClient({
+    baseURL: authConfig.baseUrl,
+    fetchOptions: {
+      throw: true,
+      onRequest: (ctx) => {
+        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("cookie", setCookiesToCookieHeader(superadminSetCookie));
+      },
+    },
+    plugins: [adminClient()],
+  });
+
+  let impersonateSetCookie;
+  await superadminAuthClient.admin.impersonateUser({
+    userId: authConfig.userId,
+    fetchOptions: {
+      throw: true,
+      onResponse: (ctx) => {
+        impersonateSetCookie = ctx.response.headers.getSetCookie();
+      },
+    },
+  });
+
+  const userCookies = setCookiesToCookieHeader(impersonateSetCookie);
+
+  const userClient = createAuthClient({
+    baseURL: authConfig.baseUrl,
+    fetchOptions: {
+      throw: true,
+      onRequest: (ctx) => {
+        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("cookie", userCookies);
+      },
+    },
+  });
+
+  return { userCookies, userClient };
+};
+
+/** @param {string} repoDir */
+const loadAppRouter = async (repoDir) => {
+  const appRouterPath = join(repoDir, APP_ROUTER_PATH);
+  if (!existsSync(appRouterPath)) {
+    throw new Error(`Could not find ${APP_ROUTER_PATH} under ${repoDir}.`);
+  }
+  const rootModule = await import(pathToFileURL(appRouterPath).href);
+  if (!rootModule || typeof rootModule !== "object" || !("appRouter" in rootModule)) {
+    throw new Error(`Failed to load appRouter from ${appRouterPath}`);
+  }
+  return rootModule.appRouter;
+};
+
 /** @param {unknown} error */
 const commandMissing = (error) => {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
@@ -346,8 +459,8 @@ const runChecked = async ({ command, args, cwd, env }) => {
 /** @param {CheckoutOptions} options */
 const ensureRepoCheckout = async ({ repoDir, repoRef, repoUrl }) => {
   if (existsSync(repoDir)) {
-    if (!existsSync(join(repoDir, OS_CLI_PATH))) {
-      throw new Error(`Expected ${OS_CLI_PATH} in ${repoDir}.`);
+    if (!existsSync(join(repoDir, APP_ROUTER_PATH))) {
+      throw new Error(`Expected ${APP_ROUTER_PATH} in ${repoDir}.`);
     }
     if (!existsSync(join(repoDir, ".git"))) {
       throw new Error(`Expected git checkout at ${repoDir}, but .git is missing.`);
@@ -413,20 +526,44 @@ const installDependencies = async ({ repoDir }) => {
 };
 
 /** @param {{ repoDir: string; args: string[] }} options */
-const runOsCli = async ({ repoDir, args }) => {
-  const cliPath = join(repoDir, OS_CLI_PATH);
-  if (!existsSync(cliPath)) {
-    throw new Error(`Could not find ${OS_CLI_PATH} under ${repoDir}.`);
-  }
+const runRepoCli = async ({ repoDir, args }) => {
+  const authConfig = readAuthConfig(process.cwd());
+  const appRouter = await loadAppRouter(repoDir);
+  const proxiedRouter = proxify(appRouter, async () => {
+    return createTRPCClient({
+      links: [
+        httpLink({
+          url: `${authConfig.baseUrl}/api/trpc/`,
+          transformer: superjson,
+          fetch: async (request, init) => {
+            const { userCookies } = await authDance(authConfig);
+            const headers = new Headers(init?.headers);
+            headers.set("cookie", userCookies);
+            return fetch(request, { ...init, headers });
+          },
+        }),
+      ],
+    });
+  });
 
-  return run({
-    command: process.execPath,
-    args: [cliPath, ...args],
-    cwd: repoDir,
-    env: {
-      ...process.env,
-      ITERATE_REPO_DIR: repoDir,
-    },
+  const runtimeRouter = t.router({
+    whoami: t.procedure.mutation(async () => {
+      const { userClient } = await authDance(authConfig);
+      return await userClient.getSession();
+    }),
+    os: proxiedRouter,
+  });
+
+  const runtimeCli = createCli({
+    router: runtimeRouter,
+    name: "iterate",
+    version: "0.0.1",
+    description: "Iterate CLI - Daemon and agent management",
+  });
+
+  process.argv = [process.argv[0], process.argv[1], ...args];
+  await runtimeCli.run({
+    prompts: isAgent ? undefined : prompts,
   });
 };
 
@@ -516,8 +653,7 @@ const runForwardedCli = async (args) => {
     await installDependencies({ repoDir: runtime.repoDir });
   }
 
-  const exitCode = await runOsCli({ repoDir: runtime.repoDir, args });
-  process.exit(Number(exitCode));
+  await runRepoCli({ repoDir: runtime.repoDir, args });
 };
 
 const main = async () => {

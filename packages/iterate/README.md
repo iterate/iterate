@@ -6,7 +6,7 @@ It does three things:
 
 1. Ensures there is an `iterate/iterate` checkout.
 2. Ensures dependencies are installed.
-3. Runs `apps/os/cli.ts` from that checkout (the tRPC CLI entrypoint).
+3. Loads `apps/os/backend/trpc/root.ts` from that checkout and proxies calls to `/api/trpc`.
 
 If you run `iterate` from inside an `iterate/iterate` git checkout, the launcher auto-detects that repo and uses it directly. In that mode, auto-install defaults to `false`.
 
@@ -20,7 +20,7 @@ Resolution order:
 2. `workspaces[process.cwd()].repoPath`
 3. `global.repoPath`
 4. `launcher.repoPath` (legacy)
-5. nearest parent directory with `.git`, `pnpm-workspace.yaml`, and `apps/os/cli.ts`
+5. nearest parent directory with `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/trpc/root.ts`
 6. `~/.iterate/repo`
 
 You can override with either:
@@ -81,6 +81,6 @@ Use top-level bootstrap commands:
 
 Auth settings always write to `workspaces[process.cwd()]`. Launcher settings write to `global` or `workspaces[process.cwd()]` based on `scope`.
 
-All other commands are forwarded to `apps/os/cli.ts` (for example `iterate os ...` and `iterate whoami`).
+All other commands are executed directly by this package (for example `iterate os ...` and `iterate whoami`).
 
 `iterate launcher ...` still works as a legacy alias.
