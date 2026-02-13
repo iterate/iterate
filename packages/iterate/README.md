@@ -1,5 +1,7 @@
 # iterate
 
+⚠️⚠️⚠️ Coming soon! `npx iterate` is a work-in-progress CLI for managing [iterate.com](https://iterate.com) agents ⚠️⚠️⚠️
+
 CLI for Iterate.
 
 Runs as a thin bootstrapper that:
