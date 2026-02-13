@@ -1,8 +1,29 @@
 {
   "name": "iterate",
   "version": "0.0.1",
-  "description": "Bootstrap launcher for the Iterate CLI",
+  "description": "CLI for iterate",
+  "license": "AGPL-3.0-only",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate.git",
+    "directory": "packages/iterate"
+  },
+  "homepage": "https://github.com/iterate/iterate#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "keywords": [
+    "iterate",
+    "cli",
+    "trpc"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "iterate": "./bin/iterate.js"
   },

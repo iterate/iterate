@@ -18,8 +18,18 @@ import { proxify } from "trpc-cli/dist/proxify.js";
 import { z } from "zod/v4";
 
 const DEFAULT_REPO_URL = "https://github.com/iterate/iterate.git";
-const DEFAULT_REPO_DIR = join(homedir(), ".iterate", "repo");
-const CONFIG_PATH = join(homedir(), ".iterate", ".iterate.json");
+const XDG_CONFIG_PATH = join(
+  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
+  "iterate",
+  "config.json",
+);
+const XDG_REPO_DIR = join(
+  process.env.XDG_DATA_HOME ? process.env.XDG_DATA_HOME : join(homedir(), ".local", "share"),
+  "iterate",
+  "repo",
+);
+const DEFAULT_REPO_DIR = XDG_REPO_DIR;
+const CONFIG_PATH = XDG_CONFIG_PATH;
 const APP_ROUTER_PATH = join("apps", "os", "backend", "trpc", "root.ts");
 
 /**
@@ -34,7 +44,6 @@ const APP_ROUTER_PATH = join("apps", "os", "backend", "trpc", "root.ts");
 /**
  * @typedef {{
  *   global?: Record<string, unknown>;
- *   launcher?: LauncherConfig;
  *   workspaces?: Record<string, Record<string, unknown>>;
  * } & Record<string, unknown>} ConfigFile
  */
@@ -199,9 +208,7 @@ const getWorkspaceConfig = (configFile, workspacePath) => {
  * @param {string} workspacePath
  */
 const getMergedWorkspaceConfig = (configFile, workspacePath) => {
-  const legacyLauncherConfig = isObject(configFile.launcher) ? configFile.launcher : {};
   return {
-    ...legacyLauncherConfig,
     ...getGlobalConfig(configFile),
     ...getWorkspaceConfig(configFile, workspacePath),
   };
@@ -240,7 +247,7 @@ const writeLauncherConfig = ({ launcherPatch, workspacePatch, scope, workspacePa
       : existingWorkspaces;
 
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  const { launcher: _legacyLauncher, ...rest } = configFile;
+  const { launcher: _unusedLauncher, ...rest } = configFile;
   const next = {
     ...rest,
     global: nextGlobal,
@@ -324,7 +331,7 @@ const readAuthConfig = (workspacePath) => {
   const parsed = AuthConfig.safeParse(mergedConfig);
   if (!parsed.success) {
     throw new Error(
-      `Config file ${CONFIG_PATH} is missing auth config for ${workspacePath}: ${z.prettifyError(parsed.error)}`,
+      `Config file ${CONFIG_PATH} is missing auth config for ${workspacePath}. Have you run \`iterate setup\`?\n${z.prettifyError(parsed.error)}`,
     );
   }
   return parsed.data;
@@ -477,10 +484,13 @@ const ensureRepoCheckout = async ({ repoDir, repoRef, repoUrl }) => {
 
   log(`cloning iterate repo into ${repoDir}`);
   try {
-    await runChecked({
-      command: "git",
-      args: cloneArgs,
-    });
+    await runChecked({ command: "git", args: cloneArgs });
+    const envClientPath = join(repoDir, "apps/os/env-client.ts");
+    // todo: remove this as soon as this branch is merged into main
+    writeFileSync(
+      envClientPath,
+      readFileSync(envClientPath, "utf8").replace("import.meta.env.", "import.meta.env?."),
+    );
   } catch (error) {
     if (commandMissing(error)) {
       throw new Error("git is required but was not found on PATH.");
@@ -648,16 +658,10 @@ const runCli = async (args) => {
 
 const main = async () => {
   const args = process.argv.slice(2);
-
-  if (args[0] === "launcher") {
-    await runCli(args.slice(1));
-    return;
-  }
   await runCli(args);
 };
 
 main().catch((error) => {
-  const detail = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`iterate bootstrap failed: ${detail}\n`);
+  console.error(error);
   process.exit(1);
 });

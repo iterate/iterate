@@ -1,86 +1,132 @@
 # iterate
 
-Bootstrap launcher for `npx iterate`.
+CLI for Iterate.
 
-It does three things:
+Runs as a thin bootstrapper that:
 
-1. Ensures there is an `iterate/iterate` checkout.
-2. Ensures dependencies are installed.
-3. Loads `apps/os/backend/trpc/root.ts` from that checkout and proxies calls to `/api/trpc`.
+1. Resolves an `iterate/iterate` checkout.
+2. Clones/install deps when needed.
+3. Loads `apps/os/backend/trpc/root.ts` from that checkout.
+4. Exposes commands like `iterate os ...` and `iterate whoami`.
 
-If you run `iterate` from inside an `iterate/iterate` git checkout, the launcher auto-detects that repo and uses it directly. In that mode, auto-install defaults to `false`.
+## Requirements
 
-## Repo location
+- Node `>=22`
+- `git`
+- `pnpm` or `corepack`
 
-By default the checkout lives at `~/.iterate/repo`.
+## Quick start
 
-Resolution order:
+Run without installing globally:
 
-1. `ITERATE_REPO_DIR`
-2. `workspaces[process.cwd()].repoPath`
-3. `global.repoPath`
-4. `launcher.repoPath` (legacy)
-5. nearest parent directory with `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/trpc/root.ts`
-6. `~/.iterate/repo`
-
-You can override with either:
-
-- `ITERATE_REPO_DIR=/path/to/iterate`
-- `~/.iterate/.iterate.json`:
-
-```json
-{
-  "global": {
-    "repoPath": "/path/to/iterate"
-  }
-}
+```bash
+npx iterate --help
 ```
 
-## Other launcher options
+Initial setup (writes auth + launcher config):
 
-`~/.iterate/.iterate.json` supports:
+```bash
+npx iterate setup \
+  --base-url https://dev-yourname-os.dev.iterate.com \
+  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
+  --user-id usr_... \
+  --repo-path managed \
+  --auto-install true \
+  --scope global
+```
 
-- `global.repoRef` / `workspaces[...].repoRef` (branch/tag/sha for fresh clones)
-- `global.repoUrl` / `workspaces[...].repoUrl` (custom git remote)
-- `global.autoInstall` / `workspaces[...].autoInstall`
+Then run commands:
 
-Preferred shape now is:
+```bash
+npx iterate whoami
+npx iterate os project list
+```
+
+## Commands
+
+- `iterate setup` - configure auth + launcher defaults
+- `iterate doctor` - print resolved config/runtime info
+- `iterate install` - force clone/install for resolved checkout
+- `iterate whoami`
+- `iterate os ...`
+
+## Config file
+
+Config path:
+
+`${XDG_CONFIG_HOME:-~/.config}/iterate/config.json`
+
+Config shape:
 
 ```json
 {
   "global": {
-    "repoPath": "~/.iterate/repo",
+    "repoPath": "~/.local/share/iterate/repo",
+    "repoRef": "main",
+    "repoUrl": "https://github.com/iterate/iterate.git",
     "autoInstall": true
   },
   "workspaces": {
-    "/path/to/workspace": {
-      "repoPath": "/path/to/iterate",
+    "/absolute/workspace/path": {
+      "baseUrl": "https://dev-yourname-os.dev.iterate.com",
+      "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
+      "userId": "usr_...",
+      "repoPath": "/absolute/path/to/iterate",
       "autoInstall": false
     }
   }
 }
 ```
 
-Launcher resolves config with a shallow merge: `legacy launcher` -> `global` -> `workspaces[process.cwd()]`.
+Merge precedence is shallow:
 
-Environment variables override file values:
+`global` -> `workspaces[process.cwd()]`
 
+## Repo checkout resolution
+
+`repoPath` resolution order:
+
+1. `ITERATE_REPO_DIR`
+2. `workspaces[process.cwd()].repoPath`
+3. `global.repoPath`
+4. nearest parent directory containing `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/trpc/root.ts`
+5. default managed checkout path `${XDG_DATA_HOME:-~/.local/share}/iterate/repo`
+
+`repoPath` shortcuts in `setup`:
+
+- `local` - nearest local iterate checkout
+- `managed` - default managed checkout path
+
+Environment overrides:
+
+- `ITERATE_REPO_DIR`
 - `ITERATE_REPO_REF`
 - `ITERATE_REPO_URL`
 - `ITERATE_AUTO_INSTALL` (`1/true` or `0/false`)
 
-## Setup commands
+## Local iterate dev
 
-Use top-level bootstrap commands:
+If you run inside an `iterate/iterate` clone, the CLI auto-detects it. In that mode, default `autoInstall` is `false`.
 
-- `iterate setup` prompts for auth (`baseUrl`, `adminPasswordEnvVarName`, `userId`) and launcher config (`repoPath`, `autoInstall`, `scope`)
-- `iterate doctor` shows resolved settings and runtime behavior
-- `iterate install` forces clone/install for the resolved checkout
+You can pin explicitly:
 
-`repoPath` accepts real paths, plus shortcuts: `local` (current iterate checkout) and `managed` (`~/.iterate/repo`).
+```bash
+npx iterate setup \
+  --base-url https://dev-yourname-os.dev.iterate.com \
+  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
+  --user-id usr_... \
+  --repo-path local \
+  --auto-install false \
+  --scope workspace
+```
 
-Auth settings always write to `workspaces[process.cwd()]`. Launcher settings write to `global` or `workspaces[process.cwd()]` based on `scope`.
+## Publishing (maintainers)
 
-All other commands are executed directly by this package (for example `iterate os ...` and `iterate whoami`).
+From repo root:
 
-`iterate launcher ...` still works as a legacy alias.
+```bash
+pnpm --filter ./packages/iterate typecheck
+pnpm eslint packages/iterate/bin/iterate.js
+pnpm prettier --check packages/iterate
+pnpm --filter ./packages/iterate publish --access public
+```
