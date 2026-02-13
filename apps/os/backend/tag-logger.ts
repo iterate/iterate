@@ -24,7 +24,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function sanitizeValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value instanceof Error) return serializeError(value, seen);
-  if (Array.isArray(value)) return value.map((item) => sanitizeValue(item, seen));
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    const sanitized = value.map((item) => sanitizeValue(item, seen));
+    seen.delete(value);
+    return sanitized;
+  }
   if (!isRecord(value)) return value;
 
   if (seen.has(value)) return "[Circular]";
