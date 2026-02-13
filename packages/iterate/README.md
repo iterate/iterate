@@ -52,6 +52,8 @@ npx iterate os project list
 - `iterate whoami`
 - `iterate os ...`
 
+`setup --scope global` writes auth + launcher values into `global`; `setup --scope workspace` writes them into `workspaces[process.cwd()]`.
+
 ## Config file
 
 Config path:

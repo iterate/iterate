@@ -233,14 +233,22 @@ const writeLauncherConfig = ({ launcherPatch, workspacePatch, scope, workspacePa
   const existingGlobal = getGlobalConfig(configFile);
   const existingWorkspaces = isObject(configFile.workspaces) ? configFile.workspaces : {};
 
-  const nextGlobal = scope === "global" ? { ...existingGlobal, ...launcherPatch } : existingGlobal;
+  const nextGlobal =
+    scope === "global"
+      ? {
+          ...existingGlobal,
+          ...launcherPatch,
+          ...(workspacePatch ?? {}),
+        }
+      : existingGlobal;
+
   const nextWorkspaces =
-    scope === "workspace" || workspacePatch
+    scope === "workspace"
       ? {
           ...existingWorkspaces,
           [workspacePath]: {
             ...getWorkspaceConfig(configFile, workspacePath),
-            ...(scope === "workspace" ? launcherPatch : {}),
+            ...launcherPatch,
             ...(workspacePatch ?? {}),
           },
         }
