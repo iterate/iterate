@@ -519,7 +519,7 @@ async function setupDatabase() {
     });
 
     if (res2.exitCode !== 0) {
-      throw new Error(`Warning: Failed to seed global secrets: ${res.stderr}`);
+      throw new Error(`Warning: Failed to seed global secrets: ${res2.stderr}`);
     }
   };
 
