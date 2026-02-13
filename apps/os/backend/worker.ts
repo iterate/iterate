@@ -4,6 +4,7 @@ import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
@@ -25,8 +26,7 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
-import { logger } from "./tag-logger.ts";
-import { captureServerException } from "./lib/posthog.ts";
+import { emitRequestLog, logger, withRequestLogger } from "./tag-logger.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -48,6 +48,50 @@ registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+function getErrorStatus(error: unknown): ContentfulStatusCode {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+  ) {
+    const status = (error as { status: number }).status;
+    if (Number.isInteger(status) && status >= 400 && status <= 599) {
+      return status as ContentfulStatusCode;
+    }
+  }
+  return 500;
+}
+
+app.use("*", async (c, next) => {
+  return withRequestLogger(c.req.raw, async () => {
+    // TODO(observability): disable Cloudflare invocation logs once evlog request logs are fully validated.
+    let status = 200;
+    let unhandledError: Error | undefined;
+    try {
+      await next();
+      status = c.res.status;
+    } catch (error) {
+      unhandledError = error instanceof Error ? error : new Error(String(error));
+      status = getErrorStatus(error);
+      throw error;
+    } finally {
+      emitRequestLog({
+        status,
+        ...(unhandledError
+          ? {
+              error: {
+                name: unhandledError.name,
+                message: unhandledError.message,
+                stack: unhandledError.stack,
+              },
+            }
+          : {}),
+      });
+    }
+  });
+});
 
 app.use("*", async (c, next) => {
   initializeOtel(c.env as Record<string, unknown>);
@@ -103,24 +147,25 @@ app.use("*", async (c, next) => {
 });
 
 app.onError((err, c) => {
-  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
+  const status = getErrorStatus(err);
+  const detail = `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`;
+  const logContext = {
+    path: c.req.path,
+    method: c.req.method,
+    userId: c.var.session?.user?.id,
+    status,
+  };
 
-  // Capture exception to PostHog with user context
-  const error = err instanceof Error ? err : new Error(String(err));
-  const distinctId = c.var.session?.user?.id ?? "anonymous";
-  c.executionCtx?.waitUntil(
-    captureServerException(c.env, {
-      distinctId,
-      error,
-      properties: {
-        path: c.req.path,
-        method: c.req.method,
-        userId: c.var.session?.user?.id,
-      },
-    }),
-  );
+  if (status >= 500) {
+    logger.error(detail, logContext, err);
+  } else {
+    logger.warn("Hono handled client error", {
+      ...logContext,
+      detail,
+    });
+  }
 
-  return c.json({ error: "Internal Server Error" }, 500);
+  return c.json({ error: status >= 500 ? "Internal Server Error" : "Request failed" }, status);
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
@@ -137,20 +182,15 @@ app.all("/api/trpc/*", (c) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
-
-        // Capture 5xx errors to PostHog
-        const distinctId = c.var.session?.user?.id ?? "anonymous";
-        c.executionCtx?.waitUntil(
-          captureServerException(c.env, {
-            distinctId,
-            error,
-            properties: {
-              path: procedurePath,
-              trpcProcedure: procedurePath,
-              userId: c.var.session?.user?.id,
-            },
-          }),
+        logger.error(
+          `TRPC Error ${status} in ${procedurePath}: ${error.message}`,
+          {
+            path: procedurePath,
+            trpcProcedure: procedurePath,
+            userId: c.var.session?.user?.id,
+            status,
+          },
+          error,
         );
       } else {
         logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
@@ -183,27 +223,25 @@ const orpcHandler = new RPCHandler(workerRouter, {
         typeof (error as { status?: unknown }).status === "number"
           ? (error as { status: number }).status
           : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
+      const throwable = error instanceof Error ? error : new Error(String(error));
+      const errorContext = {
+        status: maybeStatus,
+        url: params.request.url,
+        errorName: throwable.name,
+        errorMessage: throwable.message,
+      };
 
       const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
         (error as { message?: unknown })?.message ?? error,
       )}`;
 
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
+        logger.error(message, errorContext, throwable);
       } else {
-        logger.warn(message, errorDetails);
+        logger.warn("oRPC non-5xx error", {
+          ...errorContext,
+          detail: message,
+        });
       }
     }),
   ],
