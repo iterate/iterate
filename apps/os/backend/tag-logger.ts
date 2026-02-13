@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { log, type RequestLogger } from "evlog";
 import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
+import { env, waitUntil } from "../env.ts";
 
 const appStage = process.env.VITE_APP_STAGE || process.env.APP_STAGE || process.env.NODE_ENV;
+const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type LogEvent = Record<string, unknown>;
@@ -39,6 +41,15 @@ function sanitizeValue(value: unknown, seen = new WeakSet<object>()): unknown {
 }
 
 function serializeError(error: Error, seen = new WeakSet<object>()): Record<string, unknown> {
+  if (seen.has(error)) {
+    return {
+      name: error.name,
+      message: error.message,
+      circular: true,
+    };
+  }
+  seen.add(error);
+
   const serialized: Record<string, unknown> = {
     name: error.name,
     message: error.message,
@@ -68,7 +79,87 @@ function serializeError(error: Error, seen = new WeakSet<object>()): Record<stri
     }
   }
 
+  seen.delete(error);
   return serialized;
+}
+
+function parseStackTrace(stack: string | undefined): Array<{
+  filename: string;
+  function: string;
+  lineno: number | undefined;
+  colno: number | undefined;
+  in_app: boolean;
+}> {
+  if (!stack) return [];
+
+  const lines = stack.split("\n").slice(1);
+  return lines
+    .map((line) => {
+      const match = line.match(/^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+):(\d+)\)?$/);
+      if (!match) return null;
+
+      const [, fn, filename, lineno, colno] = match;
+      return {
+        filename: filename || "<unknown>",
+        function: fn || "<anonymous>",
+        lineno: lineno ? parseInt(lineno, 10) : undefined,
+        colno: colno ? parseInt(colno, 10) : undefined,
+        in_app: !filename?.includes("node_modules"),
+      };
+    })
+    .filter((frame): frame is NonNullable<typeof frame> => frame !== null);
+}
+
+function reportErrorToPostHog(error: Error, event: LogEvent): void {
+  const apiKey = env.POSTHOG_PUBLIC_KEY;
+  if (!apiKey) return;
+
+  const distinctId =
+    typeof event.userId === "string"
+      ? event.userId
+      : typeof event.requestId === "string"
+        ? event.requestId
+        : "anonymous";
+  const frames = parseStackTrace(error.stack);
+  const sanitizedEvent = sanitizeValue(event);
+
+  const body = {
+    api_key: apiKey,
+    event: "$exception",
+    distinct_id: distinctId,
+    properties: {
+      $exception_list: [
+        {
+          type: error.name,
+          value: error.message,
+          mechanism: {
+            handled: true,
+            synthetic: false,
+          },
+          stacktrace: {
+            type: "raw",
+            frames,
+          },
+        },
+      ],
+      $environment: env.VITE_APP_STAGE ?? appStage ?? "development",
+      $lib: "evlog-tag-logger",
+      ...(isRecord(sanitizedEvent) ? sanitizedEvent : {}),
+    },
+    timestamp: new Date().toISOString(),
+  };
+
+  waitUntil(
+    fetch(POSTHOG_CAPTURE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }).then((response) => {
+      if (!response.ok) throw new Error(`PostHog capture failed: ${response.status}`);
+    }),
+  );
 }
 
 function toRequestContext(level: LogLevel, event: LogEvent): LogEvent {
@@ -126,13 +217,14 @@ function normalizeLogArgs(args: unknown[]): { event: LogEvent; error?: Error } {
 function emit(level: LogLevel, args: unknown[]): void {
   const requestLogger = requestLoggerStorage.getStore();
   const { event, error } = normalizeLogArgs(args);
+  const eventWithContext = requestLogger ? { ...requestLogger.getContext(), ...event } : event;
 
   if (requestLogger) {
     if (level === "error") {
-      requestLogger.error(
-        error ?? new Error(typeof event.message === "string" ? event.message : "error"),
-        toRequestContext(level, event),
-      );
+      const resolvedError =
+        error ?? new Error(typeof event.message === "string" ? event.message : "error");
+      reportErrorToPostHog(resolvedError, eventWithContext);
+      requestLogger.error(resolvedError, toRequestContext(level, eventWithContext));
     } else {
       const requestContext = toRequestContext(level, event);
       if (typeof event.message === "string") {
@@ -153,6 +245,12 @@ function emit(level: LogLevel, args: unknown[]): void {
       if (Object.keys(requestContext).length > 0) requestLogger.set(requestContext);
     }
     return;
+  }
+
+  if (level === "error") {
+    const resolvedError =
+      error ?? new Error(typeof event.message === "string" ? event.message : "error");
+    reportErrorToPostHog(resolvedError, eventWithContext);
   }
 
   log[level](event);

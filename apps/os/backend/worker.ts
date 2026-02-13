@@ -27,7 +27,6 @@ import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { emitRequestLog, logger, withRequestLogger } from "./tag-logger.ts";
-import { captureServerException } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -66,7 +65,10 @@ function getErrorStatus(error: unknown): ContentfulStatusCode {
     "status" in error &&
     typeof (error as { status?: unknown }).status === "number"
   ) {
-    return (error as { status: ContentfulStatusCode }).status;
+    const status = (error as { status: number }).status;
+    if (Number.isInteger(status) && status >= 400 && status <= 599) {
+      return status as ContentfulStatusCode;
+    }
   }
   return 500;
 }
@@ -75,23 +77,27 @@ app.use("*", async (c, next) => {
   return withRequestLogger(c.req.raw, async () => {
     // TODO(observability): disable Cloudflare invocation logs once evlog request logs are fully validated.
     let status = c.res.status;
+    let unhandledError: Error | undefined;
     try {
       await next();
       status = c.res.status;
     } catch (error) {
-      const throwable = error instanceof Error ? error : new Error(String(error));
-      logger.error(
-        "Unhandled request error",
-        {
-          path: c.req.path,
-          method: c.req.method,
-        },
-        throwable,
-      );
+      unhandledError = error instanceof Error ? error : new Error(String(error));
       status = getErrorStatus(error);
       throw error;
     } finally {
-      emitRequestLog({ status });
+      emitRequestLog({
+        status,
+        ...(unhandledError
+          ? {
+              error: {
+                name: unhandledError.name,
+                message: unhandledError.message,
+                stack: unhandledError.stack,
+              },
+            }
+          : {}),
+      });
     }
   });
 });
@@ -204,21 +210,15 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
 
 app.onError((err, c) => {
   const status = getErrorStatus(err);
-  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
-
-  // Capture exception to PostHog with user context
-  const error = err instanceof Error ? err : new Error(String(err));
-  const distinctId = c.var.session?.user?.id ?? "anonymous";
-  c.executionCtx?.waitUntil(
-    captureServerException(c.env, {
-      distinctId,
-      error,
-      properties: {
-        path: c.req.path,
-        method: c.req.method,
-        userId: c.var.session?.user?.id,
-      },
-    }),
+  logger.error(
+    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+    {
+      path: c.req.path,
+      method: c.req.method,
+      userId: c.var.session?.user?.id,
+      status,
+    },
+    err,
   );
 
   return c.json({ error: "Internal Server Error" }, status);
@@ -238,20 +238,15 @@ app.all("/api/trpc/*", (c) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
-
-        // Capture 5xx errors to PostHog
-        const distinctId = c.var.session?.user?.id ?? "anonymous";
-        c.executionCtx?.waitUntil(
-          captureServerException(c.env, {
-            distinctId,
-            error,
-            properties: {
-              path: procedurePath,
-              trpcProcedure: procedurePath,
-              userId: c.var.session?.user?.id,
-            },
-          }),
+        logger.error(
+          `TRPC Error ${status} in ${procedurePath}: ${error.message}`,
+          {
+            path: procedurePath,
+            trpcProcedure: procedurePath,
+            userId: c.var.session?.user?.id,
+            status,
+          },
+          error,
         );
       } else {
         logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
