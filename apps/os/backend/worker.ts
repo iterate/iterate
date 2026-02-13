@@ -76,7 +76,7 @@ function getErrorStatus(error: unknown): ContentfulStatusCode {
 app.use("*", async (c, next) => {
   return withRequestLogger(c.req.raw, async () => {
     // TODO(observability): disable Cloudflare invocation logs once evlog request logs are fully validated.
-    let status = c.res.status;
+    let status = 200;
     let unhandledError: Error | undefined;
     try {
       await next();
