@@ -185,6 +185,35 @@ function appendBoundedList(existing: unknown, value: unknown, limit: number): un
   return [...list, value].slice(-limit);
 }
 
+function findEmbeddedError(value: unknown, seen = new WeakSet<object>()): Error | undefined {
+  if (value instanceof Error) return value;
+  if (value === null || typeof value !== "object") return undefined;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const embeddedError = findEmbeddedError(item, seen);
+      if (embeddedError) return embeddedError;
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) return undefined;
+
+  for (const key of ["error", "err", "cause"] as const) {
+    const embeddedError = findEmbeddedError(value[key], seen);
+    if (embeddedError) return embeddedError;
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const embeddedError = findEmbeddedError(nestedValue, seen);
+    if (embeddedError) return embeddedError;
+  }
+
+  return undefined;
+}
+
 function normalizeLogArgs(args: unknown[]): { event: LogEvent; error?: Error } {
   const event: LogEvent = {};
   const extraArgs: unknown[] = [];
@@ -206,6 +235,10 @@ function normalizeLogArgs(args: unknown[]): { event: LogEvent; error?: Error } {
     }
 
     if (isRecord(arg)) {
+      if (!error) {
+        const embeddedError = findEmbeddedError(arg);
+        if (embeddedError) error = embeddedError;
+      }
       Object.assign(event, sanitizeValue(arg));
       continue;
     }
