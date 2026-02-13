@@ -41,11 +41,29 @@ const IterateConfig = z.object({
   userId: z.string(),
 });
 
-const IterateConfigFileShape = z.object({
-  // global: IterateConfig.optional(), // could add something like this mebe
-
-  workspaces: z.record(z.string().describe("workspace dir path"), IterateConfig),
+const IterateLauncherConfig = z.object({
+  /** Local path to iterate/iterate checkout used by npm launcher package */
+  repoPath: z.string().optional(),
+  /** Optional git ref (branch/tag/sha) for launcher-managed checkout */
+  repoRef: z.string().optional(),
+  /** Whether launcher should auto-run dependency installation */
+  autoInstall: z.boolean().optional(),
+  /** Optional git remote URL for launcher-managed checkout */
+  repoUrl: z.string().optional(),
 });
+
+const IterateConfigDefaults = IterateConfig.partial().extend(IterateLauncherConfig.shape);
+
+const IterateConfigFileShape = z
+  .object({
+    global: IterateConfigDefaults.optional(),
+    /** Backward-compat launcher config; replaced by global/workspaces overrides */
+    launcher: IterateLauncherConfig.optional(),
+    workspaces: z
+      .record(z.string().describe("workspace dir path"), IterateConfigDefaults)
+      .default({}),
+  })
+  .passthrough();
 
 const getIterateConfigFilePath = () => {
   return path.join(os.homedir(), ".iterate/.iterate.json");
@@ -64,16 +82,23 @@ const getIterateConfig = () => {
   const file = getIterateConfigFile();
   if (!file) {
     throw new Error(
-      `Config file ${getIterateConfigFilePath()} does not exist. Have you run \`iterate setup\`?`,
+      `Config file ${getIterateConfigFilePath()} does not exist. Add auth config in global/workspaces (baseUrl, adminPasswordEnvVarName, userId).`,
     );
   }
-  const config = file.workspaces[process.cwd()];
-  if (!config) {
+
+  const mergedConfig = {
+    ...(file.launcher ?? {}),
+    ...(file.global ?? {}),
+    ...(file.workspaces[process.cwd()] ?? {}),
+  };
+
+  const parsed = IterateConfig.safeParse(mergedConfig);
+  if (!parsed.success) {
     throw new Error(
-      `Config file ${getIterateConfigFilePath()} does not contain a config for the current working directory. Have you run \`iterate setup\`?`,
+      `Config file ${getIterateConfigFilePath()} is missing auth config for the current working directory after merging global/workspaces: ${z.prettifyError(parsed.error)}`,
     );
   }
-  return config;
+  return parsed.data;
 };
 
 /** Set-Cookie → Cookie header: extract name=value, merge same keys (last wins). */
@@ -154,30 +179,6 @@ const authDance = async () => {
 };
 
 const router = t.router({
-  setup: t.procedure.input(IterateConfig).mutation(async ({ input }) => {
-    const file = await Promise.resolve()
-      .then(() => getIterateConfigFile())
-      .catch((e) => {
-        if (e instanceof z.ZodError) {
-          throw new Error(
-            `${getIterateConfigFilePath()} is not valid: ${z.prettifyError(e)}. Please fix it manually or delete it.`,
-          );
-        }
-        return null;
-      });
-
-    const configPath = getIterateConfigFilePath();
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const newFile = {
-      ...file,
-      workspaces: {
-        ...file?.workspaces,
-        [process.cwd()]: input,
-      },
-    };
-    fs.writeFileSync(configPath, JSON.stringify(newFile, null, 2));
-    return configPath;
-  }),
   whoami: t.procedure.mutation(async () => {
     const { userClient } = await authDance();
     return await userClient.getSession();
@@ -192,6 +193,11 @@ export const cli = createCli({
   description: "Iterate CLI - Daemon and agent management",
 });
 
+const isAgent =
+  process.env.AGENT === "1" ||
+  process.env.OPENCODE === "1" ||
+  !!process.env.OPENCODE_SESSION ||
+  !!process.env.CLAUDE_CODE;
 cli.run({
-  prompts,
+  prompts: isAgent ? undefined : prompts,
 });
