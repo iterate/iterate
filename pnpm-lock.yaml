@@ -854,6 +854,9 @@ importers:
       effect:
         specifier: ^3.16.0
         version: 3.19.14
+      evlog:
+        specifier: ^1.7.0
+        version: 1.7.0
       hono:
         specifier: ^4.10.7
         version: 4.11.3
@@ -908,9 +911,6 @@ importers:
       resend:
         specifier: ^6.8.0
         version: 6.8.0
-      safe-stringify:
-        specifier: ^1.2.0
-        version: 1.2.0
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -8109,6 +8109,23 @@ packages:
   eventsource-parser@3.0.6:
     resolution: {integrity: sha512-Vo1ab+QXPzZ4tCa8SwIHJFaSzy4R6SHf7BY79rFBDf0idraZWAkYrDjDj8uWaSm3S2TK+hJ7/t1CEmZ7jXw+pg==}
     engines: {node: '>=18.0.0'}
+
+  evlog@1.7.0:
+    resolution: {integrity: sha512-O13k9/omtY6MAlK1ESJj+FRCBL2bvqyu0qXGNplZbqv+kuEBDUx1QnURBZnEYQYOg5dpwLlurnf6p0uhS9AZCw==}
+    peerDependencies:
+      '@nuxt/kit': ^4.3.1
+      h3: ^1.15.5
+      nitropack: ^2.13.1
+      ofetch: ^1.5.1
+    peerDependenciesMeta:
+      '@nuxt/kit':
+        optional: true
+      h3:
+        optional: true
+      nitropack:
+        optional: true
+      ofetch:
+        optional: true
 
   execa@9.6.0:
     resolution: {integrity: sha512-jpWzZ1ZhwUmeWRhS7Qv3mhpOhLfwI+uAX4e5fOcXqwMR7EcJ0pj2kV1CVzHVMX/LphnKWD3LObjZCoJ71lKpHw==}
@@ -20081,6 +20098,8 @@ snapshots:
   events@3.3.0: {}
 
   eventsource-parser@3.0.6: {}
+
+  evlog@1.7.0: {}
 
   execa@9.6.0:
     dependencies:

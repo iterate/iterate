@@ -4,6 +4,7 @@ import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
@@ -25,7 +26,7 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
-import { logger } from "./tag-logger.ts";
+import { emitRequestLog, logger, withRequestLogger } from "./tag-logger.ts";
 import { captureServerException } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
@@ -57,6 +58,43 @@ registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+function getErrorStatus(error: unknown): ContentfulStatusCode {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+  ) {
+    return (error as { status: ContentfulStatusCode }).status;
+  }
+  return 500;
+}
+
+app.use("*", async (c, next) => {
+  return withRequestLogger(c.req.raw, async () => {
+    // TODO(observability): disable Cloudflare invocation logs once evlog request logs are fully validated.
+    let status = c.res.status;
+    try {
+      await next();
+      status = c.res.status;
+    } catch (error) {
+      const throwable = error instanceof Error ? error : new Error(String(error));
+      logger.error(
+        "Unhandled request error",
+        {
+          path: c.req.path,
+          method: c.req.method,
+        },
+        throwable,
+      );
+      status = getErrorStatus(error);
+      throw error;
+    } finally {
+      emitRequestLog({ status });
+    }
+  });
+});
 
 app.use("*", async (c, next) => {
   initializeOtel(c.env as Record<string, unknown>);
@@ -165,6 +203,7 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
 });
 
 app.onError((err, c) => {
+  const status = getErrorStatus(err);
   logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
 
   // Capture exception to PostHog with user context
@@ -182,7 +221,7 @@ app.onError((err, c) => {
     }),
   );
 
-  return c.json({ error: "Internal Server Error" }, 500);
+  return c.json({ error: "Internal Server Error" }, status);
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
@@ -245,27 +284,25 @@ const orpcHandler = new RPCHandler(workerRouter, {
         typeof (error as { status?: unknown }).status === "number"
           ? (error as { status: number }).status
           : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
+      const throwable = error instanceof Error ? error : new Error(String(error));
+      const errorContext = {
+        status: maybeStatus,
+        url: params.request.url,
+        errorName: throwable.name,
+        errorMessage: throwable.message,
+      };
 
       const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
         (error as { message?: unknown })?.message ?? error,
       )}`;
 
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
+        logger.error(message, errorContext, throwable);
       } else {
-        logger.warn(message, errorDetails);
+        logger.warn("oRPC non-5xx error", {
+          ...errorContext,
+          detail: message,
+        });
       }
     }),
   ],
