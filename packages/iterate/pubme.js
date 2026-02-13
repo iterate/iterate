@@ -29,7 +29,12 @@ const router = t.router({
       if (status !== "") {
         return { success: false, reason: "Uncommitted changes:\n" + status };
       }
-      execSync(`npm publish`);
+      let otp = await prompts.text({ message: "Enter your npm OTP" });
+      otp = otp.trim();
+      if (!otp.match(/^\d{6}$/)) {
+        return { success: false, reason: "Invalid OTP: " + otp };
+      }
+      execSync(`npm publish --otp=${otp}`);
       return { success: true };
     }),
 });
