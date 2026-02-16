@@ -1,18 +1,68 @@
-import safeStringify from "safe-stringify";
+import {
+  appendRequestEvlogMessage,
+  recordRequestEvlogError,
+  setRequestEvlogContext,
+} from "./evlog.ts";
 
-const appStage = process.env.VITE_APP_STAGE || process.env.APP_STAGE;
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-/* eslint-disable no-console -- This is the logger wrapper, console usage is intentional */
-export const logger = appStage?.match(/pro?d/)
-  ? {
-      debug: (...args: unknown[]) => console.info("[DEBUG]" + safeStringify(args)),
-      info: (...args: unknown[]) => console.info("[INFO]" + safeStringify(args)),
-      warn: (...args: unknown[]) => console.info("[WARN]" + safeStringify(args)),
-      error: (...args: unknown[]) => console.info("[ERROR]" + safeStringify(args)),
+function toMessagePart(arg: unknown): string {
+  if (typeof arg === "string") return arg;
+  if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+  try {
+    return JSON.stringify(arg);
+  } catch {
+    return String(arg);
+  }
+}
+
+function buildLogParts(args: unknown[]): {
+  message: string;
+  context: Record<string, unknown>;
+  embeddedError?: Error;
+} {
+  const message = args.length === 0 ? "log" : args.map((arg) => toMessagePart(arg)).join(" ");
+  const context: Record<string, unknown> = {};
+  let embeddedError: Error | undefined;
+
+  for (const arg of args) {
+    if (arg instanceof Error) {
+      embeddedError ??= arg;
+      continue;
     }
-  : {
-      debug: (...args: unknown[]) => console.debug(...args),
-      info: (...args: unknown[]) => console.info(...args),
-      warn: (...args: unknown[]) => console.warn(...args),
-      error: (...args: unknown[]) => console.error(...args),
-    };
+    if (!arg || typeof arg !== "object" || Array.isArray(arg)) continue;
+
+    const record = arg as Record<string, unknown>;
+    Object.assign(context, record);
+    for (const key of ["error", "err", "cause"] as const) {
+      const candidate = record[key];
+      if (candidate instanceof Error) {
+        embeddedError ??= candidate;
+      }
+    }
+  }
+
+  return { message, context, embeddedError };
+}
+
+function writeToEvlog(level: LogLevel, args: unknown[]): void {
+  const { message, context, embeddedError } = buildLogParts(args);
+
+  if (Object.keys(context).length > 0) {
+    setRequestEvlogContext(context);
+  }
+
+  if (level === "error") {
+    const error = embeddedError ?? new Error(message);
+    recordRequestEvlogError(error, { ...context, message });
+    return;
+  }
+
+  appendRequestEvlogMessage(level, message);
+}
+export const logger = {
+  debug: (...args: unknown[]) => writeToEvlog("debug", args),
+  info: (...args: unknown[]) => writeToEvlog("info", args),
+  warn: (...args: unknown[]) => writeToEvlog("warn", args),
+  error: (...args: unknown[]) => writeToEvlog("error", args),
+};
