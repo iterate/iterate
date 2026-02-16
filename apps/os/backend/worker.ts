@@ -91,6 +91,19 @@ app.use("*", async (c, next) => {
       try {
         await next();
         status = c.res.status;
+      } catch (err) {
+        const userId = c.var.session?.user?.id;
+        logger.error(
+          `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+          {
+            path: c.req.path,
+            method: c.req.method,
+            status: 500,
+            ...(typeof userId === "string" ? { userId } : {}),
+          },
+          err,
+        );
+        throw err;
       } finally {
         const userId = c.var.session?.user?.id;
         flushRequestEvlog({
@@ -287,19 +300,7 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   );
 });
 
-app.onError((err, c) => {
-  const userId = c.var.session?.user?.id;
-  logger.error(
-    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-    {
-      path: c.req.path,
-      method: c.req.method,
-      status: 500,
-      ...(typeof userId === "string" ? { userId } : {}),
-    },
-    err,
-  );
-
+app.onError((_err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
