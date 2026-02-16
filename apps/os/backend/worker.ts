@@ -181,6 +181,11 @@ app.get("/api/observability", (c) => {
   });
 });
 
+app.post("/api/debug/trigger-error", (c) => {
+  const reason = c.req.query("reason") ?? "manual-test";
+  throw new Error(`Intentional debug error for telemetry testing (${reason})`);
+});
+
 app.use(
   cors({
     origin: (origin, c: Context<{ Bindings: CloudflareEnv }>) => {
@@ -203,7 +208,9 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const orpcCaller = createRouterClient(appRouter, { context: createContext(c) });
+  const orpcCaller = createRouterClient(appRouter, {
+    context: createContext(c),
+  });
   c.set("orpcCaller", orpcCaller);
   return next();
 });
@@ -371,7 +378,11 @@ const appOrpcHandler = new RPCHandler(appRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),
@@ -435,7 +446,11 @@ const daemonOrpcHandler = new RPCHandler(workerRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),

@@ -43,7 +43,7 @@ The server exposes an **OpenAPI 3.1.1** specification at `/doc`, enabling auto-g
 
 | Endpoint              | Protocol  | Purpose                                             |
 | --------------------- | --------- | --------------------------------------------------- |
-| `/global/health`      | HTTP GET  | Health check returning `{ healthy: true, version }` |
+| ``                    | HTTP GET  | Health check returning `{ healthy: true, version }` |
 | `/global/event`       | SSE       | System-wide event stream                            |
 | `/session/:id/prompt` | SSE       | AI response streaming                               |
 | `/pty/:id/connect`    | WebSocket | Bidirectional PTY connection                        |

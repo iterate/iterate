@@ -98,7 +98,9 @@ git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
 
 ## Creating Pull Requests
 
-When creating PRs, always include attribution in the PR description so reviewers know the context:
+When creating PRs, always include attribution in the PR description so reviewers know the context.
+
+**Important:** Always include the hidden routing block at the very end of the PR body. This enables automated webhook routing back to the current agent path (even when the PR was created outside the default `/github/<owner>/<repo>/pr-<number>` path). Use the `ITERATE_GITHUB_APP_SLUG` env var (falls back to `iterate` if not set).
 
 ```markdown
 ## Context
@@ -106,6 +108,11 @@ When creating PRs, always include attribution in the PR description so reviewers
 - **Requested by:** @github-username (or "Name on Slack" if no GitHub match)
 - **Slack thread:** [link to thread]
 - **Agent session:** [clickable link to attach]
+
+<!-- iterate-agent-context
+agent_path: /github/<owner>/<repo>/pr-<number>  # replace with your current agent path
+-->
+<!-- ${ITERATE_GITHUB_APP_SLUG:-iterate}:agent-pr -->
 ```
 
 **GitHub @-tagging rule:** When attributing a PR to a user with a GitHub `@username`, you MUST verify that username appears in recent git history first (e.g., `git log --format='%an <%ae>' | sort -u` and cross-reference). If you cannot confirm the GitHub username from git history, do NOT guess — just write "Requested by: Their Name on Slack" instead.
