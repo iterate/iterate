@@ -4,7 +4,20 @@
     "cloudflare-observability": {
       "type": "remote",
       "url": "https://observability.mcp.cloudflare.com/mcp",
-      "enabled": true
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}"
+      }
+    },
+    "posthog": {
+      "type": "remote",
+      "url": "https://mcp-eu.posthog.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:POSTHOG_KEY}"
+      }
     },
     "exa": {
       "type": "remote",
