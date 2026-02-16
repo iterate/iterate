@@ -45,9 +45,9 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Set ANTHROPIC_API_KEY env var
-        run: echo "ANTHROPIC_API_KEY=$(doppler secrets get ANTHROPIC_API_KEY --plain)" >> $GITHUB_OUTPUT
+        run: echo "ANTHROPIC_API_KEY=$(doppler secrets get ANTHROPIC_API_KEY --plain)" >> $GITHUB_ENV
       - name: Set OPENAI_API_KEY env var
-        run: echo "OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --plain)" >> $GITHUB_OUTPUT
+        run: echo "OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --plain)" >> $GITHUB_ENV
       - name: Run agent
         uses: pullfrog/pullfrog@v0
         with:

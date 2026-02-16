@@ -76,7 +76,7 @@ export const setupDepot = [
 export const setEnvVar = (name: string, expression: string) =>
   ({
     name: `Set ${name} env var`,
-    run: `echo "${name}=${expression}" >> $GITHUB_OUTPUT`,
+    run: `echo "${name}=${expression}" >> $GITHUB_ENV`,
   }) satisfies Step;
 
 export const setDopplerEnvVar = (name: string) =>
