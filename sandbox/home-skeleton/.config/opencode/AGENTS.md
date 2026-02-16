@@ -109,6 +109,20 @@ When creating PRs, always include attribution in the PR description so reviewers
 - **Agent session:** [clickable link to attach]
 ```
 
+Also include this machine-readable block in every PR body (required for webhook routing):
+
+```markdown
+<!-- iterate-agent-context
+agent_path: /github/<owner>/<repo>/pr-<number>  # or your real agent path
+project_slug: <project-slug>
+machine_id: <machine-id>
+session_id: ses_xxxxx
+session_url: https://.../session/ses_xxxxx
+-->
+```
+
+If this block is missing, webhook automation may spin up a fallback agent path and post a bootstrap comment.
+
 Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
 
 To get your agent session link, first get your session ID using the `get-current-session-id` tool (installed at `~/.opencode/tool/get-current-session-id.ts`), then build the URL:

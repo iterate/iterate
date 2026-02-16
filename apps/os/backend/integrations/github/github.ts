@@ -6,6 +6,7 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import * as arctic from "arctic";
 import * as jose from "jose";
+import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
@@ -593,10 +594,14 @@ export async function listInstallationRepositories(
 // JSONata filters for webhook events - evaluated against { payload, env }
 // Return true to process the event, false to skip
 const WEBHOOK_FILTERS = {
-  // workflow_run: only process in prod when CI passes on main
-  workflow_run: "env.APP_STAGE = 'prd' and payload.workflow_run.head_branch = 'main'",
+  // workflow_run: process PR-linked runs in all stages, plus main-branch refresh flow in prd
+  workflow_run:
+    "(payload.workflow_run.pull_requests and $count(payload.workflow_run.pull_requests) > 0) or (env.APP_STAGE = 'prd' and payload.workflow_run.head_branch = 'main')",
   // commit_comment: require APP_STAGE=xxx tag in comment body to target specific environment
   commit_comment: `$contains(payload.comment.body, '[APP_STAGE=' & env.APP_STAGE & ']')`,
+  pull_request_review: "true",
+  pull_request_review_comment: "true",
+  issue_comment: "payload.issue.pull_request != null",
 };
 
 // #region ========== Webhook Handler ==========
@@ -736,6 +741,59 @@ githubApp.post("/webhook", async (c) => {
       }
       break;
     }
+    case "pull_request_review": {
+      const parseResult = PullRequestReviewEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handlePullRequestReview({ payload: parseResult.data, db: c.var.db, env: c.env }).catch(
+            (err: unknown) => {
+              logger.error("[GitHub Webhook] handlePullRequestReview error", err);
+            },
+          ),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handlePullRequestReview ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
+      }
+      break;
+    }
+    case "pull_request_review_comment": {
+      const parseResult = PullRequestReviewCommentEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handlePullRequestReviewComment({
+            payload: parseResult.data,
+            db: c.var.db,
+            env: c.env,
+          }).catch((err: unknown) => {
+            logger.error("[GitHub Webhook] handlePullRequestReviewComment error", err);
+          }),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handlePullRequestReviewComment ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
+      }
+      break;
+    }
+    case "issue_comment": {
+      const parseResult = IssueCommentEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handleIssueComment({ payload: parseResult.data, db: c.var.db, env: c.env }).catch(
+            (err: unknown) => {
+              logger.error("[GitHub Webhook] handleIssueComment error", err);
+            },
+          ),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handleIssueComment ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
+      }
+      break;
+    }
     default: {
       // ensure we've handled all event types
       eventType satisfies never;
@@ -787,12 +845,23 @@ const WorkflowRunEvent = z.object({
     head_sha: z.string(),
     path: z.string(),
     conclusion: z.string().nullable(),
+    html_url: z.string().optional(),
+    pull_requests: z
+      .array(
+        z.object({
+          number: z.number(),
+        }),
+      )
+      .optional()
+      .default([]),
     repository: z.object({
       full_name: z.string(),
     }),
   }),
   repository: z.object({
     full_name: z.string(),
+    owner: z.object({ login: z.string() }).optional(),
+    name: z.string().optional(),
   }),
 });
 
@@ -816,6 +885,722 @@ const CommitCommentEvent = z.object({
 
 type CommitCommentEvent = z.infer<typeof CommitCommentEvent>;
 
+const PullRequestRef = z.object({
+  number: z.number(),
+  title: z.string(),
+  body: z.string().nullable().optional(),
+  html_url: z.string(),
+  user: z.object({ login: z.string() }),
+});
+
+const RepositoryRef = z.object({
+  full_name: z.string(),
+  owner: z.object({ login: z.string() }).optional(),
+  name: z.string().optional(),
+});
+
+const PullRequestReviewEvent = z.object({
+  action: z.string(),
+  repository: RepositoryRef,
+  pull_request: PullRequestRef,
+  review: z.object({
+    id: z.number(),
+    body: z.string().nullable().optional(),
+    state: z.string().optional(),
+    html_url: z.string().optional(),
+    user: z.object({ login: z.string() }),
+  }),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+type PullRequestReviewEvent = z.infer<typeof PullRequestReviewEvent>;
+
+const PullRequestReviewCommentEvent = z.object({
+  action: z.string(),
+  repository: RepositoryRef,
+  pull_request: PullRequestRef,
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    html_url: z.string().optional(),
+    user: z.object({ login: z.string() }),
+  }),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+type PullRequestReviewCommentEvent = z.infer<typeof PullRequestReviewCommentEvent>;
+
+const IssueCommentEvent = z.object({
+  action: z.string(),
+  repository: RepositoryRef,
+  issue: z.object({
+    number: z.number(),
+    title: z.string(),
+    body: z.string().nullable().optional(),
+    html_url: z.string(),
+    user: z.object({ login: z.string() }),
+    pull_request: z.object({ url: z.string() }).nullable().optional(),
+  }),
+  comment: z.object({
+    id: z.number(),
+    body: z.string(),
+    html_url: z.string().optional(),
+    user: z.object({ login: z.string() }),
+  }),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+type IssueCommentEvent = z.infer<typeof IssueCommentEvent>;
+
+type RepositoryPayload = z.infer<typeof RepositoryRef>;
+
+type GitHubRepoCoordinates = {
+  owner: string;
+  name: string;
+  fullName: string;
+};
+
+type MachineProjectContext = {
+  projectId: string;
+  projectSlug: string;
+  machine: typeof schema.machine.$inferSelect;
+  installationId: number;
+};
+
+type GitHubPullRequestDetails = {
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  authorLogin: string;
+};
+
+type GitHubIssueComment = {
+  id: number;
+  body: string;
+  user: { login: string };
+};
+
+type GitHubReview = {
+  id: number;
+  body: string;
+  user: { login: string };
+};
+
+type GitHubReviewComment = {
+  id: number;
+  body: string;
+  user: { login: string };
+};
+
+type PullRequestContext = {
+  pullRequest: GitHubPullRequestDetails;
+  issueComments: GitHubIssueComment[];
+  reviews: GitHubReview[];
+  reviewComments: GitHubReviewComment[];
+};
+
+type ParsedAgentMarker = {
+  agentPath: string | null;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  projectSlug: string | null;
+  machineId: string | null;
+};
+
+type AgentTarget =
+  | {
+      kind: "path";
+      agentPath: string;
+    }
+  | {
+      kind: "opencode-session";
+      sessionId: string;
+    };
+
+type PullRequestSignal = {
+  repo: GitHubRepoCoordinates;
+  prNumber: number;
+  eventKind:
+    | "workflow_run"
+    | "pull_request_review"
+    | "pull_request_review_comment"
+    | "issue_comment";
+  action: string;
+  actorLogin: string;
+  eventBody: string;
+  eventUrl: string;
+};
+
+const AGENT_PATH_SEGMENT_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
+const AGENT_PATH_INLINE_PATTERN = /\[iterate-agent-path\]:\s*(\/[a-z0-9/-]+)/i;
+const SESSION_ID_PATTERN = /\bses_[a-zA-Z0-9_-]+\b/;
+
+function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
+  const split = repository.full_name.split("/");
+  const fallbackOwner = split[0]?.trim();
+  const fallbackName = split[1]?.trim();
+
+  const owner = repository.owner?.login?.trim() || fallbackOwner;
+  const name = repository.name?.trim() || fallbackName;
+
+  if (!owner || !name) return null;
+  return {
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+  };
+}
+
+function toPathSegment(value: string): string {
+  const normalized = value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-");
+  return normalized || "x";
+}
+
+function isValidAgentPath(path: string): boolean {
+  if (!path.startsWith("/")) return false;
+  if (path === "/") return false;
+  const segments = path.slice(1).split("/");
+  if (segments.length === 0) return false;
+  return segments.every((segment) => AGENT_PATH_SEGMENT_PATTERN.test(segment));
+}
+
+function parseSessionIdFromUrl(url: string): string | null {
+  const match = url.match(/\/session\/([^/?#]+)/i);
+  if (!match?.[1]) return null;
+  return match[1];
+}
+
+function parseAgentMarker(text: string | null | undefined): ParsedAgentMarker | null {
+  if (!text) return null;
+
+  const blockMatch = text.match(AGENT_MARKER_BLOCK_PATTERN);
+  let marker: ParsedAgentMarker | null = null;
+
+  if (blockMatch?.[1]) {
+    marker = {
+      agentPath: null,
+      sessionId: null,
+      sessionUrl: null,
+      projectSlug: null,
+      machineId: null,
+    };
+
+    for (const rawLine of blockMatch[1].split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const match = line.match(/^([a-z_]+)\s*:\s*(.+)$/i);
+      if (!match) continue;
+      const key = match[1].toLowerCase();
+      const value = match[2].trim();
+      if (!value) continue;
+
+      if (key === "agent_path" && isValidAgentPath(value)) marker.agentPath = value;
+      if (key === "session_id") marker.sessionId = value;
+      if (key === "session_url") marker.sessionUrl = value;
+      if (key === "project_slug") marker.projectSlug = value;
+      if (key === "machine_id") marker.machineId = value;
+    }
+  }
+
+  if (!marker) {
+    marker = {
+      agentPath: null,
+      sessionId: null,
+      sessionUrl: null,
+      projectSlug: null,
+      machineId: null,
+    };
+  }
+
+  if (!marker.agentPath) {
+    const inlinePath = text.match(AGENT_PATH_INLINE_PATTERN)?.[1]?.trim();
+    if (inlinePath && isValidAgentPath(inlinePath)) {
+      marker.agentPath = inlinePath;
+    }
+  }
+
+  if (!marker.sessionId && marker.sessionUrl) {
+    marker.sessionId = parseSessionIdFromUrl(marker.sessionUrl);
+  }
+
+  if (!marker.sessionId) {
+    const sessionIdMatch = text.match(SESSION_ID_PATTERN);
+    if (sessionIdMatch?.[0]) marker.sessionId = sessionIdMatch[0];
+  }
+
+  if (
+    !marker.agentPath &&
+    !marker.sessionId &&
+    !marker.projectSlug &&
+    !marker.machineId &&
+    !marker.sessionUrl
+  ) {
+    return null;
+  }
+
+  return marker;
+}
+
+function findAgentMarker(context: PullRequestContext): ParsedAgentMarker | null {
+  const sources = [
+    context.pullRequest.body,
+    ...context.issueComments.map((comment) => comment.body),
+    ...context.reviews.map((review) => review.body),
+    ...context.reviewComments.map((comment) => comment.body),
+  ];
+
+  for (const sourceText of sources) {
+    const marker = parseAgentMarker(sourceText);
+    if (marker) return marker;
+  }
+
+  return null;
+}
+
+function containsBotMention(
+  text: string | null | undefined,
+  botHandles: readonly string[],
+): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return botHandles.some((handle) => lower.includes(handle));
+}
+
+function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: number): string {
+  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
+}
+
+function buildMarkerBlock(params: {
+  agentPath: string;
+  projectSlug: string;
+  machineId: string;
+}): string {
+  return [
+    "<!-- iterate-agent-context",
+    `agent_path: ${params.agentPath}`,
+    `project_slug: ${params.projectSlug}`,
+    `machine_id: ${params.machineId}`,
+    "-->",
+  ].join("\n");
+}
+
+function buildBootstrapComment(params: {
+  markerBlock: string;
+  eventKind: PullRequestSignal["eventKind"];
+}): string {
+  return [
+    "Iterate linked this PR to an agent session for automated follow-up on checks/reviews/comments.",
+    "",
+    params.markerBlock,
+    "",
+    `<!-- iterate-agent-bootstrap event=${params.eventKind} -->`,
+  ].join("\n");
+}
+
+function selectAgentTarget(
+  marker: ParsedAgentMarker | null,
+  fallbackAgentPath: string,
+): AgentTarget {
+  if (marker?.agentPath && isValidAgentPath(marker.agentPath)) {
+    return { kind: "path", agentPath: marker.agentPath };
+  }
+
+  if (marker?.sessionId) {
+    return { kind: "opencode-session", sessionId: marker.sessionId };
+  }
+
+  return { kind: "path", agentPath: fallbackAgentPath };
+}
+
+function buildPullRequestPrompt(params: {
+  signal: PullRequestSignal;
+  pullRequest: GitHubPullRequestDetails;
+  target: AgentTarget;
+  usedFallback: boolean;
+}): string {
+  const targetLine =
+    params.target.kind === "path"
+      ? `Target agent path: ${params.target.agentPath}`
+      : `Target session id: ${params.target.sessionId}`;
+
+  const bodySection = params.signal.eventBody
+    ? ["", "Event body:", params.signal.eventBody].join("\n")
+    : "";
+
+  return [
+    "[GitHub PR Event]",
+    `Repo: ${params.signal.repo.fullName}`,
+    `PR: #${params.pullRequest.number} ${params.pullRequest.htmlUrl}`,
+    `PR title: ${params.pullRequest.title}`,
+    `PR author: ${params.pullRequest.authorLogin}`,
+    `Event: ${params.signal.eventKind}`,
+    `Action: ${params.signal.action}`,
+    `Actor: ${params.signal.actorLogin}`,
+    `Event URL: ${params.signal.eventUrl}`,
+    targetLine,
+    `Fallback target used: ${params.usedFallback ? "yes" : "no"}`,
+    bodySection,
+  ].join("\n");
+}
+
+async function buildMachineForwardFetcher(
+  machine: typeof schema.machine.$inferSelect,
+  env: CloudflareEnv,
+): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
+  const metadata = machine.metadata as Record<string, unknown> | null;
+
+  try {
+    const runtime = await createMachineStub({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata: metadata ?? {},
+    });
+    return await runtime.getFetcher(3000);
+  } catch (err) {
+    logger.warn("[GitHub Webhook] Failed to build machine forward fetcher", {
+      machineId: machine.id,
+      machineType: machine.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+async function forwardPromptToMachine(params: {
+  machine: typeof schema.machine.$inferSelect;
+  env: CloudflareEnv;
+  target: AgentTarget;
+  prompt: string;
+}) {
+  const fetcher = await buildMachineForwardFetcher(params.machine, params.env);
+  if (!fetcher) throw new Error("Could not build machine forward fetcher");
+
+  const path =
+    params.target.kind === "path"
+      ? `/api/agents${params.target.agentPath}`
+      : `/api/opencode/sessions/${encodeURIComponent(params.target.sessionId)}`;
+
+  const response = await fetcher(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: params.prompt }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "<no body>");
+    throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
+  }
+}
+
+async function githubApiRequestJson<T>(params: {
+  token: string;
+  url: string;
+  method?: "GET" | "POST";
+  body?: unknown;
+}): Promise<T> {
+  const response = await fetch(params.url, {
+    method: params.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "Iterate-OS",
+      ...(params.body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "<no body>");
+    throw new Error(`GitHub API ${response.status} for ${params.url}: ${body.slice(0, 500)}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function listRepoMachineContexts(params: {
+  db: DB;
+  owner: string;
+  name: string;
+}): Promise<MachineProjectContext[]> {
+  const repos = await params.db.query.projectRepo.findMany({
+    where: (pr, { eq: whereEq, and: whereAnd }) =>
+      whereAnd(whereEq(pr.owner, params.owner), whereEq(pr.name, params.name)),
+    with: {
+      project: {
+        with: {
+          machines: {
+            where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
+            limit: 1,
+          },
+        },
+      },
+    },
+  });
+
+  const contexts = await Promise.all(
+    repos.map(async (repo): Promise<MachineProjectContext | null> => {
+      const machine = repo.project?.machines?.[0] ?? null;
+      if (!machine) return null;
+
+      const githubConnection = await params.db.query.projectConnection.findFirst({
+        where: (connection, { eq: whereEq, and: whereAnd }) =>
+          whereAnd(
+            whereEq(connection.projectId, repo.projectId),
+            whereEq(connection.provider, "github-app"),
+          ),
+      });
+
+      const providerData = githubConnection?.providerData as
+        | { installationId?: number }
+        | undefined;
+      const installationId = providerData?.installationId;
+      if (!installationId) return null;
+
+      return {
+        projectId: repo.projectId,
+        projectSlug: repo.project.slug,
+        machine,
+        installationId,
+      };
+    }),
+  );
+
+  return contexts.filter((context): context is MachineProjectContext => Boolean(context));
+}
+
+async function fetchPullRequestContext(params: {
+  token: string;
+  repo: GitHubRepoCoordinates;
+  prNumber: number;
+}): Promise<PullRequestContext> {
+  const repoPrefix = `https://api.github.com/repos/${params.repo.owner}/${params.repo.name}`;
+
+  const [pullRequest, issueComments, reviews, reviewComments] = await Promise.all([
+    githubApiRequestJson<{
+      number: number;
+      title: string;
+      body: string | null;
+      html_url: string;
+      user: { login: string };
+    }>({ token: params.token, url: `${repoPrefix}/pulls/${params.prNumber}` }),
+    githubApiRequestJson<GitHubIssueComment[]>({
+      token: params.token,
+      url: `${repoPrefix}/issues/${params.prNumber}/comments?per_page=100`,
+    }),
+    githubApiRequestJson<GitHubReview[]>({
+      token: params.token,
+      url: `${repoPrefix}/pulls/${params.prNumber}/reviews?per_page=100`,
+    }),
+    githubApiRequestJson<GitHubReviewComment[]>({
+      token: params.token,
+      url: `${repoPrefix}/pulls/${params.prNumber}/comments?per_page=100`,
+    }),
+  ]);
+
+  return {
+    pullRequest: {
+      number: pullRequest.number,
+      title: pullRequest.title,
+      body: pullRequest.body ?? "",
+      htmlUrl: pullRequest.html_url,
+      authorLogin: pullRequest.user.login,
+    },
+    issueComments,
+    reviews,
+    reviewComments,
+  };
+}
+
+async function ensureBootstrapComment(params: {
+  token: string;
+  repo: GitHubRepoCoordinates;
+  prNumber: number;
+  markerBlock: string;
+  eventKind: PullRequestSignal["eventKind"];
+  existingIssueComments: GitHubIssueComment[];
+}): Promise<void> {
+  const markerPath = parseAgentMarker(params.markerBlock)?.agentPath;
+  if (!markerPath) return;
+
+  const existing = params.existingIssueComments.some((comment) => {
+    const marker = parseAgentMarker(comment.body);
+    return marker?.agentPath === markerPath;
+  });
+  if (existing) return;
+
+  const url = `https://api.github.com/repos/${params.repo.owner}/${params.repo.name}/issues/${params.prNumber}/comments`;
+  await githubApiRequestJson<{ id: number }>({
+    token: params.token,
+    url,
+    method: "POST",
+    body: {
+      body: buildBootstrapComment({ markerBlock: params.markerBlock, eventKind: params.eventKind }),
+    },
+  });
+}
+
+function shouldProcessSignal(params: {
+  context: PullRequestContext;
+  marker: ParsedAgentMarker | null;
+  botHandles: readonly string[];
+}): boolean {
+  const { context, marker, botHandles } = params;
+  const authorIsBot = botHandles.some((handle) => {
+    const login = handle.slice(1);
+    return context.pullRequest.authorLogin.toLowerCase() === login;
+  });
+  if (authorIsBot) return true;
+  if (marker) return true;
+
+  const mentionsInTitleOrBody =
+    containsBotMention(context.pullRequest.title, botHandles) ||
+    containsBotMention(context.pullRequest.body, botHandles);
+  if (mentionsInTitleOrBody) return true;
+
+  const mentionsInIssueComments = context.issueComments.some((comment) =>
+    containsBotMention(comment.body, botHandles),
+  );
+  if (mentionsInIssueComments) return true;
+
+  const mentionsInReviews = context.reviews.some((review) =>
+    containsBotMention(review.body, botHandles),
+  );
+  if (mentionsInReviews) return true;
+
+  const mentionsInReviewComments = context.reviewComments.some((comment) =>
+    containsBotMention(comment.body, botHandles),
+  );
+  return mentionsInReviewComments;
+}
+
+async function routePullRequestSignalToAgent(params: {
+  db: DB;
+  env: CloudflareEnv;
+  signal: PullRequestSignal;
+}) {
+  const allContexts = await listRepoMachineContexts({
+    db: params.db,
+    owner: params.signal.repo.owner,
+    name: params.signal.repo.name,
+  });
+
+  if (allContexts.length === 0) {
+    logger.debug("[GitHub Webhook] No active machine context for PR signal", {
+      repo: params.signal.repo.fullName,
+      prNumber: params.signal.prNumber,
+      eventKind: params.signal.eventKind,
+    });
+    return;
+  }
+
+  const bootstrapContext = allContexts[0];
+  const bootstrapToken = await getGitHubInstallationToken(
+    params.env,
+    bootstrapContext.installationId,
+  );
+  if (!bootstrapToken) {
+    throw new Error(
+      `Could not get GitHub installation token for installation ${bootstrapContext.installationId}`,
+    );
+  }
+
+  const prContext = await fetchPullRequestContext({
+    token: bootstrapToken,
+    repo: params.signal.repo,
+    prNumber: params.signal.prNumber,
+  });
+
+  const marker = findAgentMarker(prContext);
+
+  const contexts = marker?.projectSlug
+    ? allContexts.filter((context) => context.projectSlug === marker.projectSlug)
+    : allContexts;
+
+  if (contexts.length !== 1) {
+    throw new Error(
+      `Ambiguous Iterate project mapping for ${params.signal.repo.fullName}#${params.signal.prNumber}. Matched projects: ${contexts.map((context) => context.projectSlug).join(", ") || "none"}`,
+    );
+  }
+
+  const context = contexts[0];
+  const token =
+    context.installationId === bootstrapContext.installationId
+      ? bootstrapToken
+      : await getGitHubInstallationToken(params.env, context.installationId);
+  if (!token) {
+    throw new Error(
+      `Could not get GitHub installation token for installation ${context.installationId}`,
+    );
+  }
+
+  const botLogin = `${params.env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
+  const botHandles = [`@${botLogin}`, `@${params.env.GITHUB_APP_SLUG.toLowerCase()}`] as const;
+
+  const shouldProcess = shouldProcessSignal({ context: prContext, marker, botHandles });
+  if (!shouldProcess) {
+    logger.debug("[GitHub Webhook] PR signal ignored by gate", {
+      repo: params.signal.repo.fullName,
+      prNumber: params.signal.prNumber,
+      eventKind: params.signal.eventKind,
+      action: params.signal.action,
+    });
+    return;
+  }
+
+  const fallbackAgentPath = buildDeterministicAgentPath(params.signal.repo, params.signal.prNumber);
+  const target = selectAgentTarget(marker, fallbackAgentPath);
+
+  if (!marker) {
+    const markerBlock = buildMarkerBlock({
+      agentPath: fallbackAgentPath,
+      projectSlug: context.projectSlug,
+      machineId: context.machine.id,
+    });
+    await ensureBootstrapComment({
+      token,
+      repo: params.signal.repo,
+      prNumber: params.signal.prNumber,
+      markerBlock,
+      eventKind: params.signal.eventKind,
+      existingIssueComments: prContext.issueComments,
+    });
+  }
+
+  const prompt = buildPullRequestPrompt({
+    signal: params.signal,
+    pullRequest: prContext.pullRequest,
+    target,
+    usedFallback: !marker,
+  });
+
+  await forwardPromptToMachine({
+    machine: context.machine,
+    env: params.env,
+    target,
+    prompt,
+  });
+
+  logger.info("[GitHub Webhook] Routed PR signal to agent", {
+    repo: params.signal.repo.fullName,
+    prNumber: params.signal.prNumber,
+    eventKind: params.signal.eventKind,
+    action: params.signal.action,
+    projectSlug: context.projectSlug,
+    targetKind: target.kind,
+    target: target.kind === "path" ? target.agentPath : target.sessionId,
+    usedFallback: !marker,
+  });
+}
+
 /**
  * Handle a workflow_run event. Checks if this is an event we care about
  * and takes appropriate action.
@@ -825,6 +1610,25 @@ type CommitCommentEvent = z.infer<typeof CommitCommentEvent>;
  */
 async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) {
   const { workflow_run } = payload;
+
+  const workflowRepo = resolveRepoCoordinates(payload.repository);
+  if (workflowRepo && workflow_run.pull_requests.length > 0) {
+    for (const pullRequest of workflow_run.pull_requests) {
+      await routePullRequestSignalToAgent({
+        db,
+        env,
+        signal: {
+          repo: workflowRepo,
+          prNumber: pullRequest.number,
+          eventKind: "workflow_run",
+          action: payload.action,
+          actorLogin: "github-actions[bot]",
+          eventBody: `Workflow: ${workflow_run.name}\nConclusion: ${workflow_run.conclusion ?? "unknown"}\nHead branch: ${workflow_run.head_branch}`,
+          eventUrl: workflow_run.html_url ?? "",
+        },
+      });
+    }
+  }
 
   // Check if this is an iterate/iterate CI completion on main
   if (!IterateCICompletion.safeParse(payload).success) {
@@ -915,6 +1719,74 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
   });
 }
 
+async function handlePullRequestReview({ payload, db, env }: HandlePullRequestReviewParams) {
+  if (payload.action === "dismissed") return;
+
+  const repo = resolveRepoCoordinates(payload.repository);
+  if (!repo) return;
+
+  await routePullRequestSignalToAgent({
+    db,
+    env,
+    signal: {
+      repo,
+      prNumber: payload.pull_request.number,
+      eventKind: "pull_request_review",
+      action: payload.action,
+      actorLogin: payload.review.user.login,
+      eventBody: payload.review.body?.trim() ?? "",
+      eventUrl: payload.review.html_url ?? payload.pull_request.html_url,
+    },
+  });
+}
+
+async function handlePullRequestReviewComment({
+  payload,
+  db,
+  env,
+}: HandlePullRequestReviewCommentParams) {
+  if (payload.action === "deleted") return;
+
+  const repo = resolveRepoCoordinates(payload.repository);
+  if (!repo) return;
+
+  await routePullRequestSignalToAgent({
+    db,
+    env,
+    signal: {
+      repo,
+      prNumber: payload.pull_request.number,
+      eventKind: "pull_request_review_comment",
+      action: payload.action,
+      actorLogin: payload.comment.user.login,
+      eventBody: payload.comment.body,
+      eventUrl: payload.comment.html_url ?? payload.pull_request.html_url,
+    },
+  });
+}
+
+async function handleIssueComment({ payload, db, env }: HandleIssueCommentParams) {
+  if (!payload.issue.pull_request) return;
+  if (payload.action === "deleted") return;
+
+  const repo = resolveRepoCoordinates(payload.repository);
+  if (!repo) return;
+
+  await routePullRequestSignalToAgent({
+    db,
+    env,
+    signal: {
+      repo,
+      prNumber: payload.issue.number,
+      eventKind: "issue_comment",
+      action: payload.action,
+      actorLogin: payload.comment.user.login,
+      eventBody: payload.comment.body,
+      eventUrl: payload.comment.html_url ?? payload.issue.html_url,
+    },
+  });
+}
+
 // Schema to identify CI completion events we want to act on
 const IterateCICompletion = z.object({
   action: z.literal("completed"),
@@ -930,6 +1802,24 @@ const IterateCICompletion = z.object({
 
 type HandleWorkflowRunParams = {
   payload: WorkflowRunEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+type HandlePullRequestReviewParams = {
+  payload: PullRequestReviewEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+type HandlePullRequestReviewCommentParams = {
+  payload: PullRequestReviewCommentEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+type HandleIssueCommentParams = {
+  payload: IssueCommentEvent;
   db: DB;
   env: CloudflareEnv;
 };
