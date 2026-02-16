@@ -25,6 +25,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
   - pidnap
+  - schematch
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"

@@ -407,6 +407,9 @@ importers:
       remark-stringify:
         specifier: ^11.0.0
         version: 11.0.0
+      schematch:
+        specifier: 0.2.1
+        version: 0.2.1
       shell-quote:
         specifier: ^1.8.3
         version: 1.8.3
@@ -10519,6 +10522,9 @@ packages:
   scheduler@0.27.0:
     resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
+  schematch@0.2.1:
+    resolution: {integrity: sha512-oU50xziqSI/x8HooCNUHgr1cYewGU3hujka3h6jsQD7eVESdyoj+CxoW9dqpmJl7BoIkZaKMi2Ejdw8aIk5+qw==}
+
   section-matter@1.0.0:
     resolution: {integrity: sha512-vfD3pmTzGpufjScBh50YHKzEu2lxBWhVEHsNGoEXmCmn2hKGfeNLYMzCJpe8cD7gqX7TJluOVpBkAequ6dgMmA==}
     engines: {node: '>=4'}
@@ -18013,7 +18019,7 @@ snapshots:
 
   '@types/pg@8.16.0':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
       pg-protocol: 1.11.0
       pg-types: 2.2.0
 
@@ -22955,6 +22961,8 @@ snapshots:
       xmlchars: 2.2.0
 
   scheduler@0.27.0: {}
+
+  schematch@0.2.1: {}
 
   section-matter@1.0.0:
     dependencies:
