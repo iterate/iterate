@@ -3,13 +3,27 @@ import { homedir } from "node:os";
 import * as pty from "@lydell/node-pty";
 import type { WSContext } from "hono/ws";
 import type { WebSocket } from "ws";
+import { match } from "schematch";
 import { Hono } from "hono";
 import XTermHeadless from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { z } from "zod/v4";
 import { upgradeWebSocket } from "../utils/hono.ts";
 
 const COMMAND_PREFIX = "\x00[command]\x00";
 const PTY_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const ResizePtyCommand = z.object({
+  type: z.literal("resize"),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+
+const ExecPtyCommand = z.object({
+  type: z.literal("exec"),
+  command: z.string().min(1),
+  autorun: z.boolean().optional(),
+});
 
 interface PtySession {
   id: string;
@@ -159,6 +173,30 @@ function detachFromSession(session: PtySession) {
   scheduleCleanup(session);
 }
 
+function handlePtyControlMessage(
+  session: PtySession,
+  ws: WSContext<WebSocket>,
+  payload: unknown,
+): boolean {
+  return match(payload)
+    .case(ResizePtyCommand, ({ cols, rows }) => {
+      session.ptyProcess.resize(cols, rows);
+      session.headlessTerminal.resize(cols, rows);
+      return true;
+    })
+    .case(ExecPtyCommand, ({ command, autorun }) => {
+      session.ptyProcess.write(command);
+      if (autorun) session.ptyProcess.write("\r\n");
+      return true;
+    })
+    .default<{ type?: string } | undefined>(({ input }) => {
+      if (input?.type === "exec") {
+        ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
+      }
+      return false;
+    });
+}
+
 ptyRouter.get(
   "/ws",
   upgradeWebSocket((c) => {
@@ -215,19 +253,8 @@ ptyRouter.get(
 
         if (text.startsWith(COMMAND_PREFIX)) {
           try {
-            const parsed = JSON.parse(text.slice(COMMAND_PREFIX.length));
-            if (parsed.type === "resize") {
-              session.ptyProcess.resize(parsed.cols, parsed.rows);
-              session.headlessTerminal.resize(parsed.cols, parsed.rows);
-            } else if (parsed.type === "exec") {
-              const { command, autorun } = parsed as { command?: string; autorun?: boolean };
-              if (!command) {
-                ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
-                return;
-              }
-              session.ptyProcess.write(command);
-              if (autorun) session.ptyProcess.write("\r\n");
-            }
+            const parsed = JSON.parse(text.slice(COMMAND_PREFIX.length)) as unknown;
+            handlePtyControlMessage(session, ws, parsed);
             return;
           } catch (error) {
             console.error(`[PTY] Failed to parse command: ${error}`);
