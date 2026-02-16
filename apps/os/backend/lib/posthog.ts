@@ -16,6 +16,23 @@ type PostHogCaptureBase = {
   timestamp?: string;
 };
 
+export type PostHogRequestContext = {
+  id: string;
+  method: string;
+  path: string;
+  status: number;
+  duration: number;
+  waitUntil: boolean;
+  parentRequestId?: string;
+  trpcProcedure?: string;
+  url?: string;
+};
+
+export type PostHogUserContext = {
+  id: string;
+  email: string;
+};
+
 function getTimestamp(timestamp?: string): string {
   return timestamp ?? new Date().toISOString();
 }
@@ -86,6 +103,8 @@ function parseStackTrace(stack: string | undefined): Array<{
 export async function sendPostHogException(
   params: PostHogCaptureBase & {
     error: Error;
+    request: PostHogRequestContext;
+    user: PostHogUserContext;
     properties?: Record<string, unknown>;
     lib?: string;
   },
@@ -111,6 +130,8 @@ export async function sendPostHogException(
       ],
       $environment: params.environment,
       $lib: params.lib ?? "posthog-fetch",
+      request: params.request,
+      user: params.user,
       ...params.properties,
     },
     timestamp: getTimestamp(params.timestamp),
@@ -148,37 +169,6 @@ export async function captureServerEvent(
     event: params.event,
     properties: params.properties,
     groups: params.groups,
-    environment: env.VITE_APP_STAGE,
-  });
-}
-
-/**
- * Capture an exception to PostHog error tracking via HTTP API.
- * Includes stack trace and additional context.
- * Use with waitUntil() in Cloudflare Workers to ensure delivery.
- */
-export async function captureServerException(
-  env: PostHogEnv,
-  params: {
-    distinctId: string;
-    error: Error;
-    properties?: Record<string, unknown>;
-  },
-): Promise<void> {
-  const apiKey = env.POSTHOG_PUBLIC_KEY;
-
-  if (!apiKey) {
-    if (env.VITE_APP_STAGE !== "prd") {
-      logger.warn("POSTHOG_PUBLIC_KEY not configured, skipping exception capture");
-    }
-    return;
-  }
-
-  await sendPostHogException({
-    apiKey,
-    distinctId: params.distinctId,
-    error: params.error,
-    properties: params.properties,
     environment: env.VITE_APP_STAGE,
   });
 }

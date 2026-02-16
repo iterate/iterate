@@ -1,9 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createRequestLogger, initLogger, log, type RequestLogger, type WideEvent } from "evlog";
-import { sendPostHogException } from "./lib/posthog.ts";
-
-const appStage =
-  process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
+import { createRequestLogger, log, type RequestLogger } from "evlog";
+import { reportRequestErrorToPostHog } from "./evlog-posthog.ts";
 
 type RequestEvlogEvent = Record<string, unknown>;
 type EvlogLevel = "debug" | "info" | "warn" | "error";
@@ -17,13 +14,16 @@ type WaitUntilExecutionContext = {
   waitUntil: (promise: Promise<unknown>) => void;
 };
 
+type RequestMetadata = {
+  requestId: string;
+  method: string;
+  path: string;
+};
+
 type RequestEvlogContext = {
   logger: RequestLogger<RequestEvlogEvent>;
   env?: PostHogEnv;
   executionCtx?: WaitUntilExecutionContext;
-  requestId: string;
-  method: string;
-  path: string;
   flushed: boolean;
   waitUntilSequence: number;
   error?: Error;
@@ -31,26 +31,36 @@ type RequestEvlogContext = {
 
 const requestEvlogStorage = new AsyncLocalStorage<RequestEvlogContext>();
 
-initLogger({
-  env: {
-    service: "os-backend",
-    environment: appStage,
-  },
-  stringify: false,
-});
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getEventStringField(event: WideEvent, key: string): string | undefined {
-  const value = event[key];
+function getString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getEventNumberField(event: WideEvent, key: string): number | undefined {
-  const value = event[key];
-  return typeof value === "number" ? value : undefined;
+function getRequestMetadata(logger: RequestLogger<RequestEvlogEvent>): RequestMetadata {
+  const context = logger.getContext();
+  const nestedRequest = isRecord(context.request) ? context.request : undefined;
+
+  return {
+    requestId:
+      getString(context.requestId) ??
+      (nestedRequest ? getString(nestedRequest.id) : undefined) ??
+      crypto.randomUUID(),
+    method:
+      getString(context.method) ??
+      (nestedRequest ? getString(nestedRequest.method) : undefined) ??
+      "UNKNOWN",
+    path:
+      getString(context.path) ??
+      (nestedRequest ? getString(nestedRequest.path) : undefined) ??
+      "unknown",
+  };
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function toStringList(value: unknown): string[] {
@@ -62,88 +72,19 @@ function appendBoundedStringList(current: unknown, next: string, limit: number):
   return [...toStringList(current), next].slice(-limit);
 }
 
-function getPostHogProperties(event: WideEvent): Record<string, unknown> {
-  return {
-    method: getEventStringField(event, "method"),
-    path: getEventStringField(event, "path"),
-    requestId: getEventStringField(event, "requestId"),
-    userId: getEventStringField(event, "userId"),
-    status: getEventNumberField(event, "status"),
-    duration: getEventStringField(event, "duration"),
-    waitUntil: event.waitUntil === true,
-    parentRequestId: getEventStringField(event, "parentRequestId"),
-    trpcProcedure: getEventStringField(event, "trpcProcedure"),
-    url: getEventStringField(event, "url"),
-  };
-}
-
-async function reportErrorToPostHog(
-  env: PostHogEnv,
-  error: Error,
-  event: WideEvent,
-): Promise<void> {
-  const apiKey = env.POSTHOG_PUBLIC_KEY;
-  if (!apiKey) return;
-
-  const distinctId =
-    getEventStringField(event, "userId") ?? getEventStringField(event, "requestId") ?? "anonymous";
-
-  await sendPostHogException({
-    apiKey,
-    distinctId,
-    error,
-    properties: getPostHogProperties(event),
-    environment: env.VITE_APP_STAGE ?? appStage,
-    lib: "evlog-worker",
-  });
-}
-
-function schedulePostHogErrorReport(context: RequestEvlogContext, event: WideEvent): void {
-  if (!context.error || !context.env?.POSTHOG_PUBLIC_KEY) return;
-
-  const report = reportErrorToPostHog(context.env, context.error, event).catch(() => undefined);
-  if (context.executionCtx) {
-    context.executionCtx.waitUntil(report);
-    return;
-  }
-  void report;
-}
-
-function getRequestId(request: Request): string {
-  return (
-    request.headers.get("cf-ray") ?? request.headers.get("x-request-id") ?? crypto.randomUUID()
-  );
-}
-
-function getRequestPath(request: Request): string {
-  return new URL(request.url).pathname;
-}
-
 export function withRequestEvlogContext<T>(
   options: {
-    request: Request;
+    logger: RequestLogger<RequestEvlogEvent>;
     env?: PostHogEnv;
     executionCtx?: WaitUntilExecutionContext;
   },
   callback: () => T,
 ): T {
-  const requestId = getRequestId(options.request);
-  const method = options.request.method;
-  const path = getRequestPath(options.request);
-  const logger = createRequestLogger<RequestEvlogEvent>({
-    method,
-    path,
-    requestId,
-  });
-
   return requestEvlogStorage.run(
     {
-      logger,
+      logger: options.logger,
       env: options.env,
       executionCtx: options.executionCtx,
-      requestId,
-      method,
-      path,
       flushed: false,
       waitUntilSequence: 0,
     },
@@ -151,12 +92,8 @@ export function withRequestEvlogContext<T>(
   );
 }
 
-export function getRequestEvlogger(): RequestLogger<RequestEvlogEvent> | undefined {
-  return requestEvlogStorage.getStore()?.logger;
-}
-
 export function setRequestEvlogContext(context: RequestEvlogEvent): void {
-  getRequestEvlogger()?.set(context);
+  requestEvlogStorage.getStore()?.logger.set(context);
 }
 
 export function recordRequestEvlogError(error: unknown, context: RequestEvlogEvent = {}): void {
@@ -215,63 +152,81 @@ export function flushRequestEvlog(overrides: RequestEvlogEvent = {}): void {
 
   store.flushed = true;
   const event = store.logger.emit(overrides);
-  if (!event) return;
-  schedulePostHogErrorReport(store, event);
+  if (!event || !store.error || !store.env?.POSTHOG_PUBLIC_KEY) return;
+
+  const report = reportRequestErrorToPostHog({
+    env: store.env,
+    error: store.error,
+    event,
+  }).catch(() => undefined);
+
+  if (store.executionCtx) {
+    store.executionCtx.waitUntil(report);
+    return;
+  }
+
+  void report;
 }
 
 export function wrapWaitUntilWithEvlog<T>(promise: Promise<T>): Promise<T> {
   const parentContext = requestEvlogStorage.getStore();
   if (!parentContext) return promise;
 
+  const parentMetadata = getRequestMetadata(parentContext.logger);
+  const parentLoggerContext = parentContext.logger.getContext();
+
   const nextSequence = parentContext.waitUntilSequence + 1;
   parentContext.waitUntilSequence = nextSequence;
 
-  const waitUntilPath = `${parentContext.path}#waitUntil`;
-  const waitUntilRequestId = `${parentContext.requestId}:waitUntil:${nextSequence}`;
+  const waitUntilPath = `${parentMetadata.path}#waitUntil`;
+  const waitUntilRequestId = `${parentMetadata.requestId}:waitUntil:${nextSequence}`;
+
   const waitUntilLogger = createRequestLogger<RequestEvlogEvent>({
-    method: parentContext.method,
+    method: parentMetadata.method,
     path: waitUntilPath,
     requestId: waitUntilRequestId,
   });
 
-  const parentLoggerContext = parentContext.logger.getContext();
   waitUntilLogger.set({
+    request: {
+      id: waitUntilRequestId,
+      method: parentMetadata.method,
+      path: waitUntilPath,
+      status: 500,
+      duration: 0,
+      waitUntil: true,
+      parentRequestId: parentMetadata.requestId,
+    },
+    ...(isRecord(parentLoggerContext.user) ? { user: parentLoggerContext.user } : {}),
     waitUntil: true,
-    parentRequestId: parentContext.requestId,
-    ...(typeof parentLoggerContext.userId === "string"
-      ? { userId: parentLoggerContext.userId }
-      : {}),
+    parentRequestId: parentMetadata.requestId,
   });
 
-  const waitUntilContext: RequestEvlogContext = {
-    logger: waitUntilLogger,
-    env: parentContext.env,
-    executionCtx: parentContext.executionCtx,
-    requestId: waitUntilRequestId,
-    method: parentContext.method,
-    path: waitUntilPath,
-    flushed: false,
-    waitUntilSequence: 0,
-  };
-
-  return requestEvlogStorage.run(waitUntilContext, async () => {
-    let status = 200;
-    try {
-      return await promise;
-    } catch (error) {
-      status = 500;
-      recordRequestEvlogError(error, {
-        waitUntil: true,
-        parentRequestId: parentContext.requestId,
-        status,
-      });
-      throw error;
-    } finally {
-      flushRequestEvlog({
-        waitUntil: true,
-        parentRequestId: parentContext.requestId,
-        status,
-      });
-    }
-  });
+  return withRequestEvlogContext(
+    {
+      logger: waitUntilLogger,
+      env: parentContext.env,
+      executionCtx: parentContext.executionCtx,
+    },
+    async () => {
+      let status = 200;
+      try {
+        return await promise;
+      } catch (error) {
+        status = 500;
+        recordRequestEvlogError(error, {
+          waitUntil: true,
+          parentRequestId: parentMetadata.requestId,
+          status,
+        });
+        throw error;
+      } finally {
+        flushRequestEvlog({
+          waitUntil: true,
+          parentRequestId: parentMetadata.requestId,
+          status,
+        });
+      }
+    },
+  );
 }

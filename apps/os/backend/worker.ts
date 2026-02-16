@@ -10,6 +10,7 @@ import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
+import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb } from "./db/client.ts";
@@ -29,6 +30,7 @@ import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import { flushRequestEvlog, setRequestEvlogContext, withRequestEvlogContext } from "./evlog.ts";
 import { logger } from "./tag-logger.ts";
+import type { PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -76,13 +78,54 @@ function isAllowedDomain(domain: string, rawAllowedDomains: string): boolean {
 // Register outbox consumers at module load time
 registerConsumers();
 
+const appStage =
+  process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
+
+initWorkersLogger({
+  env: {
+    service: "os",
+    environment: appStage,
+  },
+});
+
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
 
+function getPostHogUserContext(
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+): PostHogUserContext {
+  return {
+    id: c.var.session?.user?.id ?? "anonymous",
+    email: c.var.session?.user?.email ?? "unknown",
+  };
+}
+
 app.use("*", async (c, next) => {
+  const requestLogger = createWorkersLogger(c.req.raw);
+  const currentContext = requestLogger.getContext();
+  const requestId =
+    typeof currentContext.requestId === "string" ? currentContext.requestId : crypto.randomUUID();
+  const method = typeof currentContext.method === "string" ? currentContext.method : c.req.method;
+  const path = typeof currentContext.path === "string" ? currentContext.path : c.req.path;
+
+  requestLogger.set({
+    request: {
+      id: requestId,
+      method,
+      path,
+      status: 500,
+      duration: 0,
+      waitUntil: false,
+    },
+    user: {
+      id: "anonymous",
+      email: "unknown",
+    },
+  });
+
   return withRequestEvlogContext(
     {
-      request: c.req.raw,
+      logger: requestLogger,
       env: c.env,
       executionCtx: c.executionCtx,
     },
@@ -92,23 +135,23 @@ app.use("*", async (c, next) => {
         await next();
         status = c.res.status;
       } catch (err) {
-        const userId = c.var.session?.user?.id;
+        const user = getPostHogUserContext(c);
         logger.error(
           `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
           {
             path: c.req.path,
             method: c.req.method,
             status: 500,
-            ...(typeof userId === "string" ? { userId } : {}),
+            user,
           },
           err,
         );
         throw err;
       } finally {
-        const userId = c.var.session?.user?.id;
+        const user = getPostHogUserContext(c);
         flushRequestEvlog({
           status,
-          ...(typeof userId === "string" ? { userId } : {}),
+          user,
         });
       }
     },
@@ -318,14 +361,14 @@ app.all("/api/trpc/*", (c) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
-        const userId = c.var.session?.user?.id;
+        const user = getPostHogUserContext(c);
         logger.error(
           `TRPC Error ${status} in ${procedurePath}: ${error.message}`,
           {
             path: procedurePath,
             trpcProcedure: procedurePath,
             status,
-            ...(typeof userId === "string" ? { userId } : {}),
+            user,
           },
           error,
         );
