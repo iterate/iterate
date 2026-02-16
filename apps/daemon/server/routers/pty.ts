@@ -173,30 +173,6 @@ function detachFromSession(session: PtySession) {
   scheduleCleanup(session);
 }
 
-function handlePtyControlMessage(
-  session: PtySession,
-  ws: WSContext<WebSocket>,
-  payload: unknown,
-): boolean {
-  return match(payload)
-    .case(ResizePtyCommand, ({ cols, rows }) => {
-      session.ptyProcess.resize(cols, rows);
-      session.headlessTerminal.resize(cols, rows);
-      return true;
-    })
-    .case(ExecPtyCommand, ({ command, autorun }) => {
-      session.ptyProcess.write(command);
-      if (autorun) session.ptyProcess.write("\r\n");
-      return true;
-    })
-    .default<{ type?: string } | undefined>(({ input }) => {
-      if (input?.type === "exec") {
-        ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
-      }
-      return false;
-    });
-}
-
 ptyRouter.get(
   "/ws",
   upgradeWebSocket((c) => {
@@ -254,7 +230,19 @@ ptyRouter.get(
         if (text.startsWith(COMMAND_PREFIX)) {
           try {
             const parsed = JSON.parse(text.slice(COMMAND_PREFIX.length)) as unknown;
-            handlePtyControlMessage(session, ws, parsed);
+            match(parsed)
+              .case(ResizePtyCommand, ({ cols, rows }) => {
+                session.ptyProcess.resize(cols, rows);
+                session.headlessTerminal.resize(cols, rows);
+              })
+              .case(ExecPtyCommand, ({ command, autorun }) => {
+                session.ptyProcess.write(command);
+                if (autorun) session.ptyProcess.write("\r\n");
+              })
+              .case(z.object({ type: z.literal("exec") }), () => {
+                ws.send(`\r\n\x1b[31mError: exec command requires 'command' field\x1b[0m\r\n`);
+              })
+              .default(() => {});
             return;
           } catch (error) {
             console.error(`[PTY] Failed to parse command: ${error}`);
