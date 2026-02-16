@@ -4,6 +4,10 @@
       "type": "url",
       "url": "https://observability.mcp.cloudflare.com/mcp"
     },
+    "posthog": {
+      "type": "url",
+      "url": "https://mcp.posthog.com/mcp"
+    },
     "exa": {
       "type": "url",
       "url": "https://mcp.exa.ai/mcp"

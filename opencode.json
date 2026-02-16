@@ -6,6 +6,11 @@
       "url": "https://observability.mcp.cloudflare.com/mcp",
       "enabled": true
     },
+    "posthog": {
+      "type": "remote",
+      "url": "https://mcp-eu.posthog.com/mcp",
+      "enabled": true
+    },
     "exa": {
       "type": "remote",
       "url": "https://mcp.exa.ai/mcp",

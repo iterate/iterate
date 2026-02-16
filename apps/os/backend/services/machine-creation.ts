@@ -272,7 +272,7 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
 
       logger.info("Machine provisioned", { machineId, projectId, type });
     } catch (err) {
-      logger.error("Machine provisioning failed", { machineId, projectId, type, err });
+      logger.error("Machine provisioning failed", { machineId, projectId, type }, err);
       // Store provisioning error in metadata while preserving any concurrent daemon state updates.
       const currentMachine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
@@ -280,19 +280,31 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
       const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
       const sanitizedCurrentMetadata = stripMachineStateMetadata(currentMetadata);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      await db
-        .update(schema.machine)
-        .set({
-          metadata: {
-            ...sanitizedCurrentMetadata,
+      try {
+        await db
+          .update(schema.machine)
+          .set({
+            metadata: {
+              ...sanitizedCurrentMetadata,
+              provisioningError: errorMessage,
+              daemonStatus: "error",
+              daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
+              daemonReadyAt: null,
+            },
+          })
+          .where(eq(schema.machine.id, machineId));
+      } catch (persistError) {
+        logger.error(
+          "Failed to persist machine provisioning failure metadata",
+          {
+            machineId,
+            projectId,
+            type,
             provisioningError: errorMessage,
-            daemonStatus: "error",
-            daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
-            daemonReadyAt: null,
           },
-        })
-        .where(eq(schema.machine.id, machineId))
-        .catch(() => {});
+          persistError,
+        );
+      }
     }
   })();
 
