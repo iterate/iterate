@@ -1,4 +1,5 @@
 import type { worker } from "./alchemy.run.ts";
+import { wrapWaitUntilWithEvlog } from "./backend/evlog.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;
@@ -25,8 +26,12 @@ export { isProduction, isNonProd } from "./env-client.ts";
  * Wrapper around cloudflare:workers waitUntil that catches and logs errors.
  */
 export function waitUntil(promise: Promise<unknown>): void {
+  // Best effort: waitUntil receives an already-created Promise, so execution may
+  // already be in-flight before we can attach a child evlog context. We still
+  // wrap and flush to avoid losing logs; worst case we emit an extra line.
+  const wrappedPromise = wrapWaitUntilWithEvlog(promise);
   _waitUntil(
-    promise.catch((error) => {
+    wrappedPromise.catch((error) => {
       console.error("waitUntil error:", error);
     }),
   );

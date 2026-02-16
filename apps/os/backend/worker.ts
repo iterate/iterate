@@ -27,8 +27,8 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
+import { flushRequestEvlog, setRequestEvlogContext, withRequestEvlogContext } from "./evlog.ts";
 import { logger } from "./tag-logger.ts";
-import { captureServerException } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -78,6 +78,29 @@ registerConsumers();
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+app.use("*", async (c, next) => {
+  return withRequestEvlogContext(
+    {
+      request: c.req.raw,
+      env: c.env,
+      executionCtx: c.executionCtx,
+    },
+    async () => {
+      let status = 500;
+      try {
+        await next();
+        status = c.res.status;
+      } finally {
+        const userId = c.var.session?.user?.id;
+        flushRequestEvlog({
+          status,
+          ...(typeof userId === "string" ? { userId } : {}),
+        });
+      }
+    },
+  );
+});
 
 app.use("*", async (c, next) => {
   initializeOtel(c.env as Record<string, unknown>);
@@ -265,21 +288,16 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
 });
 
 app.onError((err, c) => {
-  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
-
-  // Capture exception to PostHog with user context
-  const error = err instanceof Error ? err : new Error(String(err));
-  const distinctId = c.var.session?.user?.id ?? "anonymous";
-  c.executionCtx?.waitUntil(
-    captureServerException(c.env, {
-      distinctId,
-      error,
-      properties: {
-        path: c.req.path,
-        method: c.req.method,
-        userId: c.var.session?.user?.id,
-      },
-    }),
+  const userId = c.var.session?.user?.id;
+  logger.error(
+    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+    {
+      path: c.req.path,
+      method: c.req.method,
+      status: 500,
+      ...(typeof userId === "string" ? { userId } : {}),
+    },
+    err,
   );
 
   return c.json({ error: "Internal Server Error" }, 500);
@@ -299,22 +317,22 @@ app.all("/api/trpc/*", (c) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
-
-        // Capture 5xx errors to PostHog
-        const distinctId = c.var.session?.user?.id ?? "anonymous";
-        c.executionCtx?.waitUntil(
-          captureServerException(c.env, {
-            distinctId,
-            error,
-            properties: {
-              path: procedurePath,
-              trpcProcedure: procedurePath,
-              userId: c.var.session?.user?.id,
-            },
-          }),
+        const userId = c.var.session?.user?.id;
+        logger.error(
+          `TRPC Error ${status} in ${procedurePath}: ${error.message}`,
+          {
+            path: procedurePath,
+            trpcProcedure: procedurePath,
+            status,
+            ...(typeof userId === "string" ? { userId } : {}),
+          },
+          error,
         );
       } else {
+        setRequestEvlogContext({
+          trpcProcedure: procedurePath,
+          status,
+        });
         logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
       }
     },
@@ -363,8 +381,12 @@ const orpcHandler = new RPCHandler(workerRouter, {
       )}`;
 
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
+        logger.error(message, errorDetails, error);
       } else {
+        setRequestEvlogContext({
+          status: maybeStatus,
+          url: params.request.url,
+        });
         logger.warn(message, errorDetails);
       }
     }),
