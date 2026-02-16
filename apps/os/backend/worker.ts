@@ -181,6 +181,29 @@ app.get("/api/observability", (c) => {
   });
 });
 
+app.post("/api/debug/trigger-error", (c) => {
+  const debugTokenRaw = (c.env as Record<string, unknown>)["DEBUG_TRIGGER_ERROR_TOKEN"];
+  const debugToken = typeof debugTokenRaw === "string" ? debugTokenRaw.trim() : undefined;
+
+  if (!debugToken) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const authorization = c.req.header("authorization");
+  const bearerToken = authorization?.startsWith("Bearer ")
+    ? authorization.slice(7).trim()
+    : undefined;
+  const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
+
+  if (!providedToken || providedToken !== debugToken) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const rawReason = c.req.query("reason") ?? "manual-test";
+  const reason = rawReason.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "manual-test";
+  throw new Error(`Intentional debug error for telemetry testing (${reason})`);
+});
+
 app.use(
   cors({
     origin: (origin, c: Context<{ Bindings: CloudflareEnv }>) => {
@@ -203,7 +226,9 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const orpcCaller = createRouterClient(appRouter, { context: createContext(c) });
+  const orpcCaller = createRouterClient(appRouter, {
+    context: createContext(c),
+  });
   c.set("orpcCaller", orpcCaller);
   return next();
 });
@@ -371,7 +396,11 @@ const appOrpcHandler = new RPCHandler(appRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),
@@ -435,7 +464,11 @@ const daemonOrpcHandler = new RPCHandler(workerRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? "stack unavailable",
+            }
           : {
               name: "NonErrorThrowable",
               message: String(error),
