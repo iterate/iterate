@@ -111,6 +111,10 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
         },
       },
     },
+    emailAndPassword: {
+      enabled: true,
+      disableSignUp: true,
+    },
     plugins: [
       admin(),
       ...(envParam.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
