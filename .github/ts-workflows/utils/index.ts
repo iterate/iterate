@@ -71,3 +71,13 @@ export const setupDepot = [
     uses: "depot/setup-action@v1",
   },
 ] as const satisfies Step[];
+
+/** Set an environment variable to a bash expression */
+export const setEnvVar = (name: string, expression: string) =>
+  ({
+    name: `Set ${name} env var`,
+    run: `echo "${name}=${expression}" >> $GITHUB_OUTPUT`,
+  }) satisfies Step;
+
+export const setDopplerEnvVar = (name: string) =>
+  setEnvVar(name, `$(doppler secrets get ${name} --plain)`);
