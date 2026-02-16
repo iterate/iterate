@@ -1,7 +1,7 @@
 {
   "name": "iterate",
   "version": "0.2.2",
-  "description": "CLI for iterate",
+  "description": "Iterate CLI",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -29,18 +29,27 @@
   },
   "files": [
     "bin",
+    "src",
     "README.md"
   ],
   "scripts": {
-    "typecheck": "node --check ./bin/iterate.js"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.0",
-    "@trpc/client": "^11.7.2",
+    "@iterate-com/daemon": "workspace:*",
+    "@slack/web-api": "^7.13.0",
     "@trpc/server": "^11.7.2",
-    "better-auth": "1.4.3",
-    "superjson": "^2.2.2",
+    "dedent": "^1.7.0",
+    "ms": "4.0.0-nightly.202508271359",
+    "replicate": "^1.4.0",
+    "resend": "^6.8.0",
     "trpc-cli": "^0.12.2",
     "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
   }
 }

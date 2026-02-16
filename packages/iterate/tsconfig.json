@@ -13,6 +13,6 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["node_modules", "dist", "effect.ignoreme"]
+  "include": ["./src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

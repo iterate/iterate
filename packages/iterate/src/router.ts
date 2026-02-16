@@ -1,18 +1,13 @@
-import { trpcRouter as daemonRouter } from "@iterate-com/daemon/server/trpc/router.ts";
 import { startServer } from "@iterate-com/daemon/server/start.ts";
-import z from "zod";
+import { trpcRouter as daemonRouter } from "@iterate-com/daemon/server/trpc/router.ts";
+import { z } from "zod/v4";
 import { tasksRouter } from "./procedures/tasks.ts";
 import { toolsRouter } from "./procedures/tools.ts";
 import { t } from "./trpc.ts";
 
 export const router = t.router({
-  /** Daemon tRPC router - all daemon procedures */
   daemon: daemonRouter,
-
-  /** Top-level tool commands */
   tool: toolsRouter,
-
-  /** Scheduled task management */
   task: tasksRouter,
 
   server: {

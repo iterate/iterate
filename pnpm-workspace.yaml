@@ -1,6 +1,5 @@
 packages:
   - apps/project-ingress-proxy
-  - apps/cli
   - apps/daemon
   - apps/iterate-com
   - apps/os

@@ -26,30 +26,34 @@ You will receive one of two message types:
 
 ## Sending Replies
 
-Use the `iterate tool email` CLI command to send email replies.
-
-**Reply to an email:**
+Use `iterate tool exec-js` using `sendEmail(...)`.
 
 ```bash
-iterate tool email reply \
-  --to "sender@example.com" \
-  --subject "Re: Original Subject" \
-  --body "Your response here"
+iterate tool exec-js 'await sendEmail({
+  to: "sender@example.com",
+  subject: "Re: Original Subject",
+  text: "Your response here",
+})'
 ```
 
-**Reply with HTML formatting:**
+With HTML:
 
 ```bash
-iterate tool email reply \
-  --to "sender@example.com" \
-  --subject "Re: Original Subject" \
-  --body "Your response here" \
-  --html "<p>Your <strong>formatted</strong> response here</p>"
+iterate tool exec-js 'await sendEmail({
+  to: "sender@example.com",
+  subject: "Re: Original Subject",
+  text: "Your response here",
+  html: "<p>Your <strong>formatted</strong> response here</p>",
+})'
 ```
+
+`sendEmail` uses `ITERATE_RESEND_FROM_ADDRESS` by default and sends from `Iterate Agent <...>`.
+
+If needed, use raw Resend client via `resend`.
 
 ## Inspecting Raw Events
 
-The raw email webhook payload is stored in SQLite. To inspect it:
+The raw email webhook payload is stored in SQLite:
 
 ```bash
 sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id='EVENT_ID'"
@@ -57,7 +61,7 @@ sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id
 
 ## Best Practices
 
-1. **Be concise**: Email responses should be clear and to the point.
-2. **Quote context**: When replying, briefly reference what you're responding to.
-3. **Use plain text**: Prefer plain text responses unless HTML formatting adds value.
-4. **Subject threading**: Keep the subject consistent (with Re: prefix) to maintain thread grouping.
+1. Be concise.
+2. Briefly quote context when replying.
+3. Prefer plain text unless HTML adds real value.
+4. Keep subject threading (`Re:`) consistent.

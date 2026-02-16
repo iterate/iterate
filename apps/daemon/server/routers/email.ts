@@ -264,7 +264,7 @@ function formatNewEmailMessage(
 
   return [
     `[Agent Path: ${agentPath}] New email thread started.`,
-    `Refer to EMAIL.md for how to respond via \`iterate tool email\`.`,
+    "Refer to EMAIL.md for how to respond via `iterate tool exec-js` using `sendEmail(...)`.",
     "",
     `From: ${senderName} <${senderEmail}>`,
     `To: ${emailData.to.join(", ")}`,

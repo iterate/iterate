@@ -2,29 +2,24 @@
 
 ## Hard Rule: CLI Shape
 
-`iterate tool webchat` takes one arg: JS code.
-No subcommands. No CLI flags like `--thread-id`, `--body`, etc.
+Use `iterate tool exec-js` using `webchat`.
 
 ```bash
 # valid
-iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "hi" })'
+iterate tool exec-js 'await webchat.postMessage({ threadId: "THREAD_ID", text: "hi" })'
 
-# invalid! ERROR!!!!
+# invalid
+iterate tool webchat ...
 iterate tool webchat send --thread-id THREAD_ID --body "hi"
-iterate tool webchat --thread-id THREAD_ID --body "hi"
-iterate tool webchat postMessage ...
 ```
 
-## Quick Reference: Sending Messages
-
-**IMPORTANT:** `iterate tool webchat` takes JavaScript code as its only argument — there are NO subcommands.
+## Quick Reference
 
 ```bash
-# Reply in a thread (replace THREAD_ID with actual value from the incoming message)
-iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "Your response here" })'
+iterate tool exec-js 'await webchat.postMessage({ threadId: "THREAD_ID", text: "Your response here" })'
 ```
 
-The `webchat` object is an HTTP client with these methods:
+`webchat` methods:
 
 ```ts
 interface WebchatClient {
@@ -64,72 +59,55 @@ interface WebchatClient {
 }
 ```
 
----
-
 ## Message Types
 
-You will receive one of two message types:
+You will receive either:
 
-### 1. New Thread
+1. New thread: user started a new webchat thread.
+2. Reply in existing thread: follow-up in a thread you're already in.
 
-**Trigger:** A user started a new webchat thread.
-
-**What to do:**
-
-- Read and understand the request
-- Perform the requested work
-- Reply with your findings/actions
-
-### 2. Reply in Existing Thread
-
-**Trigger:** A follow-up message in a thread you're already participating in.
-
-**What to do:**
-
-- Note the new information or request
-- Continue the conversation as appropriate
-- Reply addressing the specific question or update
+Always reply with `webchat.postMessage(...)`.
 
 ## Sending Replies
 
-**Reply to a thread:**
+Reply:
 
 ```bash
-iterate tool webchat 'await webchat.postMessage({
+iterate tool exec-js 'await webchat.postMessage({
   threadId: "THREAD_ID",
   text: "Your response here",
 })'
 ```
 
-**Add a reaction:**
+Add reaction:
 
 ```bash
-iterate tool webchat 'await webchat.addReaction({
+iterate tool exec-js 'await webchat.addReaction({
   threadId: "THREAD_ID",
   messageId: "MESSAGE_ID",
   reaction: "thumbsup",
 })'
 ```
 
-**Remove a reaction:**
+Remove reaction:
 
 ```bash
-iterate tool webchat 'await webchat.removeReaction({
+iterate tool exec-js 'await webchat.removeReaction({
   threadId: "THREAD_ID",
   messageId: "MESSAGE_ID",
   reaction: "thumbsup",
 })'
 ```
 
-**Get thread history (for context):**
+Thread history:
 
 ```bash
-iterate tool webchat 'const result = await webchat.getThreadMessages({ threadId: "THREAD_ID" }); console.log(JSON.stringify(result, null, 2))'
+iterate tool exec-js 'const result = await webchat.getThreadMessages({ threadId: "THREAD_ID" }); console.log(JSON.stringify(result, null, 2));'
 ```
 
 ## Inspecting Raw Events
 
-The raw webchat payload is stored in SQLite. To inspect it:
+The raw webchat payload is stored in SQLite:
 
 ```bash
 sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id='EVENT_ID'"
@@ -137,29 +115,23 @@ sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id
 
 ## Sending Files
 
-To send a file to the user, create the file anywhere on the filesystem, then include it as an attachment:
-
 ```bash
-iterate tool webchat 'await webchat.postMessage({
+iterate tool exec-js 'await webchat.postMessage({
   threadId: "THREAD_ID",
   text: "Here is the generated image:",
   attachments: [{ fileName: "output.png", filePath: "/tmp/output.png", mimeType: "image/png" }],
 })'
 ```
 
-The UI will show inline previews for images (jpeg, png, gif, webp) and view/download buttons for PDFs and other files. Any absolute path on the machine filesystem works.
+The UI shows previews for images and download links for other files.
 
 ## Receiving Files
 
-When a user uploads files, the incoming message will list them under "Attachments:" with their file paths. The files are written to `/tmp/webchat-uploads/` and you can read them directly:
-
-```bash
-cat /tmp/webchat-uploads/abc123-photo.jpg
-```
+User uploads are written to `/tmp/webchat-uploads/` and listed in incoming message attachments.
 
 ## Best Practices
 
-1. **Be concise**: Webchat messages should be shorter than typical coding responses.
-2. **Markdown supported**: The webchat UI renders markdown.
-3. **Reply promptly**: Always use `webchat.postMessage` to reply — do not rely on your assistant output being shown directly.
-4. **Include file metadata**: When sending files, include `mimeType` so the UI knows how to preview them.
+1. Be concise.
+2. Markdown is supported.
+3. Always respond through `webchat.postMessage`, not assistant output.
+4. Include `mimeType` on file attachments.

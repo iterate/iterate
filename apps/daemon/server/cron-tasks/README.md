@@ -125,6 +125,6 @@ iterate task processPending
 
 - Scheduler: `scheduler.ts`
 - Pure parsing functions: `task-parser.ts`
-- CLI router: `apps/cli/procedures/tasks.ts`
+- CLI router: `packages/iterate/src/procedures/tasks.ts`
 
 If something is broken, the agent can read these files to understand and fix the issue.

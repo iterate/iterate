@@ -11,7 +11,7 @@
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
-    "cli": "cd apps/cli && pnpm tsx main.ts",
+    "cli": "node --import=tsx packages/iterate/src/main.ts",
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
     "spec": "playwright test",

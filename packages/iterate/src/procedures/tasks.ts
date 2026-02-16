@@ -1,53 +1,47 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parse as parseMs } from "ms";
-import { z } from "zod/v4";
 import {
+  abandonTask,
+  completeTask,
+  filenameToSlug,
   getTasksDir,
   parseTaskFile,
   processPendingTasks,
+  reopenTask,
   serializeTask,
   slugToFilename,
-  filenameToSlug,
-  completeTask,
-  abandonTask,
-  reopenTask,
   TaskPriority,
   type ParsedTask,
 } from "@iterate-com/daemon/server/cron-tasks/scheduler.ts";
+import { parse as parseMs } from "ms";
+import { z } from "zod/v4";
 import { t } from "../trpc.ts";
 
-// ============================================================================
-// Input Schemas
-// ============================================================================
-
-/**
- * Parse a duration string (e.g. "1h", "30m", "2 days") or ISO timestamp.
- */
 const DueInput = z
   .string()
-  .transform((val, ctx) => {
-    if (val.match(/^\d{4}-/)) {
-      // Looks like an ISO timestamp
-      const date = new Date(val);
+  .transform((value, ctx) => {
+    if (value.match(/^\d{4}-/)) {
+      const date = new Date(value);
       if (!Number.isFinite(date.getTime())) {
-        ctx.addIssue({ code: "custom", message: `Invalid ISO timestamp: "${val}"` });
+        ctx.addIssue({ code: "custom", message: `Invalid ISO timestamp: "${value}"` });
         return z.NEVER;
       }
       return date;
     }
-    const ms = parseMs(val);
-    if (!Number.isFinite(ms)) {
+
+    const milliseconds = parseMs(value);
+    if (!Number.isFinite(milliseconds)) {
       ctx.addIssue({
         code: "custom",
-        message: `Invalid duration: "${val}". Use formats like "1h", "30m", "2 days", "1 week"`,
+        message: `Invalid duration: "${value}". Use formats like "1h", "30m", "2 days", "1 week"`,
       });
       return z.NEVER;
     }
-    return new Date(Date.now() + ms);
+
+    return new Date(Date.now() + milliseconds);
   })
   .describe(
-    "Duration until task runs (e.g. '1h', '30m', '2 days') or ISO timestamp (e.g. '2026-01-29T09:00:00Z' or '2026-01-29T09:00:00-07:00'). Note that ISO timestamps will be converted to UTC - but you will need to know the user's home timezone to set a correct due date in their local time.",
+    "Duration until task runs (e.g. '1h', '30m', '2 days') or ISO timestamp (e.g. '2026-01-29T09:00:00Z' or '2026-01-29T09:00:00-07:00'). Note that ISO timestamps are converted to UTC.",
   );
 
 const SlugInput = z.string().describe("Task slug (e.g. 'daily-report')");
@@ -56,26 +50,23 @@ const NoteInput = z
   .string()
   .describe("Note explaining outcome, reason, or context (e.g. 'Done. Posted to #general')");
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 async function listTasks(): Promise<Array<{ slug: string; filename: string; task: ParsedTask }>> {
   const tasksDir = await getTasksDir();
-
   await fs.mkdir(tasksDir, { recursive: true });
 
   const entries = await fs.readdir(tasksDir, { withFileTypes: true });
-  const mdFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
+  const markdownFiles = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name);
 
   const results: Array<{ slug: string; filename: string; task: ParsedTask }> = [];
-
-  for (const file of mdFiles) {
+  for (const file of markdownFiles) {
     const content = await fs.readFile(path.join(tasksDir, file), "utf-8");
     const task = parseTaskFile(content, file);
-    if (task) {
-      results.push({ slug: task.slug, filename: file, task });
+    if (!task) {
+      continue;
     }
+    results.push({ slug: task.slug, filename: file, task });
   }
 
   return results;
@@ -89,17 +80,15 @@ async function getTaskBySlug(slug: string) {
     const filepath = path.join(tasksDir, filename);
     const content = await fs.readFile(filepath, "utf-8");
     const task = parseTaskFile(content, filename);
-    if (task) return { task, filepath };
+    if (task) {
+      return { task, filepath };
+    }
   } catch {
-    // Not found
+    // not found
   }
 
   return null;
 }
-
-// ============================================================================
-// Router
-// ============================================================================
 
 export const tasksRouter = t.router({
   list: t.procedure.meta({ description: "List active tasks" }).query(async () => {
@@ -117,7 +106,7 @@ export const tasksRouter = t.router({
     .meta({ description: "Add a new task" })
     .input(
       z.object({
-        slug: SlugInput.describe("Task slug (e.g. 'daily-report')"),
+        slug: SlugInput,
         body: z.string().describe("Task body (markdown content)"),
         due: DueInput,
         schedule: z
@@ -134,16 +123,15 @@ export const tasksRouter = t.router({
       const filename = slugToFilename(input.slug);
       const filepath = path.join(tasksDir, filename);
 
-      // Check if already exists
       try {
         await fs.access(filepath);
         return { created: false, error: `Task already exists: ${input.slug}` };
       } catch {
-        // Good, doesn't exist
+        // expected when file does not exist
       }
 
       const slug = filenameToSlug(filename);
-      const taskContent = serializeTask({
+      const content = serializeTask({
         slug,
         filename,
         frontmatter: {
@@ -154,7 +142,8 @@ export const tasksRouter = t.router({
         },
         body: input.body,
       });
-      await fs.writeFile(filepath, taskContent);
+
+      await fs.writeFile(filepath, content);
       return { created: true, slug, filepath };
     }),
 
@@ -162,21 +151,21 @@ export const tasksRouter = t.router({
     .meta({ description: "Mark a task as completed and move to archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
     .mutation(async ({ input }) => {
-      return await completeTask(input.slug, input.note);
+      return completeTask(input.slug, input.note);
     }),
 
   abandon: t.procedure
     .meta({ description: "Abandon a task and move to archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
     .mutation(async ({ input }) => {
-      return await abandonTask(input.slug, input.note);
+      return abandonTask(input.slug, input.note);
     }),
 
   reopen: t.procedure
     .meta({ description: "Reopen a task from archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
     .mutation(async ({ input }) => {
-      return await reopenTask(input.slug, input.note);
+      return reopenTask(input.slug, input.note);
     }),
 
   processPending: t.procedure
