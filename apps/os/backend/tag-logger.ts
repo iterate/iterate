@@ -6,6 +6,23 @@ import {
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeUserContext(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const id = typeof value.id === "string" ? value.id : undefined;
+  const email = typeof value.email === "string" ? value.email : undefined;
+  if (!id && !email) return undefined;
+
+  return {
+    ...(id ? { id } : {}),
+    ...(email ? { email } : {}),
+  };
+}
+
 function toMessagePart(arg: unknown): string {
   if (typeof arg === "string") return arg;
   if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
@@ -33,7 +50,23 @@ function buildLogParts(args: unknown[]): {
     if (!arg || typeof arg !== "object" || Array.isArray(arg)) continue;
 
     const record = arg as Record<string, unknown>;
-    Object.assign(context, record);
+    const { session: _session, user: rawUser, userId, userEmail, ...rest } = record;
+
+    Object.assign(context, rest);
+
+    const sanitizedUser =
+      sanitizeUserContext(rawUser) ??
+      (typeof userId === "string" || typeof userEmail === "string"
+        ? {
+            ...(typeof userId === "string" ? { id: userId } : {}),
+            ...(typeof userEmail === "string" ? { email: userEmail } : {}),
+          }
+        : undefined);
+
+    if (sanitizedUser) {
+      context.user = sanitizedUser;
+    }
+
     for (const key of ["error", "err", "cause"] as const) {
       const candidate = record[key];
       if (candidate instanceof Error) {
