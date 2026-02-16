@@ -77,6 +77,13 @@ describe("GitHub Webhook Handler", () => {
         project: {
           findMany: vi.fn().mockResolvedValue([]),
         },
+        projectRepo: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+        projectConnection: {
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
       },
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
@@ -275,6 +282,114 @@ describe("GitHub Webhook Handler", () => {
       const json = await res.json();
       expect(json).toMatchObject({ message: "Event filtered out" });
     });
+
+    it("accepts PR-linked workflow_run in non-prd environments", async () => {
+      const mockDb = {
+        query: {
+          event: { findFirst: vi.fn() },
+          project: { findMany: vi.fn().mockResolvedValue([]) },
+          projectRepo: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            findMany: vi.fn().mockResolvedValue([]),
+          },
+          projectConnection: { findFirst: vi.fn().mockResolvedValue(null) },
+        },
+        insert: vi.fn().mockReturnValue({
+          values: vi.fn().mockReturnValue({
+            onConflictDoNothing: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([{ id: "evt_test123" }]),
+            }),
+          }),
+        }),
+      };
+      const app = new Hono();
+      app.use("*", async (c, next) => {
+        c.set("db" as never, mockDb as never);
+        c.env = { GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET, APP_STAGE: "dev" } as never;
+        await next();
+      });
+      app.route("/", githubApp);
+
+      const payload = {
+        ...validWorkflowRunPayload,
+        workflow_run: {
+          ...validWorkflowRunPayload.workflow_run,
+          pull_requests: [{ number: 123 }],
+        },
+      };
+
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ received: true });
+    });
+  });
+
+  describe("issue_comment filtering", () => {
+    async function makeRequest(app: Hono, payload: Record<string, unknown>) {
+      const body = JSON.stringify(payload);
+      const signature = await generateSignature(WEBHOOK_SECRET, body);
+
+      return app.request("/webhook", {
+        method: "POST",
+        body,
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": signature,
+          "x-github-delivery": `delivery-${Date.now()}`,
+        },
+      });
+    }
+
+    it("filters out issue comments on issues", async () => {
+      const { app } = createTestApp();
+      const payload = {
+        action: "created",
+        repository: { full_name: "iterate/iterate" },
+        issue: {
+          number: 12,
+          title: "Issue title",
+          body: "Issue body",
+          html_url: "https://github.com/iterate/iterate/issues/12",
+          user: { login: "alice" },
+          pull_request: null,
+        },
+        comment: {
+          id: 123,
+          body: "Hello",
+          user: { login: "alice" },
+        },
+      };
+
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ message: "Event filtered out" });
+    });
+
+    it("accepts issue comments on pull requests", async () => {
+      const { app } = createTestApp();
+      const payload = {
+        action: "created",
+        repository: { full_name: "iterate/iterate" },
+        issue: {
+          number: 34,
+          title: "PR title",
+          body: "PR body",
+          html_url: "https://github.com/iterate/iterate/pull/34",
+          user: { login: "bob" },
+          pull_request: { url: "https://api.github.com/repos/iterate/iterate/pulls/34" },
+        },
+        comment: {
+          id: 456,
+          body: "@iterate please check",
+          user: { login: "bob" },
+        },
+      };
+
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ received: true });
+    });
   });
 
   describe("commit_comment filtering", () => {
@@ -309,6 +424,11 @@ describe("GitHub Webhook Handler", () => {
         query: {
           event: { findFirst: vi.fn() },
           project: { findMany: vi.fn().mockResolvedValue([]) },
+          projectRepo: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            findMany: vi.fn().mockResolvedValue([]),
+          },
+          projectConnection: { findFirst: vi.fn().mockResolvedValue(null) },
         },
         insert: vi.fn().mockReturnValue({
           values: vi.fn().mockReturnValue({
