@@ -1002,6 +1002,7 @@ type PullRequestContext = {
 
 type ParsedAgentMarker = {
   sessionId: string | null;
+  stage: string | null;
 };
 
 type AgentTarget =
@@ -1030,6 +1031,7 @@ type PullRequestSignal = {
 
 const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
 const SESSION_ID_PATTERN = /^ses_[a-zA-Z0-9_-]+$/;
+const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
   const split = repository.full_name.split("/");
@@ -1063,6 +1065,64 @@ function normalizeSessionId(value: string | null | undefined): string | null {
   return SESSION_ID_PATTERN.test(sessionId) ? sessionId : null;
 }
 
+function normalizeAgentStageComponent(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return AGENT_STAGE_COMPONENT_PATTERN.test(normalized) ? normalized : null;
+}
+
+function normalizeAgentStage(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parts = value
+    .split(":")
+    .map((part) => normalizeAgentStageComponent(part))
+    .filter((part): part is string => Boolean(part));
+  if (parts.length === 0) return null;
+  return parts.join(":");
+}
+
+function getRuntimeAgentStage(env: CloudflareEnv): string | null {
+  const envRecord = env as unknown as Record<string, unknown>;
+  const explicitStageRaw =
+    typeof envRecord.ITERATE_AGENT_STAGE === "string"
+      ? envRecord.ITERATE_AGENT_STAGE
+      : process.env.ITERATE_AGENT_STAGE;
+  const explicitStage = normalizeAgentStage(explicitStageRaw);
+  if (explicitStage) return explicitStage;
+
+  const appStageRaw =
+    typeof envRecord.APP_STAGE === "string"
+      ? envRecord.APP_STAGE
+      : typeof envRecord.VITE_APP_STAGE === "string"
+        ? envRecord.VITE_APP_STAGE
+        : (process.env.APP_STAGE ?? process.env.VITE_APP_STAGE);
+  const appStage = normalizeAgentStageComponent(appStageRaw);
+  if (!appStage) return null;
+
+  const projectName = normalizeAgentStageComponent(
+    typeof envRecord.PROJECT_NAME === "string" ? envRecord.PROJECT_NAME : process.env.PROJECT_NAME,
+  );
+  const iterateUser = normalizeAgentStageComponent(
+    typeof envRecord.ITERATE_USER === "string" ? envRecord.ITERATE_USER : process.env.ITERATE_USER,
+  );
+  const scope = [projectName, iterateUser]
+    .filter((part): part is string => Boolean(part))
+    .join("_");
+
+  return scope ? `${appStage}:${scope}` : appStage;
+}
+
+function isMarkerStageCompatible(markerStage: string | null, runtimeStage: string | null): boolean {
+  if (!markerStage) return true;
+  if (!runtimeStage) return false;
+  if (markerStage === runtimeStage) return true;
+
+  const markerParts = markerStage.split(":");
+  const runtimeParts = runtimeStage.split(":");
+  if (markerParts.length > 1 && runtimeParts.length > 1) return false;
+  return markerParts[0] === runtimeParts[0];
+}
+
 function parseAgentMarker(text: string | null | undefined): ParsedAgentMarker | null {
   if (!text) return null;
 
@@ -1071,6 +1131,7 @@ function parseAgentMarker(text: string | null | undefined): ParsedAgentMarker | 
 
   const marker: ParsedAgentMarker = {
     sessionId: null,
+    stage: null,
   };
 
   for (const rawLine of blockMatch[1].split("\n")) {
@@ -1080,10 +1141,18 @@ function parseAgentMarker(text: string | null | undefined): ParsedAgentMarker | 
     if (!match) continue;
     const key = match[1].toLowerCase();
     const value = match[2].trim();
-    if (!value || key !== "session_id") continue;
+    if (!value) continue;
 
-    const sessionId = normalizeSessionId(value);
-    if (sessionId) marker.sessionId = sessionId;
+    if (key === "session_id") {
+      const sessionId = normalizeSessionId(value);
+      if (sessionId) marker.sessionId = sessionId;
+      continue;
+    }
+
+    if (key === "stage") {
+      const stage = normalizeAgentStage(value);
+      if (stage) marker.stage = stage;
+    }
   }
 
   if (!marker.sessionId) return null;
@@ -1119,8 +1188,11 @@ function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: numb
   return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
 }
 
-function buildMarkerBlock(params: { sessionId: string }): string {
-  return ["<!-- iterate-agent-context", `session_id: ${params.sessionId}`, "-->"].join("\n");
+function buildMarkerBlock(params: { sessionId: string; stage: string | null }): string {
+  const lines = ["<!-- iterate-agent-context", `session_id: ${params.sessionId}`];
+  if (params.stage) lines.push(`stage: ${params.stage}`);
+  lines.push("-->");
+  return lines.join("\n");
 }
 
 function buildBootstrapComment(params: {
@@ -1461,6 +1533,17 @@ async function routePullRequestSignalToAgent(params: {
   });
 
   const marker = findAgentMarker(prContext);
+  const runtimeStage = getRuntimeAgentStage(params.env);
+  if (!isMarkerStageCompatible(marker?.stage ?? null, runtimeStage)) {
+    logger.debug("[GitHub Webhook] PR signal ignored due agent stage mismatch", {
+      repo: params.signal.repo.fullName,
+      prNumber: params.signal.prNumber,
+      eventKind: params.signal.eventKind,
+      markerStage: marker?.stage,
+      runtimeStage,
+    });
+    return;
+  }
 
   const contexts = allContexts;
 
@@ -1515,6 +1598,7 @@ async function routePullRequestSignalToAgent(params: {
   if (!marker && forwardResult.sessionId) {
     const markerBlock = buildMarkerBlock({
       sessionId: forwardResult.sessionId,
+      stage: runtimeStage,
     });
     await ensureBootstrapComment({
       token,
@@ -1534,6 +1618,8 @@ async function routePullRequestSignalToAgent(params: {
     projectSlug: context.projectSlug,
     targetKind: target.kind,
     target: target.kind === "path" ? target.agentPath : target.sessionId,
+    markerStage: marker?.stage,
+    runtimeStage,
     usedFallback: !marker,
   });
 }

@@ -116,8 +116,11 @@ You can get this via get-current-session-id tool if you don't have it.
 ```markdown
 <!-- iterate-agent-context
 session_id: ses_xxxxx
+stage: ${ITERATE_AGENT_STAGE}
 -->
 ```
+
+Use `ITERATE_AGENT_STAGE` from machine env. It's precomputed by OS as `${APP_STAGE}:${PROJECT_NAME}_${ITERATE_USER}` when available, otherwise just `${APP_STAGE}`.
 
 If this block is missing, webhook automation may spin up a fallback agent path and post a bootstrap comment.
 
@@ -143,6 +146,7 @@ The sandbox has these env vars for building URLs:
 - `ITERATE_ORG_ID` / `ITERATE_ORG_SLUG` - organization ID and slug
 - `ITERATE_PROJECT_ID` / `ITERATE_PROJECT_SLUG` - project ID and slug
 - `ITERATE_MACHINE_ID` / `ITERATE_MACHINE_NAME` - machine ID and name
+- `ITERATE_AGENT_STAGE` - stage discriminator for PR marker routing
 
 **Proxy URL format:**
 
