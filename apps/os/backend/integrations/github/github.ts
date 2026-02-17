@@ -893,7 +893,7 @@ const PullRequestRef = z.object({
   user: z.object({ login: z.string() }),
 });
 
-const RepositoryRef = z.object({
+const RepositoryPayload = z.object({
   full_name: z.string(),
   owner: z.object({ login: z.string() }).optional(),
   name: z.string().optional(),
@@ -901,7 +901,7 @@ const RepositoryRef = z.object({
 
 const PullRequestReviewEvent = z.object({
   action: z.string(),
-  repository: RepositoryRef,
+  repository: RepositoryPayload,
   pull_request: PullRequestRef,
   review: z.object({
     id: z.number(),
@@ -917,7 +917,7 @@ type PullRequestReviewEvent = z.infer<typeof PullRequestReviewEvent>;
 
 const PullRequestReviewCommentEvent = z.object({
   action: z.string(),
-  repository: RepositoryRef,
+  repository: RepositoryPayload,
   pull_request: PullRequestRef,
   comment: z.object({
     id: z.number(),
@@ -932,7 +932,7 @@ type PullRequestReviewCommentEvent = z.infer<typeof PullRequestReviewCommentEven
 
 const IssueCommentEvent = z.object({
   action: z.string(),
-  repository: RepositoryRef,
+  repository: RepositoryPayload,
   issue: z.object({
     number: z.number(),
     title: z.string(),
@@ -952,7 +952,7 @@ const IssueCommentEvent = z.object({
 
 type IssueCommentEvent = z.infer<typeof IssueCommentEvent>;
 
-type RepositoryPayload = z.infer<typeof RepositoryRef>;
+type RepositoryPayload = z.infer<typeof RepositoryPayload>;
 
 type GitHubRepoCoordinates = {
   owner: string;
@@ -1001,11 +1001,7 @@ type PullRequestContext = {
 };
 
 type ParsedAgentMarker = {
-  agentPath: string | null;
   sessionId: string | null;
-  sessionUrl: string | null;
-  projectSlug: string | null;
-  machineId: string | null;
 };
 
 type AgentTarget =
@@ -1032,10 +1028,8 @@ type PullRequestSignal = {
   eventUrl: string;
 };
 
-const AGENT_PATH_SEGMENT_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
-const AGENT_PATH_INLINE_PATTERN = /\[iterate-agent-path\]:\s*(\/[a-z0-9/-]+)/i;
-const SESSION_ID_PATTERN = /\bses_[a-zA-Z0-9_-]+\b/;
+const SESSION_ID_PATTERN = /^ses_[a-zA-Z0-9_-]+$/;
 
 function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
   const split = repository.full_name.split("/");
@@ -1063,88 +1057,36 @@ function toPathSegment(value: string): string {
   return normalized || "x";
 }
 
-function isValidAgentPath(path: string): boolean {
-  if (!path.startsWith("/")) return false;
-  if (path === "/") return false;
-  const segments = path.slice(1).split("/");
-  if (segments.length === 0) return false;
-  return segments.every((segment) => AGENT_PATH_SEGMENT_PATTERN.test(segment));
-}
-
-function parseSessionIdFromUrl(url: string): string | null {
-  const match = url.match(/\/session\/([^/?#]+)/i);
-  if (!match?.[1]) return null;
-  return match[1];
+function normalizeSessionId(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const sessionId = value.trim();
+  return SESSION_ID_PATTERN.test(sessionId) ? sessionId : null;
 }
 
 function parseAgentMarker(text: string | null | undefined): ParsedAgentMarker | null {
   if (!text) return null;
 
   const blockMatch = text.match(AGENT_MARKER_BLOCK_PATTERN);
-  let marker: ParsedAgentMarker | null = null;
+  if (!blockMatch?.[1]) return null;
 
-  if (blockMatch?.[1]) {
-    marker = {
-      agentPath: null,
-      sessionId: null,
-      sessionUrl: null,
-      projectSlug: null,
-      machineId: null,
-    };
+  const marker: ParsedAgentMarker = {
+    sessionId: null,
+  };
 
-    for (const rawLine of blockMatch[1].split("\n")) {
-      const line = rawLine.trim();
-      if (!line) continue;
-      const match = line.match(/^([a-z_]+)\s*:\s*(.+)$/i);
-      if (!match) continue;
-      const key = match[1].toLowerCase();
-      const value = match[2].trim();
-      if (!value) continue;
+  for (const rawLine of blockMatch[1].split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = line.match(/^([a-z_]+)\s*:\s*(.+)$/i);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (!value || key !== "session_id") continue;
 
-      if (key === "agent_path" && isValidAgentPath(value)) marker.agentPath = value;
-      if (key === "session_id") marker.sessionId = value;
-      if (key === "session_url") marker.sessionUrl = value;
-      if (key === "project_slug") marker.projectSlug = value;
-      if (key === "machine_id") marker.machineId = value;
-    }
+    const sessionId = normalizeSessionId(value);
+    if (sessionId) marker.sessionId = sessionId;
   }
 
-  if (!marker) {
-    marker = {
-      agentPath: null,
-      sessionId: null,
-      sessionUrl: null,
-      projectSlug: null,
-      machineId: null,
-    };
-  }
-
-  if (!marker.agentPath) {
-    const inlinePath = text.match(AGENT_PATH_INLINE_PATTERN)?.[1]?.trim();
-    if (inlinePath && isValidAgentPath(inlinePath)) {
-      marker.agentPath = inlinePath;
-    }
-  }
-
-  if (!marker.sessionId && marker.sessionUrl) {
-    marker.sessionId = parseSessionIdFromUrl(marker.sessionUrl);
-  }
-
-  if (!marker.sessionId) {
-    const sessionIdMatch = text.match(SESSION_ID_PATTERN);
-    if (sessionIdMatch?.[0]) marker.sessionId = sessionIdMatch[0];
-  }
-
-  if (
-    !marker.agentPath &&
-    !marker.sessionId &&
-    !marker.projectSlug &&
-    !marker.machineId &&
-    !marker.sessionUrl
-  ) {
-    return null;
-  }
-
+  if (!marker.sessionId) return null;
   return marker;
 }
 
@@ -1177,18 +1119,8 @@ function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: numb
   return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
 }
 
-function buildMarkerBlock(params: {
-  agentPath: string;
-  projectSlug: string;
-  machineId: string;
-}): string {
-  return [
-    "<!-- iterate-agent-context",
-    `agent_path: ${params.agentPath}`,
-    `project_slug: ${params.projectSlug}`,
-    `machine_id: ${params.machineId}`,
-    "-->",
-  ].join("\n");
+function buildMarkerBlock(params: { sessionId: string }): string {
+  return ["<!-- iterate-agent-context", `session_id: ${params.sessionId}`, "-->"].join("\n");
 }
 
 function buildBootstrapComment(params: {
@@ -1208,10 +1140,6 @@ function selectAgentTarget(
   marker: ParsedAgentMarker | null,
   fallbackAgentPath: string,
 ): AgentTarget {
-  if (marker?.agentPath && isValidAgentPath(marker.agentPath)) {
-    return { kind: "path", agentPath: marker.agentPath };
-  }
-
   if (marker?.sessionId) {
     return { kind: "opencode-session", sessionId: marker.sessionId };
   }
@@ -1279,7 +1207,7 @@ async function forwardPromptToMachine(params: {
   env: CloudflareEnv;
   target: AgentTarget;
   prompt: string;
-}) {
+}): Promise<{ sessionId: string | null }> {
   const fetcher = await buildMachineForwardFetcher(params.machine, params.env);
   if (!fetcher) throw new Error("Could not build machine forward fetcher");
 
@@ -1299,6 +1227,19 @@ async function forwardPromptToMachine(params: {
     const body = await response.text().catch(() => "<no body>");
     throw new Error(`Agent forward failed (${response.status}): ${body.slice(0, 500)}`);
   }
+
+  let sessionId =
+    params.target.kind === "opencode-session" ? normalizeSessionId(params.target.sessionId) : null;
+
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json().catch(() => null)) as { sessionId?: unknown } | null;
+    if (payload && typeof payload === "object" && typeof payload.sessionId === "string") {
+      sessionId = normalizeSessionId(payload.sessionId) ?? sessionId;
+    }
+  }
+
+  return { sessionId };
 }
 
 async function githubApiRequestJson<T>(params: {
@@ -1428,12 +1369,12 @@ async function ensureBootstrapComment(params: {
   eventKind: PullRequestSignal["eventKind"];
   existingIssueComments: GitHubIssueComment[];
 }): Promise<void> {
-  const markerPath = parseAgentMarker(params.markerBlock)?.agentPath;
-  if (!markerPath) return;
+  const markerSessionId = parseAgentMarker(params.markerBlock)?.sessionId;
+  if (!markerSessionId) return;
 
   const existing = params.existingIssueComments.some((comment) => {
     const marker = parseAgentMarker(comment.body);
-    return marker?.agentPath === markerPath;
+    return marker?.sessionId === markerSessionId;
   });
   if (existing) return;
 
@@ -1521,9 +1462,7 @@ async function routePullRequestSignalToAgent(params: {
 
   const marker = findAgentMarker(prContext);
 
-  const contexts = marker?.projectSlug
-    ? allContexts.filter((context) => context.projectSlug === marker.projectSlug)
-    : allContexts;
+  const contexts = allContexts;
 
   if (contexts.length !== 1) {
     throw new Error(
@@ -1559,11 +1498,23 @@ async function routePullRequestSignalToAgent(params: {
   const fallbackAgentPath = buildDeterministicAgentPath(params.signal.repo, params.signal.prNumber);
   const target = selectAgentTarget(marker, fallbackAgentPath);
 
-  if (!marker) {
+  const prompt = buildPullRequestPrompt({
+    signal: params.signal,
+    pullRequest: prContext.pullRequest,
+    target,
+    usedFallback: !marker,
+  });
+
+  const forwardResult = await forwardPromptToMachine({
+    machine: context.machine,
+    env: params.env,
+    target,
+    prompt,
+  });
+
+  if (!marker && forwardResult.sessionId) {
     const markerBlock = buildMarkerBlock({
-      agentPath: fallbackAgentPath,
-      projectSlug: context.projectSlug,
-      machineId: context.machine.id,
+      sessionId: forwardResult.sessionId,
     });
     await ensureBootstrapComment({
       token,
@@ -1574,20 +1525,6 @@ async function routePullRequestSignalToAgent(params: {
       existingIssueComments: prContext.issueComments,
     });
   }
-
-  const prompt = buildPullRequestPrompt({
-    signal: params.signal,
-    pullRequest: prContext.pullRequest,
-    target,
-    usedFallback: !marker,
-  });
-
-  await forwardPromptToMachine({
-    machine: context.machine,
-    env: params.env,
-    target,
-    prompt,
-  });
 
   logger.info("[GitHub Webhook] Routed PR signal to agent", {
     repo: params.signal.repo.fullName,

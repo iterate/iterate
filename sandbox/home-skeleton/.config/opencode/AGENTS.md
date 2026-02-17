@@ -111,13 +111,11 @@ When creating PRs, always include attribution in the PR description so reviewers
 
 Also include this machine-readable block in every PR body (required for webhook routing):
 
+You can get this via get-current-session-id tool if you don't have it.
+
 ```markdown
 <!-- iterate-agent-context
-agent_path: /github/<owner>/<repo>/pr-<number>  # or your real agent path
-project_slug: <project-slug>
-machine_id: <machine-id>
 session_id: ses_xxxxx
-session_url: https://.../session/ses_xxxxx
 -->
 ```
 
