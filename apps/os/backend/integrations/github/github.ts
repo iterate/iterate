@@ -18,6 +18,7 @@ import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
+import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 
 /**
  * Derive the correct provider-specific snapshot/image name from a short SHA.
@@ -309,6 +310,13 @@ githubApp.get(
         },
       });
     });
+
+    // Refresh env on running machines so new GitHub tokens are available immediately.
+    waitUntil(
+      pokeRunningMachinesToRefresh(c.var.db, projectId, c.env).catch((err) => {
+        logger.error("[GitHub OAuth] Failed to poke machines for refresh", err);
+      }),
+    );
 
     const redirectPath = callbackURL || (project ? `/proj/${project.slug}/connectors` : "/");
     return c.redirect(redirectPath);
@@ -973,6 +981,7 @@ type GitHubPullRequestDetails = {
   body: string;
   htmlUrl: string;
   authorLogin: string;
+  headSha: string;
 };
 
 type GitHubIssueComment = {
@@ -993,11 +1002,21 @@ type GitHubReviewComment = {
   user: { login: string };
 };
 
+type GitHubCheckRun = {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  detailsUrl: string | null;
+  appSlug: string | null;
+};
+
 type PullRequestContext = {
   pullRequest: GitHubPullRequestDetails;
   issueComments: GitHubIssueComment[];
   reviews: GitHubReview[];
   reviewComments: GitHubReviewComment[];
+  checkRuns: GitHubCheckRun[];
 };
 
 type ParsedAgentMarker = {
@@ -1215,6 +1234,65 @@ function previewText(text: string | null | undefined, maxLength = 160): string |
   return normalized.slice(0, maxLength);
 }
 
+function normalizePromptText(text: string | null | undefined): string {
+  if (!text) return "<empty>";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized || "<empty>";
+}
+
+function buildFirstLoopInContextSection(context: PullRequestContext): string {
+  const issueCommentLines =
+    context.issueComments.length === 0
+      ? ["- none"]
+      : context.issueComments.map(
+          (comment) =>
+            `- [issue_comment #${comment.id}] @${comment.user.login}: ${normalizePromptText(comment.body)}`,
+        );
+
+  const reviewLines =
+    context.reviews.length === 0
+      ? ["- none"]
+      : context.reviews.map(
+          (review) =>
+            `- [review #${review.id}] @${review.user.login}: ${normalizePromptText(review.body)}`,
+        );
+
+  const reviewCommentLines =
+    context.reviewComments.length === 0
+      ? ["- none"]
+      : context.reviewComments.map(
+          (comment) =>
+            `- [review_comment #${comment.id}] @${comment.user.login}: ${normalizePromptText(comment.body)}`,
+        );
+
+  const checkRunLines =
+    context.checkRuns.length === 0
+      ? ["- none"]
+      : [...context.checkRuns]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((checkRun) => {
+            const status = checkRun.conclusion
+              ? `${checkRun.status}/${checkRun.conclusion}`
+              : checkRun.status;
+            const app = checkRun.appSlug ? ` app=${checkRun.appSlug}` : "";
+            const details = checkRun.detailsUrl ? ` ${checkRun.detailsUrl}` : "";
+            return `- [${status}] ${checkRun.name}${app}${details}`;
+          });
+
+  return [
+    "",
+    "Initial PR context (first loop-in):",
+    "Existing issue comments:",
+    ...issueCommentLines,
+    "Existing pull request reviews:",
+    ...reviewLines,
+    "Existing review comments:",
+    ...reviewCommentLines,
+    "Latest check runs on PR head:",
+    ...checkRunLines,
+  ].join("\n");
+}
+
 function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: number): string {
   return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
 }
@@ -1252,7 +1330,7 @@ function selectAgentTarget(
 
 function buildPullRequestPrompt(params: {
   signal: PullRequestSignal;
-  pullRequest: GitHubPullRequestDetails;
+  context: PullRequestContext;
   target: AgentTarget;
   usedFallback: boolean;
 }): string {
@@ -1265,12 +1343,16 @@ function buildPullRequestPrompt(params: {
     ? ["", "Event body:", params.signal.eventBody].join("\n")
     : "";
 
+  const firstLoopInContextSection = params.usedFallback
+    ? buildFirstLoopInContextSection(params.context)
+    : "";
+
   return [
     "[GitHub PR Event]",
     `Repo: ${params.signal.repo.fullName}`,
-    `PR: #${params.pullRequest.number} ${params.pullRequest.htmlUrl}`,
-    `PR title: ${params.pullRequest.title}`,
-    `PR author: ${params.pullRequest.authorLogin}`,
+    `PR: #${params.context.pullRequest.number} ${params.context.pullRequest.htmlUrl}`,
+    `PR title: ${params.context.pullRequest.title}`,
+    `PR author: ${params.context.pullRequest.authorLogin}`,
     `Event: ${params.signal.eventKind}`,
     `Action: ${params.signal.action}`,
     `Actor: ${params.signal.actorLogin}`,
@@ -1278,6 +1360,7 @@ function buildPullRequestPrompt(params: {
     targetLine,
     `Fallback target used: ${params.usedFallback ? "yes" : "no"}`,
     bodySection,
+    firstLoopInContextSection,
   ].join("\n");
 }
 
@@ -1428,14 +1511,16 @@ async function fetchPullRequestContext(params: {
 }): Promise<PullRequestContext> {
   const repoPrefix = `https://api.github.com/repos/${params.repo.owner}/${params.repo.name}`;
 
-  const [pullRequest, issueComments, reviews, reviewComments] = await Promise.all([
-    githubApiRequestJson<{
-      number: number;
-      title: string;
-      body: string | null;
-      html_url: string;
-      user: { login: string };
-    }>({ token: params.token, url: `${repoPrefix}/pulls/${params.prNumber}` }),
+  const pullRequest = await githubApiRequestJson<{
+    number: number;
+    title: string;
+    body: string | null;
+    html_url: string;
+    user: { login: string };
+    head: { sha: string };
+  }>({ token: params.token, url: `${repoPrefix}/pulls/${params.prNumber}` });
+
+  const [issueComments, reviews, reviewComments, checkRuns] = await Promise.all([
     githubApiRequestJson<GitHubIssueComment[]>({
       token: params.token,
       url: `${repoPrefix}/issues/${params.prNumber}/comments?per_page=100`,
@@ -1448,6 +1533,39 @@ async function fetchPullRequestContext(params: {
       token: params.token,
       url: `${repoPrefix}/pulls/${params.prNumber}/comments?per_page=100`,
     }),
+    githubApiRequestJson<{
+      check_runs: Array<{
+        id: number;
+        name: string;
+        status: string;
+        conclusion: string | null;
+        details_url: string | null;
+        app?: { slug?: string | null } | null;
+      }>;
+    }>({
+      token: params.token,
+      url: `${repoPrefix}/commits/${pullRequest.head.sha}/check-runs?per_page=100`,
+    })
+      .then((result) =>
+        result.check_runs.map(
+          (checkRun): GitHubCheckRun => ({
+            id: checkRun.id,
+            name: checkRun.name,
+            status: checkRun.status,
+            conclusion: checkRun.conclusion,
+            detailsUrl: checkRun.details_url,
+            appSlug: checkRun.app?.slug ?? null,
+          }),
+        ),
+      )
+      .catch((err) => {
+        logger.warn("[GitHub Webhook] Failed to fetch check runs for PR context", {
+          repo: params.repo.fullName,
+          prNumber: params.prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return [];
+      }),
   ]);
 
   return {
@@ -1457,10 +1575,12 @@ async function fetchPullRequestContext(params: {
       body: pullRequest.body ?? "",
       htmlUrl: pullRequest.html_url,
       authorLogin: pullRequest.user.login,
+      headSha: pullRequest.head.sha,
     },
     issueComments,
     reviews,
     reviewComments,
+    checkRuns,
   };
 }
 
@@ -1641,7 +1761,7 @@ async function routePullRequestSignalToAgent(params: {
 
   const prompt = buildPullRequestPrompt({
     signal: params.signal,
-    pullRequest: prContext.pullRequest,
+    context: prContext,
     target,
     usedFallback: !marker,
   });

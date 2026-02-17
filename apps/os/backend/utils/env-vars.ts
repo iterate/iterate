@@ -52,12 +52,13 @@ function secretKeyToEnvVarNames(secretKey: string): string[] {
     return [secretKey.replace("iterate.", "").toUpperCase()];
   }
   if (secretKey.startsWith("github.")) {
-    // GitHub: github.access_token -> GITHUB_ACCESS_TOKEN, GH_TOKEN
-    // GH_TOKEN is required by GitHub CLI and many tools
+    // GitHub: github.access_token -> GITHUB_ACCESS_TOKEN, GH_TOKEN, GITHUB_TOKEN
+    // GH_TOKEN and GITHUB_TOKEN are commonly used by CLIs/tooling.
     const base = secretKey.replace(".", "_").toUpperCase();
     const names = [base];
     if (secretKey === "github.access_token") {
       names.push("GH_TOKEN");
+      names.push("GITHUB_TOKEN");
     }
     return [...new Set(names)];
   }
