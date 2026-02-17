@@ -1029,6 +1029,30 @@ type PullRequestSignal = {
   eventUrl: string;
 };
 
+type SignalGateDecision = {
+  shouldProcess: boolean;
+  reason:
+    | "author_is_bot"
+    | "marker_present"
+    | "mention_pr_title_or_body"
+    | "mention_issue_comment"
+    | "mention_review"
+    | "mention_review_comment"
+    | "no_signal";
+  diagnostics: {
+    botHandles: string[];
+    prAuthorLogin: string;
+    markerSessionId: string | null;
+    markerStage: string | null;
+    mentionInTitle: boolean;
+    mentionInBody: boolean;
+    mentionIssueCommentCount: number;
+    mentionReviewCount: number;
+    mentionReviewCommentCount: number;
+    latestIssueCommentPreview: string | null;
+  };
+};
+
 const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
 const SESSION_ID_PATTERN = /^ses_[a-zA-Z0-9_-]+$/;
 const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -1182,6 +1206,13 @@ function containsBotMention(
   if (!text) return false;
   const lower = text.toLowerCase();
   return botHandles.some((handle) => lower.includes(handle));
+}
+
+function previewText(text: string | null | undefined, maxLength = 160): string | null {
+  if (!text) return null;
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
 }
 
 function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: number): string {
@@ -1461,38 +1492,60 @@ async function ensureBootstrapComment(params: {
   });
 }
 
-function shouldProcessSignal(params: {
+function decideSignalGate(params: {
   context: PullRequestContext;
   marker: ParsedAgentMarker | null;
   botHandles: readonly string[];
-}): boolean {
+}): SignalGateDecision {
   const { context, marker, botHandles } = params;
+  const mentionInTitle = containsBotMention(context.pullRequest.title, botHandles);
+  const mentionInBody = containsBotMention(context.pullRequest.body, botHandles);
+  const mentionIssueCommentCount = context.issueComments.filter((comment) =>
+    containsBotMention(comment.body, botHandles),
+  ).length;
+  const mentionReviewCount = context.reviews.filter((review) =>
+    containsBotMention(review.body, botHandles),
+  ).length;
+  const mentionReviewCommentCount = context.reviewComments.filter((comment) =>
+    containsBotMention(comment.body, botHandles),
+  ).length;
+
+  const diagnostics = {
+    botHandles: [...botHandles],
+    prAuthorLogin: context.pullRequest.authorLogin,
+    markerSessionId: marker?.sessionId ?? null,
+    markerStage: marker?.stage ?? null,
+    mentionInTitle,
+    mentionInBody,
+    mentionIssueCommentCount,
+    mentionReviewCount,
+    mentionReviewCommentCount,
+    latestIssueCommentPreview: previewText(context.issueComments.at(-1)?.body),
+  };
+
   const authorIsBot = botHandles.some((handle) => {
     const login = handle.slice(1);
     return context.pullRequest.authorLogin.toLowerCase() === login;
   });
-  if (authorIsBot) return true;
-  if (marker) return true;
-
-  const mentionsInTitleOrBody =
-    containsBotMention(context.pullRequest.title, botHandles) ||
-    containsBotMention(context.pullRequest.body, botHandles);
-  if (mentionsInTitleOrBody) return true;
-
-  const mentionsInIssueComments = context.issueComments.some((comment) =>
-    containsBotMention(comment.body, botHandles),
-  );
-  if (mentionsInIssueComments) return true;
-
-  const mentionsInReviews = context.reviews.some((review) =>
-    containsBotMention(review.body, botHandles),
-  );
-  if (mentionsInReviews) return true;
-
-  const mentionsInReviewComments = context.reviewComments.some((comment) =>
-    containsBotMention(comment.body, botHandles),
-  );
-  return mentionsInReviewComments;
+  if (authorIsBot) {
+    return { shouldProcess: true, reason: "author_is_bot", diagnostics };
+  }
+  if (marker) {
+    return { shouldProcess: true, reason: "marker_present", diagnostics };
+  }
+  if (mentionInTitle || mentionInBody) {
+    return { shouldProcess: true, reason: "mention_pr_title_or_body", diagnostics };
+  }
+  if (mentionIssueCommentCount > 0) {
+    return { shouldProcess: true, reason: "mention_issue_comment", diagnostics };
+  }
+  if (mentionReviewCount > 0) {
+    return { shouldProcess: true, reason: "mention_review", diagnostics };
+  }
+  if (mentionReviewCommentCount > 0) {
+    return { shouldProcess: true, reason: "mention_review_comment", diagnostics };
+  }
+  return { shouldProcess: false, reason: "no_signal", diagnostics };
 }
 
 async function routePullRequestSignalToAgent(params: {
@@ -1567,13 +1620,18 @@ async function routePullRequestSignalToAgent(params: {
   const botLogin = `${params.env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
   const botHandles = [`@${botLogin}`, `@${params.env.GITHUB_APP_SLUG.toLowerCase()}`] as const;
 
-  const shouldProcess = shouldProcessSignal({ context: prContext, marker, botHandles });
-  if (!shouldProcess) {
+  const gateDecision = decideSignalGate({ context: prContext, marker, botHandles });
+  if (!gateDecision.shouldProcess) {
     logger.debug("[GitHub Webhook] PR signal ignored by gate", {
       repo: params.signal.repo.fullName,
       prNumber: params.signal.prNumber,
       eventKind: params.signal.eventKind,
       action: params.signal.action,
+      githubAppSlug: params.env.GITHUB_APP_SLUG,
+      signalActor: params.signal.actorLogin,
+      signalEventBodyPreview: previewText(params.signal.eventBody),
+      gateReason: gateDecision.reason,
+      ...gateDecision.diagnostics,
     });
     return;
   }
