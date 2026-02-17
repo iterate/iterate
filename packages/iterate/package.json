@@ -40,7 +40,7 @@
     "@trpc/server": "^11.7.2",
     "better-auth": "1.4.3",
     "superjson": "^2.2.2",
-    "trpc-cli": "^0.12.2",
+    "trpc-cli": "https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c",
     "zod": "4.1.12"
   }
 }

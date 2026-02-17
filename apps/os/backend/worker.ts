@@ -1,3 +1,4 @@
+import { parseRouter } from "trpc-cli";
 import { Hono, type Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
@@ -91,6 +92,13 @@ app.use("*", async (c, next) => {
   const trpcCaller = appRouter.createCaller(createContext(c));
   c.set("trpcCaller", trpcCaller);
   return next();
+});
+
+app.get("/api/trpc-cli-serialised-router", (c) => {
+  return c.json({
+    type: "trpc-cli-serialised-router",
+    procedures: parseRouter({ router: appRouter }),
+  } satisfies import("trpc-cli/dist/trpc-compat.js").SerialisedRouter);
 });
 
 app.use("*", async (c, next) => {

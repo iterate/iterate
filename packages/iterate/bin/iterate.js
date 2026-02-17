@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import * as prompts from "@clack/prompts";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { initTRPC } from "@trpc/server";
@@ -17,50 +15,38 @@ import { createCli } from "trpc-cli";
 import { proxify } from "trpc-cli/dist/proxify.js";
 import { z } from "zod/v4";
 
-const DEFAULT_REPO_URL = "https://github.com/iterate/iterate.git";
-const XDG_CONFIG_PATH = join(
+const XDG_CONFIG_PARENT = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
   "iterate",
-  "config.json",
 );
-const XDG_REPO_DIR = join(
-  process.env.XDG_DATA_HOME ? process.env.XDG_DATA_HOME : join(homedir(), ".local", "share"),
-  "iterate",
-  "repo",
-);
-const DEFAULT_REPO_DIR = XDG_REPO_DIR;
+
+const XDG_CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 const CONFIG_PATH = XDG_CONFIG_PATH;
-const APP_ROUTER_PATH = join("apps", "os", "backend", "trpc", "root.ts");
+// todo write json schema to file too - need to make everything zod first
+// const CONFIG_SCHEMA_PATH = join(XDG_CONFIG_PARENT, "config-schema.json");
 
-/**
- * @typedef {{
- *   repoPath?: string;
- *   repoRef?: string;
- *   repoUrl?: string;
- *   autoInstall?: boolean;
- * }} LauncherConfig
- */
+const SetupInput = z.object({
+  baseUrl: z
+    .string()
+    .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
+  adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
+  userEmail: z.string().describe("User email to impersonate for os calls"),
+  scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
+});
 
-/**
- * @typedef {{
- *   global?: Record<string, unknown>;
- *   workspaces?: Record<string, Record<string, unknown>>;
- * } & Record<string, unknown>} ConfigFile
- */
+const AuthConfig = z.object({
+  baseUrl: z.string(),
+  adminPasswordEnvVarName: z.string(),
+  userEmail: z.string(),
+});
 
-/** @typedef {"env" | "config" | "cwd" | "default"} RepoDirSource */
+const ConfigFile = z.object({
+  global: AuthConfig.partial().optional(),
+  workspaces: z.record(z.string(), AuthConfig).optional(),
+});
 
-/**
- * @typedef {{
- *   repoDir: string;
- *   repoDirSource: RepoDirSource;
- *   repoRef?: string;
- *   repoUrl: string;
- *   autoInstall: boolean;
- *   cwdRepoDir?: string;
- *   launcherConfig: LauncherConfig;
- * }} RuntimeOptions
- */
+/** @typedef {z.infer<typeof AuthConfig>} AuthConfig */
+/** @typedef {z.infer<typeof ConfigFile>} ConfigFile */
 
 /**
  * @typedef {{
@@ -71,14 +57,6 @@ const APP_ROUTER_PATH = join("apps", "os", "backend", "trpc", "root.ts");
  * }} SpawnOptions
  */
 
-/**
- * @typedef {{
- *   repoDir: string;
- *   repoRef?: string;
- *   repoUrl: string;
- * }} CheckoutOptions
- */
-
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
@@ -87,72 +65,12 @@ const isAgent =
 
 const t = initTRPC.meta().create();
 
-const SetupInput = z.object({
-  baseUrl: z
-    .string()
-    .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
-  adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  userEmail: z.string().describe("User email to impersonate for os calls"),
-  repoPath: z.string().describe("Path to iterate checkout (or 'local' / 'managed' shortcuts)"),
-  autoInstall: z.boolean().describe("Auto install dependencies when missing"),
-  scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
-});
-
-const AuthConfig = z.object({
-  baseUrl: z.string(),
-  adminPasswordEnvVarName: z.string(),
-  userEmail: z.string(),
-});
-
-/** @param {string} message */
-const log = (message) => {
-  process.stderr.write(`[iterate] ${message}\n`);
-};
-
 /**
  * @param {unknown} value
  * @returns {value is Record<string, unknown>}
  */
 const isObject = (value) => {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-};
-
-/** @param {unknown} value */
-const nonEmptyString = (value) => {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
-/** @param {string} input */
-const normalizePath = (input) => {
-  if (input === "~") {
-    return homedir();
-  }
-  if (input.startsWith("~/")) {
-    return join(homedir(), input.slice(2));
-  }
-  if (isAbsolute(input)) {
-    return input;
-  }
-  return resolve(input);
-};
-
-/** @param {unknown} value */
-const parseBoolean = (value) => {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.toLowerCase();
-  if (normalized === "1" || normalized === "true") {
-    return true;
-  }
-  if (normalized === "0" || normalized === "false") {
-    return false;
-  }
-  return undefined;
 };
 
 /** @returns {ConfigFile} */
@@ -175,24 +93,6 @@ const readConfigFile = () => {
   return parsed;
 };
 
-/** @param {unknown} launcher */
-const sanitizeLauncherConfig = (launcher) => {
-  if (!isObject(launcher)) {
-    return {};
-  }
-  return {
-    repoPath: nonEmptyString(launcher.repoPath),
-    repoRef: nonEmptyString(launcher.repoRef),
-    repoUrl: nonEmptyString(launcher.repoUrl),
-    autoInstall: typeof launcher.autoInstall === "boolean" ? launcher.autoInstall : undefined,
-  };
-};
-
-/** @param {ConfigFile} configFile */
-const getGlobalConfig = (configFile) => {
-  return isObject(configFile.global) ? configFile.global : {};
-};
-
 /**
  * @param {ConfigFile} configFile
  * @param {string} workspacePath
@@ -209,127 +109,43 @@ const getWorkspaceConfig = (configFile, workspacePath) => {
  */
 const getMergedWorkspaceConfig = (configFile, workspacePath) => {
   return {
-    ...getGlobalConfig(configFile),
+    ...configFile.global,
     ...getWorkspaceConfig(configFile, workspacePath),
   };
 };
 
-/** @param {string} workspacePath */
-const readLauncherConfig = (workspacePath) => {
-  const configFile = readConfigFile();
-  return sanitizeLauncherConfig(getMergedWorkspaceConfig(configFile, workspacePath));
-};
-
 /**
- * @param {{
- *   launcherPatch: Partial<LauncherConfig>;
- *   workspacePatch?: Record<string, unknown>;
- *   scope: "workspace" | "global";
- *   workspacePath: string;
- * }} options
+ * @param {{ patch?: Partial<AuthConfig>; scope: "workspace" | "global"; workspacePath: string; }} options
+ * @returns {ConfigFile}
  */
-const writeLauncherConfig = ({ launcherPatch, workspacePatch, scope, workspacePath }) => {
+const writeNewConfig = ({ patch, scope, workspacePath }) => {
+  patch = Object.fromEntries(
+    Object.entries(patch || {}).filter(([_key, value]) => value !== undefined),
+  );
+  console.log("writeNewConfig", { patch, scope, workspacePath });
   const configFile = readConfigFile();
-  const existingGlobal = getGlobalConfig(configFile);
-  const existingWorkspaces = isObject(configFile.workspaces) ? configFile.workspaces : {};
+  const cloned = structuredClone(configFile);
 
-  const nextGlobal =
-    scope === "global"
-      ? {
-          ...existingGlobal,
-          ...launcherPatch,
-          ...(workspacePatch ?? {}),
-        }
-      : existingGlobal;
+  if (scope === "global") {
+    cloned.global = { ...configFile.global, ...patch };
+  }
+  if (scope === "workspace" && workspacePath) {
+    cloned.workspaces ||= {};
+    // @ts-expect-error - we know it's a string
+    cloned.workspaces[workspacePath] = {
+      ...configFile.workspaces?.[workspacePath],
+      ...patch,
+    };
+  }
 
-  const nextWorkspaces =
-    scope === "workspace"
-      ? {
-          ...existingWorkspaces,
-          [workspacePath]: {
-            ...getWorkspaceConfig(configFile, workspacePath),
-            ...launcherPatch,
-            ...(workspacePatch ?? {}),
-          },
-        }
-      : existingWorkspaces;
+  const parsed = ConfigFile.safeParse(cloned);
+  if (!parsed.success) {
+    throw new Error(`Invalid config file: ${z.prettifyError(parsed.error)}`);
+  }
 
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  const { launcher: _unusedLauncher, ...rest } = configFile;
-  const next = {
-    ...rest,
-    global: nextGlobal,
-    workspaces: nextWorkspaces,
-  };
-  writeFileSync(CONFIG_PATH, `${JSON.stringify(next, null, 2)}\n`);
-  return next;
-};
-
-/** @param {string} dir */
-const isIterateRepo = (dir) => {
-  return (
-    existsSync(join(dir, ".git")) &&
-    existsSync(join(dir, "pnpm-workspace.yaml")) &&
-    existsSync(join(dir, APP_ROUTER_PATH))
-  );
-};
-
-/** @param {string} startDir */
-const findNearestIterateRepo = (startDir) => {
-  let current = resolve(startDir);
-  for (;;) {
-    if (isIterateRepo(current)) {
-      return current;
-    }
-    const parent = dirname(current);
-    if (parent === current) {
-      return undefined;
-    }
-    current = parent;
-  }
-};
-
-/** @returns {RuntimeOptions} */
-const resolveRuntimeOptions = () => {
-  const launcherConfig = readLauncherConfig(process.cwd());
-  const cwdRepoDir = findNearestIterateRepo(process.cwd());
-  const envRepoDir = nonEmptyString(process.env.ITERATE_REPO_DIR);
-
-  let repoDir;
-  /** @type {RepoDirSource} */
-  let repoDirSource;
-
-  if (envRepoDir) {
-    repoDir = normalizePath(envRepoDir);
-    repoDirSource = "env";
-  } else if (launcherConfig.repoPath) {
-    repoDir = normalizePath(launcherConfig.repoPath);
-    repoDirSource = "config";
-  } else if (cwdRepoDir) {
-    repoDir = cwdRepoDir;
-    repoDirSource = "cwd";
-  } else {
-    repoDir = DEFAULT_REPO_DIR;
-    repoDirSource = "default";
-  }
-
-  const repoRef = nonEmptyString(process.env.ITERATE_REPO_REF) ?? launcherConfig.repoRef;
-  const repoUrl =
-    nonEmptyString(process.env.ITERATE_REPO_URL) ?? launcherConfig.repoUrl ?? DEFAULT_REPO_URL;
-  const autoInstall =
-    parseBoolean(process.env.ITERATE_AUTO_INSTALL) ??
-    launcherConfig.autoInstall ??
-    (repoDirSource === "cwd" ? false : true);
-
-  return {
-    repoDir,
-    repoDirSource,
-    repoRef,
-    repoUrl,
-    autoInstall,
-    cwdRepoDir,
-    launcherConfig,
-  };
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(parsed.data, null, 2)}\n`);
+  return cloned;
 };
 
 /** @param {string} workspacePath */
@@ -431,6 +247,7 @@ const resolveImpersonationUserId = async ({ superadminAuthClient, userEmail, bas
 
 /** @param {z.infer<typeof AuthConfig>} authConfig */
 const authDance = async (authConfig) => {
+  /** @type {string[] | undefined} */
   let superadminSetCookie;
   const authClient = createAuthClient({
     baseURL: authConfig.baseUrl,
@@ -499,135 +316,30 @@ const authDance = async (authConfig) => {
   return { userCookies, userClient };
 };
 
-/** @param {string} repoDir */
-const loadAppRouter = async (repoDir) => {
-  const appRouterPath = join(repoDir, APP_ROUTER_PATH);
-  if (!existsSync(appRouterPath)) {
-    throw new Error(`Could not find ${APP_ROUTER_PATH} under ${repoDir}.`);
+/** @param {{baseUrl: string}} params */
+const loadAppRouter = async (params) => {
+  const url = `${params.baseUrl}/api/trpc-cli-serialised-router`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${url} got ${response.status}: ${await response.text()}`);
   }
-  const rootModule = await import(pathToFileURL(appRouterPath).href);
-  if (!rootModule || typeof rootModule !== "object" || !("appRouter" in rootModule)) {
-    throw new Error(`Failed to load appRouter from ${appRouterPath}`);
+  /** @type {import("trpc-cli/dist/trpc-compat.js").SerialisedRouter} */
+  const router = await response.json();
+  if (router?.type !== "trpc-cli-serialised-router") {
+    throw new Error(`${url} returned invalid router: ${JSON.stringify(router)}`);
   }
-  return rootModule.appRouter;
+  return router;
 };
 
-/** @param {unknown} error */
-const commandMissing = (error) => {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
-};
-
-/** @param {SpawnOptions} options */
-const run = ({ command, args, cwd, env }) => {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: "inherit",
-    });
-
-    child.on("error", (error) => {
-      rejectPromise(error);
-    });
-
-    child.on("close", (code, signal) => {
-      if (signal) {
-        rejectPromise(new Error(`${command} exited with signal ${signal}`));
-        return;
-      }
-      resolvePromise(code ?? 0);
-    });
-  });
-};
-
-/** @param {SpawnOptions} options */
-const runChecked = async ({ command, args, cwd, env }) => {
-  const code = await run({ command, args, cwd, env });
-  if (code !== 0) {
-    throw new Error(`Command failed (${code}): ${command} ${args.join(" ")}`);
-  }
-};
-
-/** @param {CheckoutOptions} options */
-const ensureRepoCheckout = async ({ repoDir, repoRef, repoUrl }) => {
-  if (existsSync(repoDir)) {
-    if (!existsSync(join(repoDir, APP_ROUTER_PATH))) {
-      throw new Error(`Expected ${APP_ROUTER_PATH} in ${repoDir}.`);
-    }
-    if (!existsSync(join(repoDir, ".git"))) {
-      throw new Error(`Expected git checkout at ${repoDir}, but .git is missing.`);
-    }
-    return;
-  }
-
-  mkdirSync(dirname(repoDir), { recursive: true });
-  const cloneArgs = ["clone", "--depth", "1"];
-  if (repoRef) {
-    cloneArgs.push("--branch", repoRef, "--single-branch");
-  }
-  cloneArgs.push(repoUrl, repoDir);
-
-  log(`cloning iterate repo into ${repoDir}`);
-  try {
-    await runChecked({ command: "git", args: cloneArgs });
-    const envClientPath = join(repoDir, "apps/os/env-client.ts");
-    // todo: remove this as soon as this branch is merged into main
-    writeFileSync(
-      envClientPath,
-      readFileSync(envClientPath, "utf8").replace("import.meta.env.", "import.meta.env?."),
-    );
-  } catch (error) {
-    if (commandMissing(error)) {
-      throw new Error("git is required but was not found on PATH.");
-    }
-    throw error;
-  }
-};
-
-/** @param {string} repoDir */
-const hasInstalledDependencies = (repoDir) => {
-  return existsSync(join(repoDir, "node_modules", ".modules.yaml"));
-};
-
-/** @param {{ repoDir: string }} options */
-const installDependencies = async ({ repoDir }) => {
-  log("installing dependencies with pnpm");
-  const installArgs = ["install", "--frozen-lockfile"];
-  try {
-    await runChecked({
-      command: "corepack",
-      args: ["pnpm", ...installArgs],
-      cwd: repoDir,
-    });
-    return;
-  } catch (error) {
-    if (!commandMissing(error)) {
-      throw error;
-    }
-  }
-
-  try {
-    await runChecked({
-      command: "pnpm",
-      args: installArgs,
-      cwd: repoDir,
-    });
-  } catch (error) {
-    if (commandMissing(error)) {
-      throw new Error("pnpm/corepack is required but was not found on PATH.");
-    }
-    throw error;
-  }
-};
-
-/** @param {string} repoDir */
-const getRuntimeProcedures = async (repoDir) => {
-  const appRouter = await loadAppRouter(repoDir);
+/** @param {{ baseUrl: string }} params */
+const getRuntimeProcedures = async (params) => {
+  const appRouter = await loadAppRouter(params);
+  /** @type {{}} */
   const proxiedRouter = proxify(appRouter, async () => {
     return createTRPCClient({
       links: [
         httpLink({
-          url: `${readAuthConfig(process.cwd()).baseUrl}/api/trpc/`,
+          url: `${params.baseUrl}/api/trpc/`,
           transformer: superjson,
           fetch: async (request, init) => {
             const authConfig = readAuthConfig(process.cwd());
@@ -655,74 +367,42 @@ const launcherProcedures = {
   doctor: t.procedure
     .meta({ description: "Show launcher config and resolved runtime options" })
     .mutation(async () => {
-      const runtime = resolveRuntimeOptions();
+      const configFile = readConfigFile();
+      const parsed = ConfigFile.safeParse(configFile);
+      if (!parsed.success) {
+        throw new Error(`Invalid config file ${CONFIG_PATH}: ${z.prettifyError(parsed.error)}`);
+      }
       return {
         configPath: CONFIG_PATH,
-        repoDir: runtime.repoDir,
-        repoDirSource: runtime.repoDirSource,
-        autoInstall: runtime.autoInstall,
-        repoRef: runtime.repoRef ?? null,
-        repoUrl: runtime.repoUrl,
-        cwdRepoDir: runtime.cwdRepoDir ?? null,
-        repoExists: existsSync(runtime.repoDir),
-        dependenciesInstalled: hasInstalledDependencies(runtime.repoDir),
+        current: readAuthConfig(process.cwd()),
       };
     }),
   setup: t.procedure
-    .input(SetupInput)
-    .meta({ description: "Configure auth + launcher defaults for current workspace" })
+    .input(SetupInput.partial())
+    .meta({ prompt: true, description: "Configure auth + launcher defaults for current workspace" })
     .mutation(async ({ input }) => {
-      const runtime = resolveRuntimeOptions();
-
-      const rawRepoPath = input.repoPath.trim().toLowerCase();
-      let repoPath = normalizePath(input.repoPath);
-      if (rawRepoPath === "managed") {
-        repoPath = DEFAULT_REPO_DIR;
-      } else if (rawRepoPath === "local") {
-        if (!runtime.cwdRepoDir) {
-          throw new Error(
-            "'local' repoPath was selected but current directory is not inside an iterate repo",
-          );
-        }
-        repoPath = runtime.cwdRepoDir;
-      }
-
-      const next = writeLauncherConfig({
-        launcherPatch: { repoPath, autoInstall: input.autoInstall },
-        workspacePatch: {
+      writeNewConfig({
+        scope: input.scope || "workspace",
+        patch: {
           baseUrl: input.baseUrl,
           adminPasswordEnvVarName: input.adminPasswordEnvVarName,
           userEmail: input.userEmail,
         },
-        scope: input.scope,
         workspacePath: process.cwd(),
       });
+
       return {
         configPath: CONFIG_PATH,
-        launcher: sanitizeLauncherConfig(getMergedWorkspaceConfig(next, process.cwd())),
-        scope: input.scope,
+        current: readAuthConfig(process.cwd()),
       };
-    }),
-  install: t.procedure
-    .meta({ description: "Clone repo if needed, then run pnpm install" })
-    .mutation(async () => {
-      const runtime = resolveRuntimeOptions();
-      await ensureRepoCheckout(runtime);
-      await installDependencies({ repoDir: runtime.repoDir });
-      return { repoDir: runtime.repoDir };
     }),
 };
 
 /** @param {string[]} args */
 const runCli = async (args) => {
-  const runtime = resolveRuntimeOptions();
-  await ensureRepoCheckout(runtime);
+  const baseUrl = readAuthConfig(process.cwd()).baseUrl;
 
-  if (runtime.autoInstall && !hasInstalledDependencies(runtime.repoDir)) {
-    await installDependencies({ repoDir: runtime.repoDir });
-  }
-
-  const runtimeProcedures = await getRuntimeProcedures(runtime.repoDir);
+  const runtimeProcedures = await getRuntimeProcedures({ baseUrl });
   const router = t.router({
     ...launcherProcedures,
     ...runtimeProcedures,
