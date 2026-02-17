@@ -87,9 +87,6 @@ const readConfigFile = () => {
     throw new Error(`Invalid JSON in ${CONFIG_PATH}: ${detail}`);
   }
 
-  if (!isObject(parsed)) {
-    throw new Error(`${CONFIG_PATH} must contain a JSON object.`);
-  }
   return parsed;
 };
 

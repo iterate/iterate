@@ -936,8 +936,8 @@ importers:
         specifier: ^1.0.2
         version: 1.0.2
       trpc-cli:
-        specifier: https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c
-        version: https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        specifier: 0.12.3
+        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -1103,8 +1103,8 @@ importers:
         specifier: ^2.2.2
         version: 2.2.6
       trpc-cli:
-        specifier: https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c
-        version: https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        specifier: 0.12.3
+        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -11042,9 +11042,8 @@ packages:
       zod:
         optional: true
 
-  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c:
-    resolution: {tarball: https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c}
-    version: 0.0.0-dev-20260217131814
+  trpc-cli@0.12.3:
+    resolution: {integrity: sha512-yfYgIhV26bSYWZhmfWCIa0g/p2OuhaA1oXC47BWDMrjONlDYMFj+86lFwXXwn+e/Nf6HFmS/92/WZr/ft3nqmg==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -23551,7 +23550,7 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.13
 
-  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+  trpc-cli@0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.2
     optionalDependencies:

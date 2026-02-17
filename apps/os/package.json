@@ -97,7 +97,7 @@
     "tailwind-merge": "^3.4.0",
     "tiny-invariant": "^1.3.3",
     "tinyexec": "^1.0.2",
-    "trpc-cli": "https://pkg.pr.new/mmkal/trpc-cli@772638c90c0f8e52b83643d19154a87b6dbc8f6c",
+    "trpc-cli": "0.12.3",
     "ts-pattern": "^5.9.0",
     "tsx": "^4.20.6",
     "type-fest": "^5.2.0",
