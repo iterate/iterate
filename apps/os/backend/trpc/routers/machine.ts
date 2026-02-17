@@ -16,6 +16,8 @@ import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { outboxClient } from "../../outbox/client.ts";
+import { getLatestMachineEvents } from "../../utils/machine-metadata.ts";
 import {
   buildCanonicalMachineIngressUrl,
   getIngressSchemeFromPublicUrl,
@@ -167,8 +169,18 @@ export const machineRouter = router({
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
-      // Enrich each machine with provider info
-      return Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env)));
+      // Enrich each machine with provider info + latest event
+      const enriched = await Promise.all(
+        machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env)),
+      );
+      const eventMap = await getLatestMachineEvents(
+        ctx.db,
+        machines.map((m) => m.id),
+      );
+      return enriched.map((m) => ({
+        ...m,
+        lastEvent: eventMap.get(m.id) ?? null,
+      }));
     }),
 
   // Get machine by ID
@@ -193,7 +205,12 @@ export const machineRouter = router({
         });
       }
 
-      return enrichMachineWithProviderInfo(m, ctx.env);
+      const enriched = await enrichMachineWithProviderInfo(m, ctx.env);
+      const eventMap = await getLatestMachineEvents(ctx.db, [m.id]);
+      return {
+        ...enriched,
+        lastEvent: eventMap.get(m.id) ?? null,
+      };
     }),
 
   // Get provider-level state (e.g., Daytona sandbox state)
@@ -322,24 +339,22 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { runtime, machine } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
         ctx.env,
       );
 
-      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
-      const updatedMetadata = {
-        ...((machine.metadata as Record<string, unknown>) ?? {}),
-        daemonStatus: "restarting",
-        daemonReadyAt: null,
-      };
-
-      await ctx.db
-        .update(schema.machine)
-        .set({ metadata: updatedMetadata })
-        .where(eq(schema.machine.id, input.machineId));
+      // Emit restart event — UI derives "Restarting..." from this
+      await outboxClient.send(
+        { transaction: ctx.db, parent: ctx.db },
+        "machine:restart-requested",
+        {
+          machineId: input.machineId,
+          projectId: ctx.project.id,
+        },
+      );
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
@@ -366,24 +381,22 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { runtime, machine } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
         ctx.env,
       );
 
-      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
-      const updatedMetadata = {
-        ...((machine.metadata as Record<string, unknown>) ?? {}),
-        daemonStatus: "restarting",
-        daemonReadyAt: null,
-      };
-
-      await ctx.db
-        .update(schema.machine)
-        .set({ metadata: updatedMetadata })
-        .where(eq(schema.machine.id, input.machineId));
+      // Emit restart event — UI derives "Restarting..." from this
+      await outboxClient.send(
+        { transaction: ctx.db, parent: ctx.db },
+        "machine:restart-requested",
+        {
+          machineId: input.machineId,
+          projectId: ctx.project.id,
+        },
+      );
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");

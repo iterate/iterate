@@ -52,9 +52,6 @@ type MachineMetadata = {
   fly?: {
     machineId?: string;
   };
-  daemonStatus?: "ready" | "error" | "restarting" | "stopping" | "verifying" | "retrying";
-  daemonReadyAt?: string;
-  daemonStatusMessage?: string;
   provisioningError?: string;
 } & Record<string, unknown>;
 
@@ -210,7 +207,10 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+        enabled:
+          machine.state === "active" &&
+          (machine.lastEvent?.name === "machine:activated" ||
+            machine.lastEvent?.name === "machine:probe-succeeded"),
         refetchInterval: 10000,
       },
     ),
@@ -373,16 +373,15 @@ function MachineDetailPage() {
     };
   })();
 
+  const lastEventName = machine.lastEvent?.name;
+  const lastEventPayload = machine.lastEvent?.payload;
   const issueMessage =
     metadata.provisioningError ??
-    ((metadata.daemonStatus === "error" ||
-      metadata.daemonStatus === "retrying" ||
-      metadata.daemonStatus === "verifying") &&
-    metadata.daemonStatusMessage
-      ? metadata.daemonStatusMessage
+    ((lastEventName === "machine:probe-failed" ||
+      lastEventName === "machine:provisioning-failed") &&
+    lastEventPayload?.detail
+      ? String(lastEventPayload.detail)
       : null);
-  const daemonStatusForDisplay =
-    metadata.daemonStatus === "retrying" ? "verifying" : metadata.daemonStatus;
 
   const machineJson = JSON.stringify(machine, null, 2);
 
@@ -412,12 +411,7 @@ function MachineDetailPage() {
           <div>
             <dt className="text-xs text-muted-foreground">Daemon</dt>
             <dd className="mt-1">
-              <DaemonStatus
-                state={machine.state}
-                daemonStatus={daemonStatusForDisplay}
-                daemonReadyAt={metadata.daemonReadyAt}
-                daemonStatusMessage={metadata.daemonStatusMessage}
-              />
+              <DaemonStatus state={machine.state} lastEvent={machine.lastEvent} />
             </dd>
           </div>
           {machine.type !== "fly" && (
@@ -556,7 +550,7 @@ function MachineDetailPage() {
 
         {!agentsLoading && agents.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            {machine.state === "active" && metadata.daemonStatus === "ready"
+            {machine.state === "active" && lastEventName === "machine:activated"
               ? "No agents found."
               : "Agents appear once the machine is active and daemon is ready."}
           </p>

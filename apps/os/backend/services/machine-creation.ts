@@ -73,9 +73,14 @@ export type CreateMachineParams = {
 };
 
 type MachineCreationEventTypes = {
-  "machine:verify-readiness": {
+  "machine:daemon-ready": {
     machineId: string;
     projectId: string;
+  };
+  "machine:provisioning-failed": {
+    machineId: string;
+    projectId: string;
+    detail: string;
   };
 };
 
@@ -232,66 +237,43 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
         ...sanitizedLatestMetadata,
         ...(runtimeResult.metadata ?? {}),
       };
-      const daemonStatus = latestMetadata.daemonStatus;
-      const shouldEnqueueDeferredReadiness =
-        latestMachine?.state === "starting" &&
-        (daemonStatus === "verifying" || daemonStatus === "ready");
+      const daemonReportedStatus =
+        (latestMetadata.daemonReportedStatus as string | undefined) ??
+        (latestMetadata.daemonStatus as string | undefined);
+      // The daemon may have reported ready while provisioning was still running.
+      // Now that we have an externalId, emit daemon-ready so the probe pipeline starts.
+      const shouldEmitDeferredDaemonReady =
+        latestMachine?.state === "starting" && daemonReportedStatus === "ready";
 
-      if (shouldEnqueueDeferredReadiness) {
-        const verifyingMetadata = {
-          ...latestMachineMetadata,
-          daemonStatus: "verifying",
-          daemonStatusMessage: "Running readiness probe...",
-          daemonReadyAt: null,
-        };
+      // Always persist provider metadata from provisioning result
+      await db
+        .update(schema.machine)
+        .set({ metadata: latestMachineMetadata })
+        .where(eq(schema.machine.id, machineId));
 
-        await machineCreationOutbox.sendTx(db, "machine:verify-readiness", async (tx) => {
-          await tx
-            .update(schema.machine)
-            .set({
-              metadata: verifyingMetadata,
-            })
-            .where(eq(schema.machine.id, machineId));
-
-          return { payload: { machineId, projectId } };
+      if (shouldEmitDeferredDaemonReady) {
+        await machineCreationOutbox.send({ transaction: db, parent: db }, "machine:daemon-ready", {
+          machineId,
+          projectId,
         });
 
-        logger.info("Machine provisioned, deferred readiness probe enqueued", {
+        logger.info("Machine provisioned, deferred daemon-ready emitted", {
           machineId,
           projectId,
           type,
         });
-      } else {
-        await db
-          .update(schema.machine)
-          .set({
-            metadata: latestMachineMetadata,
-          })
-          .where(eq(schema.machine.id, machineId));
       }
 
       logger.info("Machine provisioned", { machineId, projectId, type });
     } catch (err) {
       logger.error("Machine provisioning failed", { machineId, projectId, type, err });
-      // Store provisioning error in metadata while preserving any concurrent daemon state updates.
-      const currentMachine = await db.query.machine.findFirst({
-        where: eq(schema.machine.id, machineId),
-      });
-      const currentMetadata = (currentMachine?.metadata as Record<string, unknown>) ?? {};
-      const sanitizedCurrentMetadata = stripMachineStateMetadata(currentMetadata);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      await db
-        .update(schema.machine)
-        .set({
-          metadata: {
-            ...sanitizedCurrentMetadata,
-            provisioningError: errorMessage,
-            daemonStatus: "error",
-            daemonStatusMessage: `Provisioning failed: ${errorMessage}`,
-            daemonReadyAt: null,
-          },
+      await machineCreationOutbox
+        .send({ transaction: db, parent: db }, "machine:provisioning-failed", {
+          machineId,
+          projectId,
+          detail: errorMessage,
         })
-        .where(eq(schema.machine.id, machineId))
         .catch(() => {});
     }
   })();
