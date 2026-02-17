@@ -397,8 +397,7 @@ const launcherProcedures = {
     }),
 };
 
-/** @param {string[]} args */
-const runCli = async (args) => {
+const runCli = async () => {
   const baseUrl = readAuthConfig(process.cwd()).baseUrl;
 
   const runtimeProcedures = await getRuntimeProcedures({ baseUrl });
@@ -414,15 +413,13 @@ const runCli = async (args) => {
     description: "Iterate CLI",
   });
 
-  process.argv = [process.argv[0], process.argv[1], ...args];
   await cli.run({
     prompts: isAgent ? undefined : prompts,
   });
 };
 
 const main = async () => {
-  const args = process.argv.slice(2);
-  await runCli(args);
+  await runCli();
 };
 
 main().catch((error) => {
