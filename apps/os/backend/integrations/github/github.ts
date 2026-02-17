@@ -1075,6 +1075,7 @@ type SignalGateDecision = {
 const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
 const SESSION_ID_PATTERN = /^ses_[a-zA-Z0-9_-]+$/;
 const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const LOW_TRUST_AUTOMATED_REVIEWER_PATTERNS = [/bugbot/i, /pullfrog/i, /cursor/i];
 
 function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
   const split = repository.full_name.split("/");
@@ -1240,13 +1241,23 @@ function normalizePromptText(text: string | null | undefined): string {
   return normalized || "<empty>";
 }
 
+function isLowTrustAutomatedReviewer(login: string | null | undefined): boolean {
+  if (!login) return false;
+  return LOW_TRUST_AUTOMATED_REVIEWER_PATTERNS.some((pattern) => pattern.test(login));
+}
+
+function formatCommentActor(login: string): string {
+  if (!isLowTrustAutomatedReviewer(login)) return `@${login}`;
+  return `@${login} (automated reviewer)`;
+}
+
 function buildFirstLoopInContextSection(context: PullRequestContext): string {
   const issueCommentLines =
     context.issueComments.length === 0
       ? ["- none"]
       : context.issueComments.map(
           (comment) =>
-            `- [issue_comment #${comment.id}] @${comment.user.login}: ${normalizePromptText(comment.body)}`,
+            `- [issue_comment #${comment.id}] ${formatCommentActor(comment.user.login)}: ${normalizePromptText(comment.body)}`,
         );
 
   const reviewLines =
@@ -1254,7 +1265,7 @@ function buildFirstLoopInContextSection(context: PullRequestContext): string {
       ? ["- none"]
       : context.reviews.map(
           (review) =>
-            `- [review #${review.id}] @${review.user.login}: ${normalizePromptText(review.body)}`,
+            `- [review #${review.id}] ${formatCommentActor(review.user.login)}: ${normalizePromptText(review.body)}`,
         );
 
   const reviewCommentLines =
@@ -1262,7 +1273,7 @@ function buildFirstLoopInContextSection(context: PullRequestContext): string {
       ? ["- none"]
       : context.reviewComments.map(
           (comment) =>
-            `- [review_comment #${comment.id}] @${comment.user.login}: ${normalizePromptText(comment.body)}`,
+            `- [review_comment #${comment.id}] ${formatCommentActor(comment.user.login)}: ${normalizePromptText(comment.body)}`,
         );
 
   const checkRunLines =
@@ -1334,6 +1345,8 @@ function buildPullRequestPrompt(params: {
   target: AgentTarget;
   usedFallback: boolean;
 }): string {
+  const lowTrustAutomatedReviewer = isLowTrustAutomatedReviewer(params.signal.actorLogin);
+
   const targetLine =
     params.target.kind === "path"
       ? `Target agent path: ${params.target.agentPath}`
@@ -1345,6 +1358,14 @@ function buildPullRequestPrompt(params: {
 
   const firstLoopInContextSection = params.usedFallback
     ? buildFirstLoopInContextSection(params.context)
+    : "";
+
+  const automatedReviewerGuidance = lowTrustAutomatedReviewer
+    ? [
+        "",
+        "Automated reviewer guidance:",
+        "- You are allowed to reject feedback, especially from reviewbots.",
+      ].join("\n")
     : "";
 
   return [
@@ -1361,6 +1382,7 @@ function buildPullRequestPrompt(params: {
     `Fallback target used: ${params.usedFallback ? "yes" : "no"}`,
     bodySection,
     firstLoopInContextSection,
+    automatedReviewerGuidance,
   ].join("\n");
 }
 
