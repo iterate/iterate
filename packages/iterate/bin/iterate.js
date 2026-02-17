@@ -314,14 +314,16 @@ const authDance = async (authConfig) => {
 
 /** @param {{baseUrl: string}} params */
 const loadAppRouter = async (params) => {
-  const url = `${params.baseUrl}/api/trpc-cli-serialised-router`;
+  const url = `${params.baseUrl}/api/trpc-cli-procedures`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`${url} got ${response.status}: ${await response.text()}`);
   }
-  /** @type {import("trpc-cli/dist/trpc-compat.js").SerialisedRouter} */
-  const router = await response.json();
-  if (router?.type !== "trpc-cli-serialised-router") {
+
+  const router = await response.json().catch((e) => {
+    throw new Error(`${url} returned invalid router: ${e.message}`);
+  });
+  if (!Array.isArray(router?.procedures)) {
     throw new Error(`${url} returned invalid router: ${JSON.stringify(router)}`);
   }
   return router;

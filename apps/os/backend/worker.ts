@@ -94,11 +94,10 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-app.get("/api/trpc-cli-serialised-router", (c) => {
+app.get("/api/trpc-cli-procedures", (c) => {
   return c.json({
-    type: "trpc-cli-serialised-router",
     procedures: parseRouter({ router: appRouter }),
-  } satisfies import("trpc-cli/dist/trpc-compat.js").SerialisedRouter);
+  });
 });
 
 app.use("*", async (c, next) => {
