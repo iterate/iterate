@@ -1,39 +1,14 @@
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import dedent from "dedent";
 import { LogLevel, WebClient } from "@slack/web-api";
-import { Resend } from "resend";
+import dedent from "dedent";
 import Replicate from "replicate";
+import { Resend } from "resend";
 import { z } from "zod/v4";
-import { t } from "../trpc.ts";
+import { createTRPCRouter, publicProcedure } from "../init.ts";
 
-// add debug logging by default so that agents always see the message_ts info etc. when they send messages
-// Note: Proxy support comes from NODE_USE_ENV_PROXY=1 which makes Node's http module
-// respect HTTPS_PROXY. This is set in ~/.iterate/.env and loaded via --env-file-if-exists.
-function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
-  return new WebClient(token, { logLevel });
-}
-
-function getResendClient() {
-  const apiKey = process.env.ITERATE_RESEND_API_KEY;
-  if (!apiKey) throw new Error("ITERATE_RESEND_API_KEY environment variable is required");
-  return new Resend(apiKey);
-}
-
-function getReplicateClient() {
-  const token = process.env.REPLICATE_API_TOKEN;
-  if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is required");
-  return new Replicate({ auth: token });
-}
-
-/**
- * Webchat client — thin HTTP wrapper over the daemon's local webchat endpoints.
- * Analogous to how `@slack/web-api` WebClient wraps the Slack API, but much simpler.
- */
 interface WebchatAttachment {
   fileName: string;
   filePath: string;
@@ -77,6 +52,30 @@ interface WebchatClient {
   }>;
 }
 
+function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    throw new Error("SLACK_BOT_TOKEN environment variable is required");
+  }
+  return new WebClient(token, { logLevel });
+}
+
+function getResendClient() {
+  const apiKey = process.env.ITERATE_RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error("ITERATE_RESEND_API_KEY environment variable is required");
+  }
+  return new Resend(apiKey);
+}
+
+function getReplicateClient() {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) {
+    throw new Error("REPLICATE_API_TOKEN environment variable is required");
+  }
+  return new Replicate({ auth: token });
+}
+
 function getWebchatClient(): WebchatClient {
   const baseUrl = "http://localhost:3001/api/integrations/webchat";
 
@@ -111,13 +110,13 @@ function getWebchatClient(): WebchatClient {
   };
 }
 
-export const toolsRouter = t.router({
-  slack: t.procedure
+export const toolsRouter = createTRPCRouter({
+  slack: publicProcedure
     .meta({ description: "Run arbitrary Slack API code" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
-          An JavaScript script that uses a slack client named \`slack\`. For example:
+          A JavaScript script that uses a Slack client named \`slack\`. For example:
 
           await slack.chat.postMessage({
             channel: "C1234567890",
@@ -135,11 +134,12 @@ export const toolsRouter = t.router({
     .mutation(async ({ input }) => {
       const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const _execute = new AsyncFunction("slack", "require", input.code);
-      const result = await _execute(getSlackClient(), require);
+      const execute = new AsyncFunction("slack", "require", input.code);
+      const result = await execute(getSlackClient(), require);
       return result;
     }),
-  sendSlackMessage: t.procedure
+
+  sendSlackMessage: publicProcedure
     .meta({ description: "Send a message to Slack" })
     .input(
       z.object({
@@ -163,8 +163,9 @@ export const toolsRouter = t.router({
         message: input.message,
       };
     }),
-  email: t.router({
-    reply: t.procedure
+
+  email: createTRPCRouter({
+    reply: publicProcedure
       .meta({ description: "Send an email reply" })
       .input(
         z.object({
@@ -182,13 +183,16 @@ export const toolsRouter = t.router({
         const client = getResendClient();
         const fromAddress = process.env.ITERATE_RESEND_FROM_ADDRESS;
         if (!fromAddress) {
-          throw new Error("Failed to get from addresss from env.ITERATE_RESEND_FROM_ADDRESS");
+          throw new Error("Failed to get from address from env.ITERATE_RESEND_FROM_ADDRESS");
         }
 
         const splitEmails = (emails: string) => {
-          const list = emails.split(",");
-          return list.map((e) => e.trim()).filter(Boolean);
+          return emails
+            .split(",")
+            .map((email) => email.trim())
+            .filter(Boolean);
         };
+
         const { data, error } = await client.emails.send({
           from: `Iterate Agent <${fromAddress}>`,
           to: splitEmails(input.to),
@@ -211,17 +215,18 @@ export const toolsRouter = t.router({
         };
       }),
   }),
-  replicate: t.procedure
+
+  replicate: publicProcedure
     .meta({ description: "Run AI models via Replicate API" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
           A JavaScript script that uses a Replicate client named \`replicate\`. For example:
 
-          // Generate an image
           const output = await replicate.run("black-forest-labs/flux-schnell", {
-            input: { prompt: "a photo of a cat" }
+            input: { prompt: "a photo of a cat" },
           });
+
           console.log(output);
         `),
       }),
@@ -229,11 +234,12 @@ export const toolsRouter = t.router({
     .mutation(async ({ input }) => {
       const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const _execute = new AsyncFunction("replicate", "require", input.code);
-      const result = await _execute(getReplicateClient(), require);
+      const execute = new AsyncFunction("replicate", "require", input.code);
+      const result = await execute(getReplicateClient(), require);
       return result;
     }),
-  webchat: t.procedure
+
+  webchat: publicProcedure
     .meta({ description: "Run webchat API code" })
     .input(
       z.object({
@@ -256,11 +262,12 @@ export const toolsRouter = t.router({
     .mutation(async ({ input }) => {
       const require = createRequire(import.meta.url);
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const _execute = new AsyncFunction("webchat", "require", input.code);
-      const result = await _execute(getWebchatClient(), require);
+      const execute = new AsyncFunction("webchat", "require", input.code);
+      const result = await execute(getWebchatClient(), require);
       return result;
     }),
-  printenv: t.procedure
+
+  printenv: publicProcedure
     .meta({ description: "List environment variables from ~/.iterate/.env" })
     .input(z.object({}).optional())
     .query(() => {
@@ -282,33 +289,31 @@ export const toolsRouter = t.router({
       const activeEnvVars: EnvVar[] = [];
       const recommendedEnvVars: EnvVar[] = [];
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index]?.trim();
+        if (!line) {
+          continue;
+        }
 
-        // Look for description in previous line (comment)
         const getDescription = (): string | undefined => {
-          if (i > 0) {
-            const prevLine = lines[i - 1]?.trim();
-            if (prevLine?.startsWith("#") && !prevLine.startsWith("#[")) {
-              return prevLine.replace(/^#\s*/, "");
+          if (index > 0) {
+            const previous = lines[index - 1]?.trim();
+            if (previous?.startsWith("#") && !previous.startsWith("#[")) {
+              return previous.replace(/^#\s*/, "");
             }
           }
           return undefined;
         };
 
-        // Match recommended env vars: #[recommended] FOO_BAR="..."
         const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
         if (recommendedMatch) {
           recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
           continue;
         }
 
-        // Match active env vars: FOO_BAR="..." (not commented)
         const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
         if (activeMatch) {
           activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
-          continue;
         }
       }
 

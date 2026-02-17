@@ -426,6 +426,9 @@ importers:
       motion:
         specifier: ^12.24.12
         version: 12.24.12(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      ms:
+        specifier: 4.0.0-nightly.202508271359
+        version: 4.0.0-nightly.202508271359
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
@@ -450,6 +453,12 @@ importers:
       remark-stringify:
         specifier: ^11.0.0
         version: 11.0.0
+      replicate:
+        specifier: ^1.4.0
+        version: 1.4.0
+      resend:
+        specifier: ^6.8.0
+        version: 6.8.0
       schematch:
         specifier: 0.2.1
         version: 0.2.1

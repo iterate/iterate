@@ -1,11 +1,12 @@
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
+import { parseRouter } from "trpc-cli";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { propagation, context, type TextMapGetter } from "@opentelemetry/api";
 import { getOtelConfig } from "./utils/otel-init.ts";
-import { trpcRouter } from "./trpc/router.ts";
+import { appRouter } from "./trpc/app-router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
@@ -54,6 +55,12 @@ app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+app.get("/api/trpc-cli-procedures", (c) => {
+  return c.json({
+    procedures: parseRouter({ router: appRouter }),
+  });
+});
+
 app.route("/api/agents", agentsRouter);
 app.route("/api/opencode", opencodeRouter);
 app.route("/api/pi", piRouter);
@@ -75,7 +82,7 @@ app.all("/api/trpc/*", (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req: c.req.raw,
-    router: trpcRouter,
+    router: appRouter,
     allowMethodOverride: true,
     onError: ({ error, path }) => {
       const procedurePath = path ?? "unknown";

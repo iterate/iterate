@@ -26,16 +26,18 @@ const CONFIG_PATH = XDG_CONFIG_PATH;
 // const CONFIG_SCHEMA_PATH = join(XDG_CONFIG_PARENT, "config-schema.json");
 
 const SetupInput = z.object({
-  baseUrl: z
+  osBaseUrl: z
     .string()
-    .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
+    .describe(`Base URL for OS API (for example https://dev-yourname-os.dev.iterate.com)`),
+  daemonBaseUrl: z.string().describe(`Base URL for daemon API (for example http://localhost:3001)`),
   adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  userEmail: z.string().describe("User email to impersonate for os calls"),
+  userEmail: z.string().describe("User email to impersonate for OS calls"),
   scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
 });
 
 const AuthConfig = z.object({
-  baseUrl: z.string(),
+  osBaseUrl: z.string(),
+  daemonBaseUrl: z.string(),
   adminPasswordEnvVarName: z.string(),
   userEmail: z.string(),
 });
@@ -43,6 +45,8 @@ const AuthConfig = z.object({
 const ConfigFile = z.object({
   global: AuthConfig.partial().optional(),
   workspaces: z.record(z.string(), AuthConfig).optional(),
+  /** a place where I put old/invalid configs I can't quite let go of */
+  rubbish: z.unknown().optional(),
 });
 
 /** @typedef {z.infer<typeof AuthConfig>} AuthConfig */
@@ -150,8 +154,8 @@ const readAuthConfig = (workspacePath) => {
   const mergedConfig = getMergedWorkspaceConfig(configFile, workspacePath);
   const parsed = AuthConfig.safeParse(mergedConfig);
   if (!parsed.success) {
-    throw new Error(
-      `Config file ${CONFIG_PATH} is missing auth config for ${workspacePath}. Have you run \`iterate setup\`?\n${z.prettifyError(parsed.error)}`,
+    return new Error(
+      `Invalid auth config for ${workspacePath} (in config file ${CONFIG_PATH}). Have you run \`iterate setup\`?\n${z.prettifyError(parsed.error)}`,
     );
   }
   return parsed.data;
@@ -246,7 +250,7 @@ const authDance = async (authConfig) => {
   /** @type {string[] | undefined} */
   let superadminSetCookie;
   const authClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
     },
@@ -268,11 +272,11 @@ const authDance = async (authConfig) => {
   });
 
   const superadminAuthClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
       onRequest: (ctx) => {
-        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("origin", authConfig.osBaseUrl);
         ctx.headers.set("cookie", setCookiesToCookieHeader(superadminSetCookie));
       },
     },
@@ -282,7 +286,7 @@ const authDance = async (authConfig) => {
   const userId = await resolveImpersonationUserId({
     superadminAuthClient,
     userEmail: authConfig.userEmail,
-    baseUrl: authConfig.baseUrl,
+    baseUrl: authConfig.osBaseUrl,
   });
 
   let impersonateSetCookie;
@@ -299,11 +303,11 @@ const authDance = async (authConfig) => {
   const userCookies = setCookiesToCookieHeader(impersonateSetCookie);
 
   const userClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
       onRequest: (ctx) => {
-        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("origin", authConfig.osBaseUrl);
         ctx.headers.set("cookie", userCookies);
       },
     },
@@ -330,10 +334,10 @@ const loadAppRouter = async (params) => {
 };
 
 /** @param {{ baseUrl: string }} params */
-const getRuntimeProcedures = async (params) => {
+const getOsProcedures = async (params) => {
   const appRouter = await loadAppRouter(params);
   /** @type {{}} */
-  const proxiedRouter = proxify(appRouter, async () => {
+  const proxiedRouter = proxify(appRouter.procedures, async () => {
     return createTRPCClient({
       links: [
         httpLink({
@@ -341,6 +345,7 @@ const getRuntimeProcedures = async (params) => {
           transformer: superjson,
           fetch: async (request, init) => {
             const authConfig = readAuthConfig(process.cwd());
+            if (authConfig instanceof Error) throw authConfig;
             const { userCookies } = await authDance(authConfig);
             const headers = new Headers(init?.headers);
             headers.set("cookie", userCookies);
@@ -351,14 +356,24 @@ const getRuntimeProcedures = async (params) => {
     });
   });
 
-  return {
-    whoami: t.procedure.mutation(async () => {
-      const authConfig = readAuthConfig(process.cwd());
-      const { userClient } = await authDance(authConfig);
-      return await userClient.getSession();
-    }),
-    os: proxiedRouter,
-  };
+  return proxiedRouter;
+};
+
+/** @param {{ daemonBaseUrl: string }} params */
+const getDaemonProcedures = async (params) => {
+  const daemonRouter = await loadAppRouter({ baseUrl: params.daemonBaseUrl });
+  /** @type {{}} */
+  const proxiedRouter = proxify(daemonRouter.procedures, async () => {
+    return createTRPCClient({
+      links: [
+        httpLink({
+          url: `${params.daemonBaseUrl}/api/trpc/`,
+        }),
+      ],
+    });
+  });
+
+  return proxiedRouter;
 };
 
 const launcherProcedures = {
@@ -382,7 +397,8 @@ const launcherProcedures = {
       writeNewConfig({
         scope: input.scope || "workspace",
         patch: {
-          baseUrl: input.baseUrl,
+          osBaseUrl: input.osBaseUrl,
+          daemonBaseUrl: input.daemonBaseUrl,
           adminPasswordEnvVarName: input.adminPasswordEnvVarName,
           userEmail: input.userEmail,
         },
@@ -394,15 +410,45 @@ const launcherProcedures = {
         current: readAuthConfig(process.cwd()),
       };
     }),
+
+  whoami: t.procedure.mutation(async () => {
+    const authConfig = readAuthConfig(process.cwd());
+    if (authConfig instanceof Error) throw authConfig;
+    const { userClient } = await authDance(authConfig);
+    return await userClient.getSession();
+  }),
 };
 
 const runCli = async () => {
-  const baseUrl = readAuthConfig(process.cwd()).baseUrl;
+  const authConfig = readAuthConfig(process.cwd());
 
-  const runtimeProcedures = await getRuntimeProcedures({ baseUrl });
+  /** @type {(problem: string) => (e: Error) => {}} */
+  const errorProcedure = (problem) => (e) => {
+    const message = `${problem}: ${e.message}`;
+    return t.procedure.meta({ description: message }).mutation(() => {
+      throw new Error(problem, { cause: e });
+    });
+  };
+
+  const [osProcedures, daemonProcedures] =
+    authConfig instanceof Error
+      ? [
+          errorProcedure(`Invalid auth config`)(authConfig),
+          errorProcedure(`Invalid auth config`)(authConfig),
+        ]
+      : await Promise.all([
+          getOsProcedures({ baseUrl: authConfig.osBaseUrl }).catch(
+            errorProcedure(`Couldn't connect to os at ${authConfig.osBaseUrl}`),
+          ),
+          getDaemonProcedures({ daemonBaseUrl: authConfig.daemonBaseUrl }).catch(
+            errorProcedure(`Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`),
+          ),
+        ]);
+
   const router = t.router({
     ...launcherProcedures,
-    ...runtimeProcedures,
+    os: osProcedures,
+    daemon: daemonProcedures,
   });
 
   const cli = createCli({
