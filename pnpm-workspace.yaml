@@ -27,6 +27,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-tui"
   - pidnap
   - schematch
+  - trpc-cli
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
