@@ -246,7 +246,7 @@ const resolveImpersonationUserId = async ({ superadminAuthClient, userEmail, bas
 };
 
 /** @param {z.infer<typeof AuthConfig>} authConfig */
-const authDance = async (authConfig) => {
+const osAuthDance = async (authConfig) => {
   /** @type {string[] | undefined} */
   let superadminSetCookie;
   const authClient = createAuthClient({
@@ -346,7 +346,7 @@ const getOsProcedures = async (params) => {
           fetch: async (request, init) => {
             const authConfig = readAuthConfig(process.cwd());
             if (authConfig instanceof Error) throw authConfig;
-            const { userCookies } = await authDance(authConfig);
+            const { userCookies } = await osAuthDance(authConfig);
             const headers = new Headers(init?.headers);
             headers.set("cookie", userCookies);
             return fetch(request, { ...init, headers });
@@ -414,7 +414,7 @@ const launcherProcedures = {
   whoami: t.procedure.mutation(async () => {
     const authConfig = readAuthConfig(process.cwd());
     if (authConfig instanceof Error) throw authConfig;
-    const { userClient } = await authDance(authConfig);
+    const { userClient } = await osAuthDance(authConfig);
     return await userClient.getSession();
   }),
 };
