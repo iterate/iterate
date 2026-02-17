@@ -9,75 +9,9 @@ import { Resend } from "resend";
 import { z } from "zod/v4";
 import { createTRPCRouter, publicProcedure } from "../init.ts";
 
-interface WebchatAttachment {
-  fileName: string;
-  filePath: string;
-  mimeType?: string;
-  size?: number;
-}
-
-interface WebchatClient {
-  postMessage(params: {
-    threadId: string;
-    text?: string;
-    attachments?: WebchatAttachment[];
-  }): Promise<{ success: boolean; threadId: string; messageId: string; eventId: string }>;
-  addReaction(params: {
-    threadId: string;
-    messageId: string;
-    reaction: string;
-  }): Promise<{ success: boolean; eventId: string }>;
-  removeReaction(params: {
-    threadId: string;
-    messageId: string;
-    reaction: string;
-  }): Promise<{ success: boolean; eventId: string }>;
-  getThreadMessages(params: { threadId: string }): Promise<{
-    threadId: string;
-    messages: Array<{
-      threadId: string;
-      messageId: string;
-      role: string;
-      text: string;
-      createdAt: number;
-    }>;
-  }>;
-  listThreads(): Promise<{
-    threads: Array<{
-      threadId: string;
-      title: string;
-      messageCount: number;
-      lastMessageAt: number;
-    }>;
-  }>;
-}
-
-function getSlackClient(logLevel: LogLevel = LogLevel.DEBUG) {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) {
-    throw new Error("SLACK_BOT_TOKEN environment variable is required");
-  }
-  return new WebClient(token, { logLevel });
-}
-
-function getResendClient() {
-  const apiKey = process.env.ITERATE_RESEND_API_KEY;
-  if (!apiKey) {
-    throw new Error("ITERATE_RESEND_API_KEY environment variable is required");
-  }
-  return new Resend(apiKey);
-}
-
-function getReplicateClient() {
-  const token = process.env.REPLICATE_API_TOKEN;
-  if (!token) {
-    throw new Error("REPLICATE_API_TOKEN environment variable is required");
-  }
-  return new Replicate({ auth: token });
-}
-
-function getWebchatClient(): WebchatClient {
-  const baseUrl = "http://localhost:3001/api/integrations/webchat";
+function getWebchatClient() {
+  const daemonPort = process.env.PORT || "3001";
+  const baseUrl = `http://localhost:${daemonPort}/api/integrations/webchat`;
 
   async function post(path: string, body: Record<string, unknown>) {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -102,168 +36,117 @@ function getWebchatClient(): WebchatClient {
   }
 
   return {
-    postMessage: (params) => post("/postMessage", params),
-    addReaction: (params) => post("/addReaction", params),
-    removeReaction: (params) => post("/removeReaction", params),
-    getThreadMessages: (params) => get(`/threads/${encodeURIComponent(params.threadId)}/messages`),
+    postMessage: (params: { threadId: string; text?: string; attachments?: unknown[] }) =>
+      post("/postMessage", params),
+    addReaction: (params: { threadId: string; messageId: string; reaction: string }) =>
+      post("/addReaction", params),
+    removeReaction: (params: { threadId: string; messageId: string; reaction: string }) =>
+      post("/removeReaction", params),
+    getThreadMessages: (params: { threadId: string }) =>
+      get(`/threads/${encodeURIComponent(params.threadId)}/messages`),
     listThreads: () => get("/threads"),
   };
 }
 
+/** Lazy-initialized clients available inside execJs code */
+function getLazyClients() {
+  let _slack: WebClient | undefined;
+  let _resend: Resend | undefined;
+  let _replicate: Replicate | undefined;
+  let _webchat: ReturnType<typeof getWebchatClient> | undefined;
+
+  return {
+    get slack() {
+      if (!_slack) {
+        const token = process.env.SLACK_BOT_TOKEN;
+        if (!token) throw new Error("SLACK_BOT_TOKEN environment variable is required");
+        _slack = new WebClient(token, { logLevel: LogLevel.DEBUG });
+      }
+      return _slack;
+    },
+    get resend() {
+      if (!_resend) {
+        const apiKey = process.env.ITERATE_RESEND_API_KEY;
+        if (!apiKey) throw new Error("ITERATE_RESEND_API_KEY environment variable is required");
+        _resend = new Resend(apiKey);
+      }
+      return _resend;
+    },
+    get replicate() {
+      if (!_replicate) {
+        const token = process.env.REPLICATE_API_TOKEN;
+        if (!token) throw new Error("REPLICATE_API_TOKEN environment variable is required");
+        _replicate = new Replicate({ auth: token });
+      }
+      return _replicate;
+    },
+    get webchat() {
+      if (!_webchat) {
+        _webchat = getWebchatClient();
+      }
+      return _webchat;
+    },
+  };
+}
+
 export const toolsRouter = createTRPCRouter({
-  slack: publicProcedure
-    .meta({ description: "Run arbitrary Slack API code" })
+  execJs: publicProcedure
+    .meta({ description: "Execute JavaScript with access to integration clients" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
-          A JavaScript script that uses a Slack client named \`slack\`. For example:
+          JavaScript code to execute. The following clients are available as lazy globals
+          (only initialized when first accessed, so missing env vars won't error unless used):
 
-          await slack.chat.postMessage({
-            channel: "C1234567890",
-            text: "Hello, world!",
+          - \`slack\` — @slack/web-api WebClient (needs SLACK_BOT_TOKEN)
+          - \`resend\` — Resend client (needs ITERATE_RESEND_API_KEY)
+          - \`replicate\` — Replicate client (needs REPLICATE_API_TOKEN)
+          - \`webchat\` — webchat HTTP client (.postMessage, .addReaction, .removeReaction, .getThreadMessages, .listThreads)
+          - \`require\` — Node.js require function
+
+          Examples:
+
+          // Send a Slack message
+          await slack.chat.postMessage({ channel: "#general", text: "Hello!" });
+
+          // Send an email
+          await resend.emails.send({
+            from: "Agent <agent@example.com>",
+            to: ["user@example.com"],
+            subject: "Hello",
+            text: "Hi there",
           });
 
-          await slack.reactions.add({
-            channel: "C1234567890",
-            timestamp: "1234567890.123456",
-            name: "thumbsup",
-          });
-        `),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const require = createRequire(import.meta.url);
-      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const execute = new AsyncFunction("slack", "require", input.code);
-      const result = await execute(getSlackClient(), require);
-      return result;
-    }),
-
-  sendSlackMessage: publicProcedure
-    .meta({ description: "Send a message to Slack" })
-    .input(
-      z.object({
-        channel: z.string().describe("Slack channel (e.g. #general or C1234567890)"),
-        message: z.string().describe("Message text to send"),
-        threadTs: z.string().optional().describe("Thread timestamp for replies"),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const client = getSlackClient();
-      const result = await client.chat.postMessage({
-        channel: input.channel,
-        text: input.message,
-        thread_ts: input.threadTs,
-      });
-
-      return {
-        success: result.ok,
-        channel: result.channel,
-        ts: result.ts,
-        message: input.message,
-      };
-    }),
-
-  email: createTRPCRouter({
-    reply: publicProcedure
-      .meta({ description: "Send an email reply" })
-      .input(
-        z.object({
-          to: z
-            .string()
-            .describe("Recipient email address. Comma separated for multiple recipients."),
-          cc: z.string().optional().describe("Comma separated list of CC emails"),
-          bcc: z.string().optional().describe("Comma separated list of BCC emails"),
-          subject: z.string().describe("Email subject (use Re: prefix for replies)"),
-          body: z.string().describe("Plain text email body"),
-          html: z.string().optional().describe("Optional HTML email body"),
-        }),
-      )
-      .mutation(async ({ input }) => {
-        const client = getResendClient();
-        const fromAddress = process.env.ITERATE_RESEND_FROM_ADDRESS;
-        if (!fromAddress) {
-          throw new Error("Failed to get from address from env.ITERATE_RESEND_FROM_ADDRESS");
-        }
-
-        const splitEmails = (emails: string) => {
-          return emails
-            .split(",")
-            .map((email) => email.trim())
-            .filter(Boolean);
-        };
-
-        const { data, error } = await client.emails.send({
-          from: `Iterate Agent <${fromAddress}>`,
-          to: splitEmails(input.to),
-          cc: splitEmails(input.cc || ""),
-          bcc: splitEmails(input.bcc || ""),
-          subject: input.subject,
-          text: input.body,
-          html: input.html,
-        });
-
-        if (error) {
-          throw new Error(`Failed to send email: ${error.message}`);
-        }
-
-        return {
-          success: true,
-          emailId: data!.id,
-          to: input.to,
-          subject: input.subject,
-        };
-      }),
-  }),
-
-  replicate: publicProcedure
-    .meta({ description: "Run AI models via Replicate API" })
-    .input(
-      z.object({
-        code: z.string().meta({ positional: true }).describe(dedent`
-          A JavaScript script that uses a Replicate client named \`replicate\`. For example:
-
+          // Run an AI model
           const output = await replicate.run("black-forest-labs/flux-schnell", {
             input: { prompt: "a photo of a cat" },
           });
 
-          console.log(output);
+          // Post a webchat message
+          await webchat.postMessage({ threadId: "THREAD_ID", text: "Hello!" });
         `),
       }),
     )
     .mutation(async ({ input }) => {
       const require = createRequire(import.meta.url);
+      const clients = getLazyClients();
+      // Each client name becomes a top-level variable in the executed code.
+      // We pass the lazy-getter object as a single arg and destructure inside the
+      // function body so getters only fire when user code actually references them.
+      const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const execute = new AsyncFunction("replicate", "require", input.code);
-      const result = await execute(getReplicateClient(), require);
-      return result;
-    }),
-
-  webchat: publicProcedure
-    .meta({ description: "Run webchat API code" })
-    .input(
-      z.object({
-        code: z.string().meta({ positional: true }).describe(dedent`
-          A JavaScript script that uses a webchat client named \`webchat\`. For example:
-
-          await webchat.postMessage({
-            threadId: "THREAD_ID",
-            text: "Hello from the agent!",
-          });
-
-          await webchat.addReaction({
-            threadId: "THREAD_ID",
-            messageId: "MESSAGE_ID",
-            reaction: "eyes",
-          });
-        `),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const require = createRequire(import.meta.url);
-      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const execute = new AsyncFunction("webchat", "require", input.code);
-      const result = await execute(getWebchatClient(), require);
+      const execute = new AsyncFunction(...clientNames, "require", input.code);
+      // Build lazy proxies: each is a thin wrapper that defers to the real client
+      // only on first property access, so missing env vars don't blow up if unused.
+      const lazyArgs = clientNames.map(
+        (name) =>
+          new Proxy(Object.create(null), {
+            get(_, prop) {
+              return Reflect.get(clients[name], prop);
+            },
+          }),
+      );
+      const result = await execute(...lazyArgs, require);
       return result;
     }),
 
