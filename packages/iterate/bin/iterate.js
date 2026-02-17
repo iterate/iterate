@@ -122,7 +122,6 @@ const writeNewConfig = ({ patch, scope, workspacePath }) => {
   patch = Object.fromEntries(
     Object.entries(patch || {}).filter(([_key, value]) => value !== undefined),
   );
-  console.log("writeNewConfig", { patch, scope, workspacePath });
   const configFile = readConfigFile();
   const cloned = structuredClone(configFile);
 
