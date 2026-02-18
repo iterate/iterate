@@ -1399,6 +1399,7 @@ function buildPullRequestPrompt(params: {
     "",
     "Fix validation guidance:",
     "- After making changes, monitor relevant logs/checks/comments to confirm the fix actually worked.",
+    "- When review comments request changes, update the PR directly and report back with what changed.",
   ].join("\n");
 
   const automatedReviewerGuidance = lowTrustAutomatedReviewer
