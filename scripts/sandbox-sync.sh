@@ -11,7 +11,15 @@
 #
 set -euo pipefail
 
-CONTAINER="${1:-}"
+FAST=0
+CONTAINER=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --fast) FAST=1; shift ;;
+    *) CONTAINER="$1"; shift ;;
+  esac
+done
 
 if [ -z "$CONTAINER" ]; then
   # Find the compose project's postgres container
@@ -46,8 +54,26 @@ fi
 # Get pidnap port mapping
 PIDNAP_PORT=$(docker inspect "$CONTAINER" --format '{{(index (index .NetworkSettings.Ports "9876/tcp") 0).HostPort}}')
 
-echo "Syncing repo..."
-docker exec "$CONTAINER" bash /home/iterate/src/github.com/iterate/iterate/apps/os/sandbox/sync-repo-from-host.sh
+if [ "$FAST" = "1" ]; then
+  echo "Fast sync: rsync + home-skeleton only (skipping pnpm install, vite build, db:migrate)..."
+  docker exec "$CONTAINER" bash -c '
+    set -euo pipefail
+    ITERATE_REPO="${ITERATE_REPO:-/home/iterate/src/github.com/iterate/iterate}"
+    rsync -a --delete --force \
+      --filter=":- .gitignore" \
+      --filter=":- .git/info/exclude" \
+      --exclude=".git" \
+      --exclude="node_modules" \
+      "/host/repo-checkout/" "${ITERATE_REPO}/"
+    # Sync home-skeleton so config files (.config/opencode/AGENTS.md etc.) are updated
+    if [ -f "${ITERATE_REPO}/sandbox/sync-home-skeleton.sh" ]; then
+      bash "${ITERATE_REPO}/sandbox/sync-home-skeleton.sh"
+    fi
+  '
+else
+  echo "Full sync: rsync + pnpm install + vite build + db:migrate..."
+  docker exec "$CONTAINER" bash /home/iterate/src/github.com/iterate/iterate/sandbox/providers/docker/sync-repo-from-host.sh
+fi
 
 echo "Restarting daemon-backend..."
 curl -sf "http://localhost:${PIDNAP_PORT}/rpc/processes/restart" \
