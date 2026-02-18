@@ -37,21 +37,6 @@ export default {
         stage: "${{ steps.get_env.outputs.stage }}",
       },
     },
-    "push-daytona-snapshot": {
-      needs: ["variables"],
-      if: "needs.variables.outputs.stage == 'prd'",
-      uses: "./.github/workflows/push-daytona-snapshot.yml",
-      // @ts-expect-error - secrets inherit
-      secrets: "inherit",
-      with: {
-        doppler_config: "prd",
-        build_image: true,
-        docker_platform: "linux/amd64",
-        update_fly_doppler: true,
-        fly_doppler_configs_to_update: "dev,stg,prd",
-        update_doppler: true,
-      },
-    },
     "deploy-os-early": {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
@@ -65,17 +50,16 @@ export default {
     },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: ["variables", "push-daytona-snapshot", "deploy-os-early"],
+      needs: ["variables", "deploy-os-early"],
       if: "needs.variables.outputs.stage == 'prd'",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
-        daytona_snapshot_name: "${{ needs.push-daytona-snapshot.outputs.snapshot_name }}",
       },
     },
     slack_failure: {
-      needs: ["variables", "push-daytona-snapshot", "deploy-os-early", "deploy"],
+      needs: ["variables", "deploy-os-early", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       env: { NEEDS: "${{ toJson(needs) }}" },
