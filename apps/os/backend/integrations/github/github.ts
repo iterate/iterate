@@ -1395,7 +1395,6 @@ function buildPullRequestPrompt(params: {
     ? buildFirstLoopInContextSection(params.context)
     : "";
 
-  // TODO: remove this!
   const fixValidationGuidance = [
     "",
     "Fix validation guidance:",
