@@ -292,7 +292,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-const server = serve({ fetch: app.fetch, port: Number(PORT) }, () => {
+const server = serve({ fetch: app.fetch, port: Number(PORT), hostname: "127.0.0.1" }, () => {
   console.log(`[discord] callback service listening on ${PUBLIC_BASE_URL}`);
 });
 
