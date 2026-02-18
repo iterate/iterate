@@ -1,8 +1,8 @@
 import type { RestartingProcessEntry } from "pidnap";
+import { createClient } from "pidnap/client";
 import type { IterateConfig } from "../../config/index.ts";
 import { loadConfig } from "../config-loader.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
-import { createClient } from "pidnap/client";
 
 const ITERATE_USER_TAG = "iterate:user";
 
