@@ -13,12 +13,6 @@ export default {
           required: true,
           type: "string",
         },
-        daytona_snapshot_name: {
-          description: "The Daytona snapshot name to deploy with (iterate-sandbox-{commitSha})",
-          required: false,
-          type: "string",
-          default: "",
-        },
         deploy_iterate_com: {
           description: "Whether to deploy apps/iterate-com",
           required: false,
@@ -54,14 +48,7 @@ export default {
             max_attempts: 3,
             // This sometimes flakes: db:migrate currently uses unpooled postgres client and can exhaust
             // PlanetScale connection slots transiently. Retry smooths over that until migration path is fixed.
-            command: [
-              "set -euo pipefail",
-              'if [ -n "${{ inputs.daytona_snapshot_name }}" ]; then',
-              '  export DAYTONA_DEFAULT_SNAPSHOT="${{ inputs.daytona_snapshot_name }}"',
-              "fi",
-              "cd apps/os",
-              "pnpm run deploy:prd",
-            ].join("\n"),
+            command: ["set -euo pipefail", "cd apps/os", "pnpm run deploy:prd"].join("\n"),
           },
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
