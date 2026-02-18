@@ -270,7 +270,6 @@ client.on("messageCreate", async (message) => {
     const shouldSendBootstrapPrompt = await ensureAgentSubscription(agentPath);
 
     const text = stripBotMention(message.content, botUserId);
-    if (!text.trim() && message.attachments.size === 0) return;
 
     const prompt = shouldSendBootstrapPrompt
       ? buildBootstrapPrompt({
