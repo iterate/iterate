@@ -39,8 +39,13 @@ export const InsertedEvent = z.looseObject({
   id: z.string(),
 });
 
+type PeriodInSeconds = `${number}s`;
+const parsePeriodInSeconds = (period: PeriodInSeconds): number => {
+  return Number(period.replace("s", ""));
+};
+
 export type WhenFn<Payload> = (params: { payload: Payload }) => boolean | null | undefined | "";
-export type DelayFn<Payload> = (params: { payload: Payload }) => number;
+export type DelayFn<Payload> = (params: { payload: Payload }) => PeriodInSeconds;
 
 export type DBLike = { execute: (...args: any[]) => Promise<any> };
 export type Transactable<D extends DBLike> = DBLike & {
@@ -51,7 +56,7 @@ type RetryFn = (
   job: ConsumerJobQueueMessage,
 ) =>
   | { retry: false; reason: string; delay?: never }
-  | { retry: true; reason: string; delay: number };
+  | { retry: true; reason: string; delay: PeriodInSeconds };
 
 export type ConsumerDefinition<Payload> = {
   /** consumer name */
@@ -63,7 +68,7 @@ export type ConsumerDefinition<Payload> = {
   /** visibility timeout in seconds. extend this for long-running handlers
    * to prevent the message from becoming visible again mid-processing.
    * default queue VT is 30s. */
-  visibilityTimeout?: number;
+  visibilityTimeout?: PeriodInSeconds;
   /** handler function */
   handler: (params: {
     eventName: string;
@@ -148,7 +153,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
-              vt => ${consumer.visibilityTimeout}::integer
+              vt => ${parsePeriodInSeconds(consumer.visibilityTimeout)}::integer
             )
           `);
         }
@@ -210,7 +215,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
-              vt => ${retry.delay}::integer
+              vt => ${parsePeriodInSeconds(retry.delay)}::integer
             )
           `);
         }
@@ -257,7 +262,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             processing_results: [],
             environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
           } satisfies ConsumerEvent)}::jsonb,
-          delay => ${consumer.delay({ payload: params.payload })}::integer
+          delay => ${parsePeriodInSeconds(consumer.delay({ payload: params.payload }))}::integer
         )
       `);
     }
@@ -339,10 +344,11 @@ export const defaultRetryFn: RetryFn = (job) => {
   if (job.read_ct > 5) {
     return { retry: false, reason: "max retries reached" };
   }
-  const delay = Math.ceil(2 ** Math.max(0, job.read_ct - 1) * (0.9 + Math.random() * 0.2));
+  const delaySeconds = Math.ceil(2 ** Math.max(0, job.read_ct - 1) * (0.9 + Math.random() * 0.2));
+  const delay: PeriodInSeconds = `${delaySeconds}s`;
   return {
     retry: true,
-    reason: `attempt ${job.read_ct} setting to visible in ${delay} seconds`,
+    reason: `attempt ${job.read_ct} setting to visible in ${delay}`,
     delay,
   };
 };
@@ -384,7 +390,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     delay?: DelayFn<EventTypes[P]>;
     retry?: RetryFn;
     /** visibility timeout in seconds for long-running handlers (default: 30s from pgmq.read) */
-    visibilityTimeout?: number;
+    visibilityTimeout?: PeriodInSeconds;
     handler: (params: {
       eventName: P;
       eventId: number;
