@@ -167,6 +167,32 @@ describe("Manager - Reload & Remove", () => {
       await manager.stop();
     });
 
+    it("should update tags when provided", async () => {
+      const config: ManagerConfig = {
+        processes: [
+          {
+            name: "test-proc",
+            tags: ["old"],
+            definition: longRunningProcess,
+            options: { restartPolicy: "never" },
+          },
+        ],
+      };
+
+      const manager = new Manager(config, mockLogger);
+      await manager.start();
+      await wait(100);
+
+      await manager.reloadProcessByTarget("test-proc", longRunningProcess, {
+        tags: ["new", "worker"],
+      });
+
+      const proc = manager.getProcessByTarget("test-proc");
+      expect(proc?.tags).toEqual(["new", "worker"]);
+
+      await manager.stop();
+    });
+
     it("should throw if process not found", async () => {
       const config: ManagerConfig = {
         processes: [],

@@ -33,6 +33,7 @@ function serializeProcess(
   const def = proc.lazyProcess.definition;
   const result: RestartingProcessInfo = {
     name: proc.name,
+    tags: proc.tags,
     state: proc.state,
     restarts: proc.restarts,
     definition: {
@@ -92,7 +93,13 @@ const listProcesses = os.processes.list.handler(async ({ context }) => {
 });
 
 const addProcess = os.processes.add.handler(async ({ input, context }) => {
-  const proc = await context.manager.addProcess(input.name, input.definition);
+  const proc = await context.manager.addProcess(
+    input.name,
+    input.definition,
+    input.options,
+    input.envOptions,
+    input.tags,
+  );
   return serializeProcess(proc);
 });
 
@@ -114,6 +121,7 @@ const restartProcess = os.processes.restart.handler(async ({ input, context }) =
 const reloadProcess = os.processes.reload.handler(async ({ input, context }) => {
   const proc = await context.manager.reloadProcessByTarget(input.target, input.definition, {
     restartImmediately: input.restartImmediately,
+    tags: input.tags,
   });
   return serializeProcess(proc);
 });

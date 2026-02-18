@@ -3,7 +3,7 @@ FROM node:24
 
 # === Versions ===
 ARG SANDBOX_CODEX_VERSION=0.98.0
-ARG SANDBOX_OPENCODE_VERSION=1.1.53
+ARG SANDBOX_OPENCODE_VERSION=1.2.4
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.37
 ARG SANDBOX_PI_CODING_AGENT_VERSION=0.52.8
 ARG SANDBOX_BUN_VERSION=1.3.6
@@ -18,26 +18,26 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && apt-get install -y --no-install-recommends \
-      bash \
-      btop \
-      build-essential \
-      ca-certificates \
-      fd-find \
-      gh \
-      git \
-      inotify-tools \
-      jq \
-      less \
-      locales \
-      make \
-      openssh-client \
-      ripgrep \
-      rsync \
-      sqlite3 \
-      sudo \
-      tini \
-      tmux \
-      unzip \
+    bash \
+    btop \
+    build-essential \
+    ca-certificates \
+    fd-find \
+    gh \
+    git \
+    inotify-tools \
+    jq \
+    less \
+    locales \
+    make \
+    openssh-client \
+    ripgrep \
+    rsync \
+    sqlite3 \
+    sudo \
+    tini \
+    tmux \
+    unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s $(which fdfind) /usr/local/bin/fd
@@ -159,8 +159,8 @@ RUN mkdir -p /home/iterate/.mitmproxy && \
     # Track in tasks/mitmproxy-direct-cert-command.md.
     # Cert generation is not immediate; poll for CA file before continuing.
     for i in $(seq 1 30); do \
-      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
-      sleep 0.5; \
+    [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
+    sleep 0.5; \
     done && \
     kill $PID 2>/dev/null || true && \
     test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem

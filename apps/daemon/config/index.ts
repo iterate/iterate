@@ -1,11 +1,19 @@
+import type { RestartingProcessEntry } from "pidnap";
+export interface IteratePidnapConfig {
+  processes?: RestartingProcessEntry[];
+}
+
 /**
  * Iterate Config
  *
  * Configuration for the iterate daemon, loaded from iterate.config.ts
  */
-
 export interface IterateConfig {
-  // todo: add `pidnap`/`processes`/`crons`/`tasks`
+  /**
+   * User-defined pidnap process definitions.
+   * These are intended to be reconciled by the daemon into pidnap runtime processes.
+   */
+  pidnap?: IteratePidnapConfig;
 }
 
 /**

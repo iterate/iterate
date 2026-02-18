@@ -214,6 +214,33 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
+  it("should preserve tags from static process config", async () => {
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "tagged",
+            tags: ["web", "jobs"],
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("tagged");
+    expect(proc?.tags).toEqual(["web", "jobs"]);
+
+    await manager.stop();
+  });
+
   it("should skip global env when inheritGlobalEnv is false", async () => {
     writeFileSync(join(testDir, ".env"), "GLOBAL=base\nSHARED=global");
     writeFileSync(join(testDir, ".env.app"), "APP_VAR=app_value\nSHARED=app");
@@ -374,6 +401,33 @@ describe("Manager with EnvManager integration", () => {
       PROC_ENV: "value",
     });
     expect(definition.inheritProcessEnv).toBe(false);
+
+    await manager.stop();
+  });
+
+  it("should preserve tags when adding process at runtime", async () => {
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = await manager.addProcess(
+      "tagged-dynamic",
+      {
+        command: "echo",
+        args: ["proc"],
+      },
+      undefined,
+      undefined,
+      ["queue", "critical"],
+    );
+
+    expect(proc.tags).toEqual(["queue", "critical"]);
 
     await manager.stop();
   });

@@ -63,6 +63,7 @@ export type ScheduleConfig = v.InferOutput<typeof ScheduleConfig>;
 
 export const RestartingProcessEntry = v.object({
   name: v.string(),
+  tags: v.optional(v.array(v.string())),
   definition: ProcessDefinition,
   options: v.optional(RestartingProcessOptions),
   envOptions: v.optional(EnvOptions),
@@ -364,6 +365,7 @@ export class Manager {
       restartImmediately?: boolean;
       updateOptions?: Partial<RestartingProcessOptions>;
       envOptions?: EnvOptions;
+      tags?: string[];
     },
   ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
@@ -381,6 +383,10 @@ export class Manager {
     // Update options if provided
     if (options?.updateOptions) {
       proc.updateOptions(options.updateOptions);
+    }
+
+    if (options?.tags !== undefined) {
+      proc.updateTags(options.tags);
     }
 
     // Reload with new definition
@@ -424,6 +430,7 @@ export class Manager {
     definition: ProcessDefinition,
     options?: RestartingProcessOptions,
     envOptions?: EnvOptions,
+    tags?: string[],
   ): Promise<RestartingProcess> {
     if (this.isNameUsed(name)) {
       throw new Error(`Name "${name}" is already in use`);
@@ -440,6 +447,7 @@ export class Manager {
       this.applyDefaults(name, definition, envOptions),
       options ?? DEFAULT_RESTART_OPTIONS,
       processLogger,
+      tags,
     );
     this.restartingProcesses.set(name, restartingProcess);
 
@@ -482,6 +490,7 @@ export class Manager {
         this.applyDefaults(entry.name, entry.definition, entry.envOptions),
         entry.options ?? DEFAULT_RESTART_OPTIONS,
         processLogger,
+        entry.tags,
       );
       this.restartingProcesses.set(entry.name, restartingProcess);
       const defaultDelay = entry.envOptions?.inheritGlobalEnv === false ? false : 5000;

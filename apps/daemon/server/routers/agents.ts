@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -65,7 +66,7 @@ async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Pro
       console.error("[agent-change] callback failed", {
         agentPath,
         callbackUrl: subscription.callbackUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: inspect(error, { depth: null }),
       });
     });
   }
