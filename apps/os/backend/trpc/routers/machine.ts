@@ -17,7 +17,10 @@ import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { outboxClient } from "../../outbox/client.ts";
-import { getLatestMachineEvents } from "../../utils/machine-metadata.ts";
+import {
+  getLatestMachineEvents,
+  getMachinePendingConsumers,
+} from "../../utils/machine-metadata.ts";
 import {
   buildCanonicalMachineIngressUrl,
   getIngressSchemeFromPublicUrl,
@@ -169,17 +172,17 @@ export const machineRouter = router({
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
-      // Enrich each machine with provider info + latest event
-      const enriched = await Promise.all(
-        machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env)),
-      );
-      const eventMap = await getLatestMachineEvents(
-        ctx.db,
-        machines.map((m) => m.id),
-      );
+      // Enrich each machine with provider info + latest event + pending consumers
+      const machineIds = machines.map((m) => m.id);
+      const [enriched, eventMap, consumerMap] = await Promise.all([
+        Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env))),
+        getLatestMachineEvents(ctx.db, machineIds),
+        getMachinePendingConsumers(ctx.db, machineIds),
+      ]);
       return enriched.map((m) => ({
         ...m,
         lastEvent: eventMap.get(m.id) ?? null,
+        pendingConsumers: consumerMap.get(m.id) ?? [],
       }));
     }),
 
@@ -205,11 +208,15 @@ export const machineRouter = router({
         });
       }
 
-      const enriched = await enrichMachineWithProviderInfo(m, ctx.env);
-      const eventMap = await getLatestMachineEvents(ctx.db, [m.id]);
+      const [enriched, eventMap, consumerMap] = await Promise.all([
+        enrichMachineWithProviderInfo(m, ctx.env),
+        getLatestMachineEvents(ctx.db, [m.id]),
+        getMachinePendingConsumers(ctx.db, [m.id]),
+      ]);
       return {
         ...enriched,
         lastEvent: eventMap.get(m.id) ?? null,
+        pendingConsumers: consumerMap.get(m.id) ?? [],
       };
     }),
 

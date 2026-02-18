@@ -26,6 +26,7 @@ interface Machine {
     payload: Record<string, unknown>;
     createdAt: Date;
   } | null;
+  pendingConsumers?: string[];
 }
 
 interface MachineTableProps {
@@ -127,7 +128,11 @@ export function MachineTable({
                 <span>·</span>
                 <span className="font-mono text-xs truncate">{machine.externalId}</span>
                 <span>·</span>
-                <DaemonStatus state={machine.state} lastEvent={machine.lastEvent} />
+                <DaemonStatus
+                  state={machine.state}
+                  lastEvent={machine.lastEvent}
+                  pendingConsumers={machine.pendingConsumers}
+                />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
               </div>

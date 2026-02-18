@@ -116,6 +116,7 @@ export const registerConsumers = () => {
     name: "sendReadinessProbe",
     on: "machine:daemon-ready",
     visibilityTimeout: 90, // send retries up to 60s + margin
+    delay: () => 60, // opencode needs some time to restart after env vars are applied. Around 30s, so delay 60s to be safe.
     retry: (job) => {
       if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: 15 };
       return { retry: false, reason: "probe send failed after retries" };

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { inspect } from "node:util";
+import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { PromptAddedEvent } from "../types/events.ts";
@@ -91,7 +92,8 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
     return c.json({ error: "OpenCode is not healthy: " + inspect(health?.error) }, 503);
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!readFileSync(homedir() + "/.iterate/.env", "utf8").includes("ANTHROPIC_API_KEY")) {
+    console.log("ANTHROPIC_API_KEY is not set yet!");
     return c.json({ error: "ANTHROPIC_API_KEY is not set" }, 503);
   }
 

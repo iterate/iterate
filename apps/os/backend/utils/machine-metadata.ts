@@ -82,6 +82,16 @@ export type MachineLastEvent = {
   createdAt: Date;
 };
 
+/** Consumer names that are relevant for UI status derivation. */
+const MACHINE_CONSUMER_NAMES = [
+  "provisionMachine",
+  "sendReadinessProbe",
+  "pollProbeResponse",
+  "activateMachine",
+] as const;
+
+export type MachineConsumerName = (typeof MACHINE_CONSUMER_NAMES)[number];
+
 /**
  * Query the latest machine lifecycle event for each given machineId.
  * Uses a JSONB query on outbox_event (no dedicated column needed).
@@ -127,6 +137,48 @@ export async function getLatestMachineEvents(
       payload: row.payload,
       createdAt: row.created_at,
     });
+  }
+  return result;
+}
+
+/**
+ * Query the consumer job queue for pending/in-flight jobs related to the given machines.
+ * Returns a map of machineId → list of consumer names that are scheduled or processing.
+ *
+ * This is an abstraction over the pgmq queue internals — if the outbox later emits
+ * consumer lifecycle events, this function can be swapped to query those instead.
+ */
+export async function getMachinePendingConsumers(
+  db: DB,
+  machineIds: string[],
+): Promise<Map<string, MachineConsumerName[]>> {
+  if (machineIds.length === 0) return new Map();
+
+  const raw = await db.execute(sql`
+    SELECT
+      message->'event_payload'->>'machineId' AS machine_id,
+      message->>'consumer_name' AS consumer_name
+    FROM pgmq.q_consumer_job_queue
+    WHERE message->'event_payload'->>'machineId' IN (${sql.join(
+      machineIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})
+      AND message->>'consumer_name' IN (${sql.join(
+        [...MACHINE_CONSUMER_NAMES].map((n) => sql`${n}`),
+        sql`, `,
+      )})
+  `);
+
+  const rows = (Array.isArray(raw) ? raw : ((raw as { rows: unknown[] }).rows ?? [])) as Array<{
+    machine_id: string;
+    consumer_name: string;
+  }>;
+
+  const result = new Map<string, MachineConsumerName[]>();
+  for (const row of rows) {
+    const existing = result.get(row.machine_id) ?? [];
+    existing.push(row.consumer_name as MachineConsumerName);
+    result.set(row.machine_id, existing);
   }
   return result;
 }

@@ -409,7 +409,11 @@ function MachineDetailPage() {
           <div>
             <dt className="text-xs text-muted-foreground">Daemon</dt>
             <dd className="mt-1">
-              <DaemonStatus state={machine.state} lastEvent={machine.lastEvent} />
+              <DaemonStatus
+                state={machine.state}
+                lastEvent={machine.lastEvent}
+                pendingConsumers={machine.pendingConsumers}
+              />
             </dd>
           </div>
           {machine.type !== "fly" && (
