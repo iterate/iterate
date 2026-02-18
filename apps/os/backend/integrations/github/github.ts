@@ -1076,6 +1076,8 @@ const AGENT_MARKER_BLOCK_PATTERN = /<!--\s*iterate-agent-context([\s\S]*?)-->/i;
 const SESSION_ID_PATTERN = /^ses_[a-zA-Z0-9_-]+$/;
 const AGENT_STAGE_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const LOW_TRUST_AUTOMATED_REVIEWER_PATTERNS = [/bugbot/i, /pullfrog/i, /cursor/i];
+const CURSOR_REVIEWER_PATTERN = /cursor/i;
+const LOW_RISK_SIGNAL_PATTERN = /\blow[-\s]?risk\b/i;
 
 function resolveRepoCoordinates(repository: RepositoryPayload): GitHubRepoCoordinates | null {
   const split = repository.full_name.split("/");
@@ -1246,6 +1248,38 @@ function isLowTrustAutomatedReviewer(login: string | null | undefined): boolean 
   return LOW_TRUST_AUTOMATED_REVIEWER_PATTERNS.some((pattern) => pattern.test(login));
 }
 
+function isCursorReviewer(login: string | null | undefined): boolean {
+  if (!login) return false;
+  return CURSOR_REVIEWER_PATTERN.test(login);
+}
+
+function hasLowRiskSignal(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return LOW_RISK_SIGNAL_PATTERN.test(text);
+}
+
+function hasCursorLowRiskSignalInContext(context: PullRequestContext): boolean {
+  if (
+    context.issueComments.some(
+      (comment) => isCursorReviewer(comment.user.login) && hasLowRiskSignal(comment.body),
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    context.reviews.some(
+      (review) => isCursorReviewer(review.user.login) && hasLowRiskSignal(review.body),
+    )
+  ) {
+    return true;
+  }
+
+  return context.reviewComments.some(
+    (comment) => isCursorReviewer(comment.user.login) && hasLowRiskSignal(comment.body),
+  );
+}
+
 function formatCommentActor(login: string): string {
   if (!isLowTrustAutomatedReviewer(login)) return `@${login}`;
   return `@${login} (automated reviewer)`;
@@ -1346,6 +1380,7 @@ function buildPullRequestPrompt(params: {
   usedFallback: boolean;
 }): string {
   const lowTrustAutomatedReviewer = isLowTrustAutomatedReviewer(params.signal.actorLogin);
+  const cursorLowRiskSignal = hasCursorLowRiskSignalInContext(params.context);
 
   const targetLine =
     params.target.kind === "path"
@@ -1360,11 +1395,25 @@ function buildPullRequestPrompt(params: {
     ? buildFirstLoopInContextSection(params.context)
     : "";
 
+  const fixValidationGuidance = [
+    "",
+    "Fix validation guidance:",
+    "- After making changes, monitor relevant logs/checks/comments to confirm the fix actually worked.",
+  ].join("\n");
+
   const automatedReviewerGuidance = lowTrustAutomatedReviewer
     ? [
         "",
         "Automated reviewer guidance:",
         "- You are allowed to reject feedback, especially from reviewbots.",
+      ].join("\n")
+    : "";
+
+  const cursorLowRiskMergeGuidance = cursorLowRiskSignal
+    ? [
+        "",
+        "Cursor low-risk merge guidance:",
+        "- If Cursor Bugbot marked this low risk and independent verification shows merge is safe, you may auto-merge.",
       ].join("\n")
     : "";
 
@@ -1382,7 +1431,9 @@ function buildPullRequestPrompt(params: {
     `Fallback target used: ${params.usedFallback ? "yes" : "no"}`,
     bodySection,
     firstLoopInContextSection,
+    fixValidationGuidance,
     automatedReviewerGuidance,
+    cursorLowRiskMergeGuidance,
   ].join("\n");
 }
 
