@@ -10,6 +10,7 @@
     "format:check": "prettier --check .",
     "os": "cd apps/os && pnpm",
     "daemon": "cd apps/daemon && pnpm",
+    "sandbox": "cd sandbox && pnpm",
     "cli": "cd apps/cli && pnpm tsx main.ts",
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
@@ -26,7 +27,6 @@
     "docker:up": "tsx ./scripts/docker-compose.ts up -d",
     "docker:down": "tsx ./scripts/docker-compose.ts down --remove-orphans && tsx ./scripts/docker-remove-project-containers.ts",
     "docker:clean": "tsx ./scripts/docker-compose.ts down -v --remove-orphans && tsx ./scripts/docker-remove-project-containers.ts",
-    "sandbox": "pnpm --filter @iterate-com/sandbox",
     "db:migrate": "pnpm os db:migrate",
     "db:generate": "pnpm os db:generate",
     "db:studio": "pnpm os db:studio",
@@ -38,6 +38,7 @@
     "db:exec": "tsx ./scripts/docker-compose.ts exec -T postgres psql -U postgres -d os -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
+    "publish-cli": "node packages/iterate/pubme.js publish",
     "super-reset": "pnpm i && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
   },
   "devDependencies": {

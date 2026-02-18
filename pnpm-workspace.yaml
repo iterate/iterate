@@ -26,6 +26,8 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
   - pidnap
+  - schematch
+  - trpc-cli
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"

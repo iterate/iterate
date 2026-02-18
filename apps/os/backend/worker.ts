@@ -1,3 +1,4 @@
+import { parseRouter } from "trpc-cli";
 import { Hono, type Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
@@ -35,20 +36,11 @@ import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 import {
-  buildControlPlaneProjectIngressProxyLoginUrl,
-  buildCanonicalProjectIngressProxyHostname,
   getProjectIngressRequestHostname,
   getProjectIngressProxyHostMatchers,
   handleProjectIngressRequest,
-  normalizeProjectIngressProxyRedirectPath,
-  PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
-  resolveIngressHostname,
   shouldHandleProjectIngressHostname,
 } from "./services/project-ingress-proxy.ts";
-import {
-  getIngressSchemeFromPublicUrl,
-  normalizeProjectIngressCanonicalHost,
-} from "./utils/project-ingress-url.ts";
 
 export type { Variables };
 
@@ -102,66 +94,19 @@ app.use("*", async (c, next) => {
   return next();
 });
 
+app.get("/api/trpc-cli-procedures", (c) => {
+  return c.json({
+    procedures: parseRouter({ router: appRouter }),
+  });
+});
+
 app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
   const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
   if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
-    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
-    if (ingressResponse) return ingressResponse;
+    return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
   }
   return next();
-});
-
-app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
-  const requestedProjectIngressProxyHost = c.req.query("projectIngressProxyHost");
-  if (!requestedProjectIngressProxyHost) {
-    return c.json({ error: "Missing projectIngressProxyHost" }, 400);
-  }
-  const normalizedRequestedProjectIngressProxyHost = requestedProjectIngressProxyHost
-    .trim()
-    .toLowerCase();
-  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
-  if (
-    !shouldHandleProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, hostMatchers)
-  ) {
-    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
-  }
-  const parsedIngressHost = resolveIngressHostname(normalizedRequestedProjectIngressProxyHost);
-  if (!parsedIngressHost.ok) {
-    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
-  }
-  const canonicalProjectIngressProxyBaseHost = normalizeProjectIngressCanonicalHost(
-    c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-  );
-  if (!canonicalProjectIngressProxyBaseHost) {
-    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
-  }
-  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
-    target: parsedIngressHost.target,
-    canonicalProjectIngressProxyBaseHost,
-  });
-  const redirectPath = normalizeProjectIngressProxyRedirectPath(c.req.query("redirectPath"));
-
-  if (!c.var.session) {
-    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
-      controlPlanePublicUrl: c.env.VITE_PUBLIC_URL,
-      projectIngressProxyHost: canonicalProjectIngressProxyHost,
-      redirectPath,
-    });
-    return c.redirect(controlPlaneLoginUrl.toString(), 302);
-  }
-
-  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
-    headers: c.req.raw.headers,
-  });
-  const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
-  const exchangeUrl = new URL(
-    `${projectIngressProxyScheme}://${canonicalProjectIngressProxyHost}/api/auth/project-ingress-proxy/one-time-token/exchange`,
-  );
-  exchangeUrl.searchParams.set("token", oneTimeToken.token);
-  exchangeUrl.searchParams.set("redirectPath", redirectPath);
-
-  return c.redirect(exchangeUrl.toString(), 302);
 });
 
 app.onError((err, c) => {
@@ -185,7 +130,7 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+app.all("/api/auth/*", async (c) => c.var.auth.handler(c.req.raw));
 
 // tRPC endpoint
 app.all("/api/trpc/*", (c) => {

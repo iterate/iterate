@@ -152,15 +152,22 @@
     {
       "idx": 21,
       "version": "7",
-      "when": 1770901863478,
-      "tag": "0021_lame_shinko_yamashiro",
+      "when": 1770899161408,
+      "tag": "0021_gray_magma",
       "breakpoints": true
     },
     {
       "idx": 22,
       "version": "7",
+      "when": 1770901863478,
+      "tag": "0022_lame_shinko_yamashiro",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
       "when": 1770912000000,
-      "tag": "0022_move_local_docker_metadata_to_docker",
+      "tag": "0023_move_local_docker_metadata_to_docker",
       "breakpoints": true
     }
   ]

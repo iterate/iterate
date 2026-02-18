@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "better_auth_account_account_id_provider_id_index" ON "better_auth_account" USING btree ("account_id","provider_id");

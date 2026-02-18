@@ -110,23 +110,27 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable("better_auth_account", (t) => ({
-  id: iterateId("acc"),
-  accountId: t.text().notNull(),
-  providerId: t.text().notNull(), // google, slack, slack-bot
-  userId: t
-    .text()
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  accessToken: t.text(),
-  refreshToken: t.text(),
-  idToken: t.text(),
-  accessTokenExpiresAt: t.timestamp(),
-  refreshTokenExpiresAt: t.timestamp(),
-  scope: t.text(),
-  password: t.text(),
-  ...withTimestamps,
-}));
+export const account = pgTable(
+  "better_auth_account",
+  (t) => ({
+    id: iterateId("acc"),
+    accountId: t.text().notNull(),
+    providerId: t.text().notNull(), // google, slack, slack-bot
+    userId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    accessToken: t.text(),
+    refreshToken: t.text(),
+    idToken: t.text(),
+    accessTokenExpiresAt: t.timestamp(),
+    refreshTokenExpiresAt: t.timestamp(),
+    scope: t.text(),
+    password: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.accountId, t.providerId)],
+);
 
 export const accountRelations = relations(account, ({ one }) => ({
   user: one(user, {

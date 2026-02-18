@@ -450,6 +450,9 @@ importers:
       remark-stringify:
         specifier: ^11.0.0
         version: 11.0.0
+      schematch:
+        specifier: 0.2.1
+        version: 0.2.1
       shell-quote:
         specifier: ^1.8.3
         version: 1.8.3
@@ -698,6 +701,9 @@ importers:
 
   apps/os:
     dependencies:
+      '@clack/prompts':
+        specifier: ^1.0.0
+        version: 1.0.0
       '@daytonaio/sdk':
         specifier: ^0.128.1
         version: 0.128.1(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -929,6 +935,9 @@ importers:
       tinyexec:
         specifier: ^1.0.2
         version: 1.0.2
+      trpc-cli:
+        specifier: 0.12.3
+        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -1075,6 +1084,30 @@ importers:
       ws:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+  packages/iterate:
+    dependencies:
+      '@clack/prompts':
+        specifier: ^1.0.0
+        version: 1.0.0
+      '@trpc/client':
+        specifier: ^11.7.2
+        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
+      '@trpc/server':
+        specifier: ^11.7.2
+        version: 11.7.2(typescript@5.9.3)
+      better-auth:
+        specifier: 1.4.3
+        version: 1.4.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(solid-js@1.9.10)
+      superjson:
+        specifier: ^2.2.2
+        version: 2.2.6
+      trpc-cli:
+        specifier: 0.12.3
+        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
 
   packages/pidnap:
     dependencies:
@@ -1719,6 +1752,12 @@ packages:
 
   '@chevrotain/utils@11.0.3':
     resolution: {integrity: sha512-YslZMgtJUyuMbZ+aKvfF3x1f5liK4mWNxghFRv7jqRR9C3R3fAOGTTKvxXDa2Y1s9zSbcpuO0cAxDYsc9SrXoQ==}
+
+  '@clack/core@1.0.0':
+    resolution: {integrity: sha512-Orf9Ltr5NeiEuVJS8Rk2XTw3IxNC2Bic3ash7GgYeA8LJ/zmSNpSQ/m5UAhe03lA6KFgklzZ5KTHs4OAMA/SAQ==}
+
+  '@clack/prompts@1.0.0':
+    resolution: {integrity: sha512-rWPXg9UaCFqErJVQ+MecOaWsozjaxol4yjnmYcGNipAWzdaWa2x+VJmKfGq7L0APwBohQOYdHC+9RO4qRXej+A==}
 
   '@cloudflare/kv-asset-handler@0.4.1':
     resolution: {integrity: sha512-Nu8ahitGFFJztxUml9oD/DLb7Z28C8cd8F46IVQ7y5Btz575pvMY8AqZsXkX7Gds29eCKdMgIHjIvzskHgPSFg==}
@@ -10507,6 +10546,9 @@ packages:
   scheduler@0.27.0:
     resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
+  schematch@0.2.1:
+    resolution: {integrity: sha512-oU50xziqSI/x8HooCNUHgr1cYewGU3hujka3h6jsQD7eVESdyoj+CxoW9dqpmJl7BoIkZaKMi2Ejdw8aIk5+qw==}
+
   section-matter@1.0.0:
     resolution: {integrity: sha512-vfD3pmTzGpufjScBh50YHKzEu2lxBWhVEHsNGoEXmCmn2hKGfeNLYMzCJpe8cD7gqX7TJluOVpBkAequ6dgMmA==}
     engines: {node: '>=4'}
@@ -10619,6 +10661,9 @@ packages:
   sirv@3.0.2:
     resolution: {integrity: sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g==}
     engines: {node: '>=18'}
+
+  sisteransi@1.0.5:
+    resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
 
   skills@1.3.7:
     resolution: {integrity: sha512-02u4/E93kE2KiCi4kWDVhlAdjgOT6BINdJ9cnl3ePKFIAp9pQnyzBY1Gs+zzwaMpLcQhhscyUHNvPfyfbURa9Q==}
@@ -10974,6 +11019,31 @@ packages:
 
   trpc-cli@0.12.2:
     resolution: {integrity: sha512-kGNCiyOimGlfcZFImbWzFF2Nn3TMnenwUdyuckiN5SEaceJbIac7+Iau3WsVHjQpoNgugFruZMDOKf8GNQNtJw==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@orpc/server': ^1.0.0
+      '@trpc/server': ^10.45.2 || ^11.0.1
+      '@valibot/to-json-schema': ^1.1.0
+      effect: ^3.14.2 || ^4.0.0
+      valibot: ^1.1.0
+      zod: ^3.24.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@orpc/server':
+        optional: true
+      '@trpc/server':
+        optional: true
+      '@valibot/to-json-schema':
+        optional: true
+      effect:
+        optional: true
+      valibot:
+        optional: true
+      zod:
+        optional: true
+
+  trpc-cli@0.12.3:
+    resolution: {integrity: sha512-yfYgIhV26bSYWZhmfWCIa0g/p2OuhaA1oXC47BWDMrjONlDYMFj+86lFwXXwn+e/Nf6HFmS/92/WZr/ft3nqmg==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -13050,6 +13120,17 @@ snapshots:
   '@chevrotain/types@11.0.3': {}
 
   '@chevrotain/utils@11.0.3': {}
+
+  '@clack/core@1.0.0':
+    dependencies:
+      picocolors: 1.1.1
+      sisteransi: 1.0.5
+
+  '@clack/prompts@1.0.0':
+    dependencies:
+      '@clack/core': 1.0.0
+      picocolors: 1.1.1
+      sisteransi: 1.0.5
 
   '@cloudflare/kv-asset-handler@0.4.1':
     dependencies:
@@ -17774,7 +17855,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
 
   '@types/chai@5.2.2':
     dependencies:
@@ -17987,7 +18068,7 @@ snapshots:
 
   '@types/pg@8.16.0':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
       pg-protocol: 1.11.0
       pg-types: 2.2.0
 
@@ -18024,7 +18105,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 24.10.1
 
   '@types/yargs-parser@21.0.3': {}
 
@@ -22930,6 +23011,8 @@ snapshots:
 
   scheduler@0.27.0: {}
 
+  schematch@0.2.1: {}
+
   section-matter@1.0.0:
     dependencies:
       extend-shallow: 2.0.1
@@ -23084,6 +23167,8 @@ snapshots:
       '@polka/url': 1.0.0-next.29
       mrmime: 2.0.1
       totalist: 3.0.1
+
+  sisteransi@1.0.5: {}
 
   skills@1.3.7: {}
 
@@ -23464,6 +23549,17 @@ snapshots:
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.13
+
+  trpc-cli@0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+    dependencies:
+      commander: 14.0.2
+    optionalDependencies:
+      '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      effect: 3.19.14
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.1.12
 
   ts-algebra@2.0.0: {}
 

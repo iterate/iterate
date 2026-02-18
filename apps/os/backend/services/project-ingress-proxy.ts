@@ -7,7 +7,6 @@ import type { AuthSession } from "../auth/auth.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { normalizeProjectIngressCanonicalHost } from "../utils/project-ingress-url.ts";
 
 const DEFAULT_TARGET_PORT = 3000;
 const SANDBOX_INGRESS_PORT = 8080;
@@ -15,10 +14,6 @@ const MAX_PORT = 65_535;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
 const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
-export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
-  "/api/project-ingress-proxy-auth/bridge-start";
-const UNAUTHENTICATED_CONTROL_PLANE_PATHS = new Set(["/login", "/api/auth"]);
-const UNAUTHENTICATED_CONTROL_PLANE_PATH_PREFIXES = ["/api/auth/", "/assets/"];
 
 const HOP_BY_HOP_HEADERS = [
   "host",
@@ -155,53 +150,6 @@ function parseTargetPort(rawPort: string): number | null {
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) return null;
   return port;
-}
-
-export function buildCanonicalProjectIngressProxyHostname(params: {
-  target: IngressRouteTarget;
-  canonicalProjectIngressProxyBaseHost: string;
-}): string {
-  const { target, canonicalProjectIngressProxyBaseHost } = params;
-  const identifier = target.kind === "project" ? target.projectSlug : target.machineId;
-  const hostToken =
-    target.targetPort === DEFAULT_TARGET_PORT ? identifier : `${target.targetPort}__${identifier}`;
-  return `${hostToken}.${canonicalProjectIngressProxyBaseHost}`;
-}
-
-export function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
-  if (!rawPath) return "/";
-  try {
-    const parsed = new URL(rawPath, "https://project-ingress-proxy.local");
-    if (parsed.origin !== "https://project-ingress-proxy.local") return "/";
-    const normalizedPath = `${parsed.pathname}${parsed.search}`;
-    if (!normalizedPath.startsWith("/")) return "/";
-    return normalizedPath;
-  } catch {
-    return "/";
-  }
-}
-
-export function buildControlPlaneProjectIngressProxyLoginUrl(params: {
-  controlPlanePublicUrl: string;
-  projectIngressProxyHost: string;
-  redirectPath: string;
-}): URL {
-  const { controlPlanePublicUrl, projectIngressProxyHost, redirectPath } = params;
-  const controlPlaneBridgeStartPath = new URLSearchParams({
-    projectIngressProxyHost,
-    redirectPath: normalizeProjectIngressProxyRedirectPath(redirectPath),
-  });
-  const controlPlaneLoginUrl = new URL("/login", controlPlanePublicUrl);
-  controlPlaneLoginUrl.searchParams.set(
-    "redirectUrl",
-    `${PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH}?${controlPlaneBridgeStartPath.toString()}`,
-  );
-  return controlPlaneLoginUrl;
-}
-
-function isUnauthenticatedControlPlanePath(pathname: string): boolean {
-  if (UNAUTHENTICATED_CONTROL_PLANE_PATHS.has(pathname)) return true;
-  return UNAUTHENTICATED_CONTROL_PLANE_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
 function parseTargetToken(token: string): { identifier: string; targetPort: number } | null {
@@ -431,7 +379,7 @@ export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
   session: AuthSession,
-): Promise<Response | null> {
+): Promise<Response> {
   const url = new URL(request.url);
   const requestHostname = getProjectIngressRequestHostname(request);
   const hostMatchers = getProjectIngressProxyHostMatchers(env);
@@ -445,6 +393,18 @@ export async function handleProjectIngressRequest(
     return jsonError(
       404,
       "not_found",
+      buildHostnameParseDetails({
+        hostname: requestHostname,
+        hostMatchers,
+        matchedHostMatcher,
+      }),
+    );
+  }
+
+  if (!session) {
+    return jsonError(
+      401,
+      "unauthorized",
       buildHostnameParseDetails({
         hostname: requestHostname,
         hostMatchers,
@@ -489,42 +449,6 @@ export async function handleProjectIngressRequest(
         resolvedHost,
       }),
     );
-  }
-
-  const canonicalProjectIngressProxyBaseHost = normalizeProjectIngressCanonicalHost(
-    env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-  );
-  if (!canonicalProjectIngressProxyBaseHost) {
-    logger.error("[project-ingress] Invalid PROJECT_INGRESS_PROXY_CANONICAL_HOST", {
-      projectIngressProxyCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    });
-    return jsonError(500, "ingress_not_configured", {
-      hostname: requestHostname,
-      hostMatchers,
-      projectIngressProxyCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    });
-  }
-
-  const canonicalProjectIngressProxyHostname = buildCanonicalProjectIngressProxyHostname({
-    target: resolvedHost.target,
-    canonicalProjectIngressProxyBaseHost,
-  });
-  if (requestHostname !== canonicalProjectIngressProxyHostname) {
-    const redirectUrl = new URL(url.toString());
-    redirectUrl.host = canonicalProjectIngressProxyHostname;
-    return Response.redirect(redirectUrl.toString(), 301);
-  }
-
-  if (!session) {
-    if (isUnauthenticatedControlPlanePath(url.pathname)) {
-      return null;
-    }
-    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
-      controlPlanePublicUrl: env.VITE_PUBLIC_URL,
-      projectIngressProxyHost: canonicalProjectIngressProxyHostname,
-      redirectPath: `${url.pathname}${url.search}`,
-    });
-    return Response.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 
   const parseDetails = buildHostnameParseDetails({

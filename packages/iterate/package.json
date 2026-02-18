@@ -1,0 +1,46 @@
+{
+  "name": "iterate",
+  "version": "0.2.2",
+  "description": "CLI for iterate",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate.git",
+    "directory": "packages/iterate"
+  },
+  "homepage": "https://github.com/iterate/iterate#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "keywords": [
+    "iterate",
+    "cli",
+    "trpc"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "iterate": "./bin/iterate.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "node --check ./bin/iterate.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.0.0",
+    "@trpc/client": "^11.7.2",
+    "@trpc/server": "^11.7.2",
+    "better-auth": "1.4.3",
+    "superjson": "^2.2.2",
+    "trpc-cli": "0.12.3",
+    "zod": "4.1.12"
+  }
+}
