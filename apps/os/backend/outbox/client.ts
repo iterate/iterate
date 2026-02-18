@@ -10,10 +10,13 @@ export type InternalEventTypes = {
   "machine:created": {
     machineId: string;
   };
-  /** The daemon reported it is ready and the machine is provisioned (externalId exists). */
-  "machine:daemon-ready": {
+  /** The daemon called reportStatus (fired on every call, not just "ready"). */
+  "machine:daemon-status-reported": {
     machineId: string;
     projectId: string;
+    status: string;
+    message: string;
+    externalId: string | null;
   };
   /** A readiness probe webchat message was successfully sent to the machine. */
   "machine:probe-sent": {

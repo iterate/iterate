@@ -20,7 +20,7 @@ export const registerConsumers = () => {
   // ── Provisioning pipeline ──────────────────────────────────────────────
   //
   // machine:created → provisionMachine
-  // (daemon reports ready via reportStatus → machine:daemon-ready → probe pipeline)
+  // (daemon reports status via reportStatus → machine:daemon-status-reported → probe pipeline)
 
   cc.registerConsumer({
     name: "provisionMachine",
@@ -107,14 +107,16 @@ export const registerConsumers = () => {
 
   // ── Readiness probe pipeline ──────────────────────────────────────────
   //
-  // daemon-ready → sendReadinessProbe → (probe-sent) → pollProbeResponse
-  //   → (probe-succeeded) → activateMachine → (activated)
+  // daemon-status-reported → sendReadinessProbe (guarded) → (probe-sent)
+  //   → pollProbeResponse → (probe-succeeded) → activateMachine → (activated)
   //   → (probe-failed) → markMachineProbeFailure
 
-  // Stage 1: Daemon reported ready on a provisioned machine — send the probe message.
+  // Stage 1: Daemon reported status — if ready + provisioned, send the probe message.
+  // `when` skips the consumer entirely (not even enqueued) for non-ready / unprovisioned reports.
   cc.registerConsumer({
     name: "sendReadinessProbe",
-    on: "machine:daemon-ready",
+    on: "machine:daemon-status-reported",
+    when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
     visibilityTimeout: 90, // send retries up to 60s + margin
     delay: () => 60, // opencode needs some time to restart after env vars are applied. Around 30s, so delay 60s to be safe.
     retry: (job) => {

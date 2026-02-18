@@ -7,8 +7,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const TRANSIENT_TOP_LEVEL_MACHINE_METADATA_KEYS = new Set([
   "provisioningError",
-  "daemonReportedStatus",
-  "daemonReportedMessage",
+
   // Legacy keys — can be removed once all machines have cycled
   "daemonStatus",
   "daemonStatusMessage",
@@ -66,7 +65,7 @@ export function stripMachineStateMetadata(
 /** Machine event names that are relevant for UI status derivation. */
 const MACHINE_EVENT_NAMES = [
   "machine:created",
-  "machine:daemon-ready",
+  "machine:daemon-status-reported",
   "machine:probe-sent",
   "machine:probe-succeeded",
   "machine:probe-failed",

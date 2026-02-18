@@ -1,6 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { eq, and, or, sql } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 
 import { workerContract } from "../../../daemon/server/orpc/contract.ts";
@@ -143,51 +143,18 @@ export const reportStatus = os.machines.reportStatus
     }
 
     const { status, message } = input;
-    const currentMetadata = (machineWithOrg.metadata as Record<string, unknown>) ?? {};
 
-    // Record what the daemon reported (raw telemetry, used by machine-creation.ts
-    // for deferred daemon-ready when provisioning finishes after daemon boots).
-    await db
-      .update(schema.machine)
-      .set({
-        metadata: {
-          ...currentMetadata,
-          daemonReportedStatus: status,
-          daemonReportedMessage: message,
-        },
-      })
-      .where(eq(schema.machine.id, machine.id));
-
-    // When the daemon reports ready on a starting machine with a provisioned sandbox,
-    // emit daemon-ready so consumers can begin the readiness probe pipeline.
-    // If externalId is missing (provisioning still running), just record the status —
-    // machine-creation.ts will emit daemon-ready after provisioning completes.
-    // Guard: don't re-emit if a daemon-ready event already exists for this machine.
-    const probeAlreadyStarted = await db.query.outboxEvent.findFirst({
-      where: and(
-        eq(schema.outboxEvent.name, "machine:daemon-ready"),
-        sql`${schema.outboxEvent.payload}->>'machineId' = ${machine.id}`,
-      ),
-    });
-
-    const shouldEmitDaemonReady =
-      status === "ready" &&
-      machineWithOrg.state === "starting" &&
-      machineWithOrg.externalId &&
-      !probeAlreadyStarted;
-
-    if (shouldEmitDaemonReady) {
-      await outboxClient.send({ transaction: db, parent: db }, "machine:daemon-ready", {
-        machineId: machine.id,
-        projectId: machineWithOrg.projectId,
-      });
-    }
-
-    logger.info("Machine daemon status updated", {
+    // Always emit the fact that the daemon reported status.
+    // Consumers decide whether to act (e.g. start the probe pipeline).
+    await outboxClient.send({ transaction: db, parent: db }, "machine:daemon-status-reported", {
       machineId: machine.id,
+      projectId: machineWithOrg.projectId,
       status,
-      emittedDaemonReady: shouldEmitDaemonReady,
+      message: message ?? "",
+      externalId: machineWithOrg.externalId,
     });
+
+    logger.info("Machine daemon status reported", { machineId: machine.id, status });
 
     // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(
