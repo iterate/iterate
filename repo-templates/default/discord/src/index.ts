@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import * as Discord from "discord.js";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -122,7 +123,7 @@ function buildBootstrapPrompt(params: {
   return [
     "You have received a message from Discord channel.",
     "",
-    `Guild ID: ${message.guildId || "dm"}`,
+    `Guild ID: ${message.guildId}`,
     `Parent Channel ID: ${message.channelId}`,
     `Thread ID: ${thread.id}`,
     `Agent Path: ${agentPath}`,
@@ -131,14 +132,14 @@ function buildBootstrapPrompt(params: {
     `Date: ${message.createdAt.toISOString()}`,
     `Message URL: ${message.url}`,
     "",
-    "Message:",
+    "---",
     content || "(no text)",
     ...(attachmentLines.length > 0 ? ["", "Attachments:", ...attachmentLines] : []),
-    "",
-    "Use codemode to communicate via Discord.",
-    `POST ${PUBLIC_BASE_URL}/codemode with JSON: {"agentPath":"${agentPath}","code":"return thread.id"}`,
+    "---",
+    "Your Messages are **NOT** forwarded to the user, you must use codemode to communicate.",
+    `POST ${PUBLIC_BASE_URL}/codemode with JSON: {"agentPath":"${agentPath}","code":"return thread.send('message')"}`,
     "Always pass the exact agentPath from this message.",
-    "See DISCORD.md for more details.",
+    `Read ${join(import.meta.dirname, "../DISCORD.md")} for Instructions.`,
   ].join("\n");
 }
 
@@ -150,8 +151,11 @@ function buildNormalPrompt(params: { message: Discord.Message; content: string }
     `Author: ${message.author.username} (${message.author.id})`,
     `MessageID: ${message.id}`,
     `Date: ${message.createdAt.toISOString()}`,
+    "---",
     content || "(no text)",
     ...(attachmentLines.length > 0 ? ["", "Attachments:", ...attachmentLines] : []),
+    "---",
+    "If you need to send a message to the user, use codemode to do so.",
   ].join("\n");
 }
 

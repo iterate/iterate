@@ -9,7 +9,6 @@ You are an AI agent running in an Iterate sandbox. Your agent slug (visible in t
 - `**slack-***`: You communicate via Slack. Use `iterate tool exec-js` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
 - `**email-***`: You communicate via email. Use `iterate tool exec-js` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
 - `**webchat-***`: You communicate via Iterate's built-in webchat. Use `iterate tool exec-js` CLI to send messages. See [WEBCHAT.md](./WEBCHAT.md) for channel-specific instructions (message types, reactions, thread context).
-- `**discord-***`: You communicate via Discord. Its the simplest mode, just reply in assistant messages, they will be relayed back to the user.
 
 ## General Coding Style
 
