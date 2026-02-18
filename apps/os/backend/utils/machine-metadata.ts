@@ -65,13 +65,13 @@ export function stripMachineStateMetadata(
 
 /** Machine event names that are relevant for UI status derivation. */
 const MACHINE_EVENT_NAMES = [
+  "machine:created",
   "machine:daemon-ready",
   "machine:probe-sent",
   "machine:probe-succeeded",
   "machine:probe-failed",
   "machine:activated",
   "machine:restart-requested",
-  "machine:provisioning-failed",
 ] as const;
 
 export type MachineEventName = (typeof MACHINE_EVENT_NAMES)[number];
@@ -101,8 +101,14 @@ export async function getLatestMachineEvents(
       payload,
       created_at
     FROM outbox_event
-    WHERE payload->>'machineId' = ANY(${machineIds})
-      AND name = ANY(${MACHINE_EVENT_NAMES as unknown as string[]})
+    WHERE payload->>'machineId' IN (${sql.join(
+      machineIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})
+      AND name IN (${sql.join(
+        [...MACHINE_EVENT_NAMES].map((n) => sql`${n}`),
+        sql`, `,
+      )})
     ORDER BY payload->>'machineId', id DESC
   `);
 

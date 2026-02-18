@@ -6,6 +6,10 @@ import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
+  /** Machine DB record created — provision it via the sandbox provider. */
+  "machine:created": {
+    machineId: string;
+  };
   /** The daemon reported it is ready and the machine is provisioned (externalId exists). */
   "machine:daemon-ready": {
     machineId: string;
@@ -30,12 +34,6 @@ export type InternalEventTypes = {
     projectId: string;
     detail: string;
     attempt: number;
-  };
-  /** Machine provisioning failed (provider error). */
-  "machine:provisioning-failed": {
-    machineId: string;
-    projectId: string;
-    detail: string;
   };
   /** A user or system requested a machine/daemon restart. */
   "machine:restart-requested": {

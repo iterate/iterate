@@ -9,11 +9,101 @@ import {
   sendProbeMessage,
   pollForProbeAnswer,
 } from "../services/machine-readiness-probe.ts";
+import { buildMachineEnvVars } from "../services/machine-creation.ts";
+import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
+
+  // ── Provisioning pipeline ──────────────────────────────────────────────
+  //
+  // machine:created → provisionMachine
+  // (daemon reports ready via reportStatus → machine:daemon-ready → probe pipeline)
+
+  cc.registerConsumer({
+    name: "provisionMachine",
+    on: "machine:created",
+    visibilityTimeout: 300, // provisioning can take minutes (Daytona snapshot, etc.)
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: 10 };
+      return { retry: false, reason: "provisioning failed after retries" };
+    },
+    async handler(params) {
+      const { machineId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+        with: { project: { with: { organization: true } } },
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.info("[provisionMachine] Skipping, machine no longer starting", {
+          machineId,
+          state: machine.state,
+        });
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      if (!machine.externalId) throw new Error(`Machine ${machineId} has no externalId`);
+
+      const { apiKey } = await import("../services/machine-creation.ts").then((mod) =>
+        mod.getOrCreateProjectMachineToken(db, machine.projectId),
+      );
+      const fullEnvVars = await buildMachineEnvVars({
+        db,
+        env,
+        projectId: machine.projectId,
+        organizationId: machine.project.organizationId,
+        organizationSlug: machine.project.organization.slug,
+        projectSlug: machine.project.slug,
+        machineId,
+        name: machine.name,
+        apiKey,
+      });
+
+      const initialMetadata = stripMachineStateMetadata(
+        (machine.metadata as Record<string, unknown>) ?? {},
+      );
+
+      const runtime = await createMachineStub({
+        type: machine.type,
+        env,
+        externalId: machine.externalId,
+        metadata: initialMetadata,
+      });
+      const runtimeResult = await runtime.create({
+        machineId,
+        externalId: machine.externalId,
+        name: machine.name,
+        envVars: fullEnvVars,
+      });
+
+      // Merge provider metadata with any metadata written while provisioning ran
+      const latestMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+      const mergedMetadata = {
+        ...stripMachineStateMetadata(latestMetadata),
+        ...(runtimeResult.metadata ?? {}),
+      };
+
+      await db
+        .update(schema.machine)
+        .set({ metadata: mergedMetadata })
+        .where(eq(schema.machine.id, machineId));
+
+      logger.info("[provisionMachine] Machine provisioned", {
+        machineId,
+        type: machine.type,
+      });
+      return `provisioned machine ${machineId}`;
+    },
+  });
 
   // ── Readiness probe pipeline ──────────────────────────────────────────
   //

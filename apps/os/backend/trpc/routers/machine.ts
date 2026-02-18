@@ -11,7 +11,7 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { waitUntil, type CloudflareEnv } from "../../../env.ts";
+import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
@@ -265,17 +265,9 @@ export const machineRouter = router({
           db: ctx.db,
           env: ctx.env,
           projectId: ctx.project.id,
-          organizationId: ctx.organization.id,
-          organizationSlug: ctx.organization.slug,
-          projectSlug: ctx.project.slug,
           name: input.name,
           metadata: input.metadata,
         });
-
-        // Provision in background — the DB record is already created
-        if (result.provisionPromise) {
-          waitUntil(result.provisionPromise);
-        }
 
         // Return apiKey for local machines - user needs this to configure their daemon
         if (result.apiKey) {

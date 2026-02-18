@@ -377,9 +377,7 @@ function MachineDetailPage() {
   const lastEventPayload = machine.lastEvent?.payload;
   const issueMessage =
     metadata.provisioningError ??
-    ((lastEventName === "machine:probe-failed" ||
-      lastEventName === "machine:provisioning-failed") &&
-    lastEventPayload?.detail
+    (lastEventName === "machine:probe-failed" && lastEventPayload?.detail
       ? String(lastEventPayload.detail)
       : null);
 

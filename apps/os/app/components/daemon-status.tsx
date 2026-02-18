@@ -30,7 +30,7 @@ export function DaemonStatus({ state, lastEvent }: DaemonStatusProps) {
     );
   }
 
-  if (eventName === "machine:probe-failed" || eventName === "machine:provisioning-failed") {
+  if (eventName === "machine:probe-failed") {
     const detail = lastEvent?.payload?.detail as string | undefined;
     return (
       <span className="flex items-center gap-1.5 text-destructive text-sm" title={detail}>
@@ -45,6 +45,15 @@ export function DaemonStatus({ state, lastEvent }: DaemonStatusProps) {
       <span className="flex items-center gap-1.5 text-orange-600 text-sm">
         <RefreshCw className="h-3 w-3 animate-spin" />
         Restarting...
+      </span>
+    );
+  }
+
+  if (eventName === "machine:created") {
+    return (
+      <span className="flex items-center gap-1.5 text-muted-foreground text-sm">
+        <Circle className="h-3 w-3 animate-pulse" />
+        Provisioning...
       </span>
     );
   }
