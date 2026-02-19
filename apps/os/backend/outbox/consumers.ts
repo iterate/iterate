@@ -264,7 +264,7 @@ export const registerConsumers = () => {
             machineId,
             state: current?.state,
           });
-          return false;
+          return;
         }
 
         // Bulk-detach all active machines for this project
@@ -279,18 +279,18 @@ export const registerConsumers = () => {
           .set({ state: "active" })
           .where(eq(schema.machine.id, machineId));
 
-        return true;
+        // Emit activated event inside the transaction for atomicity
+        await cc.send({ transaction: tx, parent: db }, "machine:activated", {
+          machineId,
+          projectId,
+        });
+
+        return true as const;
       });
 
       if (!activated) {
         return `skipped: state changed during transaction`;
       }
-
-      // Emit activated event outside the transaction — only if we actually activated
-      await cc.send({ transaction: db, parent: db }, "machine:activated", {
-        machineId,
-        projectId,
-      });
 
       logger.info("[activateMachine] Machine activated", { machineId });
       await broadcastInvalidation(env).catch(() => {});
