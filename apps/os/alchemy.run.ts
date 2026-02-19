@@ -891,6 +891,6 @@ if (isDevelopment && worker.url) {
   });
   for (const loop of loops) {
     console.log(`Starting cron loop for ${loop.name}: ${loop.cron}`);
-    loop.fn();
+    loop.fn().catch(() => {});
   }
 }
