@@ -673,6 +673,21 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.0.0
+      '@codemirror/lang-json':
+        specifier: ^6.0.2
+        version: 6.0.2
+      '@codemirror/lang-yaml':
+        specifier: ^6.1.2
+        version: 6.1.2
+      '@codemirror/language':
+        specifier: ^6.11.3
+        version: 6.11.3
+      '@codemirror/search':
+        specifier: ^6.5.11
+        version: 6.5.11
+      '@codemirror/view':
+        specifier: ^6.38.8
+        version: 6.38.8
       '@daytonaio/sdk':
         specifier: ^0.128.1
         version: 0.128.1(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -688,6 +703,9 @@ importers:
       '@effect/platform-node':
         specifier: ^0.77.1
         version: 0.77.11(@effect/cluster@0.31.1(@effect/platform@0.81.1(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.81.1(effect@3.19.14))(@effect/rpc@0.57.1(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(@effect/sql@0.34.1(@effect/experimental@0.44.21(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(@effect/platform@0.81.1(effect@3.19.14))(effect@3.19.14))(bufferutil@4.0.9)(effect@3.19.14)(utf-8-validate@5.0.10)
+      '@fsegurai/codemirror-theme-bundle':
+        specifier: ^6.2.2
+        version: 6.2.2(@codemirror/language@6.11.3)(@codemirror/state@6.5.2)(@codemirror/view@6.38.8)(@lezer/highlight@1.2.3)
       '@hono/node-server':
         specifier: ^1.19.6
         version: 1.19.6(hono@4.11.3)
@@ -817,6 +835,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      codemirror:
+        specifier: ^6.0.2
+        version: 6.0.2
       cron-parser:
         specifier: ^5.5.0
         version: 5.5.0

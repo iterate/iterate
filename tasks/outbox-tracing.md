@@ -1,5 +1,5 @@
 ---
-state: planned
+state: in-progress
 priority: medium
 size: medium
 dependsOn: []
@@ -118,6 +118,16 @@ Replace `getLatestMachineEvents()` + `getMachinePendingConsumers()` with single 
 4. Admin tRPC endpoint
 5. Admin UI timeline panel
 6. Machine router integration (replace two helpers)
+
+Note: the pgmq table does have `headers` so maybe we can use that for some of this?
+
+## /admin/outbox page
+
+Needs an "Apply" button so changing filters doesn't freeze the UI and re-run everything and move cursor position etc.
+
+Also, this page can rely on `getEventsRelatedTo` to essentially render these linked lists. This can replace the current JSONB filter.
+
+Also it needs the various fields from the `q_consumer_job_queue` table like msg_id, read_ct, vt, enqueued_at etc.
 
 ## Not in scope (future)
 

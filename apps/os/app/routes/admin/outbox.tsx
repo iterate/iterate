@@ -55,6 +55,7 @@ type QueueMessage = {
     consumer_name: string;
     event_id: number;
     event_payload: Record<string, unknown>;
+    event_context?: Record<string, unknown>;
     processing_results: unknown[];
     status?: ConsumerStatus;
   };
@@ -62,10 +63,13 @@ type QueueMessage = {
 
 type ConsumerStatus = "pending" | "success" | "retrying" | "failed";
 
+type CausedBy = { eventId: number; consumerName: string; jobId: number | string };
+
 type EventWithConsumers = {
   id: number;
   name: string;
   payload: Record<string, unknown>;
+  context?: { causedBy?: CausedBy };
   createdAt: Date;
   updatedAt: Date;
   consumers: QueueMessage[];
@@ -82,7 +86,7 @@ const STATUS_COLORS: Record<ConsumerStatus, string> = {
 };
 
 function StatusDot({ status }: { status: ConsumerStatus }) {
-  return <Circle className={cn("h-2.5 w-2.5", STATUS_COLORS[status])} />;
+  return <Circle className={cn("h-2.5 w-2.5 shrink-0", STATUS_COLORS[status])} />;
 }
 
 function formatAge(date: string | Date): string {
@@ -150,6 +154,58 @@ function filtersToInput(filters: Filters) {
 
 // --- Components ---
 
+function EventCard({ event }: { event: EventWithConsumers }) {
+  const [open, setOpen] = useState(false);
+  const causedBy = event.context?.causedBy;
+
+  return (
+    <div className="border rounded-lg bg-card">
+      <button
+        type="button"
+        className="flex items-start justify-between gap-4 p-4 w-full text-left"
+        onClick={() => setOpen(!open)}
+      >
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <StatusDot status={event.aggregateStatus} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground">#{event.id}</span>
+              <span className="font-medium text-sm">{event.name}</span>
+              {causedBy && (
+                <span className="text-xs text-muted-foreground">
+                  &larr; #{causedBy.eventId} / {causedBy.consumerName}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {event.consumers.length > 0
+                ? `Consumers: ${event.consumers.map((c) => c.message.consumer_name).join(", ")}`
+                : "No consumers"}{" "}
+              · {formatAge(event.createdAt)}
+            </div>
+          </div>
+        </div>
+        {open ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+        )}
+      </button>
+      {open && (
+        <div className="border-t px-4 py-3 space-y-3">
+          <SerializedObjectCodeBlock
+            data={{ payload: event.payload, context: event.context }}
+            className="max-h-60"
+          />
+          {event.consumers.map((msg) => (
+            <ConsumerRow key={String(msg.msg_id)} msg={msg} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConsumerRow({ msg }: { msg: QueueMessage }) {
   const [open, setOpen] = useState(false);
   const status = msg.message.status ?? "pending";
@@ -165,7 +221,8 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
           <StatusDot status={status} />
           <span className="text-xs font-medium truncate">{msg.message.consumer_name}</span>
           <span className="text-xs text-muted-foreground">
-            msg #{String(msg.msg_id)} · {msg.read_ct} read{msg.read_ct !== 1 ? "s" : ""}
+            msg #{String(msg.msg_id)} · {msg.read_ct} read{msg.read_ct !== 1 ? "s" : ""} · vt{" "}
+            {new Date(msg.vt).toLocaleTimeString()}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -178,87 +235,39 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
         </div>
       </button>
       {open && (
-        <div className="border-t px-3 py-2 space-y-2">
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Full Message</div>
-            <SerializedObjectCodeBlock data={msg.message} />
-          </div>
-          {msg.message.processing_results.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-1">
-                Processing Results
-              </div>
-              <SerializedObjectCodeBlock data={msg.message.processing_results} />
-            </div>
-          )}
+        <div className="border-t px-3 py-2">
+          <SerializedObjectCodeBlock data={msg} className="max-h-60" />
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event }: { event: EventWithConsumers }) {
-  const [open, setOpen] = useState(false);
-
+/** Vertical connector line between causally-linked events */
+function CausalLine() {
   return (
-    <div className="border rounded-lg bg-card">
-      <button
-        type="button"
-        className="flex items-start justify-between gap-4 p-4 w-full text-left"
-        onClick={() => setOpen(!open)}
-      >
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <StatusDot status={event.aggregateStatus} />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium text-sm">{event.name}</div>
-            <div className="text-xs text-muted-foreground">
-              #{event.id} · {event.consumers.length} consumer
-              {event.consumers.length !== 1 ? "s" : ""} · {formatAge(event.createdAt)}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {open ? (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          )}
-        </div>
-      </button>
-      {open && (
-        <div className="border-t px-4 py-3 space-y-3">
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Event Payload</div>
-            <SerializedObjectCodeBlock data={event.payload} />
-          </div>
-          {event.consumers.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-2">Consumers</div>
-              <div className="space-y-2">
-                {event.consumers.map((msg) => (
-                  <ConsumerRow key={String(msg.msg_id)} msg={msg} />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+    <div className="flex justify-start pl-6">
+      <svg width="2" height="16" className="text-border">
+        <line x1="1" y1="0" x2="1" y2="16" stroke="currentColor" strokeWidth="2" />
+      </svg>
     </div>
   );
 }
 
 function FilterBar({
-  filters,
+  draft,
   onChange,
+  onApply,
   eventNames,
   consumerNames,
 }: {
-  filters: Filters;
+  draft: Filters;
   onChange: (f: Filters) => void;
+  onApply: () => void;
   eventNames: string[];
   consumerNames: string[];
 }) {
-  const hasFilters = Object.entries(filters).some(
+  const hasFilters = Object.entries(draft).some(
     ([key, val]) => val !== DEFAULT_FILTERS[key as keyof Filters],
   );
 
@@ -269,17 +278,25 @@ function FilterBar({
           <Filter className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Filters</span>
         </div>
-        {hasFilters && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(DEFAULT_FILTERS)}
-            className="h-7 text-xs"
-          >
-            <X className="h-3 w-3 mr-1" />
-            Clear
+        <div className="flex items-center gap-2">
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onChange(DEFAULT_FILTERS);
+                setTimeout(onApply, 0);
+              }}
+              className="h-7 text-xs"
+            >
+              <X className="h-3 w-3 mr-1" />
+              Clear
+            </Button>
+          )}
+          <Button variant="default" size="sm" onClick={onApply} className="h-7 text-xs">
+            Apply
           </Button>
-        )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -292,13 +309,13 @@ function FilterBar({
             className="w-full justify-start text-xs"
             onClick={() =>
               onChange({
-                ...filters,
-                sort: filters.sort === "desc" ? "asc" : "desc",
+                ...draft,
+                sort: draft.sort === "desc" ? "asc" : "desc",
               })
             }
           >
             <ArrowUpDown className="h-3 w-3 mr-1.5" />
-            {filters.sort === "desc" ? "Newest first" : "Oldest first"}
+            {draft.sort === "desc" ? "Newest first" : "Oldest first"}
           </Button>
         </div>
 
@@ -307,8 +324,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Event</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.event ?? ""}
-            onChange={(e) => onChange({ ...filters, event: e.target.value || undefined })}
+            value={draft.event ?? ""}
+            onChange={(e) => onChange({ ...draft, event: e.target.value || undefined })}
           >
             <option value="">All events</option>
             {eventNames.map((n) => (
@@ -324,8 +341,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Consumer</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.consumer ?? ""}
-            onChange={(e) => onChange({ ...filters, consumer: e.target.value || undefined })}
+            value={draft.consumer ?? ""}
+            onChange={(e) => onChange({ ...draft, consumer: e.target.value || undefined })}
           >
             <option value="">All consumers</option>
             {consumerNames.map((n) => (
@@ -344,19 +361,19 @@ function FilterBar({
               type="button"
               className="underline"
               onClick={() =>
-                onChange({ ...filters, statusMode: filters.statusMode === "some" ? "all" : "some" })
+                onChange({ ...draft, statusMode: draft.statusMode === "some" ? "all" : "some" })
               }
             >
-              {filters.statusMode}
+              {draft.statusMode}
             </button>
             )
           </label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.status ?? ""}
+            value={draft.status ?? ""}
             onChange={(e) =>
               onChange({
-                ...filters,
+                ...draft,
                 status: (e.target.value || undefined) as ConsumerStatus | undefined,
               })
             }
@@ -376,15 +393,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min e.g. 5m"
-              value={filters.ageMin ?? ""}
-              onChange={(e) => onChange({ ...filters, ageMin: e.target.value || undefined })}
+              value={draft.ageMin ?? ""}
+              onChange={(e) => onChange({ ...draft, ageMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max e.g. 2d"
-              value={filters.ageMax ?? ""}
-              onChange={(e) => onChange({ ...filters, ageMax: e.target.value || undefined })}
+              value={draft.ageMax ?? ""}
+              onChange={(e) => onChange({ ...draft, ageMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -398,8 +415,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="min"
-              value={filters.readMin ?? ""}
-              onChange={(e) => onChange({ ...filters, readMin: e.target.value || undefined })}
+              value={draft.readMin ?? ""}
+              onChange={(e) => onChange({ ...draft, readMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
@@ -407,8 +424,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="max"
-              value={filters.readMax ?? ""}
-              onChange={(e) => onChange({ ...filters, readMax: e.target.value || undefined })}
+              value={draft.readMax ?? ""}
+              onChange={(e) => onChange({ ...draft, readMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -420,15 +437,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min"
-              value={filters.resMin ?? ""}
-              onChange={(e) => onChange({ ...filters, resMin: e.target.value || undefined })}
+              value={draft.resMin ?? ""}
+              onChange={(e) => onChange({ ...draft, resMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max"
-              value={filters.resMax ?? ""}
-              onChange={(e) => onChange({ ...filters, resMax: e.target.value || undefined })}
+              value={draft.resMax ?? ""}
+              onChange={(e) => onChange({ ...draft, resMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -441,8 +458,8 @@ function FilterBar({
           <Input
             className="h-8 text-xs font-mono"
             placeholder='{"machineId": "..."}'
-            value={filters.payload ?? ""}
-            onChange={(e) => onChange({ ...filters, payload: e.target.value || undefined })}
+            value={draft.payload ?? ""}
+            onChange={(e) => onChange({ ...draft, payload: e.target.value || undefined })}
           />
         </div>
       </div>
@@ -459,8 +476,15 @@ function OutboxPage() {
   const page = filters.page ?? 0;
   const pageSize = 25;
 
+  // Draft filters — edited locally, only applied on "Apply" click
+  const [draft, setDraft] = useState<Filters>(filters);
+
   const setFilters = (newFilters: Filters) => {
     navigate({ search: newFilters, replace: true });
+  };
+
+  const applyFilters = () => {
+    setFilters({ ...draft, page: 0 });
   };
 
   const serverInput = useMemo(
@@ -500,6 +524,7 @@ function OutboxPage() {
         id: event.id,
         name: event.name,
         payload: event.payload,
+        context: event.context as EventWithConsumers["context"],
         createdAt: new Date(event.createdAt),
         updatedAt: new Date(event.updatedAt),
         consumers,
@@ -508,13 +533,11 @@ function OutboxPage() {
     });
   }, [data]);
 
+  // Build set of event IDs in current view for causal line rendering
+  const eventIdSet = useMemo(() => new Set(enrichedEvents.map((e) => e.id)), [enrichedEvents]);
+
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / pageSize);
-
-  // Reset page when filters change
-  const handleFilterChange = (newFilters: Filters) => {
-    setFilters({ ...newFilters, page: 0 });
-  };
 
   return (
     <div className={cn("p-4 space-y-4 max-w-4xl", isFetching && "opacity-60")}>
@@ -538,8 +561,9 @@ function OutboxPage() {
       </div>
 
       <FilterBar
-        filters={filters}
-        onChange={handleFilterChange}
+        draft={draft}
+        onChange={setDraft}
+        onApply={applyFilters}
         eventNames={data?.eventNames ?? []}
         consumerNames={data?.consumerNames ?? []}
       />
@@ -587,10 +611,18 @@ function OutboxPage() {
           {data ? "No events match the current filters" : "Loading..."}
         </div>
       ) : (
-        <div className="space-y-2">
-          {enrichedEvents.map((event) => (
-            <EventCard key={event.id} event={event} />
-          ))}
+        <div className="space-y-0">
+          {enrichedEvents.map((event, idx) => {
+            const causedBy = event.context?.causedBy;
+            const parentInView = causedBy && eventIdSet.has(causedBy.eventId);
+            return (
+              <div key={event.id}>
+                {parentInView && <CausalLine />}
+                {!parentInView && idx > 0 && <div className="h-2" />}
+                <EventCard event={event} />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

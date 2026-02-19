@@ -4,10 +4,21 @@
 
 // before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sql } from "drizzle-orm";
 import { initTRPC, type AnyTRPCRouter, type AnyTRPCProcedure } from "@trpc/server";
 import { z } from "zod/v4";
 import { logger } from "../tag-logger.ts";
+
+// Tracks the current consumer execution context so that events emitted
+// inside a consumer handler automatically get `context.causedBy` populated.
+export type OutboxCausation = {
+  eventId: number;
+  consumerName: string;
+  jobId: number | string;
+};
+
+export const outboxALS = new AsyncLocalStorage<OutboxCausation>();
 
 // Minimal DB interface - just needs to run raw SQL via drizzle's execute
 
@@ -159,12 +170,22 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             )
           `);
         }
-        const result = await consumer.handler({
+        const causation: OutboxCausation = {
           eventId: job.message.event_id,
-          eventName: job.message.event_name,
-          payload: job.message.event_payload as { input: unknown; output: unknown },
-          job: { id: job.msg_id, attempt: job.read_ct },
-        });
+          consumerName: consumer.name,
+          jobId: job.msg_id,
+        };
+        // Bind to const so TS narrows inside the closure
+        const _consumer = consumer;
+        const _job = job;
+        const result = await outboxALS.run(causation, () =>
+          _consumer.handler({
+            eventId: _job.message.event_id,
+            eventName: _job.message.event_name,
+            payload: _job.message.event_payload as { input: unknown; output: unknown },
+            job: { id: _job.msg_id, attempt: _job.read_ct },
+          }),
+        );
         results.push(result);
         await db.execute(sql`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
@@ -234,10 +255,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`[outbox] adding to pgmq:${params.name}`);
+    const causation = outboxALS.getStore();
+    const context = causation ? { causedBy: causation } : {};
     const insertResult = normalizeResult(
       await db.execute(sql`
-        insert into outbox_event (name, payload)
-        values (${params.name}, ${JSON.stringify(params.payload)})
+        insert into outbox_event (name, payload, context)
+        values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
         returning id
       `),
     );
@@ -263,7 +286,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             event_name: params.name,
             event_id: Number(eventInsertion.id satisfies string),
             event_payload: params.payload,
-            event_context: {},
+            event_context: context,
             processing_results: [],
             environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
           } satisfies ConsumerEvent)}::jsonb,
