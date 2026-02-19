@@ -58,17 +58,35 @@ https://events.iterate.com/stripe/invoice/paid
 https://events.iterate.com/stripe/subscription/cancelled
 ```
 
-The webhook handler that receives an external event is responsible for normalizing it into a specific event type at ingestion time. A GitHub webhook arriving with `X-GitHub-Event: pull_request` and `action: opened` should produce `github/pull-request/opened`, not a generic "webhook received" event.
+The webhook handler that receives an external event is responsible for:
 
-### Why no generic `webhook/received` event?
+1. **Emitting a raw `webhook-received` event** — preserves the original payload for replay and debugging
+2. **Emitting a specific typed event** — normalized to our schema for consumers to react to
 
-It's tempting to emit `.../github/webhook/received` for every inbound webhook and let consumers inspect the payload. Don't.
+A GitHub webhook arriving with `X-GitHub-Event: pull_request` and `action: opened` should produce both:
 
-- **"Webhook received" is not a domain fact.** The fact is "a pull request was opened", not "a webhook arrived." A webhook is a delivery mechanism, not a thing that happened in the world. By the same logic, we wouldn't emit `.../os/http-request/received` as the event type for first-party actions.
-- **Generic types defeat routing and filtering.** If every GitHub webhook is `.../github/webhook/received`, consumers must parse the payload to decide whether to act. Event types exist precisely so infrastructure can route events without understanding payloads.
-- **The event log becomes useless.** A stream of `webhook/received, webhook/received, webhook/received` tells you nothing at a glance. Specific types make logs, dashboards, and traces self-describing.
+```
+https://events.iterate.com/github/webhook-received     ← raw payload, for audit/replay
+https://events.iterate.com/github/pull-request/opened  ← normalized, for consumers
+```
 
-If you need a raw audit trail of every inbound webhook regardless of type (e.g. for replay or debugging), that's a storage concern — log the raw HTTP request. It doesn't need to be an event in the domain event system.
+### The two-tier approach
+
+**Raw webhook events** (e.g. `github/webhook-received`, `slack/webhook-received`, `stripe/webhook-received`):
+
+- Store the original payload as-is from the third party
+- Useful for debugging, replay, and auditing
+- Consumers should generally NOT subscribe to these — they're infrastructure events
+- One per vendor, not per webhook type
+
+**Specific typed events** (e.g. `github/pull-request/opened`, `slack/message/posted`):
+
+- Normalized to our schema with only the fields we care about
+- Domain consumers subscribe to these
+- Enable proper routing and filtering without parsing payloads
+- Make logs and traces self-describing
+
+This separation keeps the raw audit trail while ensuring domain consumers work with clean, typed events.
 
 ### Normalizing vendor event names
 
@@ -152,7 +170,7 @@ If a domain concept changes so fundamentally that the old event type no longer a
 
 1. Events are past-tense facts: `machine/activated`, not `machine/activate`
 2. Every event type is a URL: `https://events.iterate.com/{app}/{entity}/{verb}`
-3. Third-party events are normalized to specific types at ingestion: `github/pull-request/opened`, not `github/webhook/received`
+3. Third-party webhooks emit two events: raw `webhook-received` (for audit/replay) AND specific typed events (for consumers)
 4. Consumer names describe the side effect: `deleteProviderSandbox`, not `handleMachineArchived`
 5. Kebab-case for event URLs, camelCase for consumers and payloads
 6. Don't version event types — version schemas
