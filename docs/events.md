@@ -2,6 +2,19 @@
 
 Events are **facts**. An event records that something already happened, never that something should happen.
 
+## Terminology
+
+An **event** is the whole object, payload included:
+
+```typescript
+{
+  type: "https://events.iterate.com/os/machine/archive-requested",
+  payload: { machineId: "m123", reason: "user-requested" }
+}
+```
+
+An **event type** is the `type` property on the event — the URL that identifies what kind of fact this is.
+
 ## Events are facts, not commands
 
 An event must always be past tense — a statement of what occurred. Commands (imperative instructions to do something) belong to a different concept entirely.
@@ -123,7 +136,24 @@ This is not a priority right now. For now, use the full URL string as the event 
 
 The codebase currently uses colon-separated short strings (`machine:activated`, `machine:verify-readiness`) as event types. These should be migrated to full URLs when next touching the relevant code. No urgency — the mapping is straightforward.
 
-## Consumer naming
+## Consumers
+
+A **consumer** is a function that handles events, along with configuration for when and how it should run. In the OS outbox system, a consumer conforms to `ConsumerDefinition<Payload>`:
+
+```typescript
+{
+  name: string;                    // e.g. "deleteProviderSandbox"
+  when: WhenFn<Payload>;           // which events to handle
+  delay: DelayFn<Payload>;         // delay before processing
+  retry: RetryFn;                  // retry configuration
+  visibilityTimeout?: TimePeriod;  // for long-running handlers
+  handler: (params) => Promise<void | string>;
+}
+```
+
+This definition is intentionally narrow — it describes consumers in the OS outbox system specifically. Other contexts (SSE listeners, webhook subscribers, unit tests polling an event bus) may consume events but aren't "consumers" in this formal sense. We can broaden the definition later if useful.
+
+### Consumer naming
 
 Consumers are named for the **side effect they perform**, not the event they react to.
 
