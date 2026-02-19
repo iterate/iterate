@@ -867,7 +867,7 @@ if (isDevelopment && worker.url) {
         let next: ReturnType<typeof expression.next> | null = expression.next();
         while (next && next.getTime() < Date.now()) {
           console.warn(
-            `Cron ${name} is overdue by ("next" at ${next}, now is ${new Date()}). Skipping.`,
+            `Cron ${name} is overdue ("next" at ${next}, now is ${new Date()}). Skipping.`,
           );
           next = expression.hasNext() ? expression.next() : (null as never);
           continue;
@@ -877,14 +877,19 @@ if (isDevelopment && worker.url) {
           break;
         }
         const waitMs = next.getTime() - Date.now();
-        if (runs++ <= 3) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
-        if (runs === 3) console.log(`(Future runs only logged on failure)`);
+        if (runs++ <= 10) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
+        if (runs === 10) console.log(`(Future runs only logged on failure)`);
 
         await new Promise((resolve) => setTimeout(resolve, waitMs));
-        const url = `${worker.url}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent(cron)}`;
-        await fetch(url).catch((e) => {
-          console.error(`Failed to fetch scheduled URL for cron ${name}:`, e);
-        });
+        const url = new URL("cdn-cgi/handler/scheduled", worker.url);
+        url.searchParams.set("cron", cron);
+        await fetch(url.toString(), { redirect: "manual" })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(`${res.url} ${res.status} ${await res.clone().text()}`);
+          })
+          .catch((e) => {
+            console.error(`Failed to fetch scheduled URL for cron ${name}:`, e);
+          });
       }
     };
     return { name, cron, expression, fn };
