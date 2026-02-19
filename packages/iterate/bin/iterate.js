@@ -172,16 +172,6 @@ const readConfigFile = () => {
  * @param {ConfigFile} configFile
  * @param {string} workspacePath
  */
-const getWorkspaceConfig = (configFile, workspacePath) => {
-  const workspaces = isObject(configFile.workspaces) ? configFile.workspaces : {};
-  const rawWorkspaceConfig = workspaces[workspacePath];
-  return isObject(rawWorkspaceConfig) ? rawWorkspaceConfig : {};
-};
-
-/**
- * @param {ConfigFile} configFile
- * @param {string} workspacePath
- */
 const getMergedWorkspaceConfig = (configFile, workspacePath) => {
   const configs = [];
   while (workspacePath && workspacePath !== "/") {
