@@ -1371,8 +1371,8 @@ function buildFirstLoopInContextSection(context: PullRequestContext): string {
   ].join("\n");
 }
 
-function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, _prNumber: number): string {
-  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-0`;
+function buildDeterministicAgentPath(repo: GitHubRepoCoordinates, prNumber: number): string {
+  return `/github/${toPathSegment(repo.owner)}/${toPathSegment(repo.name)}/pr-${prNumber}`;
 }
 
 function buildMarkerBlock(params: { sessionId: string; stage: string | null }): string {
