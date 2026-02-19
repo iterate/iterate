@@ -44,7 +44,7 @@ type UnifiedEnvVar = {
 
 export type ApplyEnvVarsOptions = {
   /**
-   * When true, skip setting proxy env vars (NODE_USE_ENV_PROXY).
+   * When true, skip setting proxy env vars (NODE_USE_ENV_PROXY, NODE_USE_SYSTEM_CA).
    * Used when DANGEROUS_RAW_SECRETS_ENABLED is set on the control plane
    * and secrets are returned raw (no egress proxy needed).
    */
@@ -447,12 +447,13 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://127.0.0.1:4318/v1/traces"
 # Egress proxy configuration
 # All sandbox HTTP traffic routes through mitmproxy -> egress proxy for secret injection
 NODE_USE_ENV_PROXY=1
+NODE_USE_SYSTEM_CA=1
 HTTP_PROXY="${proxy}"
 HTTPS_PROXY="${proxy}"
 http_proxy="${proxy}"
 https_proxy="${proxy}"
-NO_PROXY="localhost,127.0.0.1"
-no_proxy="localhost,127.0.0.1"
+NO_PROXY="localhost,127.0.0.1,os.iterate.com"
+no_proxy="localhost,127.0.0.1,os.iterate.com"
 GIT_SSL_CAINFO="${ca}"
 SSL_CERT_FILE="${ca}"
 SSL_CERT_DIR="${mitmDir}"
