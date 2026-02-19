@@ -119,7 +119,7 @@ Replace `getLatestMachineEvents()` + `getMachinePendingConsumers()` with single 
 5. Admin UI timeline panel
 6. Machine router integration (replace two helpers)
 
-Note: the pgmq table does have `headers
+Note: the pgmq table does have `headers` so maybe we can use that for some of this?
 
 ## /admin/outbox page
 
