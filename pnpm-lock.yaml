@@ -147,49 +147,6 @@ importers:
         specifier: ^4.1.13
         version: 4.1.13
 
-  apps/cli:
-    dependencies:
-      '@iterate-com/daemon':
-        specifier: workspace:*
-        version: link:../daemon
-      '@slack/web-api':
-        specifier: ^7.13.0
-        version: 7.13.0
-      '@trpc/server':
-        specifier: ^11.4.3
-        version: 11.7.2(typescript@5.9.3)
-      dedent:
-        specifier: ^1.7.0
-        version: 1.7.0
-      ms:
-        specifier: 4.0.0-nightly.202508271359
-        version: 4.0.0-nightly.202508271359
-      replicate:
-        specifier: ^1.4.0
-        version: 1.4.0
-      resend:
-        specifier: ^6.8.0
-        version: 6.8.0
-      trpc-cli:
-        specifier: ^0.12.2
-        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
-      zod:
-        specifier: ^4.1.11
-        version: 4.1.13
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.10.1
-      tsx:
-        specifier: ^4.20.6
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.15
-        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-
   apps/daemon:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
@@ -426,6 +383,9 @@ importers:
       motion:
         specifier: ^12.24.12
         version: 12.24.12(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      ms:
+        specifier: 4.0.0-nightly.202508271359
+        version: 4.0.0-nightly.202508271359
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
@@ -450,6 +410,12 @@ importers:
       remark-stringify:
         specifier: ^11.0.0
         version: 11.0.0
+      replicate:
+        specifier: ^1.4.0
+        version: 1.4.0
+      resend:
+        specifier: ^6.8.0
+        version: 6.8.0
       schematch:
         specifier: 0.2.1
         version: 0.2.1
@@ -483,6 +449,9 @@ importers:
       tokenlens:
         specifier: ^1.3.1
         version: 1.3.1
+      trpc-cli:
+        specifier: 0.12.4
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -848,6 +817,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      cron-parser:
+        specifier: ^5.5.0
+        version: 5.5.0
       date-fns:
         specifier: ^4.1.0
         version: 4.1.0
@@ -936,8 +908,8 @@ importers:
         specifier: ^1.0.2
         version: 1.0.2
       trpc-cli:
-        specifier: 0.12.3
-        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        specifier: 0.12.4
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -1103,8 +1075,8 @@ importers:
         specifier: ^2.2.2
         version: 2.2.6
       trpc-cli:
-        specifier: 0.12.3
-        version: 0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        specifier: 0.12.4
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -7262,6 +7234,10 @@ packages:
   crelt@1.0.6:
     resolution: {integrity: sha512-VQ2MBenTq1fWZUH9DJNGti7kKv6EeAuYr3cLwxUWhIu1baTaXh4Ib5W2CqHVqib4/MqbYGJqiL3Zb8GJZr3l4g==}
 
+  cron-parser@5.5.0:
+    resolution: {integrity: sha512-oML4lKUXxizYswqmxuOCpgFS8BNUJpIu6k/2HVHyaL8Ynnf3wdf9tkns0yRdJLSIjkJ+b0DXHMZEHGpMwjnPww==}
+    engines: {node: '>=18'}
+
   cron@4.4.0:
     resolution: {integrity: sha512-fkdfq+b+AHI4cKdhZlppHveI/mgz2qpiYxcm+t5E5TsxX7QrLS1VE0+7GENEk9z0EeGPcpSciGv6ez24duWhwQ==}
     engines: {node: '>=18.x'}
@@ -11042,8 +11018,8 @@ packages:
       zod:
         optional: true
 
-  trpc-cli@0.12.3:
-    resolution: {integrity: sha512-yfYgIhV26bSYWZhmfWCIa0g/p2OuhaA1oXC47BWDMrjONlDYMFj+86lFwXXwn+e/Nf6HFmS/92/WZr/ft3nqmg==}
+  trpc-cli@0.12.4:
+    resolution: {integrity: sha512-Yo2Ob5J7hUZSWZ2A1M9Kb+0qfSxwmcmYIs3kkQyLd3sn0qU4ryGzNsySfrY3+urqp6FnDnIIdbCSqC9BKxK6Ag==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -19165,6 +19141,10 @@ snapshots:
 
   crelt@1.0.6: {}
 
+  cron-parser@5.5.0:
+    dependencies:
+      luxon: 3.7.2
+
   cron@4.4.0:
     dependencies:
       '@types/luxon': 3.7.1
@@ -23550,7 +23530,7 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.13
 
-  trpc-cli@0.12.3(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
@@ -23560,6 +23540,17 @@ snapshots:
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.12
+
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13):
+    dependencies:
+      commander: 14.0.2
+    optionalDependencies:
+      '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      effect: 3.19.14
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.1.13
 
   ts-algebra@2.0.0: {}
 

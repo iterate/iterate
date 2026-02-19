@@ -8,7 +8,7 @@ size: medium
 
 ## Problem
 
-The `iterate tool email` command can currently send emails to anyone from `@alpha.iterate.com`. This could be abused for spam/scam emails.
+The `iterate tool exec-js` command can currently send emails to anyone from `@alpha.iterate.com`. This could be abused for spam/scam emails.
 
 ## Solution
 
