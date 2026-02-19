@@ -4,10 +4,21 @@
 
 // before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sql } from "drizzle-orm";
 import { initTRPC, type AnyTRPCRouter, type AnyTRPCProcedure } from "@trpc/server";
 import { z } from "zod/v4";
 import { logger } from "../tag-logger.ts";
+
+// Tracks the current consumer execution context so that events emitted
+// inside a consumer handler automatically get `context.causedBy` populated.
+export type OutboxCausation = {
+  eventId: number;
+  consumerName: string;
+  jobId: number | string;
+};
+
+export const outboxALS = new AsyncLocalStorage<OutboxCausation>();
 
 // Minimal DB interface - just needs to run raw SQL via drizzle's execute
 
@@ -39,8 +50,15 @@ export const InsertedEvent = z.looseObject({
   id: z.string(),
 });
 
+export type TimePeriod = `${number}s`;
+const periodSeconds = (period: TimePeriod): number => {
+  if (!period.match(/^\d+s$/))
+    throw new Error(`Expected period in seconds e.g. 123s, got ${period}`);
+  return Number(period.replace("s", ""));
+};
+
 export type WhenFn<Payload> = (params: { payload: Payload }) => boolean | null | undefined | "";
-export type DelayFn<Payload> = (params: { payload: Payload }) => number;
+export type DelayFn<Payload> = (params: { payload: Payload }) => TimePeriod;
 
 export type DBLike = { execute: (...args: any[]) => Promise<any> };
 export type Transactable<D extends DBLike> = DBLike & {
@@ -51,7 +69,7 @@ type RetryFn = (
   job: ConsumerJobQueueMessage,
 ) =>
   | { retry: false; reason: string; delay?: never }
-  | { retry: true; reason: string; delay: number };
+  | { retry: true; reason: string; delay: TimePeriod };
 
 export type ConsumerDefinition<Payload> = {
   /** consumer name */
@@ -63,7 +81,7 @@ export type ConsumerDefinition<Payload> = {
   /** visibility timeout in seconds. extend this for long-running handlers
    * to prevent the message from becoming visible again mid-processing.
    * default queue VT is 30s. */
-  visibilityTimeout?: number;
+  visibilityTimeout?: TimePeriod;
   /** handler function */
   handler: (params: {
     eventName: string;
@@ -86,7 +104,7 @@ export interface Queuer<DBConnection> {
   enqueue: (
     db: DBConnection,
     params: { name: string; payload: { input: unknown; output: unknown } },
-  ) => Promise<{ eventId: string; matchedConsumers: number }>;
+  ) => Promise<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>;
 
   consumers: ConsumersRecord;
 
@@ -148,16 +166,26 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
-              vt => ${consumer.visibilityTimeout}::integer
+              vt => ${periodSeconds(consumer.visibilityTimeout)}::integer
             )
           `);
         }
-        const result = await consumer.handler({
+        const causation: OutboxCausation = {
           eventId: job.message.event_id,
-          eventName: job.message.event_name,
-          payload: job.message.event_payload as { input: unknown; output: unknown },
-          job: { id: job.msg_id, attempt: job.read_ct },
-        });
+          consumerName: consumer.name,
+          jobId: job.msg_id,
+        };
+        // Bind to const so TS narrows inside the closure
+        const _consumer = consumer;
+        const _job = job;
+        const result = await outboxALS.run(causation, () =>
+          _consumer.handler({
+            eventId: _job.message.event_id,
+            eventName: _job.message.event_name,
+            payload: _job.message.event_payload as { input: unknown; output: unknown },
+            job: { id: _job.msg_id, attempt: _job.read_ct },
+          }),
+        );
         results.push(result);
         await db.execute(sql`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
@@ -205,12 +233,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           );
           if (!archived.rows[0]) throw new Error(`Failed to archive message ${job.msg_id}`);
         } else {
-          logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay} seconds`);
+          logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay}`);
           await db.execute(sql`
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
-              vt => ${retry.delay}::integer
+              vt => ${periodSeconds(retry.delay)}::integer
             )
           `);
         }
@@ -227,10 +255,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`[outbox] adding to pgmq:${params.name}`);
+    const causation = outboxALS.getStore();
+    const context = causation ? { causedBy: causation } : {};
     const insertResult = normalizeResult(
       await db.execute(sql`
-        insert into outbox_event (name, payload)
-        values (${params.name}, ${JSON.stringify(params.payload)})
+        insert into outbox_event (name, payload, context)
+        values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
         returning id
       `),
     );
@@ -243,7 +273,10 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       `[outbox] Path: ${params.name}. Consumers: ${consumersForPath.length}. Filtered: ${filteredConsumers.map((c) => c.name).join(",")}`,
     );
 
+    const delays: TimePeriod[] = [];
     for (const consumer of filteredConsumers) {
+      const delay = consumer.delay({ payload: params.payload });
+      delays.push(delay);
       await db.execute(sql`
         select from pgmq.send(
           queue_name  => ${queueName}::text,
@@ -253,15 +286,15 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             event_name: params.name,
             event_id: Number(eventInsertion.id satisfies string),
             event_payload: params.payload,
-            event_context: {},
+            event_context: context,
             processing_results: [],
             environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
           } satisfies ConsumerEvent)}::jsonb,
-          delay => ${consumer.delay({ payload: params.payload })}::integer
+          delay => ${periodSeconds(delay)}::integer
         )
       `);
     }
-    return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length };
+    return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length, delays };
   };
 
   return {
@@ -339,10 +372,11 @@ export const defaultRetryFn: RetryFn = (job) => {
   if (job.read_ct > 5) {
     return { retry: false, reason: "max retries reached" };
   }
-  const delay = Math.ceil(2 ** Math.max(0, job.read_ct - 1) * (0.9 + Math.random() * 0.2));
+  const delaySeconds = Math.ceil(2 ** Math.max(0, job.read_ct - 1) * (0.9 + Math.random() * 0.2));
+  const delay: TimePeriod = `${delaySeconds}s`;
   return {
     retry: true,
-    reason: `attempt ${job.read_ct} setting to visible in ${delay} seconds`,
+    reason: `attempt ${job.read_ct} setting to visible in ${delay}`,
     delay,
   };
 };
@@ -384,7 +418,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     delay?: DelayFn<EventTypes[P]>;
     retry?: RetryFn;
     /** visibility timeout in seconds for long-running handlers (default: 30s from pgmq.read) */
-    visibilityTimeout?: number;
+    visibilityTimeout?: TimePeriod;
     handler: (params: {
       eventName: P;
       eventId: number;
@@ -394,11 +428,11 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   }) => {
     queuer.consumers[`eventName:${options.on}`] ||= {};
     const consumersForEvent: ConsumersForEvent = queuer.consumers[`eventName:${options.on}`];
-    consumersForEvent[`consumerName:${options.name}`] = {
+    const def: ConsumerDefinition<EventTypes[P]> = {
       name: options.name,
-      when: (options.when as WhenFn<{}>) ?? (() => true),
-      delay: (options.delay as DelayFn<{}>) ?? (() => 0),
-      retry: options.retry ?? defaultRetryFn,
+      when: options.when || (() => true),
+      delay: options.delay || (() => "0s"),
+      retry: options.retry || defaultRetryFn,
       visibilityTimeout: options.visibilityTimeout,
       handler: async (params) => {
         return options.handler({
@@ -409,6 +443,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
         });
       },
     };
+    consumersForEvent[`consumerName:${options.name}`] = def as ConsumerDefinition<{}>;
   };
 
   const send = async <Name extends EventName>(
@@ -425,10 +460,14 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       name: eventName,
       payload: payload as never,
     });
-    if (addResult.matchedConsumers > 0) {
+    for (const delay of new Set(addResult.delays)) {
+      // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
+      let delayMs = periodSeconds(delay) * 1000;
+      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
+      if (delayMs > 120_000) continue; // don't bother with super long delays
       waitUntil(
         (async () => {
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
           return queuer.processQueue(connections.parent as DBConnection);
         })(),
       );

@@ -11,11 +11,16 @@ import {
   publicProcedure,
 } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { waitUntil, type CloudflareEnv } from "../../../env.ts";
+import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
+import { outboxClient } from "../../outbox/client.ts";
+import {
+  getLatestMachineEvents,
+  getMachinePendingConsumers,
+} from "../../utils/machine-metadata.ts";
 import {
   buildCanonicalMachineIngressUrl,
   getIngressSchemeFromPublicUrl,
@@ -167,8 +172,18 @@ export const machineRouter = router({
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
-      // Enrich each machine with provider info
-      return Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env)));
+      // Enrich each machine with provider info + latest event + pending consumers
+      const machineIds = machines.map((m) => m.id);
+      const [enriched, eventMap, consumerMap] = await Promise.all([
+        Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env))),
+        getLatestMachineEvents(ctx.db, machineIds),
+        getMachinePendingConsumers(ctx.db, machineIds),
+      ]);
+      return enriched.map((m) => ({
+        ...m,
+        lastEvent: eventMap.get(m.id) ?? null,
+        pendingConsumers: consumerMap.get(m.id) ?? [],
+      }));
     }),
 
   // Get machine by ID
@@ -193,7 +208,16 @@ export const machineRouter = router({
         });
       }
 
-      return enrichMachineWithProviderInfo(m, ctx.env);
+      const [enriched, eventMap, consumerMap] = await Promise.all([
+        enrichMachineWithProviderInfo(m, ctx.env),
+        getLatestMachineEvents(ctx.db, [m.id]),
+        getMachinePendingConsumers(ctx.db, [m.id]),
+      ]);
+      return {
+        ...enriched,
+        lastEvent: eventMap.get(m.id) ?? null,
+        pendingConsumers: consumerMap.get(m.id) ?? [],
+      };
     }),
 
   // Get provider-level state (e.g., Daytona sandbox state)
@@ -247,20 +271,13 @@ export const machineRouter = router({
           db: ctx.db,
           env: ctx.env,
           projectId: ctx.project.id,
-          organizationId: ctx.organization.id,
-          organizationSlug: ctx.organization.slug,
-          projectSlug: ctx.project.slug,
           name: input.name,
           metadata: input.metadata,
         });
 
-        // Provision in background — the DB record is already created
-        if (result.provisionPromise) {
-          waitUntil(result.provisionPromise);
-        }
-
-        // Return machine API key when available
-        if (result.apiKey) {
+        // Return apiKey only for docker machines — user needs this to configure their local daemon.
+        // Cloud machines get the apiKey via provisioning env vars, no need to expose it in the response.
+        if (result.machine.type === "docker") {
           return { ...result.machine, apiKey: result.apiKey };
         }
 
@@ -321,24 +338,22 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { runtime, machine } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
         ctx.env,
       );
 
-      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
-      const updatedMetadata = {
-        ...((machine.metadata as Record<string, unknown>) ?? {}),
-        daemonStatus: "restarting",
-        daemonReadyAt: null,
-      };
-
-      await ctx.db
-        .update(schema.machine)
-        .set({ metadata: updatedMetadata })
-        .where(eq(schema.machine.id, input.machineId));
+      // Emit restart event — UI derives "Restarting..." from this
+      await outboxClient.send(
+        { transaction: ctx.db, parent: ctx.db },
+        "machine:restart-requested",
+        {
+          machineId: input.machineId,
+          projectId: ctx.project.id,
+        },
+      );
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");
@@ -365,24 +380,22 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { runtime, machine } = await getProviderForMachine(
+      const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
         input.machineId,
         ctx.env,
       );
 
-      // Set daemonStatus to "restarting" so UI shows "Restarting..." until daemon reports ready
-      const updatedMetadata = {
-        ...((machine.metadata as Record<string, unknown>) ?? {}),
-        daemonStatus: "restarting",
-        daemonReadyAt: null,
-      };
-
-      await ctx.db
-        .update(schema.machine)
-        .set({ metadata: updatedMetadata })
-        .where(eq(schema.machine.id, input.machineId));
+      // Emit restart event — UI derives "Restarting..." from this
+      await outboxClient.send(
+        { transaction: ctx.db, parent: ctx.db },
+        "machine:restart-requested",
+        {
+          machineId: input.machineId,
+          projectId: ctx.project.id,
+        },
+      );
 
       // Broadcast invalidation immediately so UI updates to show "Restarting..."
       const { broadcastInvalidation } = await import("../../utils/query-invalidation.ts");

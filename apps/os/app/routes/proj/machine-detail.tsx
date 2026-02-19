@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   Globe,
+  List,
   RefreshCw,
   TerminalSquare,
   Trash2,
@@ -20,6 +21,7 @@ import { SerializedObjectCodeBlock } from "../../components/serialized-object-co
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
 import { buildProjectIngressLink } from "../../lib/project-ingress-link.ts";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -52,10 +54,6 @@ type MachineMetadata = {
   fly?: {
     machineId?: string;
   };
-  daemonStatus?: "ready" | "error" | "restarting" | "stopping" | "verifying" | "retrying";
-  daemonReadyAt?: string;
-  daemonStatusMessage?: string;
-  provisioningError?: string;
 } & Record<string, unknown>;
 
 type ProviderDetailLink = {
@@ -128,6 +126,8 @@ function MachineDetailPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const { user } = useSessionUser();
+  const isAdmin = user.role === "admin";
 
   const machineQueryKey = trpc.machine.byId.queryKey({
     projectSlug: params.projectSlug,
@@ -210,7 +210,15 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
-        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
+        // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+        // or machine:daemon-status-reported, disabling the query permanently.
+        // Fix: fetch all events for the machine (not just lastEvent), then check
+        // events.has("machine:activated"). That way even detached machines still
+        // render their agents list, which is useful.
+        enabled:
+          machine.state === "active" &&
+          (machine.lastEvent?.name === "machine:activated" ||
+            machine.lastEvent?.name === "machine:probe-succeeded"),
         refetchInterval: 10000,
       },
     ),
@@ -373,16 +381,12 @@ function MachineDetailPage() {
     };
   })();
 
+  const lastEventName = machine.lastEvent?.name;
+  const lastEventPayload = machine.lastEvent?.payload;
   const issueMessage =
-    metadata.provisioningError ??
-    ((metadata.daemonStatus === "error" ||
-      metadata.daemonStatus === "retrying" ||
-      metadata.daemonStatus === "verifying") &&
-    metadata.daemonStatusMessage
-      ? metadata.daemonStatusMessage
-      : null);
-  const daemonStatusForDisplay =
-    metadata.daemonStatus === "retrying" ? "verifying" : metadata.daemonStatus;
+    lastEventName === "machine:probe-failed" && lastEventPayload?.detail
+      ? String(lastEventPayload.detail)
+      : null;
 
   const machineJson = JSON.stringify(machine, null, 2);
 
@@ -414,9 +418,8 @@ function MachineDetailPage() {
             <dd className="mt-1">
               <DaemonStatus
                 state={machine.state}
-                daemonStatus={daemonStatusForDisplay}
-                daemonReadyAt={metadata.daemonReadyAt}
-                daemonStatusMessage={metadata.daemonStatusMessage}
+                lastEvent={machine.lastEvent}
+                pendingConsumers={machine.pendingConsumers}
               />
             </dd>
           </div>
@@ -482,6 +485,17 @@ function MachineDetailPage() {
             <Trash2 className="h-4 w-4" />
             Delete
           </Button>
+          {isAdmin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link
+                to="/admin/outbox"
+                search={{ payload: JSON.stringify({ machineId: params.machineId }), sort: "asc" }}
+              >
+                <List className="h-4 w-4" />
+                Outbox Events
+              </Link>
+            </Button>
+          )}
         </div>
 
         <div>
@@ -556,7 +570,7 @@ function MachineDetailPage() {
 
         {!agentsLoading && agents.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            {machine.state === "active" && metadata.daemonStatus === "ready"
+            {machine.state === "active" && lastEventName === "machine:activated"
               ? "No agents found."
               : "Agents appear once the machine is active and daemon is ready."}
           </p>

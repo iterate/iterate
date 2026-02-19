@@ -2,6 +2,7 @@ import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CronExpressionParser } from "cron-parser";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
@@ -852,3 +853,49 @@ if (devTunnel && worker.url) {
 }
 
 if (!app.local) process.exit(0);
+
+// Simulate Cloudflare's cron trigger for the outbox queue in local dev.
+// workerd doesn't fire `scheduled()` locally, so we hit the endpoint via HTTP
+// (same approach as v2025 SDK CLI). Without this, delayed consumer messages
+// (e.g. sendReadinessProbe's 60s delay) sit in the queue until manually processed.
+if (isDevelopment && worker.url) {
+  const loops = Object.entries(workerCrons).map(([name, cron]) => {
+    let runs = 0;
+    const expression = CronExpressionParser.parse(cron, { tz: "UTC" });
+    const fn = async () => {
+      while (expression.hasNext()) {
+        let next: ReturnType<typeof expression.next> | null = expression.next();
+        while (next && next.getTime() < Date.now()) {
+          console.warn(
+            `Cron ${name} is overdue ("next" at ${next}, now is ${new Date()}). Skipping.`,
+          );
+          next = expression.hasNext() ? expression.next() : (null as never);
+          continue;
+        }
+        if (!next) {
+          console.error(`Cron ${name} has no next run. Stopping loop.`);
+          break;
+        }
+        const waitMs = next.getTime() - Date.now();
+        if (runs++ <= 10) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
+        if (runs === 10) console.log(`(Future runs only logged on failure)`);
+
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const url = new URL("/cdn-cgi/handler/scheduled", worker.url);
+        url.searchParams.set("cron", cron);
+        await fetch(url.toString(), { redirect: "manual" })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(`${res.url} ${res.status} ${await res.clone().text()}`);
+          })
+          .catch((e) => {
+            console.error(`Failed to fetch scheduled URL for cron ${name}:`, e);
+          });
+      }
+    };
+    return { name, cron, expression, fn };
+  });
+  for (const loop of loops) {
+    console.log(`Starting cron loop for ${loop.name}: ${loop.cron}`);
+    loop.fn().catch(() => {});
+  }
+}

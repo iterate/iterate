@@ -628,10 +628,33 @@ export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
 // #endregion ========== Billing ==========
 
 // #region ========== Outbox ==========
-export const outboxEvent = pgTable("outbox_event", (t) => ({
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  name: t.text().notNull(),
-  payload: jsonb().$type<Record<string, unknown>>().notNull(),
-  ...withTimestamps,
-}));
+export type OutboxEventContext = {
+  causedBy?: {
+    eventId: number;
+    consumerName: string;
+    jobId: number | string;
+  };
+};
+
+export const outboxEvent = pgTable(
+  "outbox_event",
+  (t) => ({
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    name: t.text().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    context: jsonb().$type<OutboxEventContext>().notNull().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    index("outbox_event_machine_id_name_id_idx").using(
+      "btree",
+      sql`(${t.payload}->>'machineId')`,
+      t.name,
+      t.id,
+    ),
+  ],
+);
+
+// NOTE: pgmq.q_consumer_job_queue is managed by pgmq.create() in migration 0017/0018.
+// Its JSONB index is added as raw SQL in migration 0022.
 // #endregion ========== Outbox ==========

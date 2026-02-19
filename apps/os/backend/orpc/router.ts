@@ -144,66 +144,17 @@ export const reportStatus = os.machines.reportStatus
 
     const { status, message } = input;
 
-    // Update machine metadata to mark daemon as ready
-    const updatedMetadata = {
-      ...((machineWithOrg.metadata as Record<string, unknown>) ?? {}),
-      daemonStatus: status,
-      daemonStatusMessage: message,
-      daemonReadyAt: status === "ready" ? new Date().toISOString() : null,
-    };
+    // Always emit the fact that the daemon reported status.
+    // Consumers decide whether to act (e.g. start the probe pipeline).
+    await outboxClient.send({ transaction: db, parent: db }, "machine:daemon-status-reported", {
+      machineId: machine.id,
+      projectId: machineWithOrg.projectId,
+      status,
+      message: message ?? "",
+      externalId: machineWithOrg.externalId,
+    });
 
-    // If machine is in 'starting' state and daemon reports ready, verify it
-    // actually works before activating. The readiness probe runs async via outbox.
-    if (status === "ready" && machineWithOrg.state === "starting") {
-      const currentMetadata = (machineWithOrg.metadata as Record<string, unknown>) ?? {};
-      const alreadyVerifying = currentMetadata.daemonStatus === "verifying";
-      const verifyingMetadata = {
-        ...currentMetadata,
-        daemonStatus: "verifying",
-        daemonStatusMessage: "Running readiness probe...",
-        daemonReadyAt: null,
-      };
-
-      if (!machineWithOrg.externalId) {
-        await db
-          .update(schema.machine)
-          .set({ metadata: verifyingMetadata })
-          .where(eq(schema.machine.id, machine.id));
-
-        logger.info("Deferring readiness probe until machine provisioning completes", {
-          machineId: machine.id,
-          projectId: machineWithOrg.projectId,
-        });
-      } else if (!alreadyVerifying) {
-        // Set verifying status and emit event in one transaction
-        await outboxClient.sendTx(db, "machine:verify-readiness", async (tx) => {
-          await tx
-            .update(schema.machine)
-            .set({ metadata: verifyingMetadata })
-            .where(eq(schema.machine.id, machine.id));
-
-          return {
-            payload: {
-              machineId: machine.id,
-              projectId: machineWithOrg.projectId,
-            },
-          };
-        });
-      } else {
-        logger.info("Readiness probe already in progress, skipping duplicate enqueue", {
-          machineId: machine.id,
-          projectId: machineWithOrg.projectId,
-        });
-      }
-    } else {
-      // Just update metadata
-      await db
-        .update(schema.machine)
-        .set({ metadata: updatedMetadata })
-        .where(eq(schema.machine.id, machine.id));
-
-      logger.info("Machine daemon status updated", { machineId: machine.id, status });
-    }
+    logger.info("Machine daemon status reported", { machineId: machine.id, status });
 
     // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(

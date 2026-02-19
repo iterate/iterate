@@ -1,0 +1,8 @@
+{
+  "global": {
+    "osBaseUrl": "https://os.iterate.com",
+    "daemonBaseUrl": "http://localhost:3000",
+    "adminPasswordEnvVarName": "SORRY_NO",
+    "userEmail": "nobody@nustom.com"
+  }
+}

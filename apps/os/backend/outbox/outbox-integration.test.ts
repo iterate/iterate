@@ -66,7 +66,7 @@ describe("outbox integration", () => {
       name: "alwaysFails",
       on: "test:fail",
       retry: (job) => {
-        if (job.read_ct <= 3) return { retry: true, reason: "keep trying", delay: 0 };
+        if (job.read_ct <= 3) return { retry: true, reason: "keep trying", delay: "0s" };
         return { retry: false, reason: "giving up" };
       },
       handler: () => {

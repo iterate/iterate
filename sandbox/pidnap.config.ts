@@ -24,12 +24,14 @@ const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
 const proxyEnv: Record<string, string> = skipProxy
   ? {}
   : {
+      NODE_USE_ENV_PROXY: "1",
+      NODE_USE_SYSTEM_CA: "1",
       HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
       HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
       http_proxy: `http://127.0.0.1:${proxyPort}`,
       https_proxy: `http://127.0.0.1:${proxyPort}`,
-      NO_PROXY: "localhost,127.0.0.1",
-      no_proxy: "localhost,127.0.0.1",
+      NO_PROXY: "localhost,127.0.0.1,os.iterate.com",
+      no_proxy: "localhost,127.0.0.1,os.iterate.com",
       SSL_CERT_FILE: caCert,
       SSL_CERT_DIR: mitmproxyDir,
       REQUESTS_CA_BUNDLE: caCert,

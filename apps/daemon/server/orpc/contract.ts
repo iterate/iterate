@@ -70,7 +70,7 @@ export const workerContract = oc.router({
           }),
         ),
         /**
-         * When true, skip setting proxy env vars (HTTPS_PROXY, HTTP_PROXY, NODE_USE_ENV_PROXY).
+         * When true, skip setting proxy env vars (HTTPS_PROXY, HTTP_PROXY, NODE_USE_ENV_PROXY, NODE_USE_SYSTEM_CA).
          * Used when DANGEROUS_RAW_SECRETS_ENABLED is set and secrets are returned raw.
          */
         skipProxy: z.boolean().optional(),

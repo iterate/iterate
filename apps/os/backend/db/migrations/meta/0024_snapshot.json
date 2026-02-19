@@ -1,6 +1,6 @@
 {
-  "id": "93d1fc6c-7ac5-47e5-9323-c3ccf933e452",
-  "prevId": "5bf18210-3e14-4fa3-923e-c52a8d5123d7",
+  "id": "846734e4-f60b-44e6-ae1f-05e4d91fdaf1",
+  "prevId": "273b3024-e802-4878-adba-b65196e23352",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -822,8 +822,7 @@
           "name": "type",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'daytona'"
+          "notNull": true
         },
         "state": {
           "name": "state",
@@ -1217,6 +1216,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "context": {
+          "name": "context",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1300,8 +1306,7 @@
           "name": "sandbox_provider",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'daytona'"
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
