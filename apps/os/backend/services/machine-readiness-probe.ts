@@ -4,7 +4,7 @@ import type { CloudflareEnv } from "../../env.ts";
 import type * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
-const PROBE_THREAD_ID = "__readiness-probe__";
+export const PROBE_THREAD_ID = "__readiness-probe__";
 const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
 const POLL_INTERVAL_MS = 3_000;
 const SEND_RETRY_INTERVAL_MS = 3_000;
@@ -13,30 +13,9 @@ const SEND_MAX_WAIT_MS = 60_000;
 const MAX_WAIT_MS = 120_000;
 
 /**
- * Smoke-test a machine by sending a webchat message and waiting for a valid response.
- * Returns true if the machine responds with something containing "3" or "three".
+ * Build a fetcher that can reach the daemon HTTP server inside the sandbox.
  */
-export async function probeMachineReadiness(
-  machine: typeof schema.machine.$inferSelect,
-  env: CloudflareEnv,
-): Promise<{ ok: boolean; detail: string }> {
-  const fetcher = await buildPreviewFetcher(machine, env);
-  if (!fetcher) {
-    return { ok: false, detail: "Could not build preview fetcher for machine" };
-  }
-
-  // 1. Send the probe message via webchat webhook (retries with fresh messageId each attempt)
-  const sendResult = await sendProbeMessage(fetcher);
-  if (!sendResult.ok) {
-    return { ok: false, detail: `Failed to send probe: ${sendResult.detail}` };
-  }
-
-  // 2. Poll for a response containing "3" or "three"
-  const pollResult = await pollForAnswer(fetcher, sendResult.threadId);
-  return pollResult;
-}
-
-async function buildPreviewFetcher(
+export async function buildMachineFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
 ): Promise<SandboxFetcher | null> {
@@ -49,7 +28,7 @@ async function buildPreviewFetcher(
     });
     return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[readiness-probe] Failed to build preview fetcher", {
+    logger.warn("[readiness-probe] Failed to build machine fetcher", {
       machineId: machine.id,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -57,14 +36,14 @@ async function buildPreviewFetcher(
   }
 }
 
-async function sendProbeMessage(
+/**
+ * Send a single readiness probe message via the webchat webhook.
+ * Retries transient errors (5xx, connection failures) for up to 60s.
+ * Returns the threadId and messageId on success.
+ */
+export async function sendProbeMessage(
   fetcher: SandboxFetcher,
 ): Promise<{ ok: true; threadId: string; messageId: string } | { ok: false; detail: string }> {
-  // Retry the initial send — the daemon may still be booting internal services
-  // (e.g. OpenCode server) even though its HTTP server is already accepting
-  // connections, so 5xx / connection-refused are expected for a short window.
-  // Each attempt uses a fresh messageId so the daemon's dedup logic doesn't
-  // silently swallow retries after a failed first attempt that stored the event.
   const deadline = Date.now() + SEND_MAX_WAIT_MS;
   let lastDetail = "";
 
@@ -120,10 +99,15 @@ async function sendProbeMessage(
   return { ok: false, detail: `Send failed after ${SEND_MAX_WAIT_MS / 1000}s: ${lastDetail}` };
 }
 
-async function pollForAnswer(
+/**
+ * Poll for a valid response to the readiness probe.
+ * Looks for an assistant message containing "3" or "three" in the probe thread.
+ * Polls every 3s for up to 120s.
+ */
+export async function pollForProbeAnswer(
   fetcher: SandboxFetcher,
   threadId: string,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: true; responseText: string } | { ok: false; detail: string }> {
   const url = `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`;
   const deadline = Date.now() + MAX_WAIT_MS;
 
@@ -149,8 +133,6 @@ async function pollForAnswer(
       };
 
       const messages = data.messages ?? [];
-
-      // Look for an assistant message that came after our probe
       const assistantMessages = messages.filter((m) => m.role === "assistant");
 
       for (const msg of assistantMessages) {
@@ -158,13 +140,11 @@ async function pollForAnswer(
         if (text.includes("3") || text.includes("three")) {
           return {
             ok: true,
-            detail: `Got valid response: "${msg.text.slice(0, 100)}"`,
+            responseText: msg.text.slice(0, 100),
           };
         }
       }
 
-      // If there are assistant messages but none match, keep polling —
-      // the agent might still be working on it
       if (assistantMessages.length > 0) {
         logger.info("[readiness-probe] Got assistant response but no valid answer yet", {
           threadId,

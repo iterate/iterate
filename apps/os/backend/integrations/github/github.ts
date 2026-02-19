@@ -878,22 +878,16 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
         (activeMachine.metadata as Record<string, unknown>) ?? {},
       );
 
-      const result = await createMachineForProject({
+      await createMachineForProject({
         db,
         env,
         projectId: project.id,
-        organizationId: project.organizationId,
-        organizationSlug: project.organization.slug,
-        projectSlug: project.slug,
         name: machineName,
         metadata: {
           ...carriedMetadata,
           ...(snapshotName ? { snapshotName } : {}),
         },
       });
-      if (result.provisionPromise) {
-        waitUntil(result.provisionPromise);
-      }
 
       logger.info("[GitHub Webhook] Created machine", {
         projectId: project.id,
@@ -1004,13 +998,10 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
         (activeMachine.metadata as Record<string, unknown>) ?? {},
       );
 
-      const result = await createMachineForProject({
+      await createMachineForProject({
         db,
         env,
         projectId: project.id,
-        organizationId: project.organizationId,
-        organizationSlug: project.organization.slug,
-        projectSlug: project.slug,
         name: machineName,
         metadata: {
           ...carriedMetadata,
@@ -1019,9 +1010,6 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
           triggeredByUser: comment.user.login,
         },
       });
-      if (result.provisionPromise) {
-        waitUntil(result.provisionPromise);
-      }
 
       logger.info("[GitHub Webhook] Created machine from comment", {
         projectId: project.id,

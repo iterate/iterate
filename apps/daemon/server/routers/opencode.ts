@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
+import { inspect } from "node:util";
+import { readFileSync } from "node:fs";
 import { Hono } from "hono";
-import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk";
+import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { PromptAddedEvent } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { trpcRouter } from "../trpc/router.ts";
@@ -50,8 +52,8 @@ opencodeRouter.post("/new", async (c) => {
 
   const workingDirectory = getOpencodeWorkingDirectory();
   const response = await opencodeClient.session.create({
-    query: { directory: workingDirectory },
-    body: { title: `Agent: ${agentPath}` },
+    directory: workingDirectory,
+    title: `Agent: ${agentPath}`,
   });
 
   if (!response.data) {
@@ -84,11 +86,28 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
     return c.json({ error: "Expected an iterate:agent:prompt-added event" }, 400);
   }
 
+  const health = await opencodeClient.global.health();
+
+  if (!health.data?.healthy) {
+    return c.json({ error: "OpenCode is not healthy: " + inspect(health?.error) }, 503);
+  }
+
+  let envFileContent: string;
+  try {
+    envFileContent = readFileSync(homedir() + "/.iterate/.env", "utf8");
+  } catch {
+    return c.json({ error: "~/.iterate/.env not found (bootstrap may not have run yet)" }, 503);
+  }
+  if (!envFileContent.includes("ANTHROPIC_API_KEY")) {
+    console.log("ANTHROPIC_API_KEY is not set yet!");
+    return c.json({ error: "ANTHROPIC_API_KEY is not set" }, 503);
+  }
+
   const { message } = parsed.data;
 
   // Fire-and-forget: background the prompt so the caller returns immediately
   void withSpan(
-    "daemon.opencode.append",
+    "daemon.opencode.append-async",
     {
       attributes: {
         "opencode.session_id": opencodeSessionId,
@@ -98,10 +117,10 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
     },
     async () => {
       if (agentPath) agentPathByOpencodeSessionId.set(opencodeSessionId, agentPath);
-      await opencodeClient.session.prompt({
-        path: { id: opencodeSessionId },
-        query: { directory: getOpencodeWorkingDirectory() },
-        body: { parts: [{ type: "text", text: message }] },
+      await opencodeClient.session.promptAsync({
+        sessionID: opencodeSessionId,
+        directory: getOpencodeWorkingDirectory(),
+        parts: [{ type: "text", text: message }],
       });
     },
   ).catch((error) => {
