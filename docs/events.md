@@ -49,6 +49,8 @@ The path structure is `/{app}/{entity}/{past-tense-verb}`.
 
 External vendor events (GitHub webhooks, Slack events, Stripe webhooks) also live under `events.iterate.com`, namespaced by vendor. The path structure mirrors first-party events: `/{vendor}/{entity}/{past-tense-verb}`.
 
+> **Note on namespace collisions:** Third-party vendors share the top-level namespace with first-party apps (e.g. `/github/...` alongside `/os/...`). This is intentional — we control which vendors we integrate with, so collisions are unlikely. If this becomes a concern, we could introduce an `/external/` prefix, but for now the flat structure keeps paths short and readable.
+
 ```
 https://events.iterate.com/github/pull-request/opened
 https://events.iterate.com/github/push/received
@@ -87,6 +89,8 @@ https://events.iterate.com/github/pull-request/opened  ← normalized, for consu
 - Make logs and traces self-describing
 
 This separation keeps the raw audit trail while ensuring domain consumers work with clean, typed events.
+
+> **Note on cardinality:** Event types are explicitly defined in our codebase, not auto-generated from vendor payloads. Raw `webhook-received` events (one per vendor) keep cardinality low and avoid type explosion from arbitrary third-party action strings. Specific typed events are added only when domain logic requires them — each one is a conscious decision, not an automatic transcription of vendor data.
 
 ### Normalizing vendor event names
 
