@@ -264,7 +264,7 @@ export const registerConsumers = () => {
             machineId,
             state: current?.state,
           });
-          return;
+          return false;
         }
 
         // Bulk-detach all active machines for this project
@@ -285,16 +285,12 @@ export const registerConsumers = () => {
           projectId,
         });
 
-        return true as const;
+        return true;
       });
 
-      if (!activated) {
-        return `skipped: state changed during transaction`;
-      }
-
-      logger.info("[activateMachine] Machine activated", { machineId });
-      await broadcastInvalidation(env).catch(() => {});
-      return `machine activated`;
+      logger.info(`[activateMachine] Machine activated:${activated}`, { machineId });
+      if (activated) await broadcastInvalidation(env).catch(() => {});
+      return `machine activated:${activated}`;
     },
   });
 
