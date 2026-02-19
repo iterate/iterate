@@ -202,9 +202,9 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 
 ### Known pitfalls
 
-- **`reportStatus` re-enqueues probes on daemon restart** — if `machine.state === "starting"`, every `reportStatus(ready)` call enqueues another `machine:verify-readiness` message. The guard checks `daemonStatus !== "verifying"` to prevent duplicates, but only after the fix in `apps/os/backend/orpc/router.ts:154`.
+- **Readiness probe pipeline** — machine activation uses a staged event pipeline: `daemon-ready` → `probe-sent` → `probe-succeeded` → `activated`. Each stage is a separate consumer. The `reportStatus` handler emits `machine:daemon-ready` only when daemon reports ready AND `externalId` exists AND `daemonStatus !== "probing"`. If `externalId` is missing (provisioning still running), `machine-creation.ts` emits the deferred `daemon-ready` after provisioning completes. See `apps/os/backend/outbox/consumers.ts` for the full pipeline.
 - **oRPC errors were silent** — prior to adding the `onError` interceptor on `RPCHandler` in `worker.ts`, unhandled errors in oRPC handlers were swallowed into generic 500s with no logging. The `cf-ray` response header can be used to correlate daemon-side errors with CF Worker dashboard logs.
-- **Queue head-of-line blocking** — `processQueue` reads 2 messages at a time by VT order. A stale `verify-readiness` probe (120s timeout) blocks all messages behind it. Archive stale messages via pgmq to unblock.
+- **Queue head-of-line blocking** — `processQueue` reads 2 messages at a time by VT order. A stale probe poll (120s timeout) blocks all messages behind it. Archive stale messages via pgmq to unblock.
 
 ## Pointers
 

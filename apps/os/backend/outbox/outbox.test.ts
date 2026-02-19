@@ -59,11 +59,11 @@ test("internal event types are type-safe", () => {
   );
 });
 
-test("machine:archive event type", () => {
+test("machine:archive-requested event type", () => {
   const db = {} as DBLike;
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
-    "machine:archive",
+    "machine:archive-requested",
     {
       machineId: "mach_123",
       type: "daytona" as const,

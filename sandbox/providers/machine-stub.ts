@@ -175,8 +175,6 @@ function createLocalStub(metadata: Record<string, unknown>): MachineStub {
         metadata: {
           host,
           ports,
-          daemonStatus: "ready",
-          daemonReadyAt: new Date().toISOString(),
         },
       };
     },

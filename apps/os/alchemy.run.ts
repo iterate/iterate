@@ -852,3 +852,15 @@ if (devTunnel && worker.url) {
 }
 
 if (!app.local) process.exit(0);
+
+// Simulate Cloudflare's cron trigger for the outbox queue in local dev.
+// workerd doesn't fire `scheduled()` locally, so we hit the endpoint via HTTP
+// (same approach as v2025 SDK CLI). Without this, delayed consumer messages
+// (e.g. sendReadinessProbe's 60s delay) sit in the queue until manually processed.
+if (isDevelopment && worker.url) {
+  const scheduledUrl = new URL("/cdn-cgi/handler/scheduled", worker.url);
+  scheduledUrl.searchParams.set("cron", workerCrons.processOutboxQueue);
+  setInterval(() => {
+    fetch(scheduledUrl).catch(() => {});
+  }, 60_000);
+}
