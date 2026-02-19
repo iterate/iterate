@@ -29,11 +29,10 @@ Initial setup (writes auth + launcher config):
 
 ```bash
 npx iterate setup \
-  --base-url https://dev-yourname-os.dev.iterate.com \
+  --os-base-url https://dev-yourname-os.dev.iterate.com \
+  --daemon-base-url http://localhost:3001 \
   --admin-password-env-var-name SERVICE_AUTH_TOKEN \
   --user-email dev-yourname@iterate.com \
-  --repo-path managed \
-  --auto-install true \
   --scope global
 ```
 
@@ -51,6 +50,7 @@ npx iterate os project list
 - `iterate install` - force clone/install for resolved checkout
 - `iterate whoami`
 - `iterate os ...`
+- `iterate daemon ...`
 
 `setup --scope global` writes auth + launcher values into `global`; `setup --scope workspace` writes them into `workspaces[process.cwd()]`.
 
@@ -72,11 +72,10 @@ Config shape:
   },
   "workspaces": {
     "/absolute/workspace/path": {
-      "baseUrl": "https://dev-yourname-os.dev.iterate.com",
+      "osBaseUrl": "https://dev-yourname-os.dev.iterate.com",
+      "daemonBaseUrl": "http://localhost:3001",
       "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
-      "userEmail": "dev-yourname@iterate.com",
-      "repoPath": "/absolute/path/to/iterate",
-      "autoInstall": false
+      "userEmail": "dev-yourname@iterate.com"
     }
   }
 }
@@ -116,11 +115,10 @@ You can pin explicitly:
 
 ```bash
 npx iterate setup \
-  --base-url https://dev-yourname-os.dev.iterate.com \
+  --os-base-url https://dev-yourname-os.dev.iterate.com \
+  --daemon-base-url http://localhost:3001 \
   --admin-password-env-var-name SERVICE_AUTH_TOKEN \
   --user-email dev-yourname@iterate.com \
-  --repo-path local \
-  --auto-install false \
   --scope workspace
 ```
 

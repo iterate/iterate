@@ -1,19 +1,93 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import * as prompts from "@clack/prompts";
-import { createTRPCClient, httpLink } from "@trpc/client";
-import { initTRPC } from "@trpc/server";
-import { createAuthClient } from "better-auth/client";
-import { adminClient } from "better-auth/client/plugins";
-import superjson from "superjson";
-import { createCli } from "trpc-cli";
-import { proxify } from "trpc-cli/dist/proxify.js";
-import { z } from "zod/v4";
+import { fileURLToPath } from "node:url";
+
+// --- Local delegation (must run before any heavy imports) ---
+
+/**
+ * Walk up from `startDir` looking for `relativePath` to exist.
+ * Returns the directory where it was found, or null.
+ * @param {string} relativePath
+ * @param {string} [startDir]
+ * @returns {string | null}
+ */
+const findUp = (relativePath, startDir = process.cwd()) => {
+  let dir = resolve(startDir);
+  while (true) {
+    if (existsSync(join(dir, relativePath))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+};
+
+const __filename = fileURLToPath(import.meta.url);
+
+/**
+ * If we're already running from a local version, skip delegation to avoid loops.
+ * Otherwise, find the closest local iterate CLI and re-exec into it.
+ */
+const delegateToLocal = () => {
+  if (process.env.__ITERATE_CLI_DELEGATED) return;
+
+  const selfReal = realpathSync(__filename);
+
+  // 1. Check if we're inside the iterate repo (has pnpm-workspace.yaml at root)
+  const repoRoot = findUp("pnpm-workspace.yaml");
+  if (repoRoot) {
+    const repoScript = join(repoRoot, "packages/iterate/bin/iterate.js");
+    if (existsSync(repoScript) && realpathSync(repoScript) !== selfReal) {
+      reExec(repoScript);
+      return;
+    }
+  }
+
+  // 2. Check for a local node_modules install
+  const nmRoot = findUp("node_modules/.bin/iterate");
+  if (nmRoot) {
+    const nmScript = join(nmRoot, "node_modules/.bin/iterate");
+    if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
+      reExec(nmScript);
+      return;
+    }
+  }
+};
+
+/**
+ * Re-exec into `scriptPath` with the same argv, never returning.
+ * @param {string} scriptPath
+ */
+const reExec = (scriptPath) => {
+  try {
+    execFileSync(process.execPath, [scriptPath, ...process.argv.slice(2)], {
+      stdio: "inherit",
+      env: { ...process.env, __ITERATE_CLI_DELEGATED: "1" },
+    });
+  } catch (e) {
+    process.exit(e && typeof e === "object" && "status" in e ? Number(e.status) || 1 : 1);
+  }
+  process.exit(0);
+};
+
+delegateToLocal();
+
+// --- Normal CLI startup (dynamic imports so delegation can short-circuit first) ---
+
+const prompts = await import("@clack/prompts");
+const { createTRPCClient, httpLink } = await import("@trpc/client");
+const { initTRPC } = await import("@trpc/server");
+const { createAuthClient } = await import("better-auth/client");
+const { adminClient } = await import("better-auth/client/plugins");
+const { default: superjson } = await import("superjson");
+const { createCli } = await import("trpc-cli");
+const { proxify } = await import("trpc-cli/dist/proxify.js");
+const { z } = await import("zod/v4");
 
 const XDG_CONFIG_PARENT = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
@@ -26,16 +100,18 @@ const CONFIG_PATH = XDG_CONFIG_PATH;
 // const CONFIG_SCHEMA_PATH = join(XDG_CONFIG_PARENT, "config-schema.json");
 
 const SetupInput = z.object({
-  baseUrl: z
+  osBaseUrl: z
     .string()
-    .describe(`Base URL for os API (for example https://dev-yourname-os.dev.iterate.com)`),
+    .describe(`Base URL for OS API (for example https://dev-yourname-os.dev.iterate.com)`),
+  daemonBaseUrl: z.string().describe(`Base URL for daemon API (for example http://localhost:3001)`),
   adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  userEmail: z.string().describe("User email to impersonate for os calls"),
+  userEmail: z.string().describe("User email to impersonate for OS calls"),
   scope: z.enum(["workspace", "global"]).describe("Where to store launcher config"),
 });
 
 const AuthConfig = z.object({
-  baseUrl: z.string(),
+  osBaseUrl: z.string(),
+  daemonBaseUrl: z.string(),
   adminPasswordEnvVarName: z.string(),
   userEmail: z.string(),
 });
@@ -43,10 +119,12 @@ const AuthConfig = z.object({
 const ConfigFile = z.object({
   global: AuthConfig.partial().optional(),
   workspaces: z.record(z.string(), AuthConfig).optional(),
+  /** a place where I put old/invalid configs I can't quite let go of */
+  rubbish: z.unknown().optional(),
 });
 
-/** @typedef {z.infer<typeof AuthConfig>} AuthConfig */
-/** @typedef {z.infer<typeof ConfigFile>} ConfigFile */
+/** @typedef {import('zod').infer<typeof AuthConfig>} AuthConfig */
+/** @typedef {import('zod').infer<typeof ConfigFile>} ConfigFile */
 
 /**
  * @typedef {{
@@ -150,8 +228,8 @@ const readAuthConfig = (workspacePath) => {
   const mergedConfig = getMergedWorkspaceConfig(configFile, workspacePath);
   const parsed = AuthConfig.safeParse(mergedConfig);
   if (!parsed.success) {
-    throw new Error(
-      `Config file ${CONFIG_PATH} is missing auth config for ${workspacePath}. Have you run \`iterate setup\`?\n${z.prettifyError(parsed.error)}`,
+    return new Error(
+      `Invalid auth config for ${workspacePath} (in config file ${CONFIG_PATH}). Have you run \`iterate setup\`?\n${z.prettifyError(parsed.error)}`,
     );
   }
   return parsed.data;
@@ -241,12 +319,12 @@ const resolveImpersonationUserId = async ({ superadminAuthClient, userEmail, bas
   return resolvedUserId;
 };
 
-/** @param {z.infer<typeof AuthConfig>} authConfig */
-const authDance = async (authConfig) => {
+/** @param {import('zod').infer<typeof AuthConfig>} authConfig */
+const osAuthDance = async (authConfig) => {
   /** @type {string[] | undefined} */
   let superadminSetCookie;
   const authClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
     },
@@ -268,11 +346,11 @@ const authDance = async (authConfig) => {
   });
 
   const superadminAuthClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
       onRequest: (ctx) => {
-        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("origin", authConfig.osBaseUrl);
         ctx.headers.set("cookie", setCookiesToCookieHeader(superadminSetCookie));
       },
     },
@@ -282,7 +360,7 @@ const authDance = async (authConfig) => {
   const userId = await resolveImpersonationUserId({
     superadminAuthClient,
     userEmail: authConfig.userEmail,
-    baseUrl: authConfig.baseUrl,
+    baseUrl: authConfig.osBaseUrl,
   });
 
   let impersonateSetCookie;
@@ -299,11 +377,11 @@ const authDance = async (authConfig) => {
   const userCookies = setCookiesToCookieHeader(impersonateSetCookie);
 
   const userClient = createAuthClient({
-    baseURL: authConfig.baseUrl,
+    baseURL: authConfig.osBaseUrl,
     fetchOptions: {
       throw: true,
       onRequest: (ctx) => {
-        ctx.headers.set("origin", authConfig.baseUrl);
+        ctx.headers.set("origin", authConfig.osBaseUrl);
         ctx.headers.set("cookie", userCookies);
       },
     },
@@ -326,14 +404,15 @@ const loadAppRouter = async (params) => {
   if (!Array.isArray(router?.procedures)) {
     throw new Error(`${url} returned invalid router: ${JSON.stringify(router)}`);
   }
+  /** @type {{procedures: any[]}} */
   return router;
 };
 
 /** @param {{ baseUrl: string }} params */
-const getRuntimeProcedures = async (params) => {
+const getOsProcedures = async (params) => {
   const appRouter = await loadAppRouter(params);
   /** @type {{}} */
-  const proxiedRouter = proxify(appRouter, async () => {
+  const proxiedRouter = proxify(appRouter.procedures, async () => {
     return createTRPCClient({
       links: [
         httpLink({
@@ -341,7 +420,8 @@ const getRuntimeProcedures = async (params) => {
           transformer: superjson,
           fetch: async (request, init) => {
             const authConfig = readAuthConfig(process.cwd());
-            const { userCookies } = await authDance(authConfig);
+            if (authConfig instanceof Error) throw authConfig;
+            const { userCookies } = await osAuthDance(authConfig);
             const headers = new Headers(init?.headers);
             headers.set("cookie", userCookies);
             return fetch(request, { ...init, headers });
@@ -351,14 +431,80 @@ const getRuntimeProcedures = async (params) => {
     });
   });
 
-  return {
-    whoami: t.procedure.mutation(async () => {
-      const authConfig = readAuthConfig(process.cwd());
-      const { userClient } = await authDance(authConfig);
-      return await userClient.getSession();
-    }),
-    os: proxiedRouter,
+  return proxiedRouter;
+};
+
+/**
+ * Creates a fetch wrapper that calls /api/trpc-stream/* instead of /api/trpc/*.
+ * The streaming endpoint returns SSE: log lines as `event: log` and the final
+ * tRPC response as `event: response`, which we reassemble into a normal Response.
+ * @param {string} daemonBaseUrl
+ * @returns {typeof globalThis.fetch}
+ */
+const streamingFetch = (daemonBaseUrl) => {
+  return async (/** @type {any} */ input, /** @type {any} */ init) => {
+    // Rewrite URL from /api/trpc/X to /api/trpc-stream/X
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const rewritten = url.replace(
+      `${daemonBaseUrl}/api/trpc/`,
+      `${daemonBaseUrl}/api/trpc-stream/`,
+    );
+    const res = await fetch(rewritten, init);
+    if (rewritten === url) return res;
+
+    const contentType = res.headers.get("content-type") || "";
+    // If the daemon didn't respond with SSE, pass through as-is (non-streaming endpoint)
+    if (!contentType.includes("text/event-stream")) return res;
+    // Parse SSE stream: print log events to stderr, collect the final response
+    const reader = res.body?.getReader();
+    if (!reader) return res;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    /** @type {string | null} */
+    let responseBody = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Process complete SSE messages (double newline delimited)
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const lines = part.split("\n");
+        const event = lines[0].split(": ")[1];
+        const data = lines[1].split(": ").slice(1).join(": ");
+        if (event === "log") {
+          /** @type {{level: "debug" | "info" | "warn" | "error"; args: unknown[]}} */
+          const detail = JSON.parse(data);
+          console[detail.level](...detail.args);
+        } else if (event === "response") {
+          responseBody = data;
+        }
+      }
+    }
+    // Reconstruct a normal Response from the final payload so tRPC client is happy
+    return new Response(responseBody, {
+      status: res.status,
+      headers: { "content-type": "application/json" },
+    });
   };
+};
+
+/** @param {{ daemonBaseUrl: string }} params */
+const getDaemonProcedures = async (params) => {
+  const daemonRouter = await loadAppRouter({ baseUrl: params.daemonBaseUrl });
+  const proxiedRouter = proxify(daemonRouter.procedures, async () => {
+    return createTRPCClient({
+      links: [
+        httpLink({
+          url: `${params.daemonBaseUrl}/api/trpc/`,
+          fetch: streamingFetch(params.daemonBaseUrl),
+        }),
+      ],
+    });
+  });
+
+  return proxiedRouter;
 };
 
 const launcherProcedures = {
@@ -382,7 +528,8 @@ const launcherProcedures = {
       writeNewConfig({
         scope: input.scope || "workspace",
         patch: {
-          baseUrl: input.baseUrl,
+          osBaseUrl: input.osBaseUrl,
+          daemonBaseUrl: input.daemonBaseUrl,
           adminPasswordEnvVarName: input.adminPasswordEnvVarName,
           userEmail: input.userEmail,
         },
@@ -394,16 +541,68 @@ const launcherProcedures = {
         current: readAuthConfig(process.cwd()),
       };
     }),
+
+  whoami: t.procedure.mutation(async () => {
+    const authConfig = readAuthConfig(process.cwd());
+    if (authConfig instanceof Error) throw authConfig;
+    const { userClient } = await osAuthDance(authConfig);
+    return await userClient.getSession();
+  }),
 };
 
 const runCli = async () => {
-  const baseUrl = readAuthConfig(process.cwd()).baseUrl;
+  const authConfig = readAuthConfig(process.cwd());
 
-  const runtimeProcedures = await getRuntimeProcedures({ baseUrl });
-  const router = t.router({
-    ...launcherProcedures,
-    ...runtimeProcedures,
-  });
+  /** @type {(problem: string) => (e: Error) => {}} */
+  const errorProcedure = (problem) => (e) => {
+    const message = `${problem}: ${e.message}`;
+    return t.procedure.meta({ description: message }).mutation(() => {
+      throw new Error(problem, { cause: e });
+    });
+  };
+
+  /** @type {import("@trpc/server").AnyRouter[]} */
+  const routers = [t.router(launcherProcedures)];
+
+  if (authConfig instanceof Error) {
+    routers.push(
+      t.router({
+        os: errorProcedure(`Invalid auth config`)(authConfig),
+        daemon: errorProcedure(`Invalid auth config`)(authConfig),
+      }),
+    );
+  } else {
+    const [osProcedures, daemonProcedures] = await Promise.allSettled([
+      getOsProcedures({ baseUrl: authConfig.osBaseUrl }),
+      getDaemonProcedures({ daemonBaseUrl: authConfig.daemonBaseUrl }),
+    ]);
+
+    if (osProcedures.status === "fulfilled") {
+      routers.push(t.router({ os: osProcedures.value }));
+    } else {
+      routers.push(
+        t.router({
+          os: errorProcedure(`Couldn't connect to os at ${authConfig.osBaseUrl}`)(
+            osProcedures.reason,
+          ),
+        }),
+      );
+    }
+    if (daemonProcedures.status === "fulfilled") {
+      // don't nest daemon procedures under "daemon"
+      routers.push(daemonProcedures.value);
+    } else {
+      routers.push(
+        t.router({
+          daemon: errorProcedure(`Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`)(
+            daemonProcedures.reason,
+          ),
+        }),
+      );
+    }
+  }
+
+  const router = t.mergeRouters(...routers);
 
   const cli = createCli({
     router,
