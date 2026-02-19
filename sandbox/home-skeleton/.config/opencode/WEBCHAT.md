@@ -2,26 +2,26 @@
 
 ## Hard Rule: CLI Shape
 
-`iterate tool webchat` takes one arg: JS code.
+`iterate tool exec-js` takes one arg: JS code.
 No subcommands. No CLI flags like `--thread-id`, `--body`, etc.
 
 ```bash
 # valid
-iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "hi" })'
+iterate tool exec-js 'await webchat.postMessage({ threadId: "THREAD_ID", text: "hi" })'
 
 # invalid! ERROR!!!!
-iterate tool webchat send --thread-id THREAD_ID --body "hi"
-iterate tool webchat --thread-id THREAD_ID --body "hi"
-iterate tool webchat postMessage ...
+iterate tool exec-js send --thread-id THREAD_ID --body "hi"
+iterate tool exec-js --thread-id THREAD_ID --body "hi"
+iterate tool exec-js postMessage ...
 ```
 
 ## Quick Reference: Sending Messages
 
-**IMPORTANT:** `iterate tool webchat` takes JavaScript code as its only argument — there are NO subcommands.
+**IMPORTANT:** `iterate tool exec-js` takes JavaScript code as its only argument — there are NO subcommands.
 
 ```bash
 # Reply in a thread (replace THREAD_ID with actual value from the incoming message)
-iterate tool webchat 'await webchat.postMessage({ threadId: "THREAD_ID", text: "Your response here" })'
+iterate tool exec-js 'await webchat.postMessage({ threadId: "THREAD_ID", text: "Your response here" })'
 ```
 
 The `webchat` object is an HTTP client with these methods:
@@ -95,7 +95,7 @@ You will receive one of two message types:
 **Reply to a thread:**
 
 ```bash
-iterate tool webchat 'await webchat.postMessage({
+iterate tool exec-js 'await webchat.postMessage({
   threadId: "THREAD_ID",
   text: "Your response here",
 })'
@@ -104,7 +104,7 @@ iterate tool webchat 'await webchat.postMessage({
 **Add a reaction:**
 
 ```bash
-iterate tool webchat 'await webchat.addReaction({
+iterate tool exec-js 'await webchat.addReaction({
   threadId: "THREAD_ID",
   messageId: "MESSAGE_ID",
   reaction: "thumbsup",
@@ -114,7 +114,7 @@ iterate tool webchat 'await webchat.addReaction({
 **Remove a reaction:**
 
 ```bash
-iterate tool webchat 'await webchat.removeReaction({
+iterate tool exec-js 'await webchat.removeReaction({
   threadId: "THREAD_ID",
   messageId: "MESSAGE_ID",
   reaction: "thumbsup",
@@ -124,7 +124,7 @@ iterate tool webchat 'await webchat.removeReaction({
 **Get thread history (for context):**
 
 ```bash
-iterate tool webchat 'const result = await webchat.getThreadMessages({ threadId: "THREAD_ID" }); console.log(JSON.stringify(result, null, 2))'
+iterate tool exec-js 'const result = await webchat.getThreadMessages({ threadId: "THREAD_ID" }); console.log(JSON.stringify(result, null, 2))'
 ```
 
 ## Inspecting Raw Events
@@ -140,7 +140,7 @@ sqlite3 $ITERATE_REPO/apps/daemon/db.sqlite "SELECT payload FROM events WHERE id
 To send a file to the user, create the file anywhere on the filesystem, then include it as an attachment:
 
 ```bash
-iterate tool webchat 'await webchat.postMessage({
+iterate tool exec-js 'await webchat.postMessage({
   threadId: "THREAD_ID",
   text: "Here is the generated image:",
   attachments: [{ fileName: "output.png", filePath: "/tmp/output.png", mimeType: "image/png" }],

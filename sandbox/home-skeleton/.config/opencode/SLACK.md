@@ -2,17 +2,17 @@
 
 ## Hard Rule: CLI Shape
 
-`iterate tool slack` takes one arg: JS code.
+`iterate tool exec-js` takes one arg: JS code.
 `slack` is a `@slack/web-api` `WebClient`.
 
 ```bash
 # valid
-iterate tool slack 'await slack.chat.postMessage({ channel: "C123", thread_ts: "1234.5678", text: "hi" })'
+iterate tool exec-js 'await slack.chat.postMessage({ channel: "C123", thread_ts: "1234.5678", text: "hi" })'
 
 # invalid! ERROR!!!!
-iterate tool slack send --channel C123 --thread_ts 1234.5678 --text "hi"
-iterate tool slack --channel C123
-iterate tool slack postMessage ...
+iterate tool exec-js send --channel C123 --thread_ts 1234.5678 --text "hi"
+iterate tool exec-js --channel C123
+iterate tool exec-js postMessage ...
 ```
 
 ## Message Types
@@ -28,7 +28,7 @@ iterate tool slack postMessage ...
 Reply:
 
 ```bash
-iterate tool slack 'await slack.chat.postMessage({
+iterate tool exec-js 'await slack.chat.postMessage({
   channel: "CHANNEL_ID",
   thread_ts: "THREAD_TS",
   text: "Your response",
@@ -38,7 +38,7 @@ iterate tool slack 'await slack.chat.postMessage({
 Add reaction:
 
 ```bash
-iterate tool slack 'await slack.reactions.add({
+iterate tool exec-js 'await slack.reactions.add({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "thumbsup",
@@ -48,7 +48,7 @@ iterate tool slack 'await slack.reactions.add({
 Remove reaction:
 
 ```bash
-iterate tool slack 'await slack.reactions.remove({
+iterate tool exec-js 'await slack.reactions.remove({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "thumbsup",
@@ -58,7 +58,7 @@ iterate tool slack 'await slack.reactions.remove({
 Thread history:
 
 ```bash
-iterate tool slack 'await slack.conversations.replies({
+iterate tool exec-js 'await slack.conversations.replies({
   channel: "CHANNEL_ID",
   ts: "THREAD_TS",
 })'
@@ -79,7 +79,7 @@ pnpm --dir "${ITERATE_REPO:-$PWD}/apps/os" exec node -p "require.resolve('@slack
 List replies while posting a "searching" response:
 
 ```bash
-iterate tool slack 'const [replies, sent] = await Promise.all([
+iterate tool exec-js 'const [replies, sent] = await Promise.all([
   slack.conversations.replies({ channel: "CHANNEL_ID", ts: "THREAD_TS" }),
   slack.chat.postMessage({
     channel: "CHANNEL_ID",
@@ -92,7 +92,7 @@ iterate tool slack 'const [replies, sent] = await Promise.all([
 Post response and remove reaction at same time:
 
 ```bash
-iterate tool slack 'await Promise.all([
+iterate tool exec-js 'await Promise.all([
   slack.chat.postMessage({
     channel: "CHANNEL_ID",
     thread_ts: "THREAD_TS",
