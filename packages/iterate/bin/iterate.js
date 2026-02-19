@@ -143,14 +143,6 @@ const isAgent =
 
 const t = initTRPC.meta().create();
 
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-const isObject = (value) => {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-};
-
 /** @returns {ConfigFile} */
 const readConfigFile = () => {
   if (!existsSync(CONFIG_PATH)) {
