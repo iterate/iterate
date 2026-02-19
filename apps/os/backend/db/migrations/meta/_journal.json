@@ -169,6 +169,13 @@
       "when": 1771509024583,
       "tag": "0023_sleepy_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1771528801344,
+      "tag": "0024_remove_daytona_defaults",
+      "breakpoints": true
     }
   ]
 }

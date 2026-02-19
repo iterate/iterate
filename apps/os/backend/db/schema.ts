@@ -36,7 +36,6 @@ export const MachineState = ["starting", "active", "detached", "archived"] as co
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-// Note: "docker" replaces "local-docker" (migration 0020).
 export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
 
@@ -248,10 +247,7 @@ export const project = pgTable(
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    sandboxProvider: t
-      .text({ enum: [...PROJECT_SANDBOX_PROVIDER] })
-      .notNull()
-      .default("daytona"),
+    sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
@@ -483,10 +479,7 @@ export const machine = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     name: t.text().notNull(),
-    type: t
-      .text({ enum: [...MachineType] })
-      .notNull()
-      .default("daytona"),
+    type: t.text({ enum: [...MachineType] }).notNull(),
     state: t
       .text({ enum: [...MachineState] })
       .notNull()

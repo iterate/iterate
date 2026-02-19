@@ -49,6 +49,12 @@ export default workflow({
           type: "boolean",
           default: false,
         },
+        run_docker_tests: {
+          description: "Run Docker provider tests on the loaded image after build",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
         doppler_configs_to_update: {
           description: "Comma-separated Doppler configs to update (e.g. dev,stg,prd)",
           required: false,
@@ -99,6 +105,12 @@ export default workflow({
         },
         update_doppler: {
           description: "Update Doppler FLY_DEFAULT_IMAGE after Fly push",
+          required: false,
+          type: "boolean",
+          default: false,
+        },
+        run_docker_tests: {
+          description: "Run Docker provider tests on the loaded image after build",
           required: false,
           type: "boolean",
           default: false,
@@ -177,6 +189,28 @@ export default workflow({
             'echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"',
             'echo "git_sha=${git_sha}" >> "$GITHUB_OUTPUT"',
           ].join("\n"),
+        },
+        {
+          name: "Run Docker provider tests",
+          if: "inputs.run_docker_tests",
+          env: {
+            RUN_SANDBOX_TESTS: "true",
+            SANDBOX_TEST_PROVIDER: "docker",
+            SANDBOX_TEST_SNAPSHOT_ID: "${{ steps.output.outputs.image_tag }}",
+            DOCKER_DEFAULT_IMAGE: "${{ steps.output.outputs.image_tag }}",
+            DOCKER_HOST: "unix:///var/run/docker.sock",
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm sandbox test:docker",
+        },
+        {
+          name: "Upload Docker test results",
+          if: "failure() && inputs.run_docker_tests",
+          ...uses("actions/upload-artifact@v4", {
+            name: "docker-provider-test-logs",
+            path: "sandbox/test-results",
+            "retention-days": 7,
+          }),
         },
       ],
     },

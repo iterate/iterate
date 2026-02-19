@@ -8,7 +8,7 @@ This folder contains the React frontend application.
 
 Key Doppler env vars:
 
-- `ITERATE_USER` — used in alchemy stage (`dev-$ITERATE_USER`) → determines `DAYTONA_SNAPSHOT_PREFIX`
+- `ITERATE_USER` — used in alchemy stage (`dev-$ITERATE_USER`)
 - `VITE_PUBLIC_URL` — auto-set to tunnel URL when `DEV_TUNNEL` is set
 
 ## Browser Testing

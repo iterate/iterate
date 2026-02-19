@@ -2,7 +2,7 @@ import { login, test, createOrganization, createProject, sidebarButton } from ".
 
 test.describe("project-level machine provider", () => {
   test("machine creation uses project provider and hides type selection", async ({ page }) => {
-    const testEmail = `local-machine-${Date.now()}+test@nustom.com`;
+    const testEmail = `machine-provider-${Date.now()}+test@nustom.com`;
     await login(page, testEmail);
     await createOrganization(page);
     await createProject(page);
@@ -12,6 +12,7 @@ test.describe("project-level machine provider", () => {
 
     await page.getByText("Provider is managed at project level.").waitFor();
     await page.getByText("Sandbox Provider").waitFor();
-    await page.getByText("daytona").waitFor();
+    await page.getByText(/^(fly|docker)$/).waitFor();
+    await page.getByText(/^daytona$/).waitFor({ state: "hidden" });
   });
 });
