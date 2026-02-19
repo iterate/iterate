@@ -881,7 +881,7 @@ if (isDevelopment && worker.url) {
         if (runs === 10) console.log(`(Future runs only logged on failure)`);
 
         await new Promise((resolve) => setTimeout(resolve, waitMs));
-        const url = new URL("cdn-cgi/handler/scheduled", worker.url);
+        const url = new URL("/cdn-cgi/handler/scheduled", worker.url);
         url.searchParams.set("cron", cron);
         await fetch(url.toString(), { redirect: "manual" })
           .then(async (res) => {
