@@ -143,14 +143,6 @@ const isAgent =
 
 const t = initTRPC.meta().create();
 
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-const isObject = (value) => {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-};
-
 /** @returns {ConfigFile} */
 const readConfigFile = () => {
   if (!existsSync(CONFIG_PATH)) {
@@ -172,21 +164,19 @@ const readConfigFile = () => {
  * @param {ConfigFile} configFile
  * @param {string} workspacePath
  */
-const getWorkspaceConfig = (configFile, workspacePath) => {
-  const workspaces = isObject(configFile.workspaces) ? configFile.workspaces : {};
-  const rawWorkspaceConfig = workspaces[workspacePath];
-  return isObject(rawWorkspaceConfig) ? rawWorkspaceConfig : {};
-};
-
-/**
- * @param {ConfigFile} configFile
- * @param {string} workspacePath
- */
 const getMergedWorkspaceConfig = (configFile, workspacePath) => {
-  return {
-    ...configFile.global,
-    ...getWorkspaceConfig(configFile, workspacePath),
-  };
+  const configs = [];
+  while (workspacePath && workspacePath !== "/") {
+    if (workspacePath in (configFile.workspaces || {})) {
+      configs.push(configFile.workspaces?.[workspacePath]);
+    }
+    workspacePath = dirname(workspacePath);
+  }
+  configs.push(configFile.global);
+  /** @type {AuthConfig} */
+  return configs.reverse().reduce((acc, config) => {
+    return { ...acc, ...config };
+  }, {});
 };
 
 /**
@@ -516,10 +506,9 @@ const launcherProcedures = {
       if (!parsed.success) {
         throw new Error(`Invalid config file ${CONFIG_PATH}: ${z.prettifyError(parsed.error)}`);
       }
-      return {
-        configPath: CONFIG_PATH,
-        current: readAuthConfig(process.cwd()),
-      };
+      const current = readAuthConfig(process.cwd());
+      if (current instanceof Error) throw current;
+      return { configPath: CONFIG_PATH, current };
     }),
   setup: t.procedure
     .input(SetupInput.partial())
@@ -536,10 +525,9 @@ const launcherProcedures = {
         workspacePath: process.cwd(),
       });
 
-      return {
-        configPath: CONFIG_PATH,
-        current: readAuthConfig(process.cwd()),
-      };
+      const current = readAuthConfig(process.cwd());
+      if (current instanceof Error) throw current;
+      return { configPath: CONFIG_PATH, current };
     }),
 
   whoami: t.procedure.mutation(async () => {
