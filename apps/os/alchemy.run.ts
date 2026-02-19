@@ -2,6 +2,7 @@ import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CronExpressionParser } from "cron-parser";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
@@ -858,9 +859,27 @@ if (!app.local) process.exit(0);
 // (same approach as v2025 SDK CLI). Without this, delayed consumer messages
 // (e.g. sendReadinessProbe's 60s delay) sit in the queue until manually processed.
 if (isDevelopment && worker.url) {
-  const scheduledUrl = new URL("/cdn-cgi/handler/scheduled", worker.url);
-  scheduledUrl.searchParams.set("cron", workerCrons.processOutboxQueue);
-  setInterval(() => {
-    fetch(scheduledUrl).catch(() => {});
-  }, 60_000);
+  const loops = Object.entries(workerCrons).map(([name, cron]) => {
+    let runs = 0;
+    const expression = CronExpressionParser.parse(cron);
+    const fn = async () => {
+      while (expression.hasNext()) {
+        const next = expression.next();
+        const waitMs = next.getTime() - Date.now();
+        if (runs++ <= 3) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
+        if (runs === 3) console.log(`(Future runs only logged on failure)`);
+
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const url = `${worker.url}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent(cron)}`;
+        await fetch(url).catch((e) => {
+          console.error(`Failed to fetch scheduled URL for cron ${name}:`, e);
+        });
+      }
+    };
+    return { name, cron, expression, fn };
+  });
+  for (const loop of loops) {
+    console.log(`Starting cron loop for ${loop.name}: ${loop.cron}`);
+    loop.fn();
+  }
 }
