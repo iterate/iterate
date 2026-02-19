@@ -183,10 +183,18 @@ const getWorkspaceConfig = (configFile, workspacePath) => {
  * @param {string} workspacePath
  */
 const getMergedWorkspaceConfig = (configFile, workspacePath) => {
-  return {
-    ...configFile.global,
-    ...getWorkspaceConfig(configFile, workspacePath),
-  };
+  const configs = [];
+  while (workspacePath && workspacePath !== "/") {
+    if (workspacePath in (configFile.workspaces || {})) {
+      configs.push(configFile.workspaces?.[workspacePath]);
+    }
+    workspacePath = dirname(workspacePath);
+  }
+  configs.push(configFile.global);
+  /** @type {AuthConfig} */
+  return configs.reverse().reduce((acc, config) => {
+    return { ...acc, ...config };
+  }, {});
 };
 
 /**
