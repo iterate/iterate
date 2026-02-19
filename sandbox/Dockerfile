@@ -6,6 +6,7 @@ ARG SANDBOX_CODEX_VERSION=0.98.0
 ARG SANDBOX_OPENCODE_VERSION=1.2.4
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.37
 ARG SANDBOX_PI_CODING_AGENT_VERSION=0.52.8
+ARG SANDBOX_MITMPROXY_VERSION=11.1.3
 ARG SANDBOX_BUN_VERSION=1.3.6
 ARG SANDBOX_GO_VERSION=1.23.4
 ARG SANDBOX_GOGCLI_REF=99d957581f61532de08f3847e79f639edad3c68b
@@ -85,13 +86,15 @@ ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Install uv and use that to install mitmproxy
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
-RUN uv tool install mitmproxy
+RUN uv tool install mitmproxy==${SANDBOX_MITMPROXY_VERSION}
 
 # Generate mitmproxy CA certificate at build time.
-# This certificate is safe to share across all sandbox instances because:
+# This certificate is baked into the image and shared across all sandbox instances.
+# This is safe because:
 # 1. Each sandbox is network-isolated - they cannot communicate with each other
 # 2. The cert is only used for the local egress proxy within each sandbox
 # 3. No sandbox can intercept another sandbox's traffic
+# Note: The CA keypair is regenerated when SANDBOX_MITMPROXY_VERSION changes (layer invalidation).
 RUN mkdir -p /home/iterate/.mitmproxy && \
     /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
     PID=$! && \
@@ -146,7 +149,8 @@ ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
 # Use a free model — no API keys are available at build time.
-RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
+# First verify opencode installed correctly, then allow warm-up to fail (network issues are OK).
+RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" || true)
 
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
