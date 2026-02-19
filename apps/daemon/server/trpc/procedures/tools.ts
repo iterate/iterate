@@ -7,7 +7,7 @@ import dedent from "dedent";
 import Replicate from "replicate";
 import { Resend } from "resend";
 import { z } from "zod/v4";
-import { createTRPCRouter, publicProcedure } from "../init.ts";
+import { createTRPCRouter, logEmitterStorage, publicProcedure } from "../init.ts";
 
 function getWebchatClient() {
   const daemonPort = process.env.PORT || "3001";
@@ -135,7 +135,7 @@ export const toolsRouter = createTRPCRouter({
       // function body so getters only fire when user code actually references them.
       const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const execute = new AsyncFunction(...clientNames, "require", input.code);
+      const execute = new AsyncFunction(...clientNames, "require", "console", input.code);
       // Build lazy proxies: each is a thin wrapper that defers to the real client
       // only on first property access, so missing env vars don't blow up if unused.
       const lazyArgs = clientNames.map(
@@ -146,7 +146,24 @@ export const toolsRouter = createTRPCRouter({
             },
           }),
       );
-      const result = await execute(...lazyArgs, require);
+      // Build a console that emits to an EventTarget so streaming callers can
+      // pick up logs in real-time, while also forwarding to the real console.
+      const emitter = logEmitterStorage.getStore();
+      const capture =
+        (level: string) =>
+        (...args: unknown[]) => {
+          // Always forward to real console so daemon logs still work
+          (console as unknown as Record<string, Function>)[level]?.(...args);
+          emitter?.dispatchEvent(new CustomEvent("log", { detail: { level, args } }));
+        };
+      const fakeConsole = {
+        log: capture("log"),
+        info: capture("info"),
+        warn: capture("warn"),
+        error: capture("error"),
+        debug: capture("debug"),
+      };
+      const result = await execute(...lazyArgs, require, fakeConsole);
       return result;
     }),
 

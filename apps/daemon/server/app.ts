@@ -6,6 +6,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { propagation, context, type TextMapGetter } from "@opentelemetry/api";
 import { getOtelConfig } from "./utils/otel-init.ts";
+import { logEmitterStorage } from "./trpc/init.ts";
 import { appRouter } from "./trpc/app-router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
@@ -78,20 +79,86 @@ app.get("/api/observability", (c) => {
   });
 });
 
+const trpcOnError = ({
+  error,
+  path,
+}: {
+  error: { message: string; stack?: string };
+  path?: string;
+}) => {
+  const procedurePath = path ?? "unknown";
+  const status = getHTTPStatusCodeFromError(
+    error as Parameters<typeof getHTTPStatusCodeFromError>[0],
+  );
+  if (status >= 500) {
+    console.error(`tRPC Error ${status} in ${procedurePath}: ${error.message}`);
+  } else {
+    console.warn(`tRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
+  }
+};
+
 app.all("/api/trpc/*", (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
     req: c.req.raw,
     router: appRouter,
     allowMethodOverride: true,
-    onError: ({ error, path }) => {
-      const procedurePath = path ?? "unknown";
-      const status = getHTTPStatusCodeFromError(error);
-      if (status >= 500) {
-        console.error(`tRPC Error ${status} in ${procedurePath}: ${error.message}`);
-      } else {
-        console.warn(`tRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
-      }
+    onError: trpcOnError,
+  });
+});
+
+// Streaming variant: same as /api/trpc/* but wraps the response in SSE so that
+// console.log calls inside execJs (or any procedure that emits to the log
+// emitter) are streamed to the caller in real-time.
+// Uses AsyncLocalStorage so concurrent requests each get their own emitter.
+app.all("/api/trpc-stream/*", (c) => {
+  const emitter = new EventTarget();
+
+  // Rewrite the request URL so fetchRequestHandler sees /api/trpc/...
+  const url = new URL(c.req.url);
+  url.pathname = url.pathname.replace("/api/trpc-stream/", "/api/trpc/");
+  const rewrittenReq = new Request(url.toString(), c.req.raw);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      const send = (event: string, data: string) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+      };
+
+      emitter.addEventListener("log", ((e: CustomEvent) => {
+        send("log", JSON.stringify(e.detail));
+      }) as EventListener);
+
+      // Run the tRPC handler inside the AsyncLocalStorage context so that
+      // execJs (and any other procedure) can read the emitter via getStore().
+      logEmitterStorage
+        .run(emitter, () =>
+          fetchRequestHandler({
+            endpoint: "/api/trpc",
+            req: rewrittenReq,
+            router: appRouter,
+            allowMethodOverride: true,
+            onError: trpcOnError,
+          }),
+        )
+        .then(async (res) => {
+          const body = await res.text();
+          send("response", body);
+          controller.close();
+        })
+        .catch((err) => {
+          send("response", JSON.stringify({ error: String(err) }));
+          controller.close();
+        });
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
     },
   });
 });

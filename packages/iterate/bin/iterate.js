@@ -330,6 +330,7 @@ const loadAppRouter = async (params) => {
   if (!Array.isArray(router?.procedures)) {
     throw new Error(`${url} returned invalid router: ${JSON.stringify(router)}`);
   }
+  /** @type {{procedures: any[]}} */
   return router;
 };
 
@@ -359,15 +360,71 @@ const getOsProcedures = async (params) => {
   return proxiedRouter;
 };
 
+/**
+ * Creates a fetch wrapper that calls /api/trpc-stream/* instead of /api/trpc/*.
+ * The streaming endpoint returns SSE: log lines as `event: log` and the final
+ * tRPC response as `event: response`, which we reassemble into a normal Response.
+ * @param {string} daemonBaseUrl
+ * @returns {typeof globalThis.fetch}
+ */
+const streamingFetch = (daemonBaseUrl) => {
+  return async (/** @type {any} */ input, /** @type {any} */ init) => {
+    // Rewrite URL from /api/trpc/X to /api/trpc-stream/X
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const rewritten = url.replace(
+      `${daemonBaseUrl}/api/trpc/`,
+      `${daemonBaseUrl}/api/trpc-stream/`,
+    );
+    const res = await fetch(rewritten, init);
+    if (rewritten === url) return res;
+
+    const contentType = res.headers.get("content-type") || "";
+    // If the daemon didn't respond with SSE, pass through as-is (non-streaming endpoint)
+    if (!contentType.includes("text/event-stream")) return res;
+    // Parse SSE stream: print log events to stderr, collect the final response
+    const reader = res.body?.getReader();
+    if (!reader) return res;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    /** @type {string | null} */
+    let responseBody = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Process complete SSE messages (double newline delimited)
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const lines = part.split("\n");
+        const event = lines[0].split(": ")[1];
+        const data = lines[1].split(": ").slice(1).join(": ");
+        if (event === "log") {
+          /** @type {{level: "debug" | "info" | "warn" | "error"; args: unknown[]}} */
+          const detail = JSON.parse(data);
+          console[detail.level](...detail.args);
+        } else if (event === "response") {
+          responseBody = data;
+        }
+      }
+    }
+    // Reconstruct a normal Response from the final payload so tRPC client is happy
+    return new Response(responseBody, {
+      status: res.status,
+      headers: { "content-type": "application/json" },
+    });
+  };
+};
+
 /** @param {{ daemonBaseUrl: string }} params */
 const getDaemonProcedures = async (params) => {
   const daemonRouter = await loadAppRouter({ baseUrl: params.daemonBaseUrl });
-  /** @type {{}} */
   const proxiedRouter = proxify(daemonRouter.procedures, async () => {
     return createTRPCClient({
       links: [
         httpLink({
           url: `${params.daemonBaseUrl}/api/trpc/`,
+          fetch: streamingFetch(params.daemonBaseUrl),
         }),
       ],
     });
@@ -430,26 +487,48 @@ const runCli = async () => {
     });
   };
 
-  const [osProcedures, daemonProcedures] =
-    authConfig instanceof Error
-      ? [
-          errorProcedure(`Invalid auth config`)(authConfig),
-          errorProcedure(`Invalid auth config`)(authConfig),
-        ]
-      : await Promise.all([
-          getOsProcedures({ baseUrl: authConfig.osBaseUrl }).catch(
-            errorProcedure(`Couldn't connect to os at ${authConfig.osBaseUrl}`),
-          ),
-          getDaemonProcedures({ daemonBaseUrl: authConfig.daemonBaseUrl }).catch(
-            errorProcedure(`Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`),
-          ),
-        ]);
+  /** @type {import("@trpc/server").AnyRouter[]} */
+  const routers = [t.router(launcherProcedures)];
 
-  const router = t.router({
-    ...launcherProcedures,
-    os: osProcedures,
-    daemon: daemonProcedures,
-  });
+  if (authConfig instanceof Error) {
+    routers.push(
+      t.router({
+        os: errorProcedure(`Invalid auth config`)(authConfig),
+        daemon: errorProcedure(`Invalid auth config`)(authConfig),
+      }),
+    );
+  } else {
+    const [osProcedures, daemonProcedures] = await Promise.allSettled([
+      getOsProcedures({ baseUrl: authConfig.osBaseUrl }),
+      getDaemonProcedures({ daemonBaseUrl: authConfig.daemonBaseUrl }),
+    ]);
+
+    if (osProcedures.status === "fulfilled") {
+      routers.push(t.router({ os: osProcedures.value }));
+    } else {
+      routers.push(
+        t.router({
+          os: errorProcedure(`Couldn't connect to os at ${authConfig.osBaseUrl}`)(
+            osProcedures.reason,
+          ),
+        }),
+      );
+    }
+    if (daemonProcedures.status === "fulfilled") {
+      // don't nest daemon procedures under "daemon"ç
+      routers.push(daemonProcedures.value);
+    } else {
+      routers.push(
+        t.router({
+          daemon: errorProcedure(`Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`)(
+            daemonProcedures.reason,
+          ),
+        }),
+      );
+    }
+  }
+
+  const router = t.mergeRouters(...routers);
 
   const cli = createCli({
     router,
