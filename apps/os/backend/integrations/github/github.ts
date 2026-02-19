@@ -1386,8 +1386,12 @@ function buildBootstrapComment(params: {
   markerBlock: string;
   eventKind: PullRequestSignal["eventKind"];
 }): string {
+  const marker = parseAgentMarker(params.markerBlock);
+  const sessionIdLine = marker?.sessionId ? `Session ID: \`${marker.sessionId}\`` : null;
+
   return [
     "Iterate linked this PR to an agent session for automated follow-up on checks/reviews/comments.",
+    ...(sessionIdLine ? [sessionIdLine] : []),
     "",
     params.markerBlock,
     "",
