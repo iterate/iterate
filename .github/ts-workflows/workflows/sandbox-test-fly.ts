@@ -55,28 +55,9 @@ export default workflow({
     "test-sandbox-fly": {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        {
-          name: "Checkout code",
-          ...uses("actions/checkout@v4", {
-            ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
-          }),
-        },
-        {
-          name: "Setup pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          name: "Setup Node",
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "Install dependencies",
-          run: "pnpm install",
-        },
+        ...utils.setupRepoSteps({
+          ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+        }),
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
           name: "Run Fly sandbox tests",

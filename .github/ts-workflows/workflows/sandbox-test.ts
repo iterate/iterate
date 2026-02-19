@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
@@ -63,28 +64,9 @@ export default workflow({
         fly_image_tag: "${{ steps.metadata.outputs.fly_image_tag }}",
       },
       steps: [
-        {
-          name: "Checkout code",
-          ...uses("actions/checkout@v4", {
-            ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
-          }),
-        },
-        {
-          name: "Setup pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          name: "Setup Node",
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "Install dependencies",
-          run: "pnpm install",
-        },
+        ...utils.setupRepoSteps({
+          ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+        }),
         ...utils.setupDoppler({ config: "dev" }),
         ...utils.setupDepot,
         {
@@ -94,11 +76,11 @@ export default workflow({
             SANDBOX_UPDATE_DOPPLER: "false",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: [
-            "echo '::group::Build sandbox image'",
-            "time doppler run -- pnpm sandbox build",
-            "echo '::endgroup::'",
-          ].join("\n"),
+          run: dedent`
+            echo '::group::Build sandbox image'
+            time doppler run -- pnpm sandbox build
+            echo '::endgroup::'
+          `,
         },
         {
           id: "metadata",
@@ -106,15 +88,15 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: [
-            "set -euo pipefail",
-            'short_sha="$(git rev-parse --short=7 HEAD)"',
-            'fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"',
-            'image_tag="iterate-sandbox:sha-${short_sha}"',
-            'fly_image_tag="registry.fly.io/${fly_registry_app}:sha-${short_sha}"',
-            'echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"',
-            'echo "fly_image_tag=${fly_image_tag}" >> "$GITHUB_OUTPUT"',
-          ].join("\n"),
+          run: dedent`
+            set -euo pipefail
+            short_sha="$(git rev-parse --short=7 HEAD)"
+            fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"
+            image_tag="iterate-sandbox:sha-\${short_sha}"
+            fly_image_tag="registry.fly.io/\${fly_registry_app}:sha-\${short_sha}"
+            echo "image_tag=\${image_tag}" >> "$GITHUB_OUTPUT"
+            echo "fly_image_tag=\${fly_image_tag}" >> "$GITHUB_OUTPUT"
+          `,
         },
         {
           name: "Run provider tests (Docker + Fly in parallel)",
@@ -127,53 +109,51 @@ export default workflow({
             RUN_FLY_TESTS:
               "${{ github.event_name == 'workflow_dispatch' && (inputs.run_fly_tests && 'true' || 'false') || 'true' }}",
           },
-          run: [
-            "set -euo pipefail",
-            "mkdir -p sandbox/test-results",
-            "",
-            "docker_status=0",
-            "fly_status=0",
-            'fly_log="sandbox/test-results/fly-provider-parallel.log"',
-            'fly_pid=""',
-            "",
-            'if [ "${RUN_FLY_TESTS}" = "true" ]; then',
-            '  echo "Starting Fly provider tests in background..."',
-            "  (",
-            "    RUN_SANDBOX_TESTS=true \\",
-            "    SANDBOX_TEST_PROVIDER=fly \\",
-            '    SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \\',
-            '    FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \\',
-            '    DOPPLER_TOKEN="${DOPPLER_TOKEN}" \\',
-            "    doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1",
-            '  ) >"${fly_log}" 2>&1 &',
-            '  fly_pid="$!"',
-            "fi",
-            "",
-            'if [ "${RUN_DOCKER_TESTS}" = "true" ]; then',
-            '  echo "Running Docker provider tests on loaded image..."',
-            "  RUN_SANDBOX_TESTS=true \\",
-            "  SANDBOX_TEST_PROVIDER=docker \\",
-            '  SANDBOX_TEST_SNAPSHOT_ID="${IMAGE_TAG}" \\',
-            '  DOCKER_DEFAULT_IMAGE="${IMAGE_TAG}" \\',
-            '  DOCKER_HOST="unix:///var/run/docker.sock" \\',
-            '  DOPPLER_TOKEN="${DOPPLER_TOKEN}" \\',
-            "  pnpm sandbox test:docker || docker_status=$?",
-            "fi",
-            "",
-            'if [ -n "${fly_pid}" ]; then',
-            '  wait "${fly_pid}" || fly_status=$?',
-            '  if [ "${fly_status}" -ne 0 ]; then',
-            '    echo "::group::Fly provider test output"',
-            '    cat "${fly_log}" || true',
-            '    echo "::endgroup::"',
-            "  fi",
-            "fi",
-            "",
-            'if [ "${docker_status}" -ne 0 ] || [ "${fly_status}" -ne 0 ]; then',
-            '  echo "docker_status=${docker_status} fly_status=${fly_status}"',
-            "  exit 1",
-            "fi",
-          ].join("\n"),
+          run: dedent`
+            set -euo pipefail
+            mkdir -p sandbox/test-results
+
+            docker_status=0
+            fly_status=0
+            fly_log="sandbox/test-results/fly-provider-parallel.log"
+            fly_pid=""
+
+            if [ "$RUN_FLY_TESTS" = "true" ]; then
+              echo "Starting Fly provider tests in background..."
+              (
+                export RUN_SANDBOX_TESTS=true
+                export SANDBOX_TEST_PROVIDER=fly
+                export SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG"
+                export FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG"
+                doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
+              ) >"$fly_log" 2>&1 &
+              fly_pid="$!"
+            fi
+
+            if [ "$RUN_DOCKER_TESTS" = "true" ]; then
+              echo "Running Docker provider tests on loaded image..."
+              export RUN_SANDBOX_TESTS=true
+              export SANDBOX_TEST_PROVIDER=docker
+              export SANDBOX_TEST_SNAPSHOT_ID="$IMAGE_TAG"
+              export DOCKER_DEFAULT_IMAGE="$IMAGE_TAG"
+              export DOCKER_HOST="unix:///var/run/docker.sock"
+              pnpm sandbox test:docker || docker_status=$?
+            fi
+
+            if [ -n "$fly_pid" ]; then
+              wait "$fly_pid" || fly_status=$?
+              if [ "$fly_status" -ne 0 ]; then
+                echo "::group::Fly provider test output"
+                cat "$fly_log" || true
+                echo "::endgroup::"
+              fi
+            fi
+
+            if [ "$docker_status" -ne 0 ] || [ "$fly_status" -ne 0 ]; then
+              echo "docker_status=$docker_status fly_status=$fly_status"
+              exit 1
+            fi
+          `,
         },
         {
           name: "Upload Docker test results",
