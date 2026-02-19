@@ -341,6 +341,9 @@ export const adminRouter = router({
                 }
               })
               .optional(),
+            /** Filter events by a specific payload key/value (e.g. machineId=xyz) */
+            relatedKey: z.string().optional(),
+            relatedValue: z.string().optional(),
           })
           .optional(),
       )
@@ -356,6 +359,9 @@ export const adminRouter = router({
         }
         if (input?.payloadContains) {
           eventWheres.push(sql`e.payload @> ${input.payloadContains}::jsonb`);
+        }
+        if (input?.relatedKey && input?.relatedValue) {
+          eventWheres.push(sql`e.payload->>${input.relatedKey} = ${input.relatedValue}`);
         }
         if (input?.ageMinMs) {
           eventWheres.push(

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   Globe,
+  List,
   RefreshCw,
   TerminalSquare,
   Trash2,
@@ -20,6 +21,7 @@ import { SerializedObjectCodeBlock } from "../../components/serialized-object-co
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
 import { buildProjectIngressLink } from "../../lib/project-ingress-link.ts";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -124,6 +126,8 @@ function MachineDetailPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const { user } = useSessionUser();
+  const isAdmin = user.role === "admin";
 
   const machineQueryKey = trpc.machine.byId.queryKey({
     projectSlug: params.projectSlug,
@@ -481,6 +485,17 @@ function MachineDetailPage() {
             <Trash2 className="h-4 w-4" />
             Delete
           </Button>
+          {isAdmin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link
+                to="/admin/outbox"
+                search={{ relatedKey: "machineId", relatedValue: params.machineId }}
+              >
+                <List className="h-4 w-4" />
+                Outbox Events
+              </Link>
+            </Button>
+          )}
         </div>
 
         <div>

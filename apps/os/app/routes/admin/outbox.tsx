@@ -10,8 +10,6 @@ import {
   ArrowUpDown,
   Filter,
   X,
-  Link2,
-  ArrowRight,
 } from "lucide-react";
 import { z } from "zod/v4";
 import { ms, parse as msParse } from "ms";
@@ -20,7 +18,6 @@ import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet.tsx";
 import { cn } from "@/lib/utils.ts";
 
 const Filters = z.object({
@@ -37,7 +34,7 @@ const Filters = z.object({
   resMax: z.string().optional(),
   payload: z.string().optional(),
   page: z.number().optional().catch(0),
-  // Related-events timeline
+  // Related-events filter (e.g. machineId=xyz)
   relatedKey: z.string().optional(),
   relatedValue: z.string().optional(),
 });
@@ -69,11 +66,13 @@ type QueueMessage = {
 
 type ConsumerStatus = "pending" | "success" | "retrying" | "failed";
 
+type CausedBy = { eventId: number; consumerName: string; jobId: number | string };
+
 type EventWithConsumers = {
   id: number;
   name: string;
   payload: Record<string, unknown>;
-  context?: { causedBy?: { eventId: number; consumerName: string; jobId: number | string } };
+  context?: { causedBy?: CausedBy };
   createdAt: Date;
   updatedAt: Date;
   consumers: QueueMessage[];
@@ -90,7 +89,7 @@ const STATUS_COLORS: Record<ConsumerStatus, string> = {
 };
 
 function StatusDot({ status }: { status: ConsumerStatus }) {
-  return <Circle className={cn("h-2.5 w-2.5", STATUS_COLORS[status])} />;
+  return <Circle className={cn("h-2.5 w-2.5 shrink-0", STATUS_COLORS[status])} />;
 }
 
 function formatAge(date: string | Date): string {
@@ -141,7 +140,7 @@ function filtersToInput(filters: Filters) {
   }
 
   return {
-    sortDirection: filters.sort,
+    sortDirection: filters.relatedKey ? ("asc" as const) : filters.sort,
     eventName: filters.event || undefined,
     consumerName: filters.consumer || undefined,
     consumerStatus: filters.status || undefined,
@@ -153,10 +152,64 @@ function filtersToInput(filters: Filters) {
     resolutionMinMs: resolutionMinMs ?? undefined,
     resolutionMaxMs: resolutionMaxMs ?? undefined,
     payloadContains,
+    relatedKey: filters.relatedKey || undefined,
+    relatedValue: filters.relatedValue || undefined,
   };
 }
 
 // --- Components ---
+
+function EventCard({ event }: { event: EventWithConsumers }) {
+  const [open, setOpen] = useState(false);
+  const causedBy = event.context?.causedBy;
+
+  return (
+    <div className="border rounded-lg bg-card">
+      <button
+        type="button"
+        className="flex items-start justify-between gap-4 p-4 w-full text-left"
+        onClick={() => setOpen(!open)}
+      >
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <StatusDot status={event.aggregateStatus} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground">#{event.id}</span>
+              <span className="font-medium text-sm">{event.name}</span>
+              {causedBy && (
+                <span className="text-xs text-muted-foreground">
+                  &larr; #{causedBy.eventId} / {causedBy.consumerName}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {event.consumers.length > 0
+                ? `Consumers: ${event.consumers.map((c) => c.message.consumer_name).join(", ")}`
+                : "No consumers"}{" "}
+              · {formatAge(event.createdAt)}
+            </div>
+          </div>
+        </div>
+        {open ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+        )}
+      </button>
+      {open && (
+        <div className="border-t px-4 py-3 space-y-3">
+          <SerializedObjectCodeBlock
+            data={{ payload: event.payload, context: event.context }}
+            className="max-h-60"
+          />
+          {event.consumers.map((msg) => (
+            <ConsumerRow key={String(msg.msg_id)} msg={msg} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ConsumerRow({ msg }: { msg: QueueMessage }) {
   const [open, setOpen] = useState(false);
@@ -187,147 +240,21 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
         </div>
       </button>
       {open && (
-        <div className="border-t px-3 py-2 space-y-2">
-          <div className="grid grid-cols-4 gap-2 text-xs text-muted-foreground">
-            <div>
-              <span className="font-medium">msg_id:</span> {String(msg.msg_id)}
-            </div>
-            <div>
-              <span className="font-medium">read_ct:</span> {msg.read_ct}
-            </div>
-            <div>
-              <span className="font-medium">enqueued:</span>{" "}
-              {new Date(msg.enqueued_at).toLocaleString()}
-            </div>
-            <div>
-              <span className="font-medium">vt:</span> {new Date(msg.vt).toLocaleString()}
-            </div>
-          </div>
-          {msg.message.processing_results.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-1">
-                Processing Results
-              </div>
-              <SerializedObjectCodeBlock data={msg.message.processing_results} />
-            </div>
-          )}
+        <div className="border-t px-3 py-2">
+          <SerializedObjectCodeBlock data={msg} className="max-h-60" />
         </div>
       )}
     </div>
   );
 }
 
-function CausedByBadge({
-  context,
-}: {
-  context?: { causedBy?: { eventId: number; consumerName: string; jobId: number | string } };
-}) {
-  if (!context?.causedBy) return null;
+/** Vertical connector line between causally-linked events */
+function CausalLine() {
   return (
-    <span className="inline-flex items-center gap-1 text-xs bg-muted rounded px-1.5 py-0.5 text-muted-foreground">
-      <ArrowRight className="h-3 w-3" />
-      from event #{context.causedBy.eventId} via {context.causedBy.consumerName}
-    </span>
-  );
-}
-
-/** Clickable payload fields that open the related-events timeline */
-function ClickablePayload({
-  payload,
-  onRelated,
-}: {
-  payload: Record<string, unknown>;
-  onRelated: (key: string, value: string) => void;
-}) {
-  return (
-    <div className="text-xs font-mono bg-muted/50 rounded p-2 space-y-0.5">
-      {Object.entries(payload).map(([key, val]) => {
-        const strVal = typeof val === "string" ? val : JSON.stringify(val);
-        const isClickable = typeof val === "string" && val.length > 0;
-        return (
-          <div key={key} className="flex items-start gap-1">
-            <span className="text-muted-foreground">{key}:</span>
-            {isClickable ? (
-              <button
-                type="button"
-                className="text-left underline decoration-dotted underline-offset-2 hover:text-foreground text-muted-foreground transition-colors inline-flex items-center gap-0.5"
-                onClick={() => onRelated(key, val)}
-                title={`Show all events where ${key}=${val}`}
-              >
-                {strVal}
-                <Link2 className="h-3 w-3 shrink-0 opacity-50" />
-              </button>
-            ) : (
-              <span className="text-muted-foreground break-all">{strVal}</span>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function EventCard({
-  event,
-  onRelated,
-}: {
-  event: EventWithConsumers;
-  onRelated: (key: string, value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className="border rounded-lg bg-card">
-      <button
-        type="button"
-        className="flex items-start justify-between gap-4 p-4 w-full text-left"
-        onClick={() => setOpen(!open)}
-      >
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <StatusDot status={event.aggregateStatus} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-sm">{event.name}</span>
-              <CausedByBadge context={event.context} />
-            </div>
-            <div className="text-xs text-muted-foreground">
-              #{event.id} · {event.consumers.length} consumer
-              {event.consumers.length !== 1 ? "s" : ""} · {formatAge(event.createdAt)}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {open ? (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          )}
-        </div>
-      </button>
-      {open && (
-        <div className="border-t px-4 py-3 space-y-3">
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Payload</div>
-            <ClickablePayload payload={event.payload} onRelated={onRelated} />
-          </div>
-          {event.context?.causedBy && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-1">Context</div>
-              <SerializedObjectCodeBlock data={event.context} />
-            </div>
-          )}
-          {event.consumers.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted-foreground mb-2">Consumers</div>
-              <div className="space-y-2">
-                {event.consumers.map((msg) => (
-                  <ConsumerRow key={String(msg.msg_id)} msg={msg} />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+    <div className="flex justify-start pl-6">
+      <svg width="2" height="16" className="text-border">
+        <line x1="1" y1="0" x2="1" y2="16" stroke="currentColor" strokeWidth="2" />
+      </svg>
     </div>
   );
 }
@@ -363,7 +290,6 @@ function FilterBar({
               size="sm"
               onClick={() => {
                 onChange(DEFAULT_FILTERS);
-                // Auto-apply on clear
                 setTimeout(onApply, 0);
               }}
               className="h-7 text-xs"
@@ -379,6 +305,28 @@ function FilterBar({
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        {/* Related key/value filter */}
+        <div className="col-span-2">
+          <label className="text-xs text-muted-foreground mb-1 block">
+            Related (payload key=value)
+          </label>
+          <div className="flex items-center gap-1.5">
+            <Input
+              className="h-8 text-xs flex-1 font-mono"
+              placeholder="key e.g. machineId"
+              value={draft.relatedKey ?? ""}
+              onChange={(e) => onChange({ ...draft, relatedKey: e.target.value || undefined })}
+            />
+            <span className="text-xs text-muted-foreground">=</span>
+            <Input
+              className="h-8 text-xs flex-1 font-mono"
+              placeholder="value"
+              value={draft.relatedValue ?? ""}
+              onChange={(e) => onChange({ ...draft, relatedValue: e.target.value || undefined })}
+            />
+          </div>
+        </div>
+
         {/* Sort */}
         <div>
           <label className="text-xs text-muted-foreground mb-1 block">Sort</label>
@@ -546,96 +494,6 @@ function FilterBar({
   );
 }
 
-// --- Related Events Timeline (Sheet) ---
-
-function TimelineSheet({
-  relatedKey,
-  relatedValue,
-  onClose,
-}: {
-  relatedKey: string;
-  relatedValue: string;
-  onClose: () => void;
-}) {
-  const { data, isFetching } = useQuery(
-    trpc.admin.outbox.relatedEvents.queryOptions({ key: relatedKey, value: relatedValue }),
-  );
-
-  // Build a lookup so we can show causal arrows
-  const eventIds = useMemo(() => new Set((data ?? []).map((e) => e.id)), [data]);
-
-  return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle className="text-sm font-medium">
-            Events for {relatedKey}={relatedValue}
-          </SheetTitle>
-        </SheetHeader>
-        <div className={cn("space-y-0 mt-4", isFetching && "opacity-60")}>
-          {!data ? (
-            <div className="text-sm text-muted-foreground p-4">Loading...</div>
-          ) : data.length === 0 ? (
-            <div className="text-sm text-muted-foreground p-4">No events found</div>
-          ) : (
-            data.map((event, idx) => {
-              const consumers = (event.consumers ?? []) as QueueMessage[];
-              const status = aggregateStatus(consumers);
-              const context = event.context as EventWithConsumers["context"];
-              const indent =
-                context?.causedBy && eventIds.has(context.causedBy.eventId) ? "ml-4" : "";
-
-              return (
-                <div key={event.id} className={cn("relative", indent)}>
-                  {/* Timeline connector */}
-                  {idx > 0 && <div className="absolute left-[11px] -top-2 h-2 w-px bg-border" />}
-                  {idx < data.length - 1 && (
-                    <div className="absolute left-[11px] bottom-0 top-[22px] w-px bg-border" />
-                  )}
-
-                  <div className="flex gap-3 py-2">
-                    <div className="relative z-10 mt-0.5">
-                      <StatusDot status={status} />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium">{event.name}</span>
-                        <span className="text-xs text-muted-foreground">#{event.id}</span>
-                        {context?.causedBy && (
-                          <span className="text-xs text-muted-foreground">
-                            &larr; #{context.causedBy.eventId} / {context.causedBy.consumerName}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {new Date(event.createdAt).toLocaleString()}
-                      </div>
-                      {consumers.length > 0 && (
-                        <div className="space-y-1 mt-1">
-                          {consumers.map((c) => (
-                            <div key={String(c.msg_id)} className="flex items-center gap-2 text-xs">
-                              <StatusDot status={c.message.status ?? "pending"} />
-                              <span className="font-medium">{c.message.consumer_name}</span>
-                              <span className="text-muted-foreground">
-                                msg #{String(c.msg_id)} · {c.read_ct} read
-                                {c.read_ct !== 1 ? "s" : ""}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 // --- Page ---
 
 function OutboxPage() {
@@ -702,21 +560,11 @@ function OutboxPage() {
     });
   }, [data]);
 
+  // Build set of event IDs in current view for causal line rendering
+  const eventIdSet = useMemo(() => new Set(enrichedEvents.map((e) => e.id)), [enrichedEvents]);
+
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / pageSize);
-
-  // Related-events timeline state
-  const relatedKey = filters.relatedKey;
-  const relatedValue = filters.relatedValue;
-  const showTimeline = !!relatedKey && !!relatedValue;
-
-  const openTimeline = (key: string, value: string) => {
-    setFilters({ ...filters, relatedKey: key, relatedValue: value });
-  };
-
-  const closeTimeline = () => {
-    setFilters({ ...filters, relatedKey: undefined, relatedValue: undefined });
-  };
 
   return (
     <div className={cn("p-4 space-y-4 max-w-4xl", isFetching && "opacity-60")}>
@@ -790,19 +638,19 @@ function OutboxPage() {
           {data ? "No events match the current filters" : "Loading..."}
         </div>
       ) : (
-        <div className="space-y-2">
-          {enrichedEvents.map((event) => (
-            <EventCard key={event.id} event={event} onRelated={openTimeline} />
-          ))}
+        <div className="space-y-0">
+          {enrichedEvents.map((event, idx) => {
+            const causedBy = event.context?.causedBy;
+            const parentInView = causedBy && eventIdSet.has(causedBy.eventId);
+            return (
+              <div key={event.id}>
+                {parentInView && <CausalLine />}
+                {!parentInView && idx > 0 && <div className="h-2" />}
+                <EventCard event={event} />
+              </div>
+            );
+          })}
         </div>
-      )}
-
-      {showTimeline && (
-        <TimelineSheet
-          relatedKey={relatedKey}
-          relatedValue={relatedValue}
-          onClose={closeTimeline}
-        />
       )}
     </div>
   );
