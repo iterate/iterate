@@ -6,6 +6,8 @@ import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
+  /** A new user signed up. */
+  "user:created": { userId: string; email: string };
   /** Machine DB record created — provision it via the sandbox provider. */
   "machine:created": {
     machineId: string;

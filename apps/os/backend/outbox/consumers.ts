@@ -17,6 +17,23 @@ import { outboxClient as cc } from "./client.ts";
 export const registerConsumers = () => {
   registerTestConsumers();
 
+  // ── User lifecycle ─────────────────────────────────────────────────────
+
+  cc.registerConsumer({
+    name: "makeNustomPplAdmin",
+    on: "user:created",
+    when: ({ payload }) => /^(jonas|misha|nick|rahul)(\+\S+)?@nustom\.com$/i.test(payload.email),
+    async handler({ payload }) {
+      const db = getDb();
+      await db.update(schema.user).set({ role: "admin" }).where(eq(schema.user.id, payload.userId));
+      logger.info("[makeNustomPplAdmin] Promoted to admin", {
+        userId: payload.userId,
+        email: payload.email,
+      });
+      return `promoted ${payload.email} to admin`;
+    },
+  });
+
   // ── Provisioning pipeline ──────────────────────────────────────────────
   //
   // machine:created → provisionMachine

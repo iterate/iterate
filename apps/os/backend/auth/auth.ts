@@ -9,6 +9,7 @@ import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
+import { outboxClient } from "../outbox/client.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -90,6 +91,10 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
           },
           after: async (user) => {
             logger.info("User signed up", { userId: user.id, email: user.email });
+            await outboxClient.send({ transaction: db, parent: db }, "user:created", {
+              userId: user.id,
+              email: user.email,
+            });
             // Track user_signed_up event in PostHog using waitUntil to ensure delivery
             waitUntil(
               captureServerEvent(envParam, {
