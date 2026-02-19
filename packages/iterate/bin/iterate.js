@@ -1,19 +1,93 @@
 #!/usr/bin/env node
 // @ts-check
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import * as prompts from "@clack/prompts";
-import { createTRPCClient, httpLink } from "@trpc/client";
-import { initTRPC } from "@trpc/server";
-import { createAuthClient } from "better-auth/client";
-import { adminClient } from "better-auth/client/plugins";
-import superjson from "superjson";
-import { createCli } from "trpc-cli";
-import { proxify } from "trpc-cli/dist/proxify.js";
-import { z } from "zod/v4";
+import { fileURLToPath } from "node:url";
+
+// --- Local delegation (must run before any heavy imports) ---
+
+/**
+ * Walk up from `startDir` looking for `relativePath` to exist.
+ * Returns the directory where it was found, or null.
+ * @param {string} relativePath
+ * @param {string} [startDir]
+ * @returns {string | null}
+ */
+const findUp = (relativePath, startDir = process.cwd()) => {
+  let dir = resolve(startDir);
+  while (true) {
+    if (existsSync(join(dir, relativePath))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+};
+
+const __filename = fileURLToPath(import.meta.url);
+
+/**
+ * If we're already running from a local version, skip delegation to avoid loops.
+ * Otherwise, find the closest local iterate CLI and re-exec into it.
+ */
+const delegateToLocal = () => {
+  if (process.env.__ITERATE_CLI_DELEGATED) return;
+
+  const selfReal = realpathSync(__filename);
+
+  // 1. Check if we're inside the iterate repo (has pnpm-workspace.yaml at root)
+  const repoRoot = findUp("pnpm-workspace.yaml");
+  if (repoRoot) {
+    const repoScript = join(repoRoot, "packages/iterate/bin/iterate.js");
+    if (existsSync(repoScript) && realpathSync(repoScript) !== selfReal) {
+      reExec(repoScript);
+      return;
+    }
+  }
+
+  // 2. Check for a local node_modules install
+  const nmRoot = findUp("node_modules/.bin/iterate");
+  if (nmRoot) {
+    const nmScript = join(nmRoot, "node_modules/.bin/iterate");
+    if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
+      reExec(nmScript);
+      return;
+    }
+  }
+};
+
+/**
+ * Re-exec into `scriptPath` with the same argv, never returning.
+ * @param {string} scriptPath
+ */
+const reExec = (scriptPath) => {
+  try {
+    execFileSync(process.execPath, [scriptPath, ...process.argv.slice(2)], {
+      stdio: "inherit",
+      env: { ...process.env, __ITERATE_CLI_DELEGATED: "1" },
+    });
+  } catch (e) {
+    process.exit(e && typeof e === "object" && "status" in e ? Number(e.status) || 1 : 1);
+  }
+  process.exit(0);
+};
+
+delegateToLocal();
+
+// --- Normal CLI startup (dynamic imports so delegation can short-circuit first) ---
+
+const prompts = await import("@clack/prompts");
+const { createTRPCClient, httpLink } = await import("@trpc/client");
+const { initTRPC } = await import("@trpc/server");
+const { createAuthClient } = await import("better-auth/client");
+const { adminClient } = await import("better-auth/client/plugins");
+const { default: superjson } = await import("superjson");
+const { createCli } = await import("trpc-cli");
+const { proxify } = await import("trpc-cli/dist/proxify.js");
+const { z } = await import("zod/v4");
 
 const XDG_CONFIG_PARENT = join(
   process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
@@ -49,8 +123,8 @@ const ConfigFile = z.object({
   rubbish: z.unknown().optional(),
 });
 
-/** @typedef {z.infer<typeof AuthConfig>} AuthConfig */
-/** @typedef {z.infer<typeof ConfigFile>} ConfigFile */
+/** @typedef {import('zod').infer<typeof AuthConfig>} AuthConfig */
+/** @typedef {import('zod').infer<typeof ConfigFile>} ConfigFile */
 
 /**
  * @typedef {{
@@ -245,7 +319,7 @@ const resolveImpersonationUserId = async ({ superadminAuthClient, userEmail, bas
   return resolvedUserId;
 };
 
-/** @param {z.infer<typeof AuthConfig>} authConfig */
+/** @param {import('zod').infer<typeof AuthConfig>} authConfig */
 const osAuthDance = async (authConfig) => {
   /** @type {string[] | undefined} */
   let superadminSetCookie;
