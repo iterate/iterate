@@ -440,7 +440,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     for (const delay of new Set(addResult.delays)) {
       // as a convenience, we'll process the queue automatically after the delay + a 10% buffer
       let delayMs = periodSeconds(delay) * 1000;
-      delayMs = Math.min(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
+      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
       if (delayMs > 120_000) continue; // don't bother with super long delays
       waitUntil(
         (async () => {
