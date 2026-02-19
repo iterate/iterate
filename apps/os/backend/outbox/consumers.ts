@@ -254,7 +254,7 @@ export const registerConsumers = () => {
         return `skipped: machine state is ${machine.state}`;
       }
 
-      await cc.sendTx(db, "machine:activated", async (tx) => {
+      const activated = await db.transaction(async (tx) => {
         // Re-check state inside the transaction (TOCTOU protection)
         const current = await tx.query.machine.findFirst({
           where: eq(schema.machine.id, machineId),
@@ -264,7 +264,7 @@ export const registerConsumers = () => {
             machineId,
             state: current?.state,
           });
-          return { payload: { machineId, projectId } };
+          return false;
         }
 
         // Bulk-detach all active machines for this project
@@ -279,10 +279,20 @@ export const registerConsumers = () => {
           .set({ state: "active" })
           .where(eq(schema.machine.id, machineId));
 
-        logger.info("[activateMachine] Machine activated", { machineId });
-        return { payload: { machineId, projectId } };
+        return true;
       });
 
+      if (!activated) {
+        return `skipped: state changed during transaction`;
+      }
+
+      // Emit activated event outside the transaction — only if we actually activated
+      await cc.send({ transaction: db, parent: db }, "machine:activated", {
+        machineId,
+        projectId,
+      });
+
+      logger.info("[activateMachine] Machine activated", { machineId });
       await broadcastInvalidation(env).catch(() => {});
       return `machine activated`;
     },

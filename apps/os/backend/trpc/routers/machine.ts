@@ -276,8 +276,9 @@ export const machineRouter = router({
           metadata: input.metadata,
         });
 
-        // Return apiKey for local machines - user needs this to configure their daemon
-        if (result.apiKey) {
+        // Return apiKey only for docker machines — user needs this to configure their local daemon.
+        // Cloud machines get the apiKey via provisioning env vars, no need to expose it in the response.
+        if (result.machine.type === "docker") {
           return { ...result.machine, apiKey: result.apiKey };
         }
 

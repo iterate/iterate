@@ -207,6 +207,11 @@ function MachineDetailPage() {
         machineId: params.machineId,
       },
       {
+        // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+        // or machine:daemon-status-reported, disabling the query permanently.
+        // Fix: fetch all events for the machine (not just lastEvent), then check
+        // events.has("machine:activated"). That way even detached machines still
+        // render their agents list, which is useful.
         enabled:
           machine.state === "active" &&
           (machine.lastEvent?.name === "machine:activated" ||

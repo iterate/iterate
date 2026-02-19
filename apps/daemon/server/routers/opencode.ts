@@ -92,7 +92,13 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
     return c.json({ error: "OpenCode is not healthy: " + inspect(health?.error) }, 503);
   }
 
-  if (!readFileSync(homedir() + "/.iterate/.env", "utf8").includes("ANTHROPIC_API_KEY")) {
+  let envFileContent: string;
+  try {
+    envFileContent = readFileSync(homedir() + "/.iterate/.env", "utf8");
+  } catch {
+    return c.json({ error: "~/.iterate/.env not found (bootstrap may not have run yet)" }, 503);
+  }
+  if (!envFileContent.includes("ANTHROPIC_API_KEY")) {
     console.log("ANTHROPIC_API_KEY is not set yet!");
     return c.json({ error: "ANTHROPIC_API_KEY is not set" }, 503);
   }
