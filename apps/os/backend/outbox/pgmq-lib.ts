@@ -267,7 +267,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             processing_results: [],
             environment: process.env.APP_STAGE || process.env.NODE_ENV || "unknown",
           } satisfies ConsumerEvent)}::jsonb,
-          delay => ${delay}::integer
+          delay => ${periodSeconds(delay)}::integer
         )
       `);
     }
