@@ -14,11 +14,7 @@ export interface ModelRef {
 }
 
 export interface IterateConfig {
-  /**
-   * Default model to use for OpenCode sessions.
-   * @example { providerID: "anthropic", modelID: "claude-sonnet-4-5" }
-   */
-  defaultModel?: () => ModelRef;
+  // todo: add `pidnap`/`processes`/`crons`/`tasks`
 }
 
 /**
@@ -30,10 +26,7 @@ export interface IterateConfig {
  * import { iterateConfig } from "@iterate-com/daemon/config/index.ts";
  *
  * export default iterateConfig({
- *   defaultModel: {
- *     providerID: "anthropic",
- *     modelID: "claude-sonnet-4-5",
- *   },
+ *   something: "foo",
  * });
  * ```
  */

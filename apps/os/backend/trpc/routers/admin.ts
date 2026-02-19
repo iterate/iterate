@@ -7,6 +7,7 @@ import { user, billingAccount } from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
 import { outboxClient } from "../../outbox/client.ts";
+import { getEventsRelatedTo } from "../../utils/machine-metadata.ts";
 
 export const adminRouter = router({
   // Impersonate a user (creates a session as that user)
@@ -444,6 +445,7 @@ export const adminRouter = router({
             e.id,
             e.name,
             e.payload,
+            e.context,
             e.created_at as "createdAt",
             e.updated_at as "updatedAt",
             coalesce(
@@ -473,6 +475,7 @@ export const adminRouter = router({
           id: number;
           name: string;
           payload: Record<string, unknown>;
+          context: Record<string, unknown>;
           createdAt: string;
           updatedAt: string;
           consumers: Array<{
@@ -512,6 +515,11 @@ export const adminRouter = router({
         const consumerNames = consumerNamesRows.map((r) => r.name);
 
         return { events: rows, total, eventNames, consumerNames };
+      }),
+    relatedEvents: adminProcedure
+      .input(z.object({ key: z.string(), value: z.string() }))
+      .query(async ({ ctx, input }) => {
+        return await getEventsRelatedTo(ctx.db, input);
       }),
   },
 });
