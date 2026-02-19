@@ -489,7 +489,7 @@ function MachineDetailPage() {
             <Button variant="outline" size="sm" asChild>
               <Link
                 to="/admin/outbox"
-                search={{ relatedKey: "machineId", relatedValue: params.machineId }}
+                search={{ payload: JSON.stringify({ machineId: params.machineId }), sort: "asc" }}
               >
                 <List className="h-4 w-4" />
                 Outbox Events

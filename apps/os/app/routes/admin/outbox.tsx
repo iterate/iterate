@@ -34,9 +34,6 @@ const Filters = z.object({
   resMax: z.string().optional(),
   payload: z.string().optional(),
   page: z.number().optional().catch(0),
-  // Related-events filter (e.g. machineId=xyz)
-  relatedKey: z.string().optional(),
-  relatedValue: z.string().optional(),
 });
 
 type Filters = z.infer<typeof Filters>;
@@ -140,7 +137,7 @@ function filtersToInput(filters: Filters) {
   }
 
   return {
-    sortDirection: filters.relatedKey ? ("asc" as const) : filters.sort,
+    sortDirection: filters.sort,
     eventName: filters.event || undefined,
     consumerName: filters.consumer || undefined,
     consumerStatus: filters.status || undefined,
@@ -152,8 +149,6 @@ function filtersToInput(filters: Filters) {
     resolutionMinMs: resolutionMinMs ?? undefined,
     resolutionMaxMs: resolutionMaxMs ?? undefined,
     payloadContains,
-    relatedKey: filters.relatedKey || undefined,
-    relatedValue: filters.relatedValue || undefined,
   };
 }
 
@@ -305,28 +300,6 @@ function FilterBar({
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
-        {/* Related key/value filter */}
-        <div className="col-span-2">
-          <label className="text-xs text-muted-foreground mb-1 block">
-            Related (payload key=value)
-          </label>
-          <div className="flex items-center gap-1.5">
-            <Input
-              className="h-8 text-xs flex-1 font-mono"
-              placeholder="key e.g. machineId"
-              value={draft.relatedKey ?? ""}
-              onChange={(e) => onChange({ ...draft, relatedKey: e.target.value || undefined })}
-            />
-            <span className="text-xs text-muted-foreground">=</span>
-            <Input
-              className="h-8 text-xs flex-1 font-mono"
-              placeholder="value"
-              value={draft.relatedValue ?? ""}
-              onChange={(e) => onChange({ ...draft, relatedValue: e.target.value || undefined })}
-            />
-          </div>
-        </div>
-
         {/* Sort */}
         <div>
           <label className="text-xs text-muted-foreground mb-1 block">Sort</label>
