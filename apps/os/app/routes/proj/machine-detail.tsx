@@ -52,7 +52,6 @@ type MachineMetadata = {
   fly?: {
     machineId?: string;
   };
-  provisioningError?: string;
 } & Record<string, unknown>;
 
 type ProviderDetailLink = {
@@ -381,10 +380,9 @@ function MachineDetailPage() {
   const lastEventName = machine.lastEvent?.name;
   const lastEventPayload = machine.lastEvent?.payload;
   const issueMessage =
-    metadata.provisioningError ??
-    (lastEventName === "machine:probe-failed" && lastEventPayload?.detail
+    lastEventName === "machine:probe-failed" && lastEventPayload?.detail
       ? String(lastEventPayload.detail)
-      : null);
+      : null;
 
   const machineJson = JSON.stringify(machine, null, 2);
 
