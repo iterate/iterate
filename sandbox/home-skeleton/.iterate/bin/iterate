@@ -1,10 +1,11 @@
 #!/bin/sh
 # Export certain env vars before starting node so they're loaded during initialization
-# (--env-file-if-exists loads too late for NODE_EXTRA_CA_CERTS and NODE_USE_ENV_PROXY)
+# (--env-file-if-exists loads too late for NODE_EXTRA_CA_CERTS, NODE_USE_ENV_PROXY, NODE_USE_SYSTEM_CA)
 if [ -f "$HOME/.iterate/.env" ]; then
   NODE_EXTRA_CA_CERTS=$(grep '^NODE_EXTRA_CA_CERTS=' "$HOME/.iterate/.env" | cut -d'"' -f2)
   NODE_USE_ENV_PROXY=$(grep '^NODE_USE_ENV_PROXY=' "$HOME/.iterate/.env" | cut -d'=' -f2)
-  export NODE_EXTRA_CA_CERTS NODE_USE_ENV_PROXY
+  NODE_USE_SYSTEM_CA=$(grep '^NODE_USE_SYSTEM_CA=' "$HOME/.iterate/.env" | cut -d'=' -f2)
+  export NODE_EXTRA_CA_CERTS NODE_USE_ENV_PROXY NODE_USE_SYSTEM_CA
 fi
 # Run from iterate repo so tsx can be resolved from node_modules
 cd ~/src/github.com/iterate/iterate
