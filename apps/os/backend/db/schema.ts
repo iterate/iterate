@@ -635,12 +635,21 @@ export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
 // #endregion ========== Billing ==========
 
 // #region ========== Outbox ==========
+export type OutboxEventContext = {
+  causedBy?: {
+    eventId: number;
+    consumerName: string;
+    jobId: number | string;
+  };
+};
+
 export const outboxEvent = pgTable(
   "outbox_event",
   (t) => ({
     id: bigserial("id", { mode: "number" }).primaryKey(),
     name: t.text().notNull(),
     payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    context: jsonb().$type<OutboxEventContext>().notNull().default({}),
     ...withTimestamps,
   }),
   (t) => [

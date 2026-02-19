@@ -1,0 +1,1 @@
+ALTER TABLE "outbox_event" ADD COLUMN "context" jsonb DEFAULT '{}'::jsonb NOT NULL;

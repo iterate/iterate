@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { DB } from "../db/client.ts";
+import type { OutboxEventContext } from "../db/schema.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -178,4 +179,73 @@ export async function getMachinePendingConsumers(
     result.set(row.machine_id, existing);
   }
   return result;
+}
+
+// --- Event lineage tracing ---
+
+export type RelatedEvent = {
+  id: number;
+  name: string;
+  payload: Record<string, unknown>;
+  context: OutboxEventContext;
+  createdAt: string;
+  consumers: Array<{
+    msg_id: number | string;
+    enqueued_at: string;
+    vt: string;
+    read_ct: number;
+    message: Record<string, unknown>;
+  }>;
+};
+
+/**
+ * Fetch all outbox events + consumer jobs related to a correlation key.
+ * e.g. `getEventsRelatedTo(db, { key: "machineId", value: "mach_abc" })`
+ *
+ * Returns events in chronological order with their consumer jobs attached,
+ * plus `context.causedBy` for causal graph edges.
+ */
+export async function getEventsRelatedTo(
+  db: DB,
+  params: { key: string; value: string },
+): Promise<RelatedEvent[]> {
+  const result = await db.execute(sql`
+    with matched_events as (
+      select * from outbox_event
+      where payload->>${"" + params.key} = ${params.value}
+    ),
+    all_consumers as (
+      select msg_id, enqueued_at, vt, read_ct, message
+      from pgmq.q_consumer_job_queue
+      union all
+      select msg_id, enqueued_at, vt, read_ct, message
+      from pgmq.a_consumer_job_queue
+    ),
+    matched_consumers as (
+      select ac.* from all_consumers ac
+      join matched_events me on (ac.message->>'event_id')::bigint = me.id
+    )
+    select
+      me.id,
+      me.name,
+      me.payload,
+      me.context,
+      me.created_at as "createdAt",
+      coalesce(
+        (select json_agg(json_build_object(
+          'msg_id', mc.msg_id, 'enqueued_at', mc.enqueued_at,
+          'vt', mc.vt, 'read_ct', mc.read_ct, 'message', mc.message
+        ) order by mc.msg_id)
+        from matched_consumers mc
+        where (mc.message->>'event_id')::bigint = me.id),
+        '[]'::json
+      ) as consumers
+    from matched_events me
+    order by me.id
+  `);
+
+  const rows = (
+    Array.isArray(result) ? result : ((result as { rows: unknown[] }).rows ?? [])
+  ) as RelatedEvent[];
+  return rows;
 }
