@@ -589,7 +589,7 @@ const runCli = async () => {
       );
     }
     if (daemonProcedures.status === "fulfilled") {
-      // don't nest daemon procedures under "daemon"ç
+      // don't nest daemon procedures under "daemon"
       routers.push(daemonProcedures.value);
     } else {
       routers.push(

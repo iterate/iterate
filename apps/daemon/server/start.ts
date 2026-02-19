@@ -6,7 +6,6 @@ import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-
 import { startCronTaskScheduler } from "./cron-tasks/scheduler.ts";
 import { loadConfig } from "./config-loader.ts";
 
-// todo: move apps/cli's router here and the cli part to packages/iterate
 export const startServer = async (params: { port: number; hostname: string }) => {
   // Load iterate.config.ts from CWD (or default) before starting server
   await loadConfig();
