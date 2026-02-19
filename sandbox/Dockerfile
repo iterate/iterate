@@ -87,6 +87,29 @@ ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 RUN uv tool install mitmproxy
 
+# Generate mitmproxy CA certificate at build time.
+# This certificate is safe to share across all sandbox instances because:
+# 1. Each sandbox is network-isolated - they cannot communicate with each other
+# 2. The cert is only used for the local egress proxy within each sandbox
+# 3. No sandbox can intercept another sandbox's traffic
+RUN mkdir -p /home/iterate/.mitmproxy && \
+    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
+    PID=$! && \
+    # TODO: replace this polling hack with a direct cert-generation command.
+    # Track in tasks/mitmproxy-direct-cert-command.md.
+    # Cert generation is not immediate; poll for CA file before continuing.
+    for i in $(seq 1 30); do \
+      [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
+      sleep 0.5; \
+    done && \
+    kill $PID 2>/dev/null || true && \
+    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
+
+# Install mitmproxy CA certificate system-wide
+RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
+    sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
+    sudo update-ca-certificates
+
 # Configure npm for userspace global installs
 RUN mkdir -p ~/.npm-global && \
     npm config set prefix ~/.npm-global
@@ -121,6 +144,10 @@ ENV PATH="/home/iterate/.opencode/bin:$PATH"
 # Ensure wrapper scripts win after all PATH modifications.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
+# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
+# Use a free model — no API keys are available at build time.
+RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
+
 # Repo path and working dir (used by COPY steps below).
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 WORKDIR /home/iterate/src/github.com/iterate/iterate
@@ -147,32 +174,6 @@ RUN pnpm install --frozen-lockfile --offline
 # Run post-repo-sync steps (cacheable - only reruns when source changes)
 RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 
-# Generate mitmproxy CA certificate at build time.
-# This certificate is safe to share across all sandbox instances because:
-# 1. Each sandbox is network-isolated - they cannot communicate with each other
-# 2. The cert is only used for the local egress proxy within each sandbox
-# 3. No sandbox can intercept another sandbox's traffic
-RUN mkdir -p /home/iterate/.mitmproxy && \
-    /home/iterate/.local/bin/mitmdump -p 0 --set confdir=/home/iterate/.mitmproxy &>/dev/null & \
-    PID=$! && \
-    # TODO: replace this polling hack with a direct cert-generation command.
-    # Track in tasks/mitmproxy-direct-cert-command.md.
-    # Cert generation is not immediate; poll for CA file before continuing.
-    for i in $(seq 1 30); do \
-    [ -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem ] && break; \
-    sleep 0.5; \
-    done && \
-    kill $PID 2>/dev/null || true && \
-    test -f /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem
-
-# Install mitmproxy CA certificate system-wide
-RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
-    sudo cp /home/iterate/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/iterate/mitmproxy-ca.crt && \
-    sudo update-ca-certificates
-
-# Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
-# Use a free model — no API keys are available at build time.
-RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
 
 ARG GIT_SHA=unknown
 # Keep a functional git repo inside the image for tools/tests that call git.
