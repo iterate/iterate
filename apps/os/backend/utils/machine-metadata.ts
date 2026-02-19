@@ -6,8 +6,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const TRANSIENT_TOP_LEVEL_MACHINE_METADATA_KEYS = new Set([
-  "provisioningError",
-
   // Legacy keys — can be removed once all machines have cycled
   "daemonStatus",
   "daemonStatusMessage",
