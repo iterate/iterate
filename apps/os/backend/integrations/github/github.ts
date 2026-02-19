@@ -610,6 +610,7 @@ const WEBHOOK_FILTERS = {
   pull_request_review: "true",
   pull_request_review_comment: "true",
   issue_comment: "payload.issue.pull_request != null",
+  pull_request: "payload.action = 'closed' and payload.pull_request.merged = true",
 };
 
 // #region ========== Webhook Handler ==========
@@ -802,6 +803,23 @@ githubApp.post("/webhook", async (c) => {
       }
       break;
     }
+    case "pull_request": {
+      const parseResult = PullRequestEvent.safeParse(payload);
+      if (parseResult.success) {
+        waitUntil(
+          handlePullRequest({ payload: parseResult.data, db: c.var.db, env: c.env }).catch(
+            (err: unknown) => {
+              logger.error("[GitHub Webhook] handlePullRequest error", err);
+            },
+          ),
+        );
+      } else {
+        logger.error(
+          `[GitHub Webhook] handlePullRequest ${deliveryId} error: ${z.prettifyError(parseResult.error)}`,
+        );
+      }
+      break;
+    }
     default: {
       // ensure we've handled all event types
       eventType satisfies never;
@@ -960,6 +978,20 @@ const IssueCommentEvent = z.object({
 
 type IssueCommentEvent = z.infer<typeof IssueCommentEvent>;
 
+const PullRequestEvent = z.object({
+  action: z.string(),
+  repository: RepositoryPayload,
+  pull_request: PullRequestRef.extend({
+    merged: z.boolean().optional(),
+    merged_at: z.string().nullable().optional(),
+    merge_commit_sha: z.string().nullable().optional(),
+    merged_by: z.object({ login: z.string() }).nullable().optional(),
+  }),
+  sender: z.object({ login: z.string() }).optional(),
+});
+
+type PullRequestEvent = z.infer<typeof PullRequestEvent>;
+
 type RepositoryPayload = z.infer<typeof RepositoryPayload>;
 
 type GitHubRepoCoordinates = {
@@ -1039,6 +1071,7 @@ type PullRequestSignal = {
   prNumber: number;
   eventKind:
     | "workflow_run"
+    | "pull_request"
     | "pull_request_review"
     | "pull_request_review_comment"
     | "issue_comment";
@@ -1395,6 +1428,16 @@ function buildPullRequestPrompt(params: {
     ? buildFirstLoopInContextSection(params.context)
     : "";
 
+  const postMergeFollowUpGuidance =
+    params.signal.eventKind === "pull_request" && params.signal.action === "closed"
+      ? [
+          "",
+          "Post-merge follow-up guidance:",
+          "- PR is merged. Monitor the deploy-os workflow plus logs/checks to confirm rollout health.",
+          "- Exit when you are confident the fix solved the issues and introduced no new ones.",
+        ].join("\n")
+      : "";
+
   const fixValidationGuidance = [
     "",
     "Fix validation guidance:",
@@ -1409,6 +1452,12 @@ function buildPullRequestPrompt(params: {
         "- You are allowed to reject feedback, especially from reviewbots.",
       ].join("\n")
     : "";
+
+  const reviewbotIssueActionGuidance = [
+    "",
+    "Reviewbot action guidance:",
+    "- For issues flagged by Cursor Bugbot/pullfrog/other reviewbots: if validated and safe, apply fixes directly without asking for confirmation.",
+  ].join("\n");
 
   const cursorLowRiskMergeGuidance = cursorLowRiskSignal
     ? [
@@ -1432,8 +1481,10 @@ function buildPullRequestPrompt(params: {
     `Fallback target used: ${params.usedFallback ? "yes" : "no"}`,
     bodySection,
     firstLoopInContextSection,
+    postMergeFollowUpGuidance,
     fixValidationGuidance,
     automatedReviewerGuidance,
+    reviewbotIssueActionGuidance,
     cursorLowRiskMergeGuidance,
   ].join("\n");
 }
@@ -2062,6 +2113,30 @@ async function handleIssueComment({ payload, db, env }: HandleIssueCommentParams
   });
 }
 
+async function handlePullRequest({ payload, db, env }: HandlePullRequestParams) {
+  if (payload.action !== "closed") return;
+  if (!payload.pull_request.merged) return;
+
+  const repo = resolveRepoCoordinates(payload.repository);
+  if (!repo) return;
+
+  const mergedBy = payload.pull_request.merged_by?.login ?? payload.sender?.login ?? "unknown";
+
+  await routePullRequestSignalToAgent({
+    db,
+    env,
+    signal: {
+      repo,
+      prNumber: payload.pull_request.number,
+      eventKind: "pull_request",
+      action: payload.action,
+      actorLogin: mergedBy,
+      eventBody: `PR merged by: ${mergedBy}\nMerge commit: ${payload.pull_request.merge_commit_sha ?? "unknown"}`,
+      eventUrl: payload.pull_request.html_url,
+    },
+  });
+}
+
 // Schema to identify CI completion events we want to act on
 const IterateCICompletion = z.object({
   action: z.literal("completed"),
@@ -2077,6 +2152,12 @@ const IterateCICompletion = z.object({
 
 type HandleWorkflowRunParams = {
   payload: WorkflowRunEvent;
+  db: DB;
+  env: CloudflareEnv;
+};
+
+type HandlePullRequestParams = {
+  payload: PullRequestEvent;
   db: DB;
   env: CloudflareEnv;
 };

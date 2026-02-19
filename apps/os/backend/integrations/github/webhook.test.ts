@@ -392,6 +392,66 @@ describe("GitHub Webhook Handler", () => {
     });
   });
 
+  describe("pull_request filtering", () => {
+    async function makeRequest(app: Hono, payload: Record<string, unknown>) {
+      const body = JSON.stringify(payload);
+      const signature = await generateSignature(WEBHOOK_SECRET, body);
+
+      return app.request("/webhook", {
+        method: "POST",
+        body,
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "pull_request",
+          "x-hub-signature-256": signature,
+          "x-github-delivery": `delivery-${Date.now()}`,
+        },
+      });
+    }
+
+    it("filters out non-merged pull_request events", async () => {
+      const { app } = createTestApp();
+      const payload = {
+        action: "closed",
+        repository: { full_name: "iterate/iterate" },
+        pull_request: {
+          number: 34,
+          title: "PR title",
+          body: "PR body",
+          html_url: "https://github.com/iterate/iterate/pull/34",
+          user: { login: "bob" },
+          merged: false,
+        },
+      };
+
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ message: "Event filtered out" });
+    });
+
+    it("accepts merged pull_request events", async () => {
+      const { app } = createTestApp();
+      const payload = {
+        action: "closed",
+        repository: { full_name: "iterate/iterate" },
+        pull_request: {
+          number: 34,
+          title: "PR title",
+          body: "PR body",
+          html_url: "https://github.com/iterate/iterate/pull/34",
+          user: { login: "bob" },
+          merged: true,
+          merge_commit_sha: "abc123",
+          merged_by: { login: "bob" },
+        },
+      };
+
+      const res = await makeRequest(app, payload);
+      const json = await res.json();
+      expect(json).toMatchObject({ received: true });
+    });
+  });
+
   describe("commit_comment filtering", () => {
     const validCommitCommentPayload = {
       action: "created",
