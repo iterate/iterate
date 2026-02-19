@@ -10,6 +10,8 @@ import {
   ArrowUpDown,
   Filter,
   X,
+  Link2,
+  ArrowRight,
 } from "lucide-react";
 import { z } from "zod/v4";
 import { ms, parse as msParse } from "ms";
@@ -18,6 +20,7 @@ import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet.tsx";
 import { cn } from "@/lib/utils.ts";
 
 const Filters = z.object({
@@ -34,6 +37,9 @@ const Filters = z.object({
   resMax: z.string().optional(),
   payload: z.string().optional(),
   page: z.number().optional().catch(0),
+  // Related-events timeline
+  relatedKey: z.string().optional(),
+  relatedValue: z.string().optional(),
 });
 
 type Filters = z.infer<typeof Filters>;
@@ -55,6 +61,7 @@ type QueueMessage = {
     consumer_name: string;
     event_id: number;
     event_payload: Record<string, unknown>;
+    event_context?: Record<string, unknown>;
     processing_results: unknown[];
     status?: ConsumerStatus;
   };
@@ -66,6 +73,7 @@ type EventWithConsumers = {
   id: number;
   name: string;
   payload: Record<string, unknown>;
+  context?: { causedBy?: { eventId: number; consumerName: string; jobId: number | string } };
   createdAt: Date;
   updatedAt: Date;
   consumers: QueueMessage[];
@@ -165,7 +173,8 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
           <StatusDot status={status} />
           <span className="text-xs font-medium truncate">{msg.message.consumer_name}</span>
           <span className="text-xs text-muted-foreground">
-            msg #{String(msg.msg_id)} · {msg.read_ct} read{msg.read_ct !== 1 ? "s" : ""}
+            msg #{String(msg.msg_id)} · {msg.read_ct} read{msg.read_ct !== 1 ? "s" : ""} · vt{" "}
+            {new Date(msg.vt).toLocaleTimeString()}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -179,9 +188,20 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
       </button>
       {open && (
         <div className="border-t px-3 py-2 space-y-2">
-          <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Full Message</div>
-            <SerializedObjectCodeBlock data={msg.message} />
+          <div className="grid grid-cols-4 gap-2 text-xs text-muted-foreground">
+            <div>
+              <span className="font-medium">msg_id:</span> {String(msg.msg_id)}
+            </div>
+            <div>
+              <span className="font-medium">read_ct:</span> {msg.read_ct}
+            </div>
+            <div>
+              <span className="font-medium">enqueued:</span>{" "}
+              {new Date(msg.enqueued_at).toLocaleString()}
+            </div>
+            <div>
+              <span className="font-medium">vt:</span> {new Date(msg.vt).toLocaleString()}
+            </div>
           </div>
           {msg.message.processing_results.length > 0 && (
             <div>
@@ -197,7 +217,63 @@ function ConsumerRow({ msg }: { msg: QueueMessage }) {
   );
 }
 
-function EventCard({ event }: { event: EventWithConsumers }) {
+function CausedByBadge({
+  context,
+}: {
+  context?: { causedBy?: { eventId: number; consumerName: string; jobId: number | string } };
+}) {
+  if (!context?.causedBy) return null;
+  return (
+    <span className="inline-flex items-center gap-1 text-xs bg-muted rounded px-1.5 py-0.5 text-muted-foreground">
+      <ArrowRight className="h-3 w-3" />
+      from event #{context.causedBy.eventId} via {context.causedBy.consumerName}
+    </span>
+  );
+}
+
+/** Clickable payload fields that open the related-events timeline */
+function ClickablePayload({
+  payload,
+  onRelated,
+}: {
+  payload: Record<string, unknown>;
+  onRelated: (key: string, value: string) => void;
+}) {
+  return (
+    <div className="text-xs font-mono bg-muted/50 rounded p-2 space-y-0.5">
+      {Object.entries(payload).map(([key, val]) => {
+        const strVal = typeof val === "string" ? val : JSON.stringify(val);
+        const isClickable = typeof val === "string" && val.length > 0;
+        return (
+          <div key={key} className="flex items-start gap-1">
+            <span className="text-muted-foreground">{key}:</span>
+            {isClickable ? (
+              <button
+                type="button"
+                className="text-left underline decoration-dotted underline-offset-2 hover:text-foreground text-muted-foreground transition-colors inline-flex items-center gap-0.5"
+                onClick={() => onRelated(key, val)}
+                title={`Show all events where ${key}=${val}`}
+              >
+                {strVal}
+                <Link2 className="h-3 w-3 shrink-0 opacity-50" />
+              </button>
+            ) : (
+              <span className="text-muted-foreground break-all">{strVal}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function EventCard({
+  event,
+  onRelated,
+}: {
+  event: EventWithConsumers;
+  onRelated: (key: string, value: string) => void;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -210,7 +286,10 @@ function EventCard({ event }: { event: EventWithConsumers }) {
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <StatusDot status={event.aggregateStatus} />
           <div className="min-w-0 flex-1">
-            <div className="font-medium text-sm">{event.name}</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium text-sm">{event.name}</span>
+              <CausedByBadge context={event.context} />
+            </div>
             <div className="text-xs text-muted-foreground">
               #{event.id} · {event.consumers.length} consumer
               {event.consumers.length !== 1 ? "s" : ""} · {formatAge(event.createdAt)}
@@ -228,9 +307,15 @@ function EventCard({ event }: { event: EventWithConsumers }) {
       {open && (
         <div className="border-t px-4 py-3 space-y-3">
           <div>
-            <div className="text-xs font-medium text-muted-foreground mb-1">Event Payload</div>
-            <SerializedObjectCodeBlock data={event.payload} />
+            <div className="text-xs font-medium text-muted-foreground mb-1">Payload</div>
+            <ClickablePayload payload={event.payload} onRelated={onRelated} />
           </div>
+          {event.context?.causedBy && (
+            <div>
+              <div className="text-xs font-medium text-muted-foreground mb-1">Context</div>
+              <SerializedObjectCodeBlock data={event.context} />
+            </div>
+          )}
           {event.consumers.length > 0 && (
             <div>
               <div className="text-xs font-medium text-muted-foreground mb-2">Consumers</div>
@@ -248,17 +333,19 @@ function EventCard({ event }: { event: EventWithConsumers }) {
 }
 
 function FilterBar({
-  filters,
+  draft,
   onChange,
+  onApply,
   eventNames,
   consumerNames,
 }: {
-  filters: Filters;
+  draft: Filters;
   onChange: (f: Filters) => void;
+  onApply: () => void;
   eventNames: string[];
   consumerNames: string[];
 }) {
-  const hasFilters = Object.entries(filters).some(
+  const hasFilters = Object.entries(draft).some(
     ([key, val]) => val !== DEFAULT_FILTERS[key as keyof Filters],
   );
 
@@ -269,17 +356,26 @@ function FilterBar({
           <Filter className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Filters</span>
         </div>
-        {hasFilters && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(DEFAULT_FILTERS)}
-            className="h-7 text-xs"
-          >
-            <X className="h-3 w-3 mr-1" />
-            Clear
+        <div className="flex items-center gap-2">
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onChange(DEFAULT_FILTERS);
+                // Auto-apply on clear
+                setTimeout(onApply, 0);
+              }}
+              className="h-7 text-xs"
+            >
+              <X className="h-3 w-3 mr-1" />
+              Clear
+            </Button>
+          )}
+          <Button variant="default" size="sm" onClick={onApply} className="h-7 text-xs">
+            Apply
           </Button>
-        )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
@@ -292,13 +388,13 @@ function FilterBar({
             className="w-full justify-start text-xs"
             onClick={() =>
               onChange({
-                ...filters,
-                sort: filters.sort === "desc" ? "asc" : "desc",
+                ...draft,
+                sort: draft.sort === "desc" ? "asc" : "desc",
               })
             }
           >
             <ArrowUpDown className="h-3 w-3 mr-1.5" />
-            {filters.sort === "desc" ? "Newest first" : "Oldest first"}
+            {draft.sort === "desc" ? "Newest first" : "Oldest first"}
           </Button>
         </div>
 
@@ -307,8 +403,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Event</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.event ?? ""}
-            onChange={(e) => onChange({ ...filters, event: e.target.value || undefined })}
+            value={draft.event ?? ""}
+            onChange={(e) => onChange({ ...draft, event: e.target.value || undefined })}
           >
             <option value="">All events</option>
             {eventNames.map((n) => (
@@ -324,8 +420,8 @@ function FilterBar({
           <label className="text-xs text-muted-foreground mb-1 block">Consumer</label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.consumer ?? ""}
-            onChange={(e) => onChange({ ...filters, consumer: e.target.value || undefined })}
+            value={draft.consumer ?? ""}
+            onChange={(e) => onChange({ ...draft, consumer: e.target.value || undefined })}
           >
             <option value="">All consumers</option>
             {consumerNames.map((n) => (
@@ -344,19 +440,19 @@ function FilterBar({
               type="button"
               className="underline"
               onClick={() =>
-                onChange({ ...filters, statusMode: filters.statusMode === "some" ? "all" : "some" })
+                onChange({ ...draft, statusMode: draft.statusMode === "some" ? "all" : "some" })
               }
             >
-              {filters.statusMode}
+              {draft.statusMode}
             </button>
             )
           </label>
           <select
             className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs ring-offset-background"
-            value={filters.status ?? ""}
+            value={draft.status ?? ""}
             onChange={(e) =>
               onChange({
-                ...filters,
+                ...draft,
                 status: (e.target.value || undefined) as ConsumerStatus | undefined,
               })
             }
@@ -376,15 +472,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min e.g. 5m"
-              value={filters.ageMin ?? ""}
-              onChange={(e) => onChange({ ...filters, ageMin: e.target.value || undefined })}
+              value={draft.ageMin ?? ""}
+              onChange={(e) => onChange({ ...draft, ageMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max e.g. 2d"
-              value={filters.ageMax ?? ""}
-              onChange={(e) => onChange({ ...filters, ageMax: e.target.value || undefined })}
+              value={draft.ageMax ?? ""}
+              onChange={(e) => onChange({ ...draft, ageMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -398,8 +494,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="min"
-              value={filters.readMin ?? ""}
-              onChange={(e) => onChange({ ...filters, readMin: e.target.value || undefined })}
+              value={draft.readMin ?? ""}
+              onChange={(e) => onChange({ ...draft, readMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
@@ -407,8 +503,8 @@ function FilterBar({
               type="number"
               min={0}
               placeholder="max"
-              value={filters.readMax ?? ""}
-              onChange={(e) => onChange({ ...filters, readMax: e.target.value || undefined })}
+              value={draft.readMax ?? ""}
+              onChange={(e) => onChange({ ...draft, readMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -420,15 +516,15 @@ function FilterBar({
             <Input
               className="h-8 text-xs flex-1"
               placeholder="min"
-              value={filters.resMin ?? ""}
-              onChange={(e) => onChange({ ...filters, resMin: e.target.value || undefined })}
+              value={draft.resMin ?? ""}
+              onChange={(e) => onChange({ ...draft, resMin: e.target.value || undefined })}
             />
             <span className="text-xs text-muted-foreground">&ndash;</span>
             <Input
               className="h-8 text-xs flex-1"
               placeholder="max"
-              value={filters.resMax ?? ""}
-              onChange={(e) => onChange({ ...filters, resMax: e.target.value || undefined })}
+              value={draft.resMax ?? ""}
+              onChange={(e) => onChange({ ...draft, resMax: e.target.value || undefined })}
             />
           </div>
         </div>
@@ -441,12 +537,102 @@ function FilterBar({
           <Input
             className="h-8 text-xs font-mono"
             placeholder='{"machineId": "..."}'
-            value={filters.payload ?? ""}
-            onChange={(e) => onChange({ ...filters, payload: e.target.value || undefined })}
+            value={draft.payload ?? ""}
+            onChange={(e) => onChange({ ...draft, payload: e.target.value || undefined })}
           />
         </div>
       </div>
     </div>
+  );
+}
+
+// --- Related Events Timeline (Sheet) ---
+
+function TimelineSheet({
+  relatedKey,
+  relatedValue,
+  onClose,
+}: {
+  relatedKey: string;
+  relatedValue: string;
+  onClose: () => void;
+}) {
+  const { data, isFetching } = useQuery(
+    trpc.admin.outbox.relatedEvents.queryOptions({ key: relatedKey, value: relatedValue }),
+  );
+
+  // Build a lookup so we can show causal arrows
+  const eventIds = useMemo(() => new Set((data ?? []).map((e) => e.id)), [data]);
+
+  return (
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="text-sm font-medium">
+            Events for {relatedKey}={relatedValue}
+          </SheetTitle>
+        </SheetHeader>
+        <div className={cn("space-y-0 mt-4", isFetching && "opacity-60")}>
+          {!data ? (
+            <div className="text-sm text-muted-foreground p-4">Loading...</div>
+          ) : data.length === 0 ? (
+            <div className="text-sm text-muted-foreground p-4">No events found</div>
+          ) : (
+            data.map((event, idx) => {
+              const consumers = (event.consumers ?? []) as QueueMessage[];
+              const status = aggregateStatus(consumers);
+              const context = event.context as EventWithConsumers["context"];
+              const indent =
+                context?.causedBy && eventIds.has(context.causedBy.eventId) ? "ml-4" : "";
+
+              return (
+                <div key={event.id} className={cn("relative", indent)}>
+                  {/* Timeline connector */}
+                  {idx > 0 && <div className="absolute left-[11px] -top-2 h-2 w-px bg-border" />}
+                  {idx < data.length - 1 && (
+                    <div className="absolute left-[11px] bottom-0 top-[22px] w-px bg-border" />
+                  )}
+
+                  <div className="flex gap-3 py-2">
+                    <div className="relative z-10 mt-0.5">
+                      <StatusDot status={status} />
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium">{event.name}</span>
+                        <span className="text-xs text-muted-foreground">#{event.id}</span>
+                        {context?.causedBy && (
+                          <span className="text-xs text-muted-foreground">
+                            &larr; #{context.causedBy.eventId} / {context.causedBy.consumerName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {new Date(event.createdAt).toLocaleString()}
+                      </div>
+                      {consumers.length > 0 && (
+                        <div className="space-y-1 mt-1">
+                          {consumers.map((c) => (
+                            <div key={String(c.msg_id)} className="flex items-center gap-2 text-xs">
+                              <StatusDot status={c.message.status ?? "pending"} />
+                              <span className="font-medium">{c.message.consumer_name}</span>
+                              <span className="text-muted-foreground">
+                                msg #{String(c.msg_id)} · {c.read_ct} read
+                                {c.read_ct !== 1 ? "s" : ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -459,8 +645,15 @@ function OutboxPage() {
   const page = filters.page ?? 0;
   const pageSize = 25;
 
+  // Draft filters — edited locally, only applied on "Apply" click
+  const [draft, setDraft] = useState<Filters>(filters);
+
   const setFilters = (newFilters: Filters) => {
     navigate({ search: newFilters, replace: true });
+  };
+
+  const applyFilters = () => {
+    setFilters({ ...draft, page: 0 });
   };
 
   const serverInput = useMemo(
@@ -500,6 +693,7 @@ function OutboxPage() {
         id: event.id,
         name: event.name,
         payload: event.payload,
+        context: event.context as EventWithConsumers["context"],
         createdAt: new Date(event.createdAt),
         updatedAt: new Date(event.updatedAt),
         consumers,
@@ -511,9 +705,17 @@ function OutboxPage() {
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / pageSize);
 
-  // Reset page when filters change
-  const handleFilterChange = (newFilters: Filters) => {
-    setFilters({ ...newFilters, page: 0 });
+  // Related-events timeline state
+  const relatedKey = filters.relatedKey;
+  const relatedValue = filters.relatedValue;
+  const showTimeline = !!relatedKey && !!relatedValue;
+
+  const openTimeline = (key: string, value: string) => {
+    setFilters({ ...filters, relatedKey: key, relatedValue: value });
+  };
+
+  const closeTimeline = () => {
+    setFilters({ ...filters, relatedKey: undefined, relatedValue: undefined });
   };
 
   return (
@@ -538,8 +740,9 @@ function OutboxPage() {
       </div>
 
       <FilterBar
-        filters={filters}
-        onChange={handleFilterChange}
+        draft={draft}
+        onChange={setDraft}
+        onApply={applyFilters}
         eventNames={data?.eventNames ?? []}
         consumerNames={data?.consumerNames ?? []}
       />
@@ -589,9 +792,17 @@ function OutboxPage() {
       ) : (
         <div className="space-y-2">
           {enrichedEvents.map((event) => (
-            <EventCard key={event.id} event={event} />
+            <EventCard key={event.id} event={event} onRelated={openTimeline} />
           ))}
         </div>
+      )}
+
+      {showTimeline && (
+        <TimelineSheet
+          relatedKey={relatedKey}
+          relatedValue={relatedValue}
+          onClose={closeTimeline}
+        />
       )}
     </div>
   );

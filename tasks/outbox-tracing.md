@@ -1,5 +1,5 @@
 ---
-state: planned
+state: in-progress
 priority: medium
 size: medium
 dependsOn: []
