@@ -516,10 +516,9 @@ const launcherProcedures = {
       if (!parsed.success) {
         throw new Error(`Invalid config file ${CONFIG_PATH}: ${z.prettifyError(parsed.error)}`);
       }
-      return {
-        configPath: CONFIG_PATH,
-        current: readAuthConfig(process.cwd()),
-      };
+      const current = readAuthConfig(process.cwd());
+      if (current instanceof Error) throw current;
+      return { configPath: CONFIG_PATH, current };
     }),
   setup: t.procedure
     .input(SetupInput.partial())
@@ -536,10 +535,9 @@ const launcherProcedures = {
         workspacePath: process.cwd(),
       });
 
-      return {
-        configPath: CONFIG_PATH,
-        current: readAuthConfig(process.cwd()),
-      };
+      const current = readAuthConfig(process.cwd());
+      if (current instanceof Error) throw current;
+      return { configPath: CONFIG_PATH, current };
     }),
 
   whoami: t.procedure.mutation(async () => {
