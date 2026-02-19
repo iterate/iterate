@@ -864,7 +864,18 @@ if (isDevelopment && worker.url) {
     const expression = CronExpressionParser.parse(cron);
     const fn = async () => {
       while (expression.hasNext()) {
-        const next = expression.next();
+        let next: ReturnType<typeof expression.next> | null = expression.next();
+        while (next && next.getTime() < Date.now()) {
+          console.warn(
+            `Cron ${name} is overdue by ("next" at ${next}, now is ${new Date()}). Skipping.`,
+          );
+          next = expression.hasNext() ? expression.next() : (null as never);
+          continue;
+        }
+        if (!next) {
+          console.error(`Cron ${name} has no next run. Stopping loop.`);
+          break;
+        }
         const waitMs = next.getTime() - Date.now();
         if (runs++ <= 3) console.log(`Cron ${name} next up in ${waitMs}ms (at ${next})`);
         if (runs === 3) console.log(`(Future runs only logged on failure)`);
