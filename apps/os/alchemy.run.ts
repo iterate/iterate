@@ -861,7 +861,7 @@ if (!app.local) process.exit(0);
 if (isDevelopment && worker.url) {
   const loops = Object.entries(workerCrons).map(([name, cron]) => {
     let runs = 0;
-    const expression = CronExpressionParser.parse(cron);
+    const expression = CronExpressionParser.parse(cron, { tz: "UTC" });
     const fn = async () => {
       while (expression.hasNext()) {
         let next: ReturnType<typeof expression.next> | null = expression.next();
