@@ -25,9 +25,9 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "provisionMachine",
     on: "machine:created",
-    visibilityTimeout: 300, // provisioning can take minutes (Daytona snapshot, etc.)
+    visibilityTimeout: "300s", // provisioning can take minutes (Daytona snapshot, etc.)
     retry: (job) => {
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: 10 };
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: "10s" };
       return { retry: false, reason: "provisioning failed after retries" };
     },
     async handler(params) {
@@ -117,10 +117,10 @@ export const registerConsumers = () => {
     name: "sendReadinessProbe",
     on: "machine:daemon-status-reported",
     when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
-    visibilityTimeout: 90, // send retries up to 60s + margin
-    delay: () => 60, // opencode needs some time to restart after env vars are applied. Around 30s, so delay 60s to be safe.
+    visibilityTimeout: "90s", // send retries up to 60s + margin
+    delay: () => "30s", // opencode needs some time to restart after env vars are applied.
     retry: (job) => {
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: 15 };
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "15s" };
       return { retry: false, reason: "probe send failed after retries" };
     },
     async handler(params) {
@@ -171,11 +171,11 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "pollProbeResponse",
     on: "machine:probe-sent",
-    visibilityTimeout: 150, // poll runs up to 120s + margin
+    visibilityTimeout: "150s", // poll runs up to 120s + margin
     retry: (job) => {
       // Polling itself already retries internally for 120s. An outbox retry here
       // covers worker-level failures (e.g. worker restarted mid-poll).
-      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: 10 };
+      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "10s" };
       return { retry: false, reason: "poll failed after retry" };
     },
     async handler(params) {
@@ -420,7 +420,7 @@ function registerTestConsumers() {
     name: "badConsumer",
     on: "trpc:admin.outbox.poke",
     retry: (job) => {
-      if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: 1 };
+      if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: "1s" };
       return { retry: false, reason: "max retries reached" };
     },
     when: (params) => params.payload.input.message.includes("fail"),
