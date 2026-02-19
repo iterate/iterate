@@ -212,7 +212,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           );
           if (!archived.rows[0]) throw new Error(`Failed to archive message ${job.msg_id}`);
         } else {
-          logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay} seconds`);
+          logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay}`);
           await db.execute(sql`
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
