@@ -6,9 +6,9 @@ You are an AI agent running in an Iterate sandbox. Your agent slug (visible in t
 
 ## Communication Channels
 
-- `**slack-***`: You communicate via Slack. Use `iterate tool slack` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
-- `**email-***`: You communicate via email. Use `iterate tool email` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
-- `**webchat-***`: You communicate via Iterate's built-in webchat. Use `iterate tool webchat` CLI to send messages. See [WEBCHAT.md](./WEBCHAT.md) for channel-specific instructions (message types, reactions, thread context).
+- `**slack-***`: You communicate via Slack. Use `iterate tool exec-js` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
+- `**email-***`: You communicate via email. Use `iterate tool exec-js` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
+- `**webchat-***`: You communicate via Iterate's built-in webchat. Use `iterate tool exec-js` CLI to send messages. See [WEBCHAT.md](./WEBCHAT.md) for channel-specific instructions (message types, reactions, thread context).
 - `**discord-***`: You communicate via Discord. Its the simplest mode, just reply in assistant messages, they will be relayed back to the user.
 
 ## General Coding Style
@@ -244,11 +244,11 @@ iterate task get --filename my-task.md
 
 Replicate provides API access to thousands of AI models for image generation, video creation, audio synthesis, and more. The `REPLICATE_API_TOKEN` env var is available globally.
 
-**Recommended: Use `iterate tool replicate**` for programmatic access:
+**Recommended: Use `iterate tool exec-js**` for programmatic access:
 
 ```bash
 # Generate an image
-iterate tool replicate '
+iterate tool exec-js '
 const output = await replicate.run("black-forest-labs/flux-schnell", {
   input: { prompt: "a photo of a cat riding a bicycle" }
 });
@@ -256,7 +256,7 @@ console.log(output);
 '
 
 # Generate and save to file
-iterate tool replicate '
+iterate tool exec-js '
 const fs = require("fs");
 const output = await replicate.run("black-forest-labs/flux-schnell", {
   input: { prompt: "a sunset over mountains" }
@@ -274,7 +274,7 @@ console.log("Saved to output.png");
 Use the Replicate search API to find models for your task:
 
 ```bash
-iterate tool replicate '
+iterate tool exec-js '
 const results = await replicate.models.search("image generation");
 for (const model of results.results.slice(0, 5)) {
   console.log(model.owner + "/" + model.name, "-", model.description?.slice(0, 80));
@@ -287,7 +287,7 @@ for (const model of results.results.slice(0, 5)) {
 Model APIs vary significantly - parameter names differ between models (e.g., `image` vs `image_input`, single value vs array). Always check the schema before running:
 
 ```bash
-iterate tool replicate '
+iterate tool exec-js '
 const model = await replicate.models.get("google", "nano-banana-pro");
 console.log(JSON.stringify(model.latest_version.openapi_schema.components.schemas.Input, null, 2));
 '
@@ -298,7 +298,7 @@ console.log(JSON.stringify(model.latest_version.openapi_schema.components.schema
 Some models return a `ReadableStream` instead of URLs. Handle both cases:
 
 ```bash
-iterate tool replicate '
+iterate tool exec-js '
 const fs = require("fs");
 const imageData = fs.readFileSync("/tmp/input.png");
 const base64Image = `data:image/png;base64,${imageData.toString("base64")}`;
