@@ -8,13 +8,4 @@
  */
 import { iterateConfig } from "@iterate-com/daemon/config/index.ts";
 
-export default iterateConfig({
-  /**
-   * Default model used for OpenCode sessions.
-   */
-  defaultModel: () => {
-    if (process.env.ANTHROPIC_API_KEY)
-      return { providerID: "anthropic", modelID: "claude-opus-4-6" };
-    return { providerID: "opencode", modelID: "kimi-k2.5-free" };
-  },
-});
+export default iterateConfig({});

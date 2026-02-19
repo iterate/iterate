@@ -4,15 +4,6 @@
  * Configuration for the iterate daemon, loaded from iterate.config.ts
  */
 
-/**
- * Model reference matching OpenCode's internal format.
- * See https://models.dev for available provider and model IDs.
- */
-export interface ModelRef {
-  providerID: string;
-  modelID: string;
-}
-
 export interface IterateConfig {
   // todo: add `pidnap`/`processes`/`crons`/`tasks`
 }
