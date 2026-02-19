@@ -1502,7 +1502,28 @@ async function buildMachineForwardFetcher(
       externalId: machine.externalId,
       metadata: metadata ?? {},
     });
-    return await runtime.getFetcher(3000);
+
+    try {
+      return await runtime.getFetcher(3000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("No host port mapped for 8080")) throw err;
+
+      const daemonBaseUrl = await runtime.getBaseUrl(3000);
+      logger.warn("[GitHub Webhook] Falling back to direct daemon base URL (no ingress port)", {
+        machineId: machine.id,
+        machineType: machine.type,
+        daemonBaseUrl,
+      });
+
+      return async (input: string | Request | URL, init?: RequestInit) => {
+        const target =
+          typeof input === "string" && !/^https?:\/\//.test(input)
+            ? `${daemonBaseUrl}${input}`
+            : input;
+        return fetch(target, init);
+      };
+    }
   } catch (err) {
     logger.warn("[GitHub Webhook] Failed to build machine forward fetcher", {
       machineId: machine.id,
