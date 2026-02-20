@@ -93,6 +93,55 @@ function getLazyClients() {
 }
 
 export const toolsRouter = createTRPCRouter({
+  writeFile: publicProcedure
+    .meta({ description: "Write a file to the filesystem" })
+    .input(
+      z.object({
+        path: z.string().describe("File path to write. ~ is resolved to the home directory."),
+        content: z.string().describe("File content to write"),
+        mode: z.number().optional().describe("File permissions mode (default: 0o644)"),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const resolvedPath = input.path.startsWith("~")
+        ? path.join(homedir(), input.path.slice(1))
+        : input.path;
+      await mkdir(path.dirname(resolvedPath), { recursive: true });
+      await writeFile(resolvedPath, input.content, { mode: input.mode ?? 0o644 });
+      return { path: resolvedPath, bytesWritten: Buffer.byteLength(input.content) };
+    }),
+
+  execCommand: publicProcedure
+    .meta({ description: "Execute a shell command" })
+    .input(
+      z.object({
+        command: z
+          .array(z.string())
+          .meta({ positional: true })
+          .describe("Command and arguments. First element is the binary, rest are args."),
+        cwd: z
+          .string()
+          .optional()
+          .describe("Working directory for the command. Default: current working directory"),
+        timeout: z.number().optional().describe("Timeout in milliseconds (default: 120000)"),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const [command, ...args] = input.command;
+      if (!command) throw new Error("command array must have at least one element");
+      const result = await exec(command, args, {
+        nodeOptions: {
+          cwd: input.cwd || process.cwd(),
+          timeout: input.timeout ?? 120_000,
+        },
+      });
+      return {
+        exitCode: result.exitCode ?? 0,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    }),
+
   execTs: publicProcedure
     .meta({ description: "Execute TypeScript with access to integration clients" })
     .input(
