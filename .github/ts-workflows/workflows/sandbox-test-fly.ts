@@ -10,12 +10,6 @@ export default workflow({
   on: {
     workflow_call: {
       inputs: {
-        ref: {
-          description: "Git ref to test (branch, tag, or SHA). Uses caller ref if empty.",
-          required: false,
-          type: "string",
-          default: "",
-        },
         fly_image_tag: {
           description: "Fly image tag to test (e.g. registry.fly.io/iterate-sandbox:sha-abc1234)",
           required: true,
@@ -31,12 +25,6 @@ export default workflow({
     },
     workflow_dispatch: {
       inputs: {
-        ref: {
-          description: "Git ref to test (branch, tag, or SHA). Leave empty for current branch.",
-          required: false,
-          type: "string",
-          default: "",
-        },
         fly_image_tag: {
           description: "Fly image tag to test (e.g. registry.fly.io/iterate-sandbox:sha-abc1234)",
           required: true,
@@ -55,18 +43,7 @@ export default workflow({
     "test-sandbox-fly": {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        ...utils.setupRepo.map((step) => {
-          if (step.name === "Checkout code") {
-            return {
-              ...step,
-              with: {
-                ...step.with,
-                ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
-              },
-            };
-          }
-          return step;
-        }),
+        ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
           name: "Run Fly sandbox tests",
