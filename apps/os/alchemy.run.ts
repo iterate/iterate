@@ -439,7 +439,8 @@ const Env = z.object({
   POSTHOG_PUBLIC_KEY: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
-  PROJECT_INGRESS_DOMAIN: Required,
+  PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
+  PROJECT_INGRESS_PROXY_CANONICAL_HOST: Optional, // legacy fallback, remove after Doppler update
   VITE_APP_STAGE: Required,
   APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
@@ -717,8 +718,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   // PROJECT_INGRESS_DOMAIN is the base domain for project ingress hostnames.
   // prod: iterate.app, dev w/ tunnel: $DEV_TUNNEL.dev.iterate.app, dev w/o tunnel: iterate.app.localhost
+  // Fallback: accept old PROJECT_INGRESS_PROXY_CANONICAL_HOST until Doppler configs are updated.
   const projectIngressDomain = normalizeProjectIngressCanonicalHost(
-    process.env.PROJECT_INGRESS_DOMAIN ?? "",
+    process.env.PROJECT_INGRESS_DOMAIN ?? process.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST ?? "",
   );
   if (!projectIngressDomain) {
     throw new Error(
