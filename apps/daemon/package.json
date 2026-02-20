@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "pnpm --filter @iterate-com/daemon --reporter-hide-prefix --color --parallel /dev:/",
     "dev:client": "doppler run -- vite",
-    "dev:server": "doppler run -- drizzle-kit migrate && doppler run -- tsx watch --clear-screen=false ./server.ts",
+    "dev:server": "doppler run -- drizzle-kit migrate && doppler run -- tsx watch --clear-screen=false --exclude '_generated/*' ./server.ts",
     "discord": "tsx ./discord/index.ts",
     "discord:dev": "tsx watch --clear-screen=false ./discord/index.ts",
     "discord:start": "./discord/start.sh",
