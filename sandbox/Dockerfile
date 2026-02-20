@@ -134,14 +134,16 @@ RUN mkdir -p /home/iterate/.local/bin && \
     rm -rf /tmp/gogcli
 
 # === Agent packages (npm, userspace) ===
-RUN npm install -g agent-browser@${SANDBOX_AGENT_BROWSER_VERSION}
-RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
-RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
+RUN npm install -g \
+    agent-browser@${SANDBOX_AGENT_BROWSER_VERSION} \
+    @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION} \
+    @openai/codex@${SANDBOX_CODEX_VERSION} \
+    && npm cache clean --force
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
 
-# Pre-download Chromium for agent-browser (system deps installed above)
+# Pre-download Chromium for agent-browser (pinned to version bundled with agent-browser@0.13.0)
 RUN agent-browser install
 
 # Ensure wrapper scripts win after all PATH modifications.
