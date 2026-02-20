@@ -123,10 +123,9 @@ To get your agent session link, first get your session ID using the `get-current
 ```bash
 # Replace ses_xxxxx with the result from get-current-session-id tool
 node -p '
-  const { ITERATE_CUSTOMER_REPO_PATH: repoPath, ITERATE_OS_BASE_URL: baseUrl, ITERATE_ORG_SLUG: orgSlug, ITERATE_PROJECT_SLUG: projectSlug, ITERATE_MACHINE_ID: machineId } = process.env;
+  const { ITERATE_CUSTOMER_REPO_PATH: repoPath, ITERATE_PROJECT_BASE_URL: projectBaseUrl } = process.env;
   const command = `opencode attach 'http://localhost:4096' --session ses_xxxxx --dir ${repoPath}`;
-  const proxyUrl = `${baseUrl}/org/${orgSlug}/proj/${projectSlug}/${machineId}/proxy/3000`;
-  `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+  `${projectBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
 '
 ```
 
@@ -134,23 +133,35 @@ node -p '
 
 The sandbox has these env vars for building URLs:
 
-- `ITERATE_OS_BASE_URL` - base URL (e.g., `https://os.iterate.com` or `https://dev-mmkal-os.dev.iterate.com`)
+- `ITERATE_OS_BASE_URL` - control plane URL (e.g., `https://os.iterate.com`)
+- `ITERATE_PROJECT_BASE_URL` - project ingress base URL (e.g., `https://my-proj.iterate.app`)
+- `ITERATE_PROJECT_INGRESS_DOMAIN` - project ingress domain (e.g., `iterate.app`)
 - `ITERATE_ORG_ID` / `ITERATE_ORG_SLUG` - organization ID and slug
 - `ITERATE_PROJECT_ID` / `ITERATE_PROJECT_SLUG` - project ID and slug
 - `ITERATE_MACHINE_ID` / `ITERATE_MACHINE_NAME` - machine ID and name
 
-**Proxy URL format:**
+**Project ingress URL format (preferred):**
+
+For a specific port, prefix `{port}__` to the hostname of `ITERATE_PROJECT_BASE_URL`:
+
+```
+https://{PORT}__my-proj.iterate.app/
+```
+
+Example: `https://4096__my-proj.iterate.app/` for OpenCode on port 4096.
+
+For the default port (3000), the prefix is omitted: `https://my-proj.iterate.app/`
+
+**Legacy proxy URL format (still works):**
 
 ```
 ${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/${PORT}/
 ```
 
-Example: `https://os.iterate.com/org/nustom.com/proj/hullo/mach_01kg2323bmfzst5yzdmh8q3hs5/proxy/3000/`
-
 **Terminal URL (with optional command):**
 
 ```
-${ITERATE_OS_BASE_URL}/org/${ITERATE_ORG_SLUG}/proj/${ITERATE_PROJECT_SLUG}/${ITERATE_MACHINE_ID}/proxy/3000/terminal
+${ITERATE_PROJECT_BASE_URL}/terminal
 ```
 
 Add `?command=...&autorun=true` to pre-fill and run a command.

@@ -17,18 +17,41 @@ Keep sandbox details out of this file to avoid drift.
 
 ## Project ingress env vars
 
-These vars control machine service ingress hostnames:
+Two domains configure the system:
 
-| Variable                               | Purpose                                                                                  |
-| -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `PROJECT_INGRESS_PROXY_CANONICAL_HOST` | Canonical base host used to build service links: `<port>__<machine_id>.<canonical-host>` |
-| `PROJECT_INGRESS_PROXY_HOST_MATCHERS`  | Comma-separated glob patterns for incoming host matching in OS ingress routing           |
-| `OS_WORKER_ROUTES`                     | Comma-separated Cloudflare route host patterns mounted to the `os` worker                |
-| `DEV_TUNNEL`                           | Local tunnel subdomain input; use with Doppler expansion for canonical host              |
+1. **OS worker host** — where the control plane lives (`VITE_PUBLIC_URL`).
+   - prod: `https://os.iterate.com`
+   - dev w/ tunnel: `https://$DEV_TUNNEL.dev.iterate.com`
+   - dev w/o tunnel: `http://os.iterate.com.localhost`
 
-Local dev default example:
+2. **Project ingress domain** (`PROJECT_INGRESS_DOMAIN`) — base domain for machine ingress.
+   - prod: `iterate.app`
+   - dev w/ tunnel: `$DEV_TUNNEL.dev.iterate.app`
+   - dev w/o tunnel: `iterate.app.localhost`
 
-`PROJECT_INGRESS_PROXY_CANONICAL_HOST=${DEV_TUNNEL}.dev.iterate.com`
+Ingress hostnames follow the pattern `<port>__<identifier>.<PROJECT_INGRESS_DOMAIN>`.
+
+| Variable                 | Purpose                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `PROJECT_INGRESS_DOMAIN` | Base domain for project ingress hostnames (e.g. `iterate.app`)                   |
+| `OS_WORKER_ROUTES`       | Comma-separated Cloudflare route host patterns mounted to the `os` worker        |
+| `DEV_TUNNEL`             | Local tunnel subdomain; sets up both `*.dev.iterate.com` and `*.dev.iterate.app` |
+
+### Env vars injected into machines
+
+| Variable                         | Example                       |
+| -------------------------------- | ----------------------------- |
+| `ITERATE_OS_BASE_URL`            | `https://os.iterate.com`      |
+| `ITERATE_PROJECT_BASE_URL`       | `https://my-proj.iterate.app` |
+| `ITERATE_PROJECT_INGRESS_DOMAIN` | `iterate.app`                 |
+
+Shared helpers in `@iterate-com/shared/project-ingress` provide:
+
+- `parseProjectIngressHostname()` — extract project/machine + port from hostname
+- `buildMachineIngressEnvVars()` — produce the env vars above
+- `buildProjectPortUrl()` — given `ITERATE_PROJECT_BASE_URL` + port → publicly routable URL
+- `buildMachinePortUrl()` — given domain + machineId + port → publicly routable URL
+- `isProjectIngressHostname()` — check if hostname is a subdomain of the ingress domain
 
 ---
 

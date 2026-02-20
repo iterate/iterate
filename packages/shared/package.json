@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts"
+    "./force-public-url-vite-plugin": "./src/dev/force-public-url-vite-plugin.ts",
+    "./project-ingress": "./src/project-ingress.ts"
   },
   "devDependencies": {
     "vite": "7.2.4"

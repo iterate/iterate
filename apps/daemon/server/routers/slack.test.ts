@@ -502,10 +502,7 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
 
-      vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
-      vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
-      vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
-      vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
       vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
 
       selectLimitQueue.push([]); // storeEvent dedup check

@@ -11,6 +11,10 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
+import {
+  isProjectIngressHostname,
+  parseProjectIngressHostname,
+} from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb } from "./db/client.ts";
 import { getAuth } from "./auth/auth.ts";
@@ -40,14 +44,10 @@ import {
   buildCanonicalProjectIngressProxyHostname,
   buildControlPlaneProjectIngressProxyLoginUrl,
   getProjectIngressRequestHostname,
-  getProjectIngressProxyHostMatchers,
   handleProjectIngressRequest,
   normalizeProjectIngressProxyRedirectPath,
   PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
   PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH,
-  resolveCanonicalProjectIngressHostForBridge,
-  resolveEffectiveProjectIngressCanonicalHost,
-  resolveIngressHostname,
   shouldHandleProjectIngressHostname,
 } from "./services/project-ingress-proxy.ts";
 import { getIngressSchemeFromPublicUrl } from "./utils/project-ingress-url.ts";
@@ -131,8 +131,7 @@ app.get("/api/trpc-cli-procedures", (c) => {
 
 app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
-  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
-  if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
+  if (shouldHandleProjectIngressHostname(requestDomain, c.env)) {
     const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
     if (ingressResponse) return ingressResponse;
   }
@@ -143,6 +142,7 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
   const requestedProjectIngressProxyHost = c.req.query("projectIngressProxyHost");
   const requestedProjectIngressProxySubdomain = c.req.query("subdomain");
   const requestedProjectIngressProxyPath = c.req.query("path") ?? c.req.query("redirectPath");
+  const projectIngressDomain = c.env.PROJECT_INGRESS_DOMAIN;
 
   let normalizedRequestedProjectIngressProxyHost = requestedProjectIngressProxyHost
     ?.trim()
@@ -153,47 +153,25 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
       return c.json({ error: "Invalid subdomain" }, 400);
     }
 
-    const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
-    const canonicalProjectIngressProxyBaseHost = resolveCanonicalProjectIngressHostForBridge({
-      configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-      appStage: c.env.APP_STAGE,
-      hostMatchers,
-    });
-    if (!canonicalProjectIngressProxyBaseHost) {
-      return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
-    }
-
-    normalizedRequestedProjectIngressProxyHost = `${normalizedSubdomain}.${canonicalProjectIngressProxyBaseHost}`;
+    normalizedRequestedProjectIngressProxyHost = `${normalizedSubdomain}.${projectIngressDomain}`;
   }
 
   if (!normalizedRequestedProjectIngressProxyHost) {
     return c.json({ error: "Missing projectIngressProxyHost or subdomain" }, 400);
   }
 
-  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
-  if (
-    !shouldHandleProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, hostMatchers)
-  ) {
+  if (!isProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, projectIngressDomain)) {
     return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
   }
 
-  const parsedIngressHost = resolveIngressHostname(normalizedRequestedProjectIngressProxyHost);
+  const parsedIngressHost = parseProjectIngressHostname(normalizedRequestedProjectIngressProxyHost);
   if (!parsedIngressHost.ok) {
     return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
   }
 
-  const canonicalProjectIngressProxyBaseHost = resolveEffectiveProjectIngressCanonicalHost({
-    configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    resolvedRootDomain: parsedIngressHost.rootDomain,
-    appStage: c.env.APP_STAGE,
-  });
-  if (!canonicalProjectIngressProxyBaseHost) {
-    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
-  }
-
   const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
     target: parsedIngressHost.target,
-    canonicalProjectIngressProxyBaseHost,
+    projectIngressDomain,
   });
   const redirectPath = normalizeProjectIngressProxyRedirectPath(requestedProjectIngressProxyPath);
 
@@ -220,28 +198,19 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
 
 app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   const requestHost = getProjectIngressRequestHostname(c.req.raw);
-  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
-  if (!shouldHandleProjectIngressHostname(requestHost, hostMatchers)) {
+  const projectIngressDomain = c.env.PROJECT_INGRESS_DOMAIN;
+  if (!isProjectIngressHostname(requestHost, projectIngressDomain)) {
     return c.json({ error: "Invalid ingress host" }, 400);
   }
 
-  const parsedIngressHost = resolveIngressHostname(requestHost);
+  const parsedIngressHost = parseProjectIngressHostname(requestHost);
   if (!parsedIngressHost.ok) {
     return c.json({ error: "Invalid ingress host" }, 400);
   }
 
-  const canonicalProjectIngressProxyBaseHost = resolveEffectiveProjectIngressCanonicalHost({
-    configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    resolvedRootDomain: parsedIngressHost.rootDomain,
-    appStage: c.env.APP_STAGE,
-  });
-  if (!canonicalProjectIngressProxyBaseHost) {
-    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
-  }
-
   const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
     target: parsedIngressHost.target,
-    canonicalProjectIngressProxyBaseHost,
+    projectIngressDomain,
   });
   if (requestHost !== canonicalProjectIngressProxyHost) {
     return c.json({ error: "Non-canonical ingress host" }, 400);
