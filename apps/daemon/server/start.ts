@@ -41,14 +41,19 @@ type ReportStatusInput = Parameters<
  * Throws on error so the process can be restarted.
  */
 async function bootstrapWithControlPlane(): Promise<void> {
-  // Skip if not connected to control plane (standalone mode)
-  if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) {
+  const hasControlPlane = Boolean(
+    process.env.ITERATE_OS_BASE_URL && process.env.ITERATE_OS_API_KEY,
+  );
+  if (!hasControlPlane) {
     console.log("[bootstrap] No control plane configured, running standalone");
-    return;
+  } else {
+    await reportStatusToPlatform();
   }
 
-  await reportStatusToPlatform();
   await fetchBootstrapData();
+
+  if (!hasControlPlane) return;
+
   startBootstrapRefreshScheduler();
   await startCronTaskScheduler();
 }

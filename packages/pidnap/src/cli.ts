@@ -24,15 +24,21 @@ const ResourceTarget = v.union([v.string(), v.number()]);
 const makeTable = (head?: string[]) => new Table({ head });
 
 // Helper functions for table formatting
-function printProcessTable(proc: { name: string; state: string; restarts: number }) {
-  const table = makeTable(["Name", "State", "Restarts"]);
-  table.push([proc.name, proc.state, proc.restarts]);
+function printProcessTable(proc: {
+  name: string;
+  tags: string[];
+  state: string;
+  restarts: number;
+}) {
+  const table = makeTable(["Name", "Tags", "State", "Restarts"]);
+  table.push([proc.name, proc.tags.join(", ") || "-", proc.state, proc.restarts]);
   console.log(table.toString());
 }
 
 function printProcessDetails(
   proc: {
     name: string;
+    tags: string[];
     state: string;
     restarts: number;
     definition: {
@@ -45,8 +51,8 @@ function printProcessDetails(
   },
   options?: { showEffectiveEnv?: boolean },
 ) {
-  const table = makeTable(["Name", "State", "Restarts"]);
-  table.push([proc.name, proc.state, proc.restarts]);
+  const table = makeTable(["Name", "Tags", "State", "Restarts"]);
+  table.push([proc.name, proc.tags.join(", ") || "-", proc.state, proc.restarts]);
   console.log(table.toString());
 
   console.log("\nDefinition:");
@@ -192,9 +198,9 @@ const cliRouter = os.router({
       .meta({ description: "List restarting processes" })
       .handler(async ({ context: { client } }) => {
         const processes = await client.processes.list();
-        const table = new Table({ head: ["Name", "State", "Restarts"], wordWrap: true });
+        const table = new Table({ head: ["Name", "Tags", "State", "Restarts"], wordWrap: true });
         for (const proc of processes) {
-          table.push([proc.name, proc.state, proc.restarts]);
+          table.push([proc.name, proc.tags.join(", ") || "-", proc.state, proc.restarts]);
         }
         console.log(table.toString());
       }),
@@ -230,10 +236,15 @@ const cliRouter = os.router({
         v.object({
           name: v.pipe(v.string(), v.description("Process name")),
           definition: v.pipe(ProcessDefinition, v.description("Process definition JSON")),
+          tags: v.optional(v.pipe(v.array(v.string()), v.description("Process tags"))),
         }),
       )
       .handler(async ({ input, context: { client } }) => {
-        const proc = await client.processes.add({ name: input.name, definition: input.definition });
+        const proc = await client.processes.add({
+          name: input.name,
+          definition: input.definition,
+          tags: input.tags,
+        });
         printProcessTable(proc);
       }),
     start: os

@@ -64,6 +64,7 @@ export type StateChangeListener = (newState: RestartingProcessState) => void;
 export class RestartingProcess {
   readonly name: string;
   readonly lazyProcess: LazyProcess;
+  private _tags: string[];
   private options: Required<Omit<RestartingProcessOptions, "maxTotalRestarts">> & {
     maxTotalRestarts?: number;
   };
@@ -85,8 +86,10 @@ export class RestartingProcess {
     definition: ProcessDefinition,
     options: RestartingProcessOptions,
     logger: Logger,
+    tags?: string[],
   ) {
     this.name = name;
+    this._tags = tags ?? [];
     this.logger = logger;
     this.options = {
       restartPolicy: options.restartPolicy,
@@ -108,6 +111,10 @@ export class RestartingProcess {
 
   get hasStarted(): boolean {
     return this._hasStarted;
+  }
+
+  get tags(): string[] {
+    return this._tags;
   }
 
   get isHealthy(): boolean {
@@ -242,6 +249,12 @@ export class RestartingProcess {
       minUptimeMs: newOptions.minUptimeMs ?? this.options.minUptimeMs,
       maxTotalRestarts: newOptions.maxTotalRestarts ?? this.options.maxTotalRestarts,
     };
+  }
+
+  updateTags(tags?: string[]): void {
+    if (tags !== undefined) {
+      this._tags = tags;
+    }
   }
 
   private resetCounters(): void {

@@ -13,6 +13,7 @@ const CONFIG_FILENAME = "iterate.config.ts";
 
 // Cached config singleton
 let loadedConfig: IterateConfig | null = null;
+let loadedConfigPath: string | null = null;
 
 /**
  * Get the path to the default config in repo-templates.
@@ -31,12 +32,16 @@ function getDefaultConfigPath(): string {
  * Falls back to default config from repo-templates if not found.
  * Caches the result for subsequent calls.
  */
-export async function loadConfig(cwd: string = process.cwd()): Promise<IterateConfig> {
-  if (loadedConfig !== null) {
+export async function loadConfig(
+  cwd: string = process.cwd(),
+  options?: { forceReload?: boolean },
+): Promise<IterateConfig> {
+  const forceReload = options?.forceReload ?? false;
+  const configPath = path.join(cwd, CONFIG_FILENAME);
+
+  if (!forceReload && loadedConfig !== null && loadedConfigPath === configPath) {
     return loadedConfig;
   }
-
-  const configPath = path.join(cwd, CONFIG_FILENAME);
 
   if (fs.existsSync(configPath)) {
     try {
@@ -47,6 +52,7 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<IterateCo
         throw new Error(`Config file ${configPath} does not have a default export`);
       }
       loadedConfig = module.default as IterateConfig;
+      loadedConfigPath = configPath;
       console.log(`[config] Loaded config:`, loadedConfig);
       return loadedConfig;
     } catch (error) {
@@ -68,6 +74,7 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<IterateCo
         throw new Error(`Default config file ${defaultConfigPath} does not have a default export`);
       }
       loadedConfig = module.default as IterateConfig;
+      loadedConfigPath = defaultConfigPath;
       console.log(`[config] Loaded default config:`, loadedConfig);
       return loadedConfig;
     } catch (error) {
@@ -78,6 +85,7 @@ export async function loadConfig(cwd: string = process.cwd()): Promise<IterateCo
   // Ultimate fallback: empty config (uses defaults in consumers)
   console.log(`[config] Using empty config as fallback`);
   loadedConfig = {};
+  loadedConfigPath = null;
   return loadedConfig;
 }
 

@@ -1,5 +1,6 @@
 import { createWorkerClient } from "./orpc/client.ts";
 import { applyEnvVars, clearGitHubCredentials, cloneRepos } from "./trpc/platform.ts";
+import { reconcilePidnapProcesses } from "./pidnap/reconcile.ts";
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const JITTER_MS = 5 * 60 * 1000; // +/- 5 minutes
@@ -57,37 +58,41 @@ export function startBootstrapRefreshScheduler(): void {
  * 3. When poked by the control plane via refreshEnv (catches errors)
  */
 export async function fetchBootstrapData(): Promise<void> {
-  // Skip if not connected to the control plane
   if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) {
-    console.log("[bootstrap-refresh] Not connected to control plane, skipping fetch");
-    return;
+    console.log("[bootstrap-refresh] Not connected to control plane, skipping env/repo fetch");
+  } else {
+    const machineId = process.env.ITERATE_MACHINE_ID;
+    if (!machineId) {
+      console.error("[bootstrap-refresh] ITERATE_MACHINE_ID not set, cannot fetch env");
+    } else {
+      console.log("[bootstrap-refresh] Fetching env data...");
+      const client = createWorkerClient();
+      const result = await client.machines.getEnv({ machineId });
+
+      // Apply environment variables (always call to replace/clear stale vars)
+      // skipProxy indicates that raw secrets mode is enabled - no egress proxy needed
+      const { injectedCount, removedCount } = await applyEnvVars(result.envVars, {
+        skipProxy: result.skipProxy,
+      });
+      console.log(
+        `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale${result.skipProxy ? " (proxy disabled)" : ""}`,
+      );
+
+      // Clear any stale GitHub credentials from global git config
+      // (new auth is handled via GIT_CONFIG_* env vars with magic strings that egress proxy resolves)
+      await clearGitHubCredentials();
+
+      // Clone repos if any
+      if (result.repos.length > 0) {
+        cloneRepos(result.repos);
+        console.log(`[bootstrap-refresh] Triggered clone for ${result.repos.length} repos`);
+      }
+    }
   }
-  const machineId = process.env.ITERATE_MACHINE_ID;
-  if (!machineId) {
-    console.error("[bootstrap-refresh] ITERATE_MACHINE_ID not set, cannot fetch env");
-    return;
-  }
 
-  console.log("[bootstrap-refresh] Fetching env data...");
-  const client = createWorkerClient();
-  const result = await client.machines.getEnv({ machineId });
-
-  // Apply environment variables (always call to replace/clear stale vars)
-  // skipProxy indicates that raw secrets mode is enabled - no egress proxy needed
-  const { injectedCount, removedCount } = await applyEnvVars(result.envVars, {
-    skipProxy: result.skipProxy,
-  });
-  console.log(
-    `[bootstrap-refresh] Applied ${injectedCount} env vars, removed ${removedCount} stale${result.skipProxy ? " (proxy disabled)" : ""}`,
-  );
-
-  // Clear any stale GitHub credentials from global git config
-  // (new auth is handled via GIT_CONFIG_* env vars with magic strings that egress proxy resolves)
-  await clearGitHubCredentials();
-
-  // Clone repos if any
-  if (result.repos.length > 0) {
-    cloneRepos(result.repos);
-    console.log(`[bootstrap-refresh] Triggered clone for ${result.repos.length} repos`);
+  try {
+    await reconcilePidnapProcesses();
+  } catch (error) {
+    console.error("[bootstrap-refresh] Failed to reconcile pidnap processes:", error);
   }
 }
