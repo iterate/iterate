@@ -178,7 +178,6 @@ export const toolsRouter = createTRPCRouter({
         fakeConsole as typeof globalThis.console;
 
       await writeFile(filepath, code);
-      await using _fileCleanup = { [Symbol.asyncDispose]: async () => console.log(filepath) };
       if (input.typecheck) {
         const [typecheckCommand, ...typecheckArgs] = input.typecheck.trim().split(/\s+/);
         const result = await exec(typecheckCommand, typecheckArgs.concat(filepath), {
