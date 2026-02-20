@@ -1,12 +1,14 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import { buildCanonicalMachineExternalId } from "@iterate-com/sandbox/providers/naming";
+import { buildMachineIngressEnvVars } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { outboxClient } from "../outbox/client.ts";
 import { decrypt, encrypt } from "../utils/encryption.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
+import { getIngressSchemeFromPublicUrl } from "../utils/project-ingress-url.ts";
 import { logger } from "../tag-logger.ts";
 
 /**
@@ -102,9 +104,16 @@ export async function buildMachineEnvVars(params: {
 
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
+  const ingressEnvVars = buildMachineIngressEnvVars({
+    projectSlug,
+    projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,
+    osBaseUrl: env.VITE_PUBLIC_URL,
+    scheme: getIngressSchemeFromPublicUrl(env.VITE_PUBLIC_URL),
+  });
+
   return {
     ...envVars,
-    ITERATE_OS_BASE_URL: env.VITE_PUBLIC_URL,
+    ...ingressEnvVars,
     ITERATE_OS_API_KEY: apiKey,
     ITERATE_MACHINE_ID: machineId,
     ITERATE_MACHINE_NAME: name,
