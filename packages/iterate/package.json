@@ -21,18 +21,30 @@
   "engines": {
     "node": ">=22"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "bin": {
     "iterate": "./bin/iterate.js"
   },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      }
+    }
+  },
   "files": [
     "bin",
+    "dist",
     "README.md"
   ],
   "scripts": {
-    "typecheck": "node --check ./bin/iterate.js"
+    "build": "tsgo",
+    "typecheck": "tsgo --noEmit",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
@@ -42,5 +54,8 @@
     "superjson": "^2.2.2",
     "trpc-cli": "0.12.4",
     "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
   }
 }
