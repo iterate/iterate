@@ -21,11 +21,6 @@ on:
       - .github/workflows/sandbox-test.yml
   workflow_dispatch:
     inputs:
-      ref:
-        description: Git ref to test (branch, tag, or SHA). Leave empty for current branch.
-        required: false
-        type: string
-        default: ""
       run_docker_tests:
         description: Run Docker provider tests after build
         required: false
@@ -45,7 +40,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
@@ -102,41 +97,39 @@ jobs:
           fly_log="sandbox/test-results/fly-provider-parallel.log"
           fly_pid=""
 
-          if [ "${RUN_FLY_TESTS}" = "true" ]; then
+          if [ "$RUN_FLY_TESTS" = "true" ]; then
             echo "Starting Fly provider tests in background..."
             (
-              RUN_SANDBOX_TESTS=true \
-              SANDBOX_TEST_PROVIDER=fly \
-              SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \
-              FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \
-              DOPPLER_TOKEN="${DOPPLER_TOKEN}" \
+              export RUN_SANDBOX_TESTS=true
+              export SANDBOX_TEST_PROVIDER=fly
+              export SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG"
+              export FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG"
               doppler run -- pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
-            ) >"${fly_log}" 2>&1 &
+            ) >"$fly_log" 2>&1 &
             fly_pid="$!"
           fi
 
-          if [ "${RUN_DOCKER_TESTS}" = "true" ]; then
+          if [ "$RUN_DOCKER_TESTS" = "true" ]; then
             echo "Running Docker provider tests on loaded image..."
-            RUN_SANDBOX_TESTS=true \
-            SANDBOX_TEST_PROVIDER=docker \
-            SANDBOX_TEST_SNAPSHOT_ID="${IMAGE_TAG}" \
-            DOCKER_DEFAULT_IMAGE="${IMAGE_TAG}" \
-            DOCKER_HOST="unix:///var/run/docker.sock" \
-            DOPPLER_TOKEN="${DOPPLER_TOKEN}" \
+            export RUN_SANDBOX_TESTS=true
+            export SANDBOX_TEST_PROVIDER=docker
+            export SANDBOX_TEST_SNAPSHOT_ID="$IMAGE_TAG"
+            export DOCKER_DEFAULT_IMAGE="$IMAGE_TAG"
+            export DOCKER_HOST="unix:///var/run/docker.sock"
             pnpm sandbox test:docker || docker_status=$?
           fi
 
-          if [ -n "${fly_pid}" ]; then
-            wait "${fly_pid}" || fly_status=$?
-            if [ "${fly_status}" -ne 0 ]; then
+          if [ -n "$fly_pid" ]; then
+            wait "$fly_pid" || fly_status=$?
+            if [ "$fly_status" -ne 0 ]; then
               echo "::group::Fly provider test output"
-              cat "${fly_log}" || true
+              cat "$fly_log" || true
               echo "::endgroup::"
             fi
           fi
 
-          if [ "${docker_status}" -ne 0 ] || [ "${fly_status}" -ne 0 ]; then
-            echo "docker_status=${docker_status} fly_status=${fly_status}"
+          if [ "$docker_status" -ne 0 ] || [ "$fly_status" -ne 0 ]; then
+            echo "docker_status=$docker_status fly_status=$fly_status"
             exit 1
           fi
       - name: Upload Docker test results
