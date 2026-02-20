@@ -1,5 +1,6 @@
 import type { worker } from "./alchemy.run.ts";
 import { wrapWaitUntilWithEvlog } from "./backend/evlog.ts";
+import { logger } from "./backend/tag-logger.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;
@@ -32,7 +33,7 @@ export function waitUntil(promise: Promise<unknown>): void {
   const wrappedPromise = wrapWaitUntilWithEvlog(promise);
   _waitUntil(
     wrappedPromise.catch((error) => {
-      console.error("waitUntil error:", error);
+      logger.error("waitUntil error", error);
     }),
   );
 }
