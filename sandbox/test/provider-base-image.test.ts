@@ -6,58 +6,14 @@
  * full Iterate sandbox image.
  */
 
-import { describe, expect as vitestExpect } from "vitest";
-import {
-  RUN_SANDBOX_TESTS,
-  TEST_BASE_SNAPSHOT_ID,
-  TEST_CONFIG,
-  createTestProvider,
-  test,
-} from "./helpers.ts";
+import { describe } from "vitest";
+import { RUN_SANDBOX_TESTS, TEST_BASE_SNAPSHOT_ID, TEST_CONFIG, test } from "./helpers.ts";
 
 const PREVIEW_BODY = "preview-ok";
 const TEST_RUN_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const TEST_EXTERNAL_ID = `test-base-image-test-${TEST_RUN_SUFFIX}`;
 const TEST_ID = `base-image-test-${TEST_RUN_SUFFIX}`;
 const PROVIDER_API_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "fly" ? 180_000 : 120_000;
-
-/**
- * Cleanup proof: deliberately create a Fly machine, skip cleanup, and fail.
- * The workflow's `if: always()` cleanup step must catch this leaked machine.
- * DELETE THIS BLOCK after verification.
- */
-describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "fly")(
-  "Cleanup proof (deliberate leak)",
-  () => {
-    const LEAK_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const LEAKED_EXTERNAL_ID = `test-base-image-test-leaked-${LEAK_SUFFIX}`;
-
-    test.concurrent(
-      "creates a machine, leaks it, and fails",
-      async () => {
-        const provider = createTestProvider();
-        const sandbox = await provider.create({
-          externalId: LEAKED_EXTERNAL_ID,
-          id: `cleanup-proof-${LEAK_SUFFIX}`,
-          name: "Cleanup Proof (delete me)",
-          envVars: {},
-          providerSnapshotId: TEST_BASE_SNAPSHOT_ID,
-          entrypointArguments: ["sleep", "infinity"],
-        });
-
-        console.log(`[cleanup-proof] LEAKED machine created:`);
-        console.log(`[cleanup-proof]   externalId = ${LEAKED_EXTERNAL_ID}`);
-        console.log(`[cleanup-proof]   providerId = ${sandbox.providerId}`);
-        console.log(`[cleanup-proof] Deliberately NOT deleting this sandbox.`);
-        console.log(`[cleanup-proof] The if:always() cleanup step must catch it.`);
-
-        // Deliberately fail — the machine is now leaked
-        vitestExpect(true, "DELIBERATE FAILURE to test cleanup").toBe(false);
-      },
-      PROVIDER_API_TEST_TIMEOUT_MS,
-    );
-  },
-);
 
 describe
   .runIf(RUN_SANDBOX_TESTS)
