@@ -1,7 +1,12 @@
+import type { WideEvent } from "evlog";
 import { waitUntil } from "../../env.ts";
+import type { EvlogExceptionEvent } from "../evlog-event-schema.ts";
 import { logger } from "../tag-logger.ts";
 
 const POSTHOG_CAPTURE_URL = "https://eu.i.posthog.com/capture/";
+
+const evlogAppStage =
+  process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
 /** Minimal env type for PostHog functions */
 export type PostHogEnv = {
@@ -31,6 +36,17 @@ export type PostHogRequestContext = {
 export type PostHogUserContext = {
   id: string;
   email: string;
+};
+
+type EvlogPostHogEnv = {
+  POSTHOG_PUBLIC_KEY?: string;
+  VITE_APP_STAGE?: string;
+};
+
+export type EvlogExceptionPayload = {
+  event: WideEvent;
+  errors?: Error[];
+  env?: EvlogPostHogEnv;
 };
 
 function getTimestamp(timestamp?: string): string {
@@ -102,32 +118,32 @@ function parseStackTrace(stack: string | undefined): Array<{
 
 export async function sendPostHogException(
   params: PostHogCaptureBase & {
-    error: Error;
+    errors: Error[];
     request: PostHogRequestContext;
     user: PostHogUserContext;
     properties?: Record<string, unknown>;
     lib?: string;
   },
 ): Promise<void> {
+  if (params.errors.length === 0) return;
+
   await posthogCapture({
     api_key: params.apiKey,
     event: "$exception",
     distinct_id: params.distinctId,
     properties: {
-      $exception_list: [
-        {
-          type: params.error.name,
-          value: params.error.message,
-          mechanism: {
-            handled: true,
-            synthetic: false,
-          },
-          stacktrace: {
-            type: "raw",
-            frames: parseStackTrace(params.error.stack),
-          },
+      $exception_list: params.errors.map((error) => ({
+        type: error.name,
+        value: error.message,
+        mechanism: {
+          handled: true,
+          synthetic: false,
         },
-      ],
+        stacktrace: {
+          type: "raw",
+          frames: parseStackTrace(error.stack),
+        },
+      })),
       $environment: params.environment,
       $lib: params.lib ?? "posthog-fetch",
       request: params.request,
@@ -135,6 +151,50 @@ export async function sendPostHogException(
       ...params.properties,
     },
     timestamp: getTimestamp(params.timestamp),
+  });
+}
+
+function toPostHogRequestContext(event: EvlogExceptionEvent): PostHogRequestContext {
+  const request = event.request;
+  return {
+    id: request.id,
+    method: request.method,
+    path: request.path,
+    status: request.status,
+    duration: request.duration,
+    waitUntil: request.waitUntil,
+    parentRequestId: request.parentRequestId,
+    trpcProcedure: request.trpcProcedure,
+    url: request.url,
+  };
+}
+
+function toPostHogUserContext(event: EvlogExceptionEvent): PostHogUserContext {
+  const user = event.user;
+  return {
+    id: user.id,
+    email: user.email,
+  };
+}
+
+export async function sendEvlogExceptionToPostHog(payload: EvlogExceptionPayload): Promise<void> {
+  if (!payload.errors || payload.errors.length === 0) return;
+
+  const apiKey = payload.env?.POSTHOG_PUBLIC_KEY;
+  if (!apiKey) return;
+
+  const event = payload.event as unknown as EvlogExceptionEvent;
+  const request = toPostHogRequestContext(event);
+  const user = toPostHogUserContext(event);
+
+  await sendPostHogException({
+    apiKey,
+    distinctId: user.id,
+    errors: payload.errors,
+    request,
+    user,
+    environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
+    lib: "evlog-worker",
   });
 }
 
@@ -156,9 +216,9 @@ export async function captureServerEvent(
 
   if (!apiKey) {
     if (env.VITE_APP_STAGE !== "prd") {
-      logger.warn("POSTHOG_PUBLIC_KEY not configured, skipping event capture", {
-        event: params.event,
-      });
+      logger.warn(
+        `POSTHOG_PUBLIC_KEY not configured, skipping event capture event=${params.event}`,
+      );
     }
     return;
   }
@@ -191,7 +251,7 @@ export function trackWebhookEvent(
 ): void {
   waitUntil(
     captureServerEvent(env, params).catch((error) => {
-      logger.error("Failed to track webhook event", { error, event: params.event });
+      logger.error("Failed to track webhook event", error, { event: params.event });
     }),
   );
 }
@@ -220,8 +280,7 @@ export function linkExternalIdToGroups(
         project: params.projectId,
       },
     }).catch((error) => {
-      logger.error("Failed to link external ID to groups", {
-        error,
+      logger.error("Failed to link external ID to groups", error, {
         distinctId: params.distinctId,
       });
     }),

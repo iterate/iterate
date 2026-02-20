@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createRequestLogger, log, type RequestLogger } from "evlog";
-import { reportRequestErrorToPostHog } from "./evlog-posthog.ts";
+import { createRequestLogger, log as rootLog, type RequestLogger, type WideEvent } from "evlog";
 
-type RequestEvlogEvent = Record<string, unknown>;
-type EvlogLevel = "debug" | "info" | "warn" | "error";
+export type RequestEvlogEvent = Record<string, unknown>;
 
-type PostHogEnv = {
+type RequestMetadata = {
+  requestId: string;
+  method: string;
+  path: string;
+};
+
+type RequestEvlogEnv = {
   POSTHOG_PUBLIC_KEY?: string;
   VITE_APP_STAGE?: string;
 };
@@ -14,94 +18,92 @@ type WaitUntilExecutionContext = {
   waitUntil: (promise: Promise<unknown>) => void;
 };
 
-type RequestMetadata = {
-  requestId: string;
-  method: string;
-  path: string;
-};
-
-type RequestEvlogContext = {
-  logger: RequestLogger<RequestEvlogEvent>;
-  env?: PostHogEnv;
+export type RequestEvlogContext = {
+  request: RequestMetadata;
+  env?: RequestEvlogEnv;
   executionCtx?: WaitUntilExecutionContext;
   flushed: boolean;
-  waitUntilSequence: number;
-  error?: Error;
+  errors: Error[];
 };
 
-const requestEvlogStorage = new AsyncLocalStorage<RequestEvlogContext>();
+export type RequestEvlogFlushPayload = {
+  event: WideEvent;
+  errors?: Error[];
+  env?: RequestEvlogEnv;
+  executionCtx?: WaitUntilExecutionContext;
+};
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export const logStorage = new AsyncLocalStorage<RequestLogger<RequestEvlogEvent>>();
+const requestStorage = new AsyncLocalStorage<RequestEvlogContext>();
 
-function getString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+let flushHandler: ((payload: RequestEvlogFlushPayload) => void | Promise<void>) | undefined;
 
-function getRequestMetadata(logger: RequestLogger<RequestEvlogEvent>): RequestMetadata {
-  const context = logger.getContext();
-  const nestedRequest = isRecord(context.request) ? context.request : undefined;
+const getLogger = (): RequestLogger<RequestEvlogEvent> => {
+  const logger = logStorage.getStore();
+  if (!logger) {
+    throw new Error("Logger not found in storage");
+  }
+  return logger;
+};
 
-  return {
-    requestId:
-      getString(context.requestId) ??
-      (nestedRequest ? getString(nestedRequest.id) : undefined) ??
-      crypto.randomUUID(),
-    method:
-      getString(context.method) ??
-      (nestedRequest ? getString(nestedRequest.method) : undefined) ??
-      "UNKNOWN",
-    path:
-      getString(context.path) ??
-      (nestedRequest ? getString(nestedRequest.path) : undefined) ??
-      "unknown",
-  };
+function getStore(): RequestEvlogContext | undefined {
+  return requestStorage.getStore();
 }
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function toStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function appendBoundedStringList(current: unknown, next: string, limit: number): string[] {
-  return [...toStringList(current), next].slice(-limit);
+export const log: RequestLogger<RequestEvlogEvent> = {
+  set: (...args) => getLogger().set(...args),
+  error: (...args) => getLogger().error(...args),
+  info: (...args) => getLogger().info(...args),
+  warn: (...args) => getLogger().warn(...args),
+  emit: (...args) => getLogger().emit(...args),
+  getContext: () => getLogger().getContext(),
+};
+
+export function setRequestEvlogFlushHandler(
+  handler?: (payload: RequestEvlogFlushPayload) => void | Promise<void>,
+): void {
+  flushHandler = handler;
+}
+
+export function getRequestEvlogStore(): RequestEvlogContext | undefined {
+  return getStore();
 }
 
 export function withRequestEvlogContext<T>(
   options: {
     logger: RequestLogger<RequestEvlogEvent>;
-    env?: PostHogEnv;
+    request: RequestMetadata;
+    env?: RequestEvlogEnv;
     executionCtx?: WaitUntilExecutionContext;
   },
   callback: () => T,
 ): T {
-  return requestEvlogStorage.run(
+  return requestStorage.run(
     {
-      logger: options.logger,
+      request: options.request,
       env: options.env,
       executionCtx: options.executionCtx,
       flushed: false,
-      waitUntilSequence: 0,
+      errors: [],
     },
-    callback,
+    () => logStorage.run(options.logger, callback),
   );
 }
 
-export function setRequestEvlogContext(context: RequestEvlogEvent): void {
-  requestEvlogStorage.getStore()?.logger.set(context);
-}
-
 export function recordRequestEvlogError(error: unknown, context: RequestEvlogEvent = {}): void {
-  const store = requestEvlogStorage.getStore();
+  const store = getStore();
   const resolvedError = toError(error);
 
   if (!store || store.flushed) {
-    log.error({
+    rootLog.error({
       ...context,
       error: {
         name: resolvedError.name,
@@ -112,120 +114,115 @@ export function recordRequestEvlogError(error: unknown, context: RequestEvlogEve
     return;
   }
 
-  store.error = resolvedError;
-  store.logger.error(resolvedError, context);
-
-  const currentContext = store.logger.getContext();
-  const nextMessage = `${resolvedError.name}: ${resolvedError.message}`;
-  store.logger.set({
-    errors: appendBoundedStringList(currentContext.errors, nextMessage, 100),
-  });
+  store.errors.push(resolvedError);
+  log.error(resolvedError, context);
 }
 
-export function appendRequestEvlogMessage(level: EvlogLevel, message: string): void {
-  const store = requestEvlogStorage.getStore();
-  const contextKey =
-    level === "warn"
-      ? "warnings"
-      : level === "debug"
-        ? "debugMessages"
-        : level === "error"
-          ? "errors"
-          : "messages";
-
-  if (!store || store.flushed) {
-    log[level]({
-      [contextKey]: [message],
-    });
-    return;
-  }
-
-  const currentContext = store.logger.getContext();
-  store.logger.set({
-    [contextKey]: appendBoundedStringList(currentContext[contextKey], message, 200),
-  });
-}
-
-export function flushRequestEvlog(overrides: RequestEvlogEvent = {}): void {
-  const store = requestEvlogStorage.getStore();
-  if (!store || store.flushed) return;
+export function flushRequestEvlog(): RequestEvlogFlushPayload | undefined {
+  const store = getStore();
+  if (!store || store.flushed) return undefined;
 
   store.flushed = true;
-  const event = store.logger.emit(overrides);
-  if (!event || !store.error || !store.env?.POSTHOG_PUBLIC_KEY) return;
+  const event = log.emit();
+  if (!event) return undefined;
 
-  const report = reportRequestErrorToPostHog({
-    env: store.env,
-    error: store.error,
+  const payload: RequestEvlogFlushPayload = {
     event,
-  }).catch(() => undefined);
+    errors: store.errors.length > 0 ? [...store.errors] : undefined,
+    env: store.env,
+    executionCtx: store.executionCtx,
+  };
 
+  if (!flushHandler) return payload;
+
+  const task = Promise.resolve(flushHandler(payload)).catch(() => undefined);
   if (store.executionCtx) {
-    store.executionCtx.waitUntil(report);
-    return;
+    store.executionCtx.waitUntil(task);
+  } else {
+    void task;
   }
 
-  void report;
+  return payload;
 }
 
-export function wrapWaitUntilWithEvlog<T>(promise: Promise<T>): Promise<T> {
-  const parentContext = requestEvlogStorage.getStore();
-  if (!parentContext) return promise;
+type WaitUntilTask<T> = Promise<T> | (() => Promise<T>);
 
-  const parentMetadata = getRequestMetadata(parentContext.logger);
-  const parentLoggerContext = parentContext.logger.getContext();
+function resolveWaitUntilTask<T>(task: WaitUntilTask<T>): Promise<T> {
+  if (typeof task === "function") {
+    return Promise.resolve().then(task);
+  }
+  return task;
+}
 
-  const nextSequence = parentContext.waitUntilSequence + 1;
-  parentContext.waitUntilSequence = nextSequence;
+export function wrapWaitUntilWithEvlog<T>(task: WaitUntilTask<T>): Promise<T> {
+  const parent = getStore();
+  if (!parent) return resolveWaitUntilTask(task);
 
-  const waitUntilPath = `${parentMetadata.path}#waitUntil`;
-  const waitUntilRequestId = `${parentMetadata.requestId}:waitUntil:${nextSequence}`;
+  const parentContext = log.getContext();
+  const parentRequest = parent.request;
+  const waitUntilStartedAt = Date.now();
+
+  const waitUntilPath = `${parentRequest.path}#waitUntil`;
+  const waitUntilRequestId = `${parentRequest.requestId}:waitUntil:${crypto.randomUUID()}`;
 
   const waitUntilLogger = createRequestLogger<RequestEvlogEvent>({
-    method: parentMetadata.method,
+    method: parentRequest.method,
     path: waitUntilPath,
     requestId: waitUntilRequestId,
   });
 
+  const parentUser = parentContext.user;
   waitUntilLogger.set({
     request: {
       id: waitUntilRequestId,
-      method: parentMetadata.method,
+      method: parentRequest.method,
       path: waitUntilPath,
       status: 500,
       duration: 0,
       waitUntil: true,
-      parentRequestId: parentMetadata.requestId,
+      parentRequestId: parentRequest.requestId,
     },
-    ...(isRecord(parentLoggerContext.user) ? { user: parentLoggerContext.user } : {}),
-    waitUntil: true,
-    parentRequestId: parentMetadata.requestId,
+    ...(isRecord(parentUser) ? { user: parentUser } : {}),
   });
 
   return withRequestEvlogContext(
     {
       logger: waitUntilLogger,
-      env: parentContext.env,
-      executionCtx: parentContext.executionCtx,
+      request: {
+        requestId: waitUntilRequestId,
+        method: parentRequest.method,
+        path: waitUntilPath,
+      },
+      env: parent.env,
+      executionCtx: parent.executionCtx,
     },
     async () => {
-      let status = 200;
+      let ok = false;
       try {
-        return await promise;
+        const result = await resolveWaitUntilTask(task);
+        ok = true;
+        return result;
       } catch (error) {
-        status = 500;
         recordRequestEvlogError(error, {
-          waitUntil: true,
-          parentRequestId: parentMetadata.requestId,
-          status,
+          request: {
+            status: 500,
+            waitUntil: true,
+            parentRequestId: parentRequest.requestId,
+          },
         });
         throw error;
       } finally {
-        flushRequestEvlog({
-          waitUntil: true,
-          parentRequestId: parentMetadata.requestId,
-          status,
+        const status = ok ? 200 : 500;
+        const duration = Date.now() - waitUntilStartedAt;
+        log.set({
+          request: {
+            status,
+            duration,
+            waitUntil: true,
+            parentRequestId: parentRequest.requestId,
+          },
         });
+        flushRequestEvlog();
       }
     },
   );

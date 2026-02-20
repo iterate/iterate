@@ -72,7 +72,7 @@ export async function reportRequestErrorToPostHog(input: {
   await sendPostHogException({
     apiKey,
     distinctId: user.id,
-    error: input.error,
+    errors: [input.error],
     request,
     user,
     environment: input.env.VITE_APP_STAGE ?? appStage,
