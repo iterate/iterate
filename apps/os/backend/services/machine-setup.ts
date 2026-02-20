@@ -174,6 +174,18 @@ export async function pushSetupToMachine(
   const transport = await buildDaemonTransport(machine, env);
   const client = createDaemonClient(transport);
 
+  // Read existing env file — if content matches, setup was already pushed.
+  // Skip the entire push (env write + repo clones) to avoid:
+  // 1. Triggering a pidnap restart from an identical .env write
+  // 2. git clone failing because the target directories already exist
+  const existing = await client.tool.readFile.query({ path: "~/.iterate/.env" });
+  if (existing.exists && existing.content === envFileContent) {
+    logger.info("[machine-setup] .env already up to date, skipping setup push", {
+      machineId: machine.id,
+    });
+    return;
+  }
+
   // Write env file
   logger.info("[machine-setup] Writing .env to machine", {
     machineId: machine.id,
@@ -257,6 +269,14 @@ export async function pushEnvToRunningMachines(
       try {
         const transport = await buildDaemonTransport(machine, env);
         const client = createDaemonClient(transport);
+        // Read first to skip no-op writes (avoids unnecessary pidnap restarts)
+        const existing = await client.tool.readFile.query({ path: "~/.iterate/.env" });
+        if (existing.exists && existing.content === envFileContent) {
+          logger.info("[machine-setup] .env already up to date, skipping", {
+            machineId: machine.id,
+          });
+          return;
+        }
         await client.tool.writeFile.mutate({
           path: "~/.iterate/.env",
           content: envFileContent,

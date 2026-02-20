@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
@@ -93,6 +93,28 @@ function getLazyClients() {
 }
 
 export const toolsRouter = createTRPCRouter({
+  readFile: publicProcedure
+    .meta({ description: "Read a file from the filesystem" })
+    .input(
+      z.object({
+        path: z.string().describe("File path to read. ~ is resolved to the home directory."),
+      }),
+    )
+    .query(async ({ input }) => {
+      const resolvedPath = input.path.startsWith("~")
+        ? path.join(homedir(), input.path.slice(1))
+        : input.path;
+      try {
+        const content = await readFile(resolvedPath, "utf-8");
+        return { path: resolvedPath, content, exists: true };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return { path: resolvedPath, content: null, exists: false };
+        }
+        throw err;
+      }
+    }),
+
   writeFile: publicProcedure
     .meta({ description: "Write a file to the filesystem" })
     .input(
