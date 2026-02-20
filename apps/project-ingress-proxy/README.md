@@ -16,12 +16,10 @@ The target port is carried in `X-Iterate-Proxy-Target-Host`.
 
 Supported public hostname forms:
 
-- `mach_123.iterate.town` -> machine `mach_123`, port `3000`
-- `4096__mach_123.iterate.town` -> machine `mach_123`, port `4096`
-- `misha.iterate.town` -> active machine for project slug `misha`, port `3000`
-- `4096__misha.iterate.town` -> active machine for project slug `misha`, port `4096`
-
-Equivalent `.iterate.app` matching exists in code paths, but we cannot fully validate live traffic there yet.
+- `mach_123.iterate.app` -> machine `mach_123`, port `3000`
+- `4096__mach_123.iterate.app` -> machine `mach_123`, port `4096`
+- `misha.iterate.app` -> active machine for project slug `misha`, port `3000`
+- `4096__misha.iterate.app` -> active machine for project slug `misha`, port `4096`
 
 ## Machine process behavior
 
@@ -60,7 +58,7 @@ Key points:
 Canonical service links use:
 
 - `<port>__<machine_id>.<PROJECT_INGRESS_PROXY_CANONICAL_HOST>`
-- Example: `4096__mach_123.p.os.iterate.com`
+- Example: `4096__mach_123.iterate.app`
 
 ## Ingress env vars
 
@@ -70,7 +68,7 @@ Canonical service links use:
   - Must be covered by `PROJECT_INGRESS_PROXY_HOST_MATCHERS`.
 - `PROJECT_INGRESS_PROXY_HOST_MATCHERS`
   - Comma-separated hostname glob patterns used to decide if OS should handle ingress routing.
-  - Match full incoming hostnames (for example `*.p.os.iterate.com`).
+  - Match full incoming hostnames (for example `*.iterate.app`).
 - `OS_WORKER_ROUTES`
   - Comma-separated Cloudflare route host patterns bound to the `os` worker.
   - Must include patterns that cover ingress hostnames.
