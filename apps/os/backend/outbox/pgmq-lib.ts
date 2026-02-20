@@ -202,7 +202,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
         if (!job) {
-          logger.error(`[outbox] unparseable message, skipping`, { job: _job, error: e });
+          logger.error(`[outbox] unparseable message, skipping`, e, { job: _job });
           continue;
         }
         const retry = (consumer?.retry ?? defaultRetryFn)(job);

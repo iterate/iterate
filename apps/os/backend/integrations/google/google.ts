@@ -71,7 +71,7 @@ export async function revokeGoogleToken(accessToken: string): Promise<boolean> {
       return true;
     }
 
-    logger.warn("Google token revocation failed", { status: response.status });
+    logger.warn(`Google token revocation failed status=${response.status}`);
     return false;
   } catch (error) {
     logger.error("Failed to revoke Google token", error);
@@ -103,7 +103,7 @@ googleApp.get(
 
     // Handle OAuth denial/error from Google
     if (error) {
-      logger.warn("Google OAuth error", { error });
+      logger.warn(`Google OAuth error: ${error}`);
 
       if (state) {
         const verification = await c.var.db.query.verification.findFirst({
@@ -166,10 +166,9 @@ googleApp.get(
     const { projectId, userId, callbackURL, codeVerifier } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.warn("Google callback user mismatch", {
-        sessionUserId: c.var.session.user.id,
-        stateUserId: userId,
-      });
+      logger.warn(
+        `Google callback user mismatch sessionUserId=${c.var.session.user.id} stateUserId=${userId}`,
+      );
       return c.json({ error: "User mismatch - please restart the Google connection flow" }, 403);
     }
 

@@ -41,10 +41,10 @@ export const registerConsumers = () => {
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
       if (machine.state !== "starting") {
-        logger.info("[provisionMachine] Skipping, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[provisionMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -97,10 +97,8 @@ export const registerConsumers = () => {
         .set({ metadata: mergedMetadata })
         .where(eq(schema.machine.id, machineId));
 
-      logger.info("[provisionMachine] Machine provisioned", {
-        machineId,
-        type: machine.type,
-      });
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[provisionMachine] Machine provisioned type=${machine.type}`);
       return `provisioned machine ${machineId}`;
     },
   });
@@ -133,10 +131,10 @@ export const registerConsumers = () => {
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
       if (machine.state !== "starting") {
-        logger.info("[sendReadinessProbe] Skipping, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[sendReadinessProbe] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -158,11 +156,8 @@ export const registerConsumers = () => {
         messageId: sendResult.messageId,
       });
 
-      logger.info("[sendReadinessProbe] Probe message sent", {
-        machineId,
-        threadId: sendResult.threadId,
-        messageId: sendResult.messageId,
-      });
+      logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
+      logger.info(`[sendReadinessProbe] Probe message sent messageId=${sendResult.messageId}`);
       return `probe sent, messageId=${sendResult.messageId}`;
     },
   });
@@ -188,10 +183,10 @@ export const registerConsumers = () => {
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
       if (machine.state !== "starting") {
-        logger.info("[pollProbeResponse] Skipping, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[pollProbeResponse] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -209,10 +204,8 @@ export const registerConsumers = () => {
           responseText: pollResult.responseText,
         });
 
-        logger.info("[pollProbeResponse] Probe succeeded", {
-          machineId,
-          responseText: pollResult.responseText,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(`[pollProbeResponse] Probe succeeded responseText=${pollResult.responseText}`);
         return `probe succeeded: "${pollResult.responseText}"`;
       }
 
@@ -247,10 +240,10 @@ export const registerConsumers = () => {
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
       if (machine.state !== "starting") {
-        logger.info("[activateMachine] Skipping, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[activateMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -260,10 +253,10 @@ export const registerConsumers = () => {
           where: eq(schema.machine.id, machineId),
         });
         if (current?.state !== "starting") {
-          logger.info("[activateMachine] Skipping inside tx, state changed", {
-            machineId,
-            state: current?.state,
-          });
+          logger.set({ machine: { id: machineId } });
+          logger.info(
+            `[activateMachine] Skipping inside tx, state changed state=${current?.state}`,
+          );
           return false;
         }
 
@@ -288,7 +281,8 @@ export const registerConsumers = () => {
         return true;
       });
 
-      logger.info(`[activateMachine] Machine activated:${activated}`, { machineId });
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[activateMachine] Machine activated:${activated}`);
       if (activated) await broadcastInvalidation(env).catch(() => {});
       return `machine activated:${activated}`;
     },
@@ -345,11 +339,10 @@ export const registerConsumers = () => {
         });
       }
 
-      logger.info("[archiveStaleDetachedMachines] Fan-out archival", {
-        activatedMachineId: machineId,
-        projectId,
-        enqueuedCount: staleDetached.length,
-      });
+      logger.set({ machine: { id: machineId }, project: { id: projectId } });
+      logger.info(
+        `[archiveStaleDetachedMachines] Fan-out archival enqueuedCount=${staleDetached.length}`,
+      );
       return `enqueued ${staleDetached.length} archive-requested events`;
     },
   });
@@ -375,7 +368,8 @@ export const registerConsumers = () => {
         .set({ state: "archived" })
         .where(eq(schema.machine.id, machineId));
 
-      logger.info("[archiveMachineViaProvider] Archived machine", { machineId });
+      logger.set({ machine: { id: machineId } });
+      logger.info("[archiveMachineViaProvider] Archived machine");
       return `archived machine ${machineId}`;
     },
   });

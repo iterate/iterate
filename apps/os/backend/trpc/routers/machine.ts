@@ -447,10 +447,10 @@ export const machineRouter = router({
       // Best-effort provider cleanup first — don't block DB deletion if provider fails
       // (e.g. sandbox already deleted, invalid externalId, provider API down)
       await runtime.delete().catch((err) => {
-        logger.warn("Failed to delete provider sandbox, proceeding with DB cleanup", {
-          machineId: input.machineId,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        logger.set({ machine: { id: input.machineId } });
+        logger.warn(
+          `Failed to delete provider sandbox, proceeding with DB cleanup error=${err instanceof Error ? err.message : String(err)}`,
+        );
       });
 
       // Delete machine from DB (token is shared across project, so we keep it)

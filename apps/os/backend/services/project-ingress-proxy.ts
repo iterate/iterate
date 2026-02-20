@@ -671,12 +671,11 @@ export async function handleProjectIngressRequest(
     const pathWithQuery = `${url.pathname}${url.search}`;
     return await proxyWithFetcher(request, pathWithQuery, fetcher, requestHostname);
   } catch (error) {
-    logger.error("[project-ingress] Failed to proxy request", {
+    logger.error("[project-ingress] Failed to proxy request", error, {
       host: requestHostname,
       rootDomain: resolvedHost.rootDomain,
-      machineId: machine.id,
+      machine: { id: machine.id },
       machineType: machine.type,
-      error: error instanceof Error ? error.message : String(error),
     });
     return jsonError(502, "proxy_error", {
       ...parseDetails,
