@@ -2,6 +2,7 @@
 FROM node:24
 
 # === Versions ===
+ARG SANDBOX_AGENT_BROWSER_VERSION=0.13.0
 ARG SANDBOX_CODEX_VERSION=0.98.0
 ARG SANDBOX_OPENCODE_VERSION=1.2.4
 ARG SANDBOX_CLAUDE_CODE_VERSION=2.1.37
@@ -28,6 +29,26 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     inotify-tools \
     jq \
     less \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxi6 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxshmfence1 \
     locales \
     make \
     openssh-client \
@@ -113,11 +134,16 @@ RUN mkdir -p /home/iterate/.local/bin && \
     rm -rf /tmp/gogcli
 
 # === Agent packages (npm, userspace) ===
+RUN npm install -g agent-browser@${SANDBOX_AGENT_BROWSER_VERSION}
 RUN npm install -g @mariozechner/pi-coding-agent@${SANDBOX_PI_CODING_AGENT_VERSION}
 RUN npm install -g @openai/codex@${SANDBOX_CODEX_VERSION}
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${SANDBOX_CLAUDE_CODE_VERSION}
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${SANDBOX_OPENCODE_VERSION}
 ENV PATH="/home/iterate/.opencode/bin:$PATH"
+
+# Pre-download Chromium for agent-browser (system deps installed above)
+RUN agent-browser install
+
 # Ensure wrapper scripts win after all PATH modifications.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
