@@ -2,14 +2,14 @@ import type { ReactNode } from "react";
 import { createRouter } from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
 import { createTRPCOptionsProxy, type TRPCOptionsProxy } from "@trpc/tanstack-react-query";
-import type { TRPCRouter } from "@server/trpc/router.ts";
+import type { AppRouter } from "@server/trpc/app-router.ts";
 import { routeTree } from "./routeTree.gen.ts";
 import { trpcClient } from "./integrations/tanstack-query/trpc-client.tsx";
 import { Provider } from "./integrations/tanstack-query/root-provider.tsx";
 
 export interface RouterContext {
   queryClient: QueryClient;
-  trpc: TRPCOptionsProxy<TRPCRouter>;
+  trpc: TRPCOptionsProxy<AppRouter>;
 }
 
 const queryClient = new QueryClient();

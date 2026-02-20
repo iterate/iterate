@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import type { SerializedAgent } from "../trpc/router.ts";
+import type { SerializedAgent } from "../routers/agents.ts";
 import { resolveAgentSession } from "./agent-debug-links.ts";
 
 export type AgentCommandEnvironment = {

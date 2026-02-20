@@ -7,11 +7,11 @@ import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
-import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
+import type { AppRouter } from "../../../daemon/server/trpc/app-router.ts";
 
 function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
   const { baseUrl, fetcher } = params;
-  return createTRPCClient<TRPCRouter>({
+  return createTRPCClient<AppRouter>({
     links: [
       httpBatchLink({
         url: `${baseUrl}/api/trpc`,
@@ -71,7 +71,7 @@ async function pokeMachineToRefresh(
   const client = createDaemonTrpcClient(daemonTransport);
 
   try {
-    await client.platform.refreshEnv.mutate();
+    await client.daemon.platform.refreshEnv.mutate();
     logger.info("[poke-machines] Poked machine to refresh env", { machineId: machine.id });
   } catch (err) {
     logger.error("[poke-machines] Failed to poke machine for refresh", err);

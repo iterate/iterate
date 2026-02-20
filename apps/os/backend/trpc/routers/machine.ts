@@ -27,7 +27,7 @@ import {
   normalizeProjectIngressCanonicalHost,
 } from "../../utils/project-ingress-url.ts";
 import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
-import type { TRPCRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/router.ts";
+import type { AppRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/app-router.ts";
 
 function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
   const { baseUrl, fetcher } = params;
@@ -76,12 +76,19 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     return { ...machine, metadata, services: [] };
   }
 
+  const shouldUseIterateAppDisplayHost =
+    (cloudflareEnv.APP_STAGE === "dev" || cloudflareEnv.APP_STAGE.startsWith("dev-")) &&
+    cloudflareEnv.PROJECT_INGRESS_PROXY_HOST_MATCHERS.split(",")
+      .map((value) => value.trim().toLowerCase())
+      .includes("*.iterate.app");
+  const machineServiceHost = shouldUseIterateAppDisplayHost ? "iterate.app" : canonicalHost;
+
   const scheme = getIngressSchemeFromPublicUrl(cloudflareEnv.VITE_PUBLIC_URL);
 
   const services = getDaemonsWithWebUI().map((daemon) => {
     const url = buildCanonicalMachineIngressUrl({
       scheme,
-      canonicalHost,
+      canonicalHost: machineServiceHost,
       machineId: machine.id,
       port: daemon.internalPort,
     });
@@ -412,7 +419,7 @@ export const machineRouter = router({
         baseUrl: daemonBaseUrl,
         fetcher: daemonFetcher,
       });
-      await daemonClient.restartDaemon.mutate().catch((err) => {
+      await daemonClient.daemon.restartDaemon.mutate().catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to restart daemon: ${err instanceof Error ? err.message : String(err)}`,
@@ -537,8 +544,8 @@ export const machineRouter = router({
         fetcher: daemonFetcher,
       });
       const [agents, serverInfo] = await Promise.all([
-        daemonClient.listAgents.query(),
-        daemonClient.getServerCwd.query(),
+        daemonClient.daemon.listAgents.query(),
+        daemonClient.daemon.getServerCwd.query(),
       ]);
       return { agents, customerRepoPath: serverInfo.customerRepoPath };
     }),

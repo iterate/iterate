@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, LoaderIcon } from "lucide-react";
-import type { SerializedAgent } from "../../../../server/trpc/router.ts";
+import type { SerializedAgent } from "../../../../server/routers/agents.ts";
 import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
 
 const XtermTerminal = lazy(() =>
@@ -25,7 +25,7 @@ function getAgentCommand(agent: SerializedAgent): string | undefined {
 export const Route = createFileRoute("/_app/agents/$slug")({
   beforeLoad: async ({ params }) => {
     const agentPath = decodeURIComponent(params.slug);
-    const agent = await trpcClient.getAgent.query({ path: agentPath });
+    const agent = await trpcClient.daemon.getAgent.query({ path: agentPath });
     if (!agent) {
       throw redirect({
         to: "/agents/new",
@@ -41,7 +41,7 @@ function AgentPage() {
   const agentPath = decodeURIComponent(slug);
   const trpc = useTRPC();
 
-  const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ path: agentPath }));
+  const { data: agent } = useSuspenseQuery(trpc.daemon.getAgent.queryOptions({ path: agentPath }));
 
   const initialCommand = useMemo(() => {
     if (!agent) return undefined;

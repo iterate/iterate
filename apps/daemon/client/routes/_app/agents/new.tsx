@@ -60,12 +60,12 @@ function NewAgentForm() {
 
   const createAgent = useMutation({
     mutationFn: () =>
-      trpcClient.getOrCreateAgent.mutate({
+      trpcClient.daemon.getOrCreateAgent.mutate({
         agentPath: normalizedPath,
         createWithEvents: [],
       }),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.daemon.listAgents.queryKey() });
       navigate({
         to: "/agents/$slug",
         params: { slug: encodeURIComponent(result.agent.path) },

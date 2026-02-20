@@ -39,14 +39,14 @@ function AgentsContent() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { data: agents } = useSuspenseQuery({
-    ...trpc.listAgents.queryOptions(),
+    ...trpc.daemon.listAgents.queryOptions(),
     refetchInterval: false,
     refetchOnWindowFocus: false,
   });
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    trpc.daemon.archiveAgent.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.daemon.listAgents.queryKey() });
       },
     }),
   );

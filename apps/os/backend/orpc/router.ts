@@ -17,7 +17,7 @@ import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-ref
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { decrypt } from "../utils/encryption.ts";
 import { getUnifiedEnvVars } from "../utils/env-vars.ts";
-import type { TRPCRouter } from "../../../daemon/server/trpc/router.ts";
+import type { AppRouter } from "../../../daemon/server/trpc/app-router.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import { outboxClient } from "../outbox/client.ts";
 
@@ -29,7 +29,7 @@ export type ORPCContext = RequestHeadersPluginContext & {
 };
 
 export function createDaemonTrpcClient(baseUrl: string) {
-  return createTRPCClient<TRPCRouter>({
+  return createTRPCClient<AppRouter>({
     links: [
       httpBatchLink({
         url: `${baseUrl}/api/trpc`,

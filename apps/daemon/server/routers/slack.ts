@@ -57,7 +57,7 @@ import type {
 } from "@slack/types";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { appRouter } from "../trpc/app-router.ts";
 import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
@@ -212,7 +212,7 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  const caller = trpcRouter.createCaller({});
+  const caller = appRouter.createCaller({});
 
   // ── Reaction events ──
   // Reactions never create agents; they only forward to an existing one.
@@ -228,7 +228,7 @@ slackRouter.post("/webhook", async (c) => {
     }
 
     const agentPath = getAgentPath(threadTs);
-    const agent = await caller.getAgent({ path: agentPath });
+    const agent = await caller.daemon.getAgent({ path: agentPath });
     if (!agent) {
       return c.json({
         success: true,
@@ -279,16 +279,16 @@ slackRouter.post("/webhook", async (c) => {
   }
 
   let wasNewlyCreated = false;
-  let agent: Awaited<ReturnType<typeof caller.getAgent>> = null;
+  let agent: Awaited<ReturnType<typeof caller.daemon.getAgent>> = null;
 
   if (isMention) {
     // Mentions always get-or-create an agent, matching the webchat pattern.
-    const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+    const result = await caller.daemon.getOrCreateAgent({ agentPath, createWithEvents: [] });
     wasNewlyCreated = result.wasNewlyCreated;
     agent = result.agent;
   } else {
     // FYI messages (no @mention) in a thread — only forward if an agent already exists.
-    agent = await caller.getAgent({ path: agentPath });
+    agent = await caller.daemon.getAgent({ path: agentPath });
     if (!agent) {
       return c.json({
         success: true,
@@ -325,7 +325,7 @@ slackRouter.post("/webhook", async (c) => {
 
   if (commandResult) {
     if (wasNewlyCreated) {
-      void caller.subscribeToAgentChanges({
+      void caller.daemon.subscribeToAgentChanges({
         agentPath,
         callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
       });
@@ -368,7 +368,7 @@ slackRouter.post("/webhook", async (c) => {
 
   // Subscribe to agent-change callbacks once, when the agent is first created.
   if (wasNewlyCreated) {
-    void caller.subscribeToAgentChanges({
+    void caller.daemon.subscribeToAgentChanges({
       agentPath,
       callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
     });

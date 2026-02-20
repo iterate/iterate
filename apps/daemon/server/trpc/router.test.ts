@@ -42,7 +42,7 @@ vi.mock("../db/index.ts", () => ({
   db: testDb,
 }));
 
-const { trpcRouter } = await import("./router.ts");
+const { appRouter } = await import("./app-router.ts");
 
 describe("getOrCreateAgent", () => {
   beforeEach(() => {
@@ -66,8 +66,8 @@ describe("getOrCreateAgent", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
-    const caller = trpcRouter.createCaller({});
-    const result = await caller.getOrCreateAgent({
+    const caller = appRouter.createCaller({});
+    const result = await caller.daemon.getOrCreateAgent({
       agentPath: "/test/archived-with-route",
       createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
       newAgentPath: "http://localhost:9999/new",
@@ -78,7 +78,7 @@ describe("getOrCreateAgent", () => {
     expect(result.agent.archivedAt).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
 
-    const loaded = await caller.getAgent({ path: "/test/archived-with-route" });
+    const loaded = await caller.daemon.getAgent({ path: "/test/archived-with-route" });
     expect(loaded).not.toBeNull();
     expect(loaded?.archivedAt).toBeNull();
     expect(loaded?.activeRoute?.destination).toBe("/opencode/sessions/existing-route");
@@ -99,8 +99,8 @@ describe("getOrCreateAgent", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const caller = trpcRouter.createCaller({});
-    const result = await caller.getOrCreateAgent({
+    const caller = appRouter.createCaller({});
+    const result = await caller.daemon.getOrCreateAgent({
       agentPath: "/test/archived-no-route",
       createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
       newAgentPath: "http://localhost:9999/new",
@@ -111,7 +111,7 @@ describe("getOrCreateAgent", () => {
     expect(result.agent.archivedAt).toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    const loaded = await caller.getAgent({ path: "/test/archived-no-route" });
+    const loaded = await caller.daemon.getAgent({ path: "/test/archived-no-route" });
     expect(loaded).not.toBeNull();
     expect(loaded?.archivedAt).toBeNull();
     expect(loaded?.activeRoute?.destination).toBe("/opencode/sessions/new-route");
@@ -131,16 +131,16 @@ describe("getOrCreateAgent", () => {
       }),
     );
 
-    const caller = trpcRouter.createCaller({});
+    const caller = appRouter.createCaller({});
     await expect(
-      caller.getOrCreateAgent({
+      caller.daemon.getOrCreateAgent({
         agentPath: "/test/archived-create-fails",
         createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
         newAgentPath: "http://localhost:9999/new",
       }),
     ).rejects.toThrow("Failed to create session: upstream failed");
 
-    const loaded = await caller.getAgent({ path: "/test/archived-create-fails" });
+    const loaded = await caller.daemon.getAgent({ path: "/test/archived-create-fails" });
     expect(loaded).not.toBeNull();
     expect(loaded?.archivedAt).toBeNull();
     expect(loaded?.activeRoute).toBeNull();
@@ -163,9 +163,9 @@ describe("getOrCreateAgent", () => {
       }),
     );
 
-    const caller = trpcRouter.createCaller({});
+    const caller = appRouter.createCaller({});
     const promises = Array.from({ length: 10 }, () =>
-      caller.getOrCreateAgent({
+      caller.daemon.getOrCreateAgent({
         agentPath: "/test/concurrent",
         createWithEvents: [{ type: "iterate:agent:prompt-added", message: "Hello" }],
         newAgentPath: "http://localhost:9999/new",
