@@ -36,7 +36,7 @@ import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { appRouter } from "../trpc/app-router.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
@@ -148,8 +148,8 @@ webchatRouter.post("/webhook", async (c) => {
   }
 
   const agentPath = getAgentPathForThread(webchatThreadId);
-  const caller = appRouter.createCaller({});
-  const { agent, wasNewlyCreated } = await caller.daemon.getOrCreateAgent({
+  const caller = trpcRouter.createCaller({});
+  const { agent, wasNewlyCreated } = await caller.getOrCreateAgent({
     agentPath,
     createWithEvents: [],
   });
@@ -157,7 +157,7 @@ webchatRouter.post("/webhook", async (c) => {
   webchatThreadIdByAgentPath.set(agentPath, webchatThreadId);
 
   if (wasNewlyCreated) {
-    void caller.daemon.subscribeToAgentChanges({
+    void caller.subscribeToAgentChanges({
       agentPath,
       callbackUrl: WEBCHAT_AGENT_CHANGE_CALLBACK_URL,
     });

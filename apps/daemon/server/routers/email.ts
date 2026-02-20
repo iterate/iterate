@@ -18,7 +18,7 @@ import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { appRouter } from "../trpc/app-router.ts";
+import { trpcRouter } from "../trpc/router.ts";
 
 const logger = console;
 const DAEMON_PORT = process.env.PORT || "3001";
@@ -99,8 +99,8 @@ emailRouter.post("/webhook", async (c) => {
     const emailBody = payload._iterate?.emailBody;
 
     // Get or create the agent — wasNewlyCreated tells us if this is a new thread or a reply.
-    const caller = appRouter.createCaller({});
-    const { wasNewlyCreated } = await caller.daemon.getOrCreateAgent({
+    const caller = trpcRouter.createCaller({});
+    const { wasNewlyCreated } = await caller.getOrCreateAgent({
       agentPath,
       createWithEvents: [],
     });

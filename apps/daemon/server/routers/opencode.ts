@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { PromptAddedEvent } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
-import { appRouter } from "../trpc/app-router.ts";
+import { trpcRouter } from "../trpc/router.ts";
 import { withSpan } from "../utils/otel.ts";
 
 // Opencode sessions are project-bound - use homedir as neutral location for global sessions
@@ -39,7 +39,7 @@ function getOpencodeWorkingDirectory(): string {
 //   trpc.updateAgent so the agents table reflects the current state.
 
 const OPENCODE_BASE_URL = process.env.OPENCODE_BASE_URL ?? "http://localhost:4096";
-const trpc = appRouter.createCaller({});
+const trpc = trpcRouter.createCaller({});
 const opencodeClient = createOpencodeClient({ baseUrl: OPENCODE_BASE_URL });
 
 export const opencodeRouter = new Hono();
@@ -166,7 +166,7 @@ void (async () => {
       if (!status.isWorking) {
         agentPathByOpencodeSessionId.delete(opencodeSessionId);
       }
-      await trpc.daemon.updateAgent({ path: agentPath, ...status });
+      await trpc.updateAgent({ path: agentPath, ...status });
     }
 
     console.warn("[opencode] lifecycle subscription stream ended unexpectedly");
