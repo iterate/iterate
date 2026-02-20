@@ -39,7 +39,7 @@ describe("runAgentCommand", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns renderer-agnostic debug markdown with plain links", async () => {
+  it("returns structured debug result with canonical ingress URLs", async () => {
     const agent = buildAgent();
     const result = await runAgentCommand({
       message: "!debug",
@@ -51,12 +51,47 @@ describe("runAgentCommand", () => {
     expect(result?.command).toBe("debug");
     expect(result?.result).toEqual(
       expect.objectContaining({
+        agentPath: agent.path,
+        agentHarness: "opencode",
+        sessionSource: "route.metadata",
         agent,
       }),
     );
+
+    const r = result?.result as { webUrl: string; terminalUrl: string };
+    expect(r.webUrl).toContain("4096__my-proj.iterate.app");
+    expect(r.terminalUrl).toContain("my-proj.iterate.app");
     expect(result?.resultMarkdown).toContain("Harness Web UI (direct proxy): https://");
     expect(result?.resultMarkdown).toContain("Open Terminal UI: https://");
-    expect(result?.resultMarkdown).not.toContain("|Open session>");
-    expect(result?.resultMarkdown).not.toContain("|Open terminal attach>");
+  });
+
+  it("recognizes /debug alias", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "/debug",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result?.command).toBe("debug");
+  });
+
+  it("returns null for non-command messages", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "hello world",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("strips @mention prefixes before matching", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "<@U123ABC> !debug",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result?.command).toBe("debug");
   });
 });
