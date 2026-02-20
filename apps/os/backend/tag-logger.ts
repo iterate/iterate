@@ -25,8 +25,8 @@ function buildLogParts(args: unknown[]): {
   context: Record<string, unknown>;
   embeddedError?: Error;
 } {
-  const message = args.length === 0 ? "log" : args.map((arg) => toMessagePart(arg)).join(" ");
   const context: Record<string, unknown> = {};
+  const messageParts: string[] = [];
   let embeddedError: Error | undefined;
 
   for (const arg of args) {
@@ -34,11 +34,22 @@ function buildLogParts(args: unknown[]): {
       embeddedError ??= arg;
       continue;
     }
-    const record = toContextRecord(arg);
-    if (!record) continue;
 
-    Object.assign(context, record);
+    const record = toContextRecord(arg);
+    if (record) {
+      Object.assign(context, record);
+      continue;
+    }
+
+    messageParts.push(toMessagePart(arg));
   }
+
+  const message =
+    messageParts.length > 0
+      ? messageParts.join(" ")
+      : embeddedError
+        ? `${embeddedError.name}: ${embeddedError.message}`
+        : "log";
 
   return { message, context, embeddedError };
 }

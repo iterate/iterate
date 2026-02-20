@@ -61,7 +61,7 @@ export async function sendEmail(
   });
 
   if (error) {
-    logger.error("[Resend] Failed to send email", { error });
+    logger.error("[Resend] Failed to send email", new Error(error.message));
     return { error: error.message };
   }
 
@@ -120,12 +120,14 @@ export async function fetchEmailContent(
   try {
     const { data, error } = await client.emails.receiving.get(emailId);
     if (error) {
-      logger.error("[Resend] Failed to fetch email content", { emailId, error });
+      logger.error("[Resend] Failed to fetch email content", new Error(error.message), {
+        emailId,
+      });
       return null;
     }
     return data as ResendEmailContent;
   } catch (err) {
-    logger.error("[Resend] Error fetching email content", { emailId, error: err });
+    logger.error("[Resend] Error fetching email content", err, { emailId });
     return null;
   }
 }
@@ -165,11 +167,8 @@ async function buildMachineForwardFetcher(
     });
     return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[Resend Webhook] Failed to build forward fetcher", {
-      machineId: machine.id,
-      type: machine.type,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.error(`[Resend Webhook] Failed to build forward fetcher type=${machine.type}`, err);
     return null;
   }
 }
@@ -314,11 +313,10 @@ resendApp.post("/webhook", async (c) => {
       const targetUrl = new URL(currentUrl);
       targetUrl.hostname = targetHostname;
 
-      logger.info("[Resend Webhook] Forwarding email to correct stage", {
-        expectedStage,
-        recipientStage,
-        targetUrl: targetUrl.href,
-      });
+      logger.set({ url: targetUrl.href });
+      logger.info(
+        `[Resend Webhook] Forwarding email to correct stage expectedStage=${expectedStage} recipientStage=${recipientStage}`,
+      );
 
       try {
         // Forward all headers, adding our forwarded-from header
@@ -341,20 +339,16 @@ resendApp.post("/webhook", async (c) => {
           headers: responseHeaders,
         });
       } catch (error) {
-        logger.error("[Resend Webhook] Failed to forward email", {
-          error,
-          targetUrl: targetUrl.href,
+        logger.error("[Resend Webhook] Failed to forward email", error, {
+          url: targetUrl.href,
         });
         return c.json({ ok: false, message: "Failed to forward to correct stage" }, 502);
       }
     }
 
-    logger.info("[Resend Webhook] Email addressed to different stage, ignoring", {
-      expectedStage,
-      recipientStage,
-      recipientEmail,
-      alreadyForwarded: alreadyForwarded ?? null,
-    });
+    logger.info(
+      `[Resend Webhook] Email addressed to different stage, ignoring expectedStage=${expectedStage} recipientStage=${recipientStage}`,
+    );
     return c.json({ ok: true, message: "Email addressed to different stage" });
   }
 
@@ -387,7 +381,7 @@ resendApp.post("/webhook", async (c) => {
         });
 
         if (!user) {
-          logger.warn("[Resend Webhook] No user found for sender", { senderEmail });
+          logger.warn(`[Resend Webhook] No user found for sender ${senderEmail}`);
           // Still save the event for debugging
           await db.insert(schema.event).values({
             type: "resend:email-received",
@@ -417,7 +411,8 @@ resendApp.post("/webhook", async (c) => {
         });
 
         if (memberships.length === 0) {
-          logger.warn("[Resend Webhook] No org memberships for user", { userId: user.id });
+          logger.set({ user: { id: user.id } });
+          logger.warn("[Resend Webhook] No org memberships for user");
           await db.insert(schema.event).values({
             type: "resend:email-received",
             payload: payload as unknown as Record<string, unknown>,
@@ -455,10 +450,10 @@ resendApp.post("/webhook", async (c) => {
         }
 
         if (!targetProject) {
-          logger.warn("[Resend Webhook] No project found for email", {
-            userId: user.id,
-            targetProjectSlug,
-          });
+          logger.set({ user: { id: user.id } });
+          logger.warn(
+            `[Resend Webhook] No project found for email targetProjectSlug=${targetProjectSlug ?? "none"}`,
+          );
           await db.insert(schema.event).values({
             type: "resend:email-received",
             payload: payload as unknown as Record<string, unknown>,

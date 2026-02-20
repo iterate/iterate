@@ -1,6 +1,6 @@
-import { parseRouter } from "trpc-cli";
 import { Hono, type Context } from "hono";
 import { minimatch } from "minimatch";
+import { parseRouter } from "trpc-cli";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
@@ -31,9 +31,14 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
-import { flushRequestEvlog, setRequestEvlogContext, withRequestEvlogContext } from "./evlog.ts";
+import {
+  flushRequestEvlog,
+  log as evlog,
+  setRequestEvlogFlushHandler,
+  withRequestEvlogContext,
+} from "./evlog.ts";
+import { sendEvlogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { logger } from "./tag-logger.ts";
-import type { PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -80,6 +85,8 @@ registerConsumers();
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
+setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
+
 initWorkersLogger({
   env: {
     service: "os",
@@ -103,7 +110,9 @@ app.use("*", async (c, next) => {
   const requestLogger = createWorkersLogger(c.req.raw);
   const currentContext = requestLogger.getContext();
   const requestId =
-    typeof currentContext.requestId === "string" ? currentContext.requestId : crypto.randomUUID();
+    typeof currentContext.requestId === "string" && currentContext.requestId.length > 0
+      ? currentContext.requestId
+      : crypto.randomUUID();
   const method = typeof currentContext.method === "string" ? currentContext.method : c.req.method;
   const path = typeof currentContext.path === "string" ? currentContext.path : c.req.path;
 
@@ -122,9 +131,15 @@ app.use("*", async (c, next) => {
     },
   });
 
+  const requestStartedAt = Date.now();
   return withRequestEvlogContext(
     {
       logger: requestLogger,
+      request: {
+        requestId,
+        method,
+        path,
+      },
       env: c.env,
       executionCtx: c.executionCtx,
     },
@@ -133,25 +148,17 @@ app.use("*", async (c, next) => {
       try {
         await next();
         status = c.res.status;
-      } catch (err) {
-        const user = getPostHogUserContext(c);
-        logger.error(
-          `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-          {
-            path: c.req.path,
-            method: c.req.method,
-            status: 500,
-            user,
-          },
-          err,
-        );
-        throw err;
       } finally {
         const user = getPostHogUserContext(c);
-        flushRequestEvlog({
-          status,
+        const duration = Date.now() - requestStartedAt;
+        evlog.set({
+          request: {
+            status,
+            duration,
+          },
           user,
         });
+        flushRequestEvlog();
       }
     },
   );
@@ -311,11 +318,24 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   );
 });
 
-app.onError((_err, c) => {
+app.onError((err, c) => {
+  const user = getPostHogUserContext(c);
+  logger.error(
+    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+    {
+      request: {
+        path: c.req.path,
+        method: c.req.method,
+        status: 500,
+      },
+      user,
+    },
+    err,
+  );
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", async (c) => c.var.auth.handler(c.req.raw));
+app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {
@@ -342,9 +362,10 @@ const appOrpcHandler = new RPCHandler(appRouter, {
       if (!maybeStatus || maybeStatus >= 500) {
         logger.error(message, errorDetails);
       } else {
-        setRequestEvlogContext({
-          status: maybeStatus,
-          url: params.request.url,
+        logger.set({
+          request: {
+            status: maybeStatus,
+          },
         });
         logger.warn(message, errorDetails);
       }
@@ -405,11 +426,11 @@ const daemonOrpcHandler = new RPCHandler(workerRouter, {
       if (!maybeStatus || maybeStatus >= 500) {
         logger.error(message, errorDetails, error);
       } else {
-        setRequestEvlogContext({
+        logger.set({
           status: maybeStatus,
           url: params.request.url,
         });
-        logger.warn(message, errorDetails);
+        logger.warn(message);
       }
     }),
   ],
@@ -484,8 +505,9 @@ export default class extends WorkerEntrypoint {
       case workerConfig.workerCrons.processOutboxQueue: {
         try {
           const result = await queuer.processQueue(db);
-          if (result !== "0 messages processed")
-            logger.info("Scheduled outbox queue processing completed", result);
+          if (result !== "0 messages processed") {
+            logger.info("Scheduled outbox queue processing completed");
+          }
         } catch (error) {
           logger.error("Scheduled outbox queue processing failed:", error);
         }

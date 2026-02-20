@@ -29,10 +29,10 @@ export async function buildMachineFetcher(
     });
     return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[readiness-probe] Failed to build machine fetcher", {
-      machineId: machine.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.warn(
+      `[readiness-probe] Failed to build machine fetcher error=${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -86,12 +86,11 @@ export async function sendProbeMessage(
         return { ok: false, detail: lastDetail };
       }
 
-      logger.info("[readiness-probe] Send got retryable response, will retry", {
-        status: response.status,
-      });
+      logger.set({ responseStatus: response.status });
+      logger.info("[readiness-probe] Send got retryable response, will retry");
     } catch (err) {
       lastDetail = err instanceof Error ? err.message : String(err);
-      logger.info("[readiness-probe] Send error (will retry)", { error: lastDetail });
+      logger.info(`[readiness-probe] Send error (will retry) error=${lastDetail}`);
     }
 
     await sleep(SEND_RETRY_INTERVAL_MS);
@@ -121,8 +120,12 @@ export async function pollForProbeAnswer(
         method: "GET",
         signal: AbortSignal.timeout(10_000),
       });
-    } catch {
+    } catch (err) {
       // Network/timeout error — transient, keep polling
+      logger.set({ threadId });
+      logger.info(
+        `[readiness-probe] Poll error (will retry) error=${err instanceof Error ? err.message : String(err)}`,
+      );
       continue;
     }
 
