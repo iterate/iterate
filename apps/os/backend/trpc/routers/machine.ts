@@ -76,19 +76,12 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     return { ...machine, metadata, services: [] };
   }
 
-  const shouldUseIterateAppDisplayHost =
-    (cloudflareEnv.APP_STAGE === "dev" || cloudflareEnv.APP_STAGE.startsWith("dev-")) &&
-    cloudflareEnv.PROJECT_INGRESS_PROXY_HOST_MATCHERS.split(",")
-      .map((value) => value.trim().toLowerCase())
-      .includes("*.iterate.app");
-  const machineServiceHost = shouldUseIterateAppDisplayHost ? "iterate.app" : canonicalHost;
-
   const scheme = getIngressSchemeFromPublicUrl(cloudflareEnv.VITE_PUBLIC_URL);
 
   const services = getDaemonsWithWebUI().map((daemon) => {
     const url = buildCanonicalMachineIngressUrl({
       scheme,
-      canonicalHost: machineServiceHost,
+      canonicalHost,
       machineId: machine.id,
       port: daemon.internalPort,
     });
