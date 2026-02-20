@@ -16,22 +16,23 @@
     "daytona:push": "doppler run -- sh -c 'tsx providers/daytona/push-snapshot.ts \"$@\"' --",
     "shell": "doppler run -- tsx providers/docker/shell.ts",
     "fly:bootstrap-apps": "doppler run -- sh -c 'tsx providers/fly/bootstrap-apps.ts \"$@\"' --",
-    "fly:cleanup": "doppler run -- sh -c 'tsx providers/fly/cleanup-machines.ts \"$@\"' --",
+    "fly:cleanup": "doppler run -- tsx providers/fly/cleanup-machines.ts",
     "test": "vitest run",
     "test:docker": "RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=docker pnpm test",
     "test:daytona": "doppler run -- sh -c 'RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=daytona pnpm test'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pidnap": "workspace:*",
     "@daytonaio/sdk": "^0.128.1",
     "@trpc/client": "^11.1.4",
     "@trpc/server": "^11.1.4",
+    "pidnap": "workspace:*",
     "undici": "^7.10.0",
     "zod": "^3.25.30"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
+    "trpc-cli": "^0.12.4",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }
