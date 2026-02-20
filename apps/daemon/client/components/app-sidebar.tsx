@@ -2,7 +2,7 @@ import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-route
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, BotIcon } from "lucide-react";
 
-import type { SerializedAgent } from "@server/trpc/router.ts";
+import type { SerializedAgent } from "@server/routers/agents.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
 import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
 
@@ -33,9 +33,9 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
   const queryClient = useQueryClient();
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    trpc.daemon.archiveAgent.mutationOptions({
       onSuccess: (_data, variables) => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.daemon.listAgents.queryKey() });
         if (variables.path === selectedPath) {
           navigate({ to: "/agents" });
         }

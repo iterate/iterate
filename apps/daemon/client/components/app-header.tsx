@@ -1,7 +1,7 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, ChevronLeft, PlusIcon } from "lucide-react";
 
-import type { SerializedAgent } from "@server/trpc/router.ts";
+import type { SerializedAgent } from "@server/routers/agents.ts";
 import { cn } from "@/lib/utils.ts";
 import { Separator } from "@/components/ui/separator.tsx";
 import { SidebarTrigger } from "@/components/ui/sidebar.tsx";

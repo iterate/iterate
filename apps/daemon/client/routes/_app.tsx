@@ -15,7 +15,7 @@ function AppLayout() {
   const agentPath = encodedAgentPath ? decodeURIComponent(encodedAgentPath) : undefined;
 
   const trpc = useTRPC();
-  const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
+  const { data: agents = [] } = useQuery(trpc.daemon.listAgents.queryOptions());
 
   const currentAgent = agents.find((a) => a.path === agentPath);
 

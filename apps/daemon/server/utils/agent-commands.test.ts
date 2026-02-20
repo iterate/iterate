@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SerializedAgent } from "../trpc/router.ts";
+import type { SerializedAgent } from "../routers/agents.ts";
 import { runAgentCommand } from "./agent-commands.ts";
 
 function buildAgent(overrides: Partial<SerializedAgent> = {}): SerializedAgent {
