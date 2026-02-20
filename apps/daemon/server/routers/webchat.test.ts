@@ -276,6 +276,15 @@ describe("webchat router", () => {
   });
 
   describe("/webhook — agent commands", () => {
+    beforeEach(() => {
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("handles !debug without forwarding to agent prompt", async () => {
       getOrCreateAgentMock.mockResolvedValue({
         wasNewlyCreated: false,

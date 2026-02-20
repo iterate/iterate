@@ -30,9 +30,12 @@ const AGENT_COMMANDS = [
     async run(env: AgentCommandEnvironment) {
       const session = resolveAgentSession(env.agent);
       const result = {
-        agent: env.agent,
+        agentPath: env.agentPath,
+        agentHarness: session.agentHarness ?? null,
+        sessionSource: session.source ?? null,
         terminalUrl: session.terminalUrl ?? null,
         webUrl: session.webUrl ?? null,
+        agent: env.agent,
       } as const;
 
       const lines = [
