@@ -1,12 +1,15 @@
 import { readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import * as path from "node:path";
+import { exec } from "tinyexec";
 import { LogLevel, WebClient } from "@slack/web-api";
 import dedent from "dedent";
 import Replicate from "replicate";
 import { Resend } from "resend";
 import { z } from "zod/v4";
+import { tsImport } from "tsx/esm/api";
 import { createTRPCRouter, logEmitterStorage, publicProcedure } from "../init.ts";
 
 function getWebchatClient() {
@@ -90,6 +93,107 @@ function getLazyClients() {
 }
 
 export const toolsRouter = createTRPCRouter({
+  execTs: publicProcedure
+    .meta({ description: "Execute TypeScript with access to integration clients" })
+    .input(
+      z.object({
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Current working directory to generate and execute the code in. Default: current working directory",
+          ),
+        filename: z
+          .string()
+          .optional()
+          .describe("Filename to generate and execute the code in. Default: `${Date.now()}.ts"),
+        typecheck: z
+          .string()
+          .or(z.literal(false))
+          .default("npx tsc --noEmit")
+          .describe("Typecheck command. Set to false to skip typechecking."),
+        code: z.string().meta({ positional: true }).describe(dedent`
+          TypeScript code to execute. This should be in the form of a full module with a default export function which will be called with an execution context object:
+
+          - \`slack\` — @slack/web-api WebClient (needs SLACK_BOT_TOKEN)
+          - \`resend\` — Resend client (needs ITERATE_RESEND_API_KEY)
+          - \`replicate\` — Replicate client (needs REPLICATE_API_TOKEN)
+          - \`webchat\` — webchat HTTP client (.postMessage, .addReaction, .removeReaction, .getThreadMessages, .listThreads)
+
+          Example module invocation:
+
+          iterate tool exec-ts 'export default async () => 123' # prints 123
+          iterate tool exec-ts 'export default async () => console.log(123)' # console.log is piped to the CLI caller so this prints 123 as well
+          iterate tool exec-ts 'export default async ({ slack, resend }) => {
+            await slack.chat.postMessage({ channel: "#general", text: "Hello!" });
+            await resend.emails.send({
+              from: "Agent <agent@example.com>",
+              to: ["user@example.com"],
+              subject: "Hello",
+              text: "Hi there",
+            });
+          }' # clients injected into the context are lazy-initialized, so missing env vars won't cause an error unless used
+        `),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const cwd = input.cwd || process.cwd();
+      const generatedDir = path.join(cwd, "_generated");
+      const filename = input.filename || `${new Date().toISOString().replaceAll(":", ".")}.ts`;
+      const filepath = path.join(generatedDir, filename);
+      await mkdir(path.dirname(filepath), { recursive: true });
+
+      // Build a console that emits to an EventTarget so streaming callers can
+      // pick up logs in real-time, while also forwarding to the real console.
+      const emitter = logEmitterStorage.getStore();
+      const capture =
+        (level: string) =>
+        (...args: unknown[]) => {
+          // Always forward to real console so daemon logs still work
+          (console as unknown as Record<string, Function>)[level]?.(...args);
+          emitter?.dispatchEvent(new CustomEvent("log", { detail: { level, args } }));
+        };
+      const fakeConsole = {
+        log: capture("log"),
+        info: capture("info"),
+        warn: capture("warn"),
+        error: capture("error"),
+        debug: capture("debug"),
+      };
+
+      const globalThisWithShimmedConsoles = globalThis as {} as {
+        shimmedConsoles: Record<string, typeof globalThis.console>;
+      };
+      globalThisWithShimmedConsoles.shimmedConsoles ||= {};
+      using _consoleCleanup = {
+        [Symbol.dispose]: () => delete globalThisWithShimmedConsoles.shimmedConsoles[filepath],
+      };
+      const code = [
+        `const globalThisWithShimmedConsoles = globalThis as {} as {shimmedConsoles?: Record<string, typeof globalThis.console>};`,
+        `const console = globalThisWithShimmedConsoles.shimmedConsoles?.[${JSON.stringify(filepath)}] || globalThis.console;`,
+        ``,
+        input.code,
+      ].join("\n");
+      globalThisWithShimmedConsoles.shimmedConsoles[filepath] =
+        fakeConsole as typeof globalThis.console;
+
+      await writeFile(filepath, code);
+      if (input.typecheck) {
+        const [typecheckCommand, ...typecheckArgs] = input.typecheck.trim().split(/\s+/);
+        const result = await exec(typecheckCommand, typecheckArgs.concat(filepath), {
+          nodeOptions: { cwd },
+        });
+        if (result.exitCode !== 0) {
+          throw new Error(`Typecheck failed: ${result.stdout + result.stderr}`);
+        }
+      }
+
+      const clients = getLazyClients();
+
+      type ModuleShape = { default: (context: typeof clients) => Promise<unknown> };
+      const module_: ModuleShape = await tsImport(filepath, { parentURL: import.meta.url });
+      return module_.default(clients);
+    }),
   execJs: publicProcedure
     .meta({ description: "Execute JavaScript with access to integration clients" })
     .input(
@@ -171,7 +275,7 @@ export const toolsRouter = createTRPCRouter({
     .meta({ description: "List environment variables from ~/.iterate/.env" })
     .input(z.object({}).optional())
     .query(() => {
-      const envFilePath = join(homedir(), ".iterate/.env");
+      const envFilePath = path.join(homedir(), ".iterate/.env");
       let content: string;
       try {
         content = readFileSync(envFilePath, "utf-8");

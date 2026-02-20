@@ -4,3 +4,6 @@
 
 # local database
 db.sqlite
+
+# exec-ts generated files
+_generated
