@@ -58,6 +58,7 @@ import type {
   SectionBlock,
   ActionsBlock,
   Button,
+  RichTextBlock,
 } from "@slack/types";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -691,6 +692,22 @@ function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[]
       elements: buttons,
     } satisfies ActionsBlock);
   }
+
+  // Full agent metadata as a collapsible-style code block
+  const agentJson = JSON.stringify(commandResult.result, null, 2);
+  blocks.push({
+    type: "rich_text",
+    elements: [
+      {
+        type: "rich_text_section",
+        elements: [{ type: "text", text: "Full agent metadata", style: { bold: true } }],
+      },
+      {
+        type: "rich_text_preformatted",
+        elements: [{ type: "text", text: agentJson }],
+      },
+    ],
+  } satisfies RichTextBlock);
 
   return blocks;
 }
