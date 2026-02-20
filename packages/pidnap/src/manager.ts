@@ -425,41 +425,43 @@ export class Manager {
   /**
    * Add a restarting process at runtime
    */
-  async addProcess(
-    name: string,
-    definition: ProcessDefinition,
-    options?: RestartingProcessOptions,
-    envOptions?: EnvOptions,
-    tags?: string[],
-  ): Promise<RestartingProcess> {
-    if (this.isNameUsed(name)) {
-      throw new Error(`Name "${name}" is already in use`);
+  async addProcess(process: {
+    name: string;
+    definition: ProcessDefinition;
+    options?: RestartingProcessOptions;
+    envOptions?: EnvOptions;
+    tags?: string[];
+  }): Promise<RestartingProcess> {
+    if (this.isNameUsed(process.name)) {
+      throw new Error(`Name "${process.name}" is already in use`);
     }
 
     // Register custom env file if provided
-    if (envOptions?.envFile) {
-      this.envManager.registerFile(name, envOptions.envFile);
+    if (process.envOptions?.envFile) {
+      this.envManager.registerFile(process.name, process.envOptions.envFile);
     }
 
-    const processLogger = this.logger.child(name, { logFile: this.processLogFile(name) });
+    const processLogger = this.logger.child(process.name, {
+      logFile: this.processLogFile(process.name),
+    });
     const restartingProcess = new RestartingProcess(
-      name,
-      this.applyDefaults(name, definition, envOptions),
-      options ?? DEFAULT_RESTART_OPTIONS,
+      process.name,
+      this.applyDefaults(process.name, process.definition, process.envOptions),
+      process.options ?? DEFAULT_RESTART_OPTIONS,
       processLogger,
-      tags,
+      process.tags,
     );
-    this.restartingProcesses.set(name, restartingProcess);
+    this.restartingProcesses.set(process.name, restartingProcess);
 
     restartingProcess.start();
 
     // Track env reload config for this process.
     // Default: 5000ms, but if inheritGlobalEnv is false, default to no reload
     // (no point restarting for env changes the process won't see).
-    const defaultDelay = envOptions?.inheritGlobalEnv === false ? false : 5000;
-    this.envReloadConfig.set(name, envOptions?.reloadDelay ?? defaultDelay);
+    const defaultDelay = process.envOptions?.inheritGlobalEnv === false ? false : 5000;
+    this.envReloadConfig.set(process.name, process.envOptions?.reloadDelay ?? defaultDelay);
 
-    this.logger.info(`Added and started restarting process: ${name}`);
+    this.logger.info(`Added and started restarting process: ${process.name}`);
     return restartingProcess;
   }
 

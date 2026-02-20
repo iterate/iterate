@@ -93,13 +93,7 @@ const listProcesses = os.processes.list.handler(async ({ context }) => {
 });
 
 const addProcess = os.processes.add.handler(async ({ input, context }) => {
-  const proc = await context.manager.addProcess(
-    input.name,
-    input.definition,
-    input.options,
-    input.envOptions,
-    input.tags,
-  );
+  const proc = await context.manager.addProcess(input);
   return serializeProcess(proc);
 });
 

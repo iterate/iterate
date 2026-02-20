@@ -194,11 +194,14 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess("dynamic", {
-      command: "echo",
-      args: ["dynamic"],
-      env: {
-        SPECIFIC: "specific_value",
+    const proc = await manager.addProcess({
+      name: "dynamic",
+      definition: {
+        command: "echo",
+        args: ["dynamic"],
+        env: {
+          SPECIFIC: "specific_value",
+        },
       },
     });
 
@@ -383,16 +386,15 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess(
-      "dynamic-proc",
-      {
+    const proc = await manager.addProcess({
+      name: "dynamic-proc",
+      definition: {
         command: "echo",
         args: ["proc"],
         env: { PROC_ENV: "value" },
       },
-      undefined, // options
-      { inheritGlobalEnv: false, inheritProcessEnv: false },
-    );
+      envOptions: { inheritGlobalEnv: false, inheritProcessEnv: false },
+    });
 
     const definition = proc!.lazyProcess.definition;
 
@@ -416,16 +418,14 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess(
-      "tagged-dynamic",
-      {
+    const proc = await manager.addProcess({
+      name: "tagged-dynamic",
+      definition: {
         command: "echo",
         args: ["proc"],
       },
-      undefined,
-      undefined,
-      ["queue", "critical"],
-    );
+      tags: ["queue", "critical"],
+    });
 
     expect(proc.tags).toEqual(["queue", "critical"]);
 
