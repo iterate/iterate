@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import * as arctic from "arctic";
 import {
@@ -159,13 +159,44 @@ export const projectRouter = router({
     .input(
       z.object({
         name: z.string().min(1).max(100).optional(),
+        sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.sandboxProvider && input.sandboxProvider !== ctx.project.sandboxProvider) {
+        // Validate provider is available
+        const availableProviders = getAvailableProjectSandboxProviders(
+          ctx.env,
+          import.meta.env.DEV,
+        );
+        if (!availableProviders.includes(input.sandboxProvider)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Sandbox provider '${input.sandboxProvider}' is not enabled`,
+          });
+        }
+
+        // Gate: no non-archived machines allowed
+        const runningMachine = await ctx.db.query.machine.findFirst({
+          where: and(
+            eq(schema.machine.projectId, ctx.project.id),
+            inArray(schema.machine.state, ["starting", "active"]),
+          ),
+        });
+        if (runningMachine) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Cannot change sandbox provider while machines are running. Archive all machines first.",
+          });
+        }
+      }
+
       const [updated] = await ctx.db
         .update(project)
         .set({
           ...(input.name && { name: input.name }),
+          ...(input.sandboxProvider && { sandboxProvider: input.sandboxProvider }),
         })
         .where(eq(project.id, ctx.project.id))
         .returning();
