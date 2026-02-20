@@ -55,8 +55,17 @@ export default workflow({
     "test-sandbox-fly": {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        ...utils.setupRepoSteps({
-          ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+        ...utils.setupRepo.map((step) => {
+          if (step.name === "Checkout code") {
+            return {
+              ...step,
+              with: {
+                ...step.with,
+                ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+              },
+            };
+          }
+          return step;
         }),
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {

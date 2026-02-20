@@ -43,32 +43,6 @@ export const setupRepo = [
   },
 ] as const satisfies Step[];
 
-/** Like {@link setupRepo} but with a custom checkout ref */
-export const setupRepoSteps = (options: { ref: string }): Step[] => [
-  {
-    name: "Checkout code",
-    ...uses("actions/checkout@v4", {
-      ref: options.ref,
-    }),
-  },
-  {
-    name: "Setup pnpm",
-    uses: "pnpm/action-setup@v4",
-  },
-  {
-    name: "Setup Node",
-    uses: "actions/setup-node@v4",
-    with: {
-      "node-version": 24,
-      cache: "pnpm",
-    },
-  },
-  {
-    name: "Install dependencies",
-    run: "pnpm install",
-  },
-];
-
 type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
 export const installDopplerCli = {
   name: "Install Doppler CLI",
