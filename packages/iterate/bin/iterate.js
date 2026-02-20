@@ -34,8 +34,6 @@ const pkgRoot = dirname(__dirname);
  * @returns {string | null}
  */
 const findLocalModule = () => {
-  if (process.env.__ITERATE_CLI_DELEGATED) return null;
-
   const selfReal = realpathSync(__filename);
 
   // 1. Check if we're inside the iterate repo (has pnpm-workspace.yaml at root)
@@ -68,7 +66,6 @@ const findLocalModule = () => {
 
 const localModule = findLocalModule();
 if (localModule) {
-  process.env.__ITERATE_CLI_DELEGATED = "1";
   const { runCli } = await import(localModule);
   await runCli();
 } else {
