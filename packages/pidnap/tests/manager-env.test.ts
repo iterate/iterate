@@ -194,11 +194,14 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess("dynamic", {
-      command: "echo",
-      args: ["dynamic"],
-      env: {
-        SPECIFIC: "specific_value",
+    const proc = await manager.addProcess({
+      name: "dynamic",
+      definition: {
+        command: "echo",
+        args: ["dynamic"],
+        env: {
+          SPECIFIC: "specific_value",
+        },
       },
     });
 
@@ -210,6 +213,33 @@ describe("Manager with EnvManager integration", () => {
       CONFIG_VAR: "config_value",
       SPECIFIC: "specific_value",
     });
+
+    await manager.stop();
+  });
+
+  it("should preserve tags from static process config", async () => {
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "tagged",
+            tags: ["web", "jobs"],
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("tagged");
+    expect(proc?.tags).toEqual(["web", "jobs"]);
 
     await manager.stop();
   });
@@ -356,16 +386,15 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess(
-      "dynamic-proc",
-      {
+    const proc = await manager.addProcess({
+      name: "dynamic-proc",
+      definition: {
         command: "echo",
         args: ["proc"],
         env: { PROC_ENV: "value" },
       },
-      undefined, // options
-      { inheritGlobalEnv: false, inheritProcessEnv: false },
-    );
+      envOptions: { inheritGlobalEnv: false, inheritProcessEnv: false },
+    });
 
     const definition = proc!.lazyProcess.definition;
 
@@ -374,6 +403,31 @@ describe("Manager with EnvManager integration", () => {
       PROC_ENV: "value",
     });
     expect(definition.inheritProcessEnv).toBe(false);
+
+    await manager.stop();
+  });
+
+  it("should preserve tags when adding process at runtime", async () => {
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = await manager.addProcess({
+      name: "tagged-dynamic",
+      definition: {
+        command: "echo",
+        args: ["proc"],
+      },
+      tags: ["queue", "critical"],
+    });
+
+    expect(proc.tags).toEqual(["queue", "critical"]);
 
     await manager.stop();
   });

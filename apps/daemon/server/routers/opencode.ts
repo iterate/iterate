@@ -160,9 +160,12 @@ void (async () => {
       }
 
       const status = agentStatusFromOpencodeEvent(event);
+
       if (!status) continue;
 
-      if (!status.isWorking) agentPathByOpencodeSessionId.delete(opencodeSessionId);
+      if (!status.isWorking) {
+        agentPathByOpencodeSessionId.delete(opencodeSessionId);
+      }
       await trpc.updateAgent({ path: agentPath, ...status });
     }
 
