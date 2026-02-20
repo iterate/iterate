@@ -15,10 +15,14 @@ const router = t.router({
     .input(
       z.object({
         version: z.string().describe(`Version to publish (current is "${packageJson.version}")`),
+        skipCheckClean: z.boolean().describe("Skip checking for clean git status").default(false),
       }),
     )
     .mutation(async ({ input }) => {
-      execSync(`npm version ${input.version}`);
+      execSync(`npm whoami`);
+      if (input.version !== packageJson.version) {
+        execSync(`npm version ${input.version}`);
+      }
       const confirm = await prompts.confirm({
         message: "When you've committed the version bump, confirm you want to publish",
       });
@@ -26,7 +30,7 @@ const router = t.router({
         return { success: false, reason: "User did not confirm" };
       }
       const status = execSync(`git status --porcelain`).toString().trim();
-      if (status !== "") {
+      if (status !== "" && !input.skipCheckClean) {
         return { success: false, reason: "Uncommitted changes:\n" + status };
       }
       let otp = await prompts.text({ message: "Enter your npm OTP" });
