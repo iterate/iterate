@@ -21,11 +21,6 @@ on:
       - .github/workflows/sandbox-test.yml
   workflow_dispatch:
     inputs:
-      ref:
-        description: Git ref to test (branch, tag, or SHA). Leave empty for current branch.
-        required: false
-        type: string
-        default: ""
       run_docker_tests:
         description: Run Docker provider tests after build
         required: false
@@ -45,7 +40,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
