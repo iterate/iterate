@@ -103,12 +103,20 @@ When creating PRs, always include attribution in the PR description so reviewers
 ```markdown
 ## Context
 
-- **Requested by:** @username (or user email)
+- **Requested by:** @github-username (or "Name on Slack" if no GitHub match)
 - **Slack thread:** [link to thread]
 - **Agent session:** [clickable link to attach]
 ```
 
-Build the Slack thread link using the workspace, channel and thread_ts: `https://{WORKSPACE}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
+**GitHub @-tagging rule:** When attributing a PR to a user with a GitHub `@username`, you MUST verify that username appears in recent git history first (e.g., `git log --format='%an <%ae>' | sort -u` and cross-reference). If you cannot confirm the GitHub username from git history, do NOT guess — just write "Requested by: Their Name on Slack" instead.
+
+**Building Slack thread links:** Use `slack.auth.test()` to discover the workspace domain dynamically — do NOT hardcode or guess the workspace name:
+
+```bash
+iterate tool exec-js 'const auth = await slack.auth.test(); const workspace = new URL(auth.url).hostname.split(".")[0]; console.log(workspace)'
+```
+
+Then build the link: `https://{workspace}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
 
 To get your agent session link, first get your session ID using the `get-current-session-id` tool (installed at `~/.opencode/tool/get-current-session-id.ts`), then build the URL:
 
