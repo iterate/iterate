@@ -1,14 +1,20 @@
 import { betterAuth, APIError } from "better-auth";
+import { createAuthEndpoint } from "better-auth/api";
+import { setSessionCookie } from "better-auth/cookies";
 import { admin, emailOTP } from "better-auth/plugins";
+import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { minimatch } from "minimatch";
+import { and, eq, gte } from "drizzle-orm";
+import { z } from "zod/v4";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
 import { createResendClient, sendEmail } from "../integrations/resend/resend.ts";
+import { normalizeProjectIngressProxyRedirectPath } from "../services/project-ingress-proxy.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -36,13 +42,50 @@ function matchesEmailPattern(email: string, patterns: string[]) {
   return patterns.some((pattern) => minimatch(email, pattern));
 }
 
+function projectIngressProxyOneTimeTokenExchangePlugin(db: DB) {
+  return {
+    id: "project-ingress-proxy-one-time-token-exchange",
+    endpoints: {
+      exchangeProjectIngressProxyOneTimeToken: createAuthEndpoint(
+        "/project-ingress-proxy/one-time-token/exchange",
+        {
+          method: "GET",
+          query: z.object({
+            token: z.string().min(1),
+            redirectPath: z.string().optional(),
+          }),
+        },
+        async (ctx) => {
+          const [verificationValue] = await db
+            .delete(schema.verification)
+            .where(
+              and(
+                eq(schema.verification.identifier, `one-time-token:${ctx.query.token}`),
+                gte(schema.verification.expiresAt, new Date()),
+              ),
+            )
+            .returning();
+          if (!verificationValue) {
+            throw new APIError("BAD_REQUEST", { message: "Invalid one-time token" });
+          }
+
+          const verifiedSession = await ctx.context.internalAdapter.findSession(
+            verificationValue.value,
+          );
+          if (!verifiedSession) {
+            throw new APIError("BAD_REQUEST", { message: "Session not found for one-time token" });
+          }
+
+          await setSessionCookie(ctx, verifiedSession);
+          throw ctx.redirect(normalizeProjectIngressProxyRedirectPath(ctx.query.redirectPath));
+        },
+      ),
+    },
+  };
+}
+
 function createAuth(db: DB, envParam: CloudflareEnv) {
   const allowSignupFromEmails = parseEmailPatterns(envParam.SIGNUP_ALLOWLIST);
-  const baseHostname = URL.canParse(envParam.VITE_PUBLIC_URL)
-    ? new URL(envParam.VITE_PUBLIC_URL).hostname
-    : null;
-  const canUseCrossSubdomainCookies =
-    !!baseHostname && baseHostname !== "localhost" && baseHostname !== "127.0.0.1";
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -117,6 +160,11 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     },
     plugins: [
       admin(),
+      oneTimeToken({
+        disableClientRequest: true,
+        storeToken: "plain",
+      }),
+      projectIngressProxyOneTimeTokenExchangePlugin(db),
       ...(envParam.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true"
         ? [
             emailOTP({
@@ -189,14 +237,6 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
       },
     },
     advanced: {
-      ...(canUseCrossSubdomainCookies
-        ? {
-            crossSubDomainCookies: {
-              enabled: true,
-              domain: baseHostname,
-            },
-          }
-        : {}),
       database: {
         generateId: (opts) => {
           const map = {

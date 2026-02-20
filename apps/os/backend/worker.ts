@@ -1,6 +1,7 @@
 import { parseRouter } from "trpc-cli";
 import { Hono, type Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { minimatch } from "minimatch";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
@@ -36,13 +37,41 @@ import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
 import {
+  buildCanonicalProjectIngressProxyHostname,
+  buildControlPlaneProjectIngressProxyLoginUrl,
   getProjectIngressRequestHostname,
   getProjectIngressProxyHostMatchers,
   handleProjectIngressRequest,
+  normalizeProjectIngressProxyRedirectPath,
+  PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
+  PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH,
+  resolveCanonicalProjectIngressHostForBridge,
+  resolveEffectiveProjectIngressCanonicalHost,
+  resolveIngressHostname,
   shouldHandleProjectIngressHostname,
 } from "./services/project-ingress-proxy.ts";
+import { getIngressSchemeFromPublicUrl } from "./utils/project-ingress-url.ts";
 
 export type { Variables };
+
+const HOST_MATCHER_OPTIONS = {
+  nocase: true,
+  dot: true,
+  noext: false,
+  noglobstar: false,
+} as const;
+
+function isAllowedDomain(domain: string, rawAllowedDomains: string): boolean {
+  const allowedDomains = rawAllowedDomains
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return allowedDomains.some(
+    (allowedDomain) =>
+      domain === allowedDomain || minimatch(domain, allowedDomain, HOST_MATCHER_OPTIONS),
+  );
+}
 
 // Register outbox consumers at module load time
 registerConsumers();
@@ -73,7 +102,7 @@ app.use(
       if (import.meta.env.DEV) return origin;
       if (!origin || !URL.canParse(origin)) return null;
       const domain = new URL(origin).hostname;
-      return c.env.ALLOWED_DOMAINS.split(",").includes(domain) ? origin : null;
+      return isAllowedDomain(domain, c.env.ALLOWED_DOMAINS) ? origin : null;
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -104,9 +133,135 @@ app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
   const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
   if (shouldHandleProjectIngressHostname(requestDomain, hostMatchers)) {
-    return handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+    if (ingressResponse) return ingressResponse;
   }
   return next();
+});
+
+app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
+  const requestedProjectIngressProxyHost = c.req.query("projectIngressProxyHost");
+  const requestedProjectIngressProxySubdomain = c.req.query("subdomain");
+  const requestedProjectIngressProxyPath = c.req.query("path") ?? c.req.query("redirectPath");
+
+  let normalizedRequestedProjectIngressProxyHost = requestedProjectIngressProxyHost
+    ?.trim()
+    .toLowerCase();
+  if (!normalizedRequestedProjectIngressProxyHost && requestedProjectIngressProxySubdomain) {
+    const normalizedSubdomain = requestedProjectIngressProxySubdomain.trim().toLowerCase();
+    if (!normalizedSubdomain || normalizedSubdomain.includes(".")) {
+      return c.json({ error: "Invalid subdomain" }, 400);
+    }
+
+    const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+    const canonicalProjectIngressProxyBaseHost = resolveCanonicalProjectIngressHostForBridge({
+      configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
+      appStage: c.env.APP_STAGE,
+      hostMatchers,
+    });
+    if (!canonicalProjectIngressProxyBaseHost) {
+      return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
+    }
+
+    normalizedRequestedProjectIngressProxyHost = `${normalizedSubdomain}.${canonicalProjectIngressProxyBaseHost}`;
+  }
+
+  if (!normalizedRequestedProjectIngressProxyHost) {
+    return c.json({ error: "Missing projectIngressProxyHost or subdomain" }, 400);
+  }
+
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (
+    !shouldHandleProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, hostMatchers)
+  ) {
+    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+  }
+
+  const parsedIngressHost = resolveIngressHostname(normalizedRequestedProjectIngressProxyHost);
+  if (!parsedIngressHost.ok) {
+    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+  }
+
+  const canonicalProjectIngressProxyBaseHost = resolveEffectiveProjectIngressCanonicalHost({
+    configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
+    resolvedRootDomain: parsedIngressHost.rootDomain,
+    appStage: c.env.APP_STAGE,
+  });
+  if (!canonicalProjectIngressProxyBaseHost) {
+    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
+  }
+
+  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
+    target: parsedIngressHost.target,
+    canonicalProjectIngressProxyBaseHost,
+  });
+  const redirectPath = normalizeProjectIngressProxyRedirectPath(requestedProjectIngressProxyPath);
+
+  if (!c.var.session) {
+    const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
+      controlPlanePublicUrl: c.env.VITE_PUBLIC_URL,
+      projectIngressProxyHost: canonicalProjectIngressProxyHost,
+      redirectPath,
+    });
+    return c.redirect(controlPlaneLoginUrl.toString(), 302);
+  }
+
+  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
+    headers: c.req.raw.headers,
+  });
+  const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
+  const exchangeUrl = new URL(
+    `${projectIngressProxyScheme}://${canonicalProjectIngressProxyHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
+  );
+  exchangeUrl.searchParams.set("token", oneTimeToken.token);
+  exchangeUrl.searchParams.set("redirectPath", redirectPath);
+  return c.redirect(exchangeUrl.toString(), 302);
+});
+
+app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
+  const requestHost = getProjectIngressRequestHostname(c.req.raw);
+  const hostMatchers = getProjectIngressProxyHostMatchers(c.env);
+  if (!shouldHandleProjectIngressHostname(requestHost, hostMatchers)) {
+    return c.json({ error: "Invalid ingress host" }, 400);
+  }
+
+  const parsedIngressHost = resolveIngressHostname(requestHost);
+  if (!parsedIngressHost.ok) {
+    return c.json({ error: "Invalid ingress host" }, 400);
+  }
+
+  const canonicalProjectIngressProxyBaseHost = resolveEffectiveProjectIngressCanonicalHost({
+    configuredCanonicalHost: c.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
+    resolvedRootDomain: parsedIngressHost.rootDomain,
+    appStage: c.env.APP_STAGE,
+  });
+  if (!canonicalProjectIngressProxyBaseHost) {
+    return c.json({ error: "PROJECT_INGRESS_PROXY_CANONICAL_HOST is invalid" }, 500);
+  }
+
+  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
+    target: parsedIngressHost.target,
+    canonicalProjectIngressProxyBaseHost,
+  });
+  if (requestHost !== canonicalProjectIngressProxyHost) {
+    return c.json({ error: "Non-canonical ingress host" }, 400);
+  }
+
+  const exchangePath = new URL(
+    "/api/auth/project-ingress-proxy/one-time-token/exchange",
+    c.req.url,
+  );
+  const token = c.req.query("token");
+  if (token) exchangePath.searchParams.set("token", token);
+  const redirectPath = c.req.query("redirectPath");
+  if (redirectPath) exchangePath.searchParams.set("redirectPath", redirectPath);
+
+  return c.var.auth.handler(
+    new Request(exchangePath.toString(), {
+      method: "GET",
+      headers: c.req.raw.headers,
+    }),
+  );
 });
 
 app.onError((err, c) => {

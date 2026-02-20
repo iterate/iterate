@@ -76,12 +76,19 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     return { ...machine, metadata, services: [] };
   }
 
+  const isDevStage =
+    cloudflareEnv.APP_STAGE === "dev" || cloudflareEnv.APP_STAGE.startsWith("dev-");
+  const machineServiceHost =
+    isDevStage && canonicalHost.endsWith(".dev.iterate.com")
+      ? canonicalHost.replace(/\.dev\.iterate\.com$/, ".dev.iterate.app")
+      : canonicalHost;
+
   const scheme = getIngressSchemeFromPublicUrl(cloudflareEnv.VITE_PUBLIC_URL);
 
   const services = getDaemonsWithWebUI().map((daemon) => {
     const url = buildCanonicalMachineIngressUrl({
       scheme,
-      canonicalHost,
+      canonicalHost: machineServiceHost,
       machineId: machine.id,
       port: daemon.internalPort,
     });

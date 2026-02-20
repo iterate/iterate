@@ -62,8 +62,8 @@ const isPreview =
 
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const ITERATE_ZONE_NAME = "iterate.com";
-const PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS = ["*.p.os.iterate.com"];
-const PROD_OS_WORKER_EXTRA_ROUTES = ["*.p.os.iterate.com"];
+const PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS = ["*.iterate.app"];
+const PROD_OS_WORKER_EXTRA_ROUTES = ["*.iterate.app"];
 
 /**
  * DEV_TUNNEL:
@@ -89,9 +89,16 @@ function getDevTunnelConfig() {
   }
 
   const hostname = `${subdomain}.dev.iterate.com`;
-  const wildcardHostname = `*.${subdomain}.dev.iterate.com`;
+  const wildcardHostname = `*.${subdomain}.dev.iterate.app`;
 
   return { hostname, wildcardHostname, subdomain };
+}
+
+function getZoneNameFromHostname(hostname: string): string {
+  const normalized = hostname.replace(/^\*\./, "").toLowerCase();
+  const labels = normalized.split(".").filter(Boolean);
+  if (labels.length < 2) return ITERATE_ZONE_NAME;
+  return labels.slice(-2).join(".");
 }
 
 async function ensureDevTunnelWildcardDns(
@@ -108,8 +115,9 @@ async function ensureDevTunnelWildcardDns(
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
+  const wildcardZoneName = getZoneNameFromHostname(config.wildcardHostname);
   const zoneResponse = await fetch(
-    `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(ITERATE_ZONE_NAME)}&status=active&per_page=1`,
+    `${CLOUDFLARE_API_BASE}/zones?name=${encodeURIComponent(wildcardZoneName)}&status=active&per_page=1`,
     { headers },
   );
   const zonePayload = (await zoneResponse.json()) as {
@@ -119,13 +127,13 @@ async function ensureDevTunnelWildcardDns(
   const zoneId = zonePayload?.result?.[0]?.id;
   if (!zoneResponse.ok || !zoneId) {
     throw new Error(
-      `Cloudflare zone lookup failed: ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
+      `Cloudflare zone lookup failed for '${wildcardZoneName}': ${JSON.stringify(zonePayload?.errors ?? zonePayload)}`,
     );
   }
 
   const target = `${tunnelId}.cfargotunnel.com`;
   const edgeCertificatesUrl =
-    "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.com/ssl-tls/edge-certificates";
+    "https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/iterate.app/ssl-tls/edge-certificates";
   const comment = `Managed by apps/os/alchemy.run.ts for DEV_TUNNEL ${config.subdomain}`;
 
   async function upsertWildcardDnsRecord(name: string) {
@@ -626,7 +634,14 @@ async function setupDatabase() {
 
 const subdomain = `os-${app.stage}`.replace(/^os-prd$/, "os").replace(/^os-stg$/, "os-staging");
 
-const domains = [`${subdomain}.iterate.com`];
+const devTunnelConfig = isDevelopment ? getDevTunnelConfig() : null;
+const osDomain = isDevelopment
+  ? (devTunnelConfig?.hostname ?? `${subdomain}.dev.iterate.com`)
+  : `${subdomain}.iterate.com`;
+const domains = [
+  osDomain,
+  ...(devTunnelConfig ? [devTunnelConfig.hostname, devTunnelConfig.wildcardHostname] : []),
+];
 
 async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvSecrets) {
   const dockerEnvVars = isDevelopment ? getDockerEnvVars(repoRoot) : {};
@@ -712,6 +727,15 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     );
   }
 
+  if (isDevelopment && devTunnelConfig) {
+    const expectedDevMachineWildcardMatcher = devTunnelConfig.wildcardHostname;
+    if (projectIngressProxyHostMatchers.includes("*.iterate.app")) {
+      throw new Error(
+        `For dev stages, do not use '*.iterate.app' in PROJECT_INGRESS_PROXY_HOST_MATCHERS. Use '${expectedDevMachineWildcardMatcher}'.`,
+      );
+    }
+  }
+
   const rawProjectIngressCanonicalHost = process.env.PROJECT_INGRESS_PROXY_CANONICAL_HOST;
   const projectIngressCanonicalHost = normalizeProjectIngressCanonicalHost(
     rawProjectIngressCanonicalHost ?? "",
@@ -725,6 +749,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const effectiveProjectIngressProxyHostMatchers = [
     ...new Set([
       ...projectIngressProxyHostMatchers,
+      ...(devTunnelConfig ? [devTunnelConfig.wildcardHostname] : []),
       ...(isProduction ? PROD_PROJECT_INGRESS_EXTRA_HOST_MATCHERS : []),
     ]),
   ];
@@ -750,6 +775,9 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ...(isProduction ? PROD_OS_WORKER_EXTRA_ROUTES : []),
     ]),
   ];
+  const allowedDomains = [
+    ...new Set([...domains, ...(isProduction ? PROD_OS_WORKER_EXTRA_ROUTES : [])]),
+  ];
 
   const worker = await TanStackStart("os", {
     bindings: {
@@ -757,7 +785,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ...envSecrets,
       SELF: Self,
       WORKER_LOADER: WorkerLoader(),
-      ALLOWED_DOMAINS: domains.join(","),
+      ALLOWED_DOMAINS: allowedDomains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_PROXY_HOST_MATCHERS: effectiveProjectIngressProxyHostMatchers.join(","),

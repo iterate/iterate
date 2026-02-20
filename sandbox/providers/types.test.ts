@@ -62,14 +62,14 @@ describe("Sandbox.getFetcher", () => {
     const fetcher = await sandbox.getFetcher({ port: 3003 });
     await fetcher("/api/webhook", {
       headers: {
-        "x-iterate-proxy-target-host": "hello.iterate.town",
+        "x-iterate-proxy-target-host": "hello.iterate.app",
       },
     });
 
     const init = fetchSpy.mock.calls[0]?.[1];
     if (!init) throw new Error("expected fetch init");
     const headers = new Headers(init.headers);
-    expect(headers.get("x-iterate-proxy-target-host")).toBe("hello.iterate.town");
+    expect(headers.get("x-iterate-proxy-target-host")).toBe("hello.iterate.app");
   });
 
   it("rewrites absolute urls to ingress origin while preserving path/query", async () => {

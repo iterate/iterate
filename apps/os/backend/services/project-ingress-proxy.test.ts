@@ -7,12 +7,10 @@ import {
 } from "./project-ingress-proxy.ts";
 
 describe("project ingress hostname matching", () => {
-  const hostMatchers = parseProjectIngressProxyHostMatchers(
-    "*.local.iterate.town,*.*.dev.iterate.com,*.iterate.town,*.iterate.app,*.p.os.iterate.com",
-  );
+  const hostMatchers = parseProjectIngressProxyHostMatchers("*.*.dev.iterate.com,*.iterate.app");
 
-  it("matches project slug host under iterate.town", () => {
-    expect(shouldHandleProjectIngressHostname("misha.iterate.town", hostMatchers)).toBe(true);
+  it("matches project slug host under iterate.app", () => {
+    expect(shouldHandleProjectIngressHostname("misha.iterate.app", hostMatchers)).toBe(true);
   });
 
   it("matches nested dev subdomain host", () => {
@@ -31,16 +29,16 @@ describe("project ingress hostname matching", () => {
     );
   });
 
-  it("matches machine id host under iterate.town", () => {
-    expect(shouldHandleProjectIngressHostname("mach_123.iterate.town", hostMatchers)).toBe(true);
+  it("matches machine id host under iterate.app", () => {
+    expect(shouldHandleProjectIngressHostname("mach_123.iterate.app", hostMatchers)).toBe(true);
   });
 
   it("does not match unrelated hostnames", () => {
     expect(shouldHandleProjectIngressHostname("google.com", hostMatchers)).toBe(false);
   });
 
-  it("matches p.os.iterate.com hostnames", () => {
-    expect(shouldHandleProjectIngressHostname("misha.p.os.iterate.com", hostMatchers)).toBe(true);
+  it("does not match unrelated hostnames", () => {
+    expect(shouldHandleProjectIngressHostname("misha.example.com", hostMatchers)).toBe(false);
   });
 });
 
@@ -48,13 +46,13 @@ describe("project ingress hostname resolution", () => {
   it("resolves project slug host with explicit port prefix", () => {
     expect(resolveIngressHostname("4096__banana.dev-jonas-os.dev.iterate.com")).toEqual({
       ok: true,
-      target: { kind: "project", projectSlug: "banana", targetPort: 4096 },
+      target: { kind: "project", projectSlug: "banana", targetPort: 4096, isPortExplicit: true },
       rootDomain: "dev-jonas-os.dev.iterate.com",
     });
   });
 
   it("rejects invalid project slug tokens", () => {
-    expect(resolveIngressHostname("banana_test.dev-jonas-os.dev.iterate.com")).toEqual({
+    expect(resolveIngressHostname("1234.dev-jonas-os.dev.iterate.com")).toEqual({
       ok: false,
       error: "invalid_project_slug",
     });
