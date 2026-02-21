@@ -367,7 +367,7 @@ const appOrpcHandler = new RPCHandler(appRouter, {
             status: maybeStatus,
           },
         });
-        logger.warn(message, errorDetails);
+        logger.warn(message);
       }
     }),
   ],

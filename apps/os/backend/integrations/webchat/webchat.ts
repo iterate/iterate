@@ -93,7 +93,9 @@ async function buildMachineForwardFetcher(
     return await runtime.getFetcher(3000);
   } catch (error) {
     logger.set({ machine: { id: machine.id } });
-    logger.error(`[webchat] Failed to build machine forward fetcher type=${machine.type}`, error);
+    logger.warn(
+      `[webchat] Failed to build machine forward fetcher type=${machine.type} error=${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
 }

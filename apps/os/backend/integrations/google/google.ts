@@ -166,9 +166,8 @@ googleApp.get(
     const { projectId, userId, callbackURL, codeVerifier } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.warn(
-        `Google callback user mismatch sessionUserId=${c.var.session.user.id} stateUserId=${userId}`,
-      );
+      logger.set({ user: { id: c.var.session.user.id }, stateUserId: userId });
+      logger.warn("Google callback user mismatch");
       return c.json({ error: "User mismatch - please restart the Google connection flow" }, 403);
     }
 

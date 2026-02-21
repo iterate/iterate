@@ -129,10 +129,10 @@ export const registerConsumers = () => {
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
       if (machine.state !== "starting") {
-        logger.info("[pushMachineSetup] Skipping, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[pushMachineSetup] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
@@ -145,7 +145,8 @@ export const registerConsumers = () => {
         projectId,
       });
 
-      logger.info("[pushMachineSetup] Setup pushed to machine", { machineId });
+      logger.set({ machine: { id: machineId } });
+      logger.info("[pushMachineSetup] Setup pushed to machine");
       return `setup pushed to ${machineId}`;
     },
   });

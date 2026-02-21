@@ -131,10 +131,8 @@ export async function pollForProbeAnswer(
 
     if ([500, 502, 503, 504, 404].includes(response.status)) {
       // Transient HTTP error (5xx, etc.) — keep polling, services may still be restarting
-      logger.info("[readiness-probe] Poll got non-OK response", {
-        status: response.status,
-        threadId,
-      });
+      logger.set({ responseStatus: response.status, threadId });
+      logger.info("[readiness-probe] Poll got non-OK response");
       continue;
     }
 

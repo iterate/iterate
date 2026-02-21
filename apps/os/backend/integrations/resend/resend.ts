@@ -168,7 +168,9 @@ async function buildMachineForwardFetcher(
     return await runtime.getFetcher(3000);
   } catch (err) {
     logger.set({ machine: { id: machine.id } });
-    logger.error(`[Resend Webhook] Failed to build forward fetcher type=${machine.type}`, err);
+    logger.warn(
+      `[Resend Webhook] Failed to build forward fetcher type=${machine.type} error=${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }

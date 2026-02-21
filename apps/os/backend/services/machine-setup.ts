@@ -98,11 +98,10 @@ export async function resolveMachineSetupData(
       const tokenResult = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
       installationToken = tokenResult.token;
       if (!tokenResult.token) {
-        logger.warn("[machine-setup] Failed to get GitHub installation token", {
-          machineId,
-          projectId,
-          installationId,
-        });
+        logger.set({ machine: { id: machineId }, project: { id: projectId } });
+        logger.warn(
+          `[machine-setup] Failed to get GitHub installation token installationId=${installationId}`,
+        );
       }
     }
   }
@@ -114,9 +113,7 @@ export async function resolveMachineSetupData(
           projectRepos.map(async (repo): Promise<RepoInfo | null> => {
             const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
             if (!repoInfo) {
-              logger.warn("[machine-setup] Could not fetch repo info", {
-                repoId: repo.externalId,
-              });
+              logger.warn(`[machine-setup] Could not fetch repo info repoId=${repo.externalId}`);
               return null;
             }
             return {
@@ -183,17 +180,14 @@ export async function pushSetupToMachine(
   const sentinelPath = "~/.iterate/.setup-done";
   const existingSentinel = await client.tool.readFile({ path: sentinelPath });
   if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
-    logger.info("[machine-setup] Setup already completed (sentinel matches), skipping", {
-      machineId: machine.id,
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.info("[machine-setup] Setup already completed (sentinel matches), skipping");
     return;
   }
 
   // Write env file first so pidnap picks up env vars immediately
-  logger.info("[machine-setup] Writing .env to machine", {
-    machineId: machine.id,
-    contentLength: envFileContent.length,
-  });
+  logger.set({ machine: { id: machine.id } });
+  logger.info(`[machine-setup] Writing .env to machine contentLength=${envFileContent.length}`);
   await client.tool.writeFile({
     path: "~/.iterate/.env",
     content: envFileContent,
@@ -202,11 +196,9 @@ export async function pushSetupToMachine(
 
   // Clone repos — skip already-cloned dirs so retries after partial failure work
   for (const repo of repos) {
-    logger.info("[machine-setup] Cloning repo on machine", {
-      machineId: machine.id,
-      repo: `${repo.owner}/${repo.name}`,
-      path: repo.path,
-    });
+    logger.info(
+      `[machine-setup] Cloning repo on machine repo=${repo.owner}/${repo.name} path=${repo.path}`,
+    );
 
     // mkdir -p for parent dir first
     const parentDir = repo.path.split("/").slice(0, -1).join("/");
@@ -221,10 +213,7 @@ export async function pushSetupToMachine(
       .catch(() => false);
 
     if (dirCheck) {
-      logger.info("[machine-setup] Repo already cloned, skipping", {
-        machineId: machine.id,
-        repo: `${repo.owner}/${repo.name}`,
-      });
+      logger.info(`[machine-setup] Repo already cloned, skipping repo=${repo.owner}/${repo.name}`);
       continue;
     }
 
@@ -236,10 +225,9 @@ export async function pushSetupToMachine(
       });
     } catch {
       // If branch clone failed (e.g., empty repo), try without --branch
-      logger.info("[machine-setup] Branch clone failed, retrying without --branch", {
-        machineId: machine.id,
-        repo: `${repo.owner}/${repo.name}`,
-      });
+      logger.info(
+        `[machine-setup] Branch clone failed, retrying without --branch repo=${repo.owner}/${repo.name}`,
+      );
       await client.tool.execCommand({
         command: ["git", "clone", repo.url, repo.path],
         timeout: 120_000,
@@ -255,11 +243,9 @@ export async function pushSetupToMachine(
     mode: 0o600,
   });
 
-  logger.info("[machine-setup] Setup push complete", {
-    machineId: machine.id,
-    envVarBytes: envFileContent.length,
-    repoCount: repos.length,
-  });
+  logger.info(
+    `[machine-setup] Setup push complete envVarBytes=${envFileContent.length} repoCount=${repos.length}`,
+  );
 }
 
 /**
@@ -277,14 +263,15 @@ export async function pushEnvToRunningMachines(
   });
 
   if (runningMachines.length === 0) {
-    logger.info("[machine-setup] No running machines to push env to", { projectId });
+    logger.set({ project: { id: projectId } });
+    logger.info("[machine-setup] No running machines to push env to");
     return;
   }
 
-  logger.info("[machine-setup] Pushing env to running machines", {
-    projectId,
-    machineCount: runningMachines.length,
-  });
+  logger.set({ project: { id: projectId } });
+  logger.info(
+    `[machine-setup] Pushing env to running machines machineCount=${runningMachines.length}`,
+  );
 
   // Resolve env data once, push to all machines
   const { envFileContent } = await resolveMachineSetupData(db, env, projectId, "env-refresh");
@@ -297,9 +284,8 @@ export async function pushEnvToRunningMachines(
         // Read first to skip no-op writes (avoids unnecessary pidnap restarts)
         const existing = await client.tool.readFile({ path: "~/.iterate/.env" });
         if (existing.exists && existing.content === envFileContent) {
-          logger.info("[machine-setup] .env already up to date, skipping", {
-            machineId: machine.id,
-          });
+          logger.set({ machine: { id: machine.id } });
+          logger.info("[machine-setup] .env already up to date, skipping");
           return;
         }
         await client.tool.writeFile({
@@ -307,7 +293,7 @@ export async function pushEnvToRunningMachines(
           content: envFileContent,
           mode: 0o600,
         });
-        logger.info("[machine-setup] Pushed env to machine", { machineId: machine.id });
+        logger.info("[machine-setup] Pushed env to machine");
       } catch (err) {
         logger.error("[machine-setup] Failed to push env to machine", {
           machineId: machine.id,

@@ -114,10 +114,7 @@ githubApp.get(
     const { projectId, userId, callbackURL } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.set({
-        sessionUserId: c.var.session.user.id,
-        stateUserId: userId,
-      });
+      logger.set({ user: { id: c.var.session.user.id }, stateUserId: userId });
       logger.warn("GitHub callback user mismatch");
       return c.json({ error: "User mismatch - please restart the GitHub connection flow" }, 403);
     }

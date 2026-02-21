@@ -74,7 +74,9 @@ async function buildMachineForwardFetcher(
     return await runtime.getFetcher(3000);
   } catch (err) {
     logger.set({ machine: { id: machine.id } });
-    logger.error(`[Slack Webhook] Failed to build forward fetcher type=${machine.type}`, err);
+    logger.warn(
+      `[Slack Webhook] Failed to build forward fetcher type=${machine.type} error=${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -286,9 +288,8 @@ slackApp.get(
     const { projectId, userId, callbackURL } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.warn(
-        `Slack callback user mismatch sessionUserId=${c.var.session.user.id} stateUserId=${userId}`,
-      );
+      logger.set({ user: { id: c.var.session.user.id }, stateUserId: userId });
+      logger.warn("Slack callback user mismatch");
       return c.json({ error: "User mismatch - please restart the Slack connection flow" }, 403);
     }
 
