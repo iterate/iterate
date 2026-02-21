@@ -106,7 +106,7 @@ test.describe("project home webchat", () => {
     await page.getByRole("button", { name: "Create" }).click();
 
     // Machine pipeline: create → provision (50-120s) → setup → 30s delay → probe → activate.
-    // DaemonStatus shows a spinner throughout, so spinner-waiter bridges the wait.
+    // We expect that the UI shows an informative spinner throughout. This should fail within 1s if the spinner goes away at any point.
     await spinnerWaiter.settings.run({ spinnerTimeout: 240_000 }, async () => {
       await page.getByRole("heading", { name: "Active Machine", exact: true }).waitFor();
     });
