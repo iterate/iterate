@@ -6,11 +6,12 @@ import { logger } from "../tag-logger.ts";
 
 export const PROBE_THREAD_ID = "__readiness-probe__";
 const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
+const EXPECTED_ANSWER = /3|three/i;
 const POLL_INTERVAL_MS = 3_000;
 const SEND_RETRY_INTERVAL_MS = 3_000;
 const SEND_TIMEOUT_MS = 10_000;
-const SEND_MAX_WAIT_MS = 60_000;
-const MAX_WAIT_MS = 120_000;
+const SEND_MAX_WAIT_MS = 30_000;
+const MAX_WAIT_MS = 60_000;
 
 /**
  * Build a fetcher that can reach the daemon HTTP server inside the sandbox.
@@ -101,69 +102,63 @@ export async function sendProbeMessage(
 
 /**
  * Poll for a valid response to the readiness probe.
- * Looks for an assistant message containing "3" or "three" in the probe thread.
- * Polls every 3s for up to 120s.
+ * Polls every 3s for up to 60s. Fails immediately if the assistant
+ * responds with the wrong answer (no point continuing to poll).
  */
 export async function pollForProbeAnswer(
   fetcher: SandboxFetcher,
   threadId: string,
-): Promise<{ ok: true; responseText: string } | { ok: false; detail: string }> {
+): Promise<string> {
   const url = `/api/integrations/webchat/threads/${encodeURIComponent(threadId)}/messages`;
   const deadline = Date.now() + MAX_WAIT_MS;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
 
+    let response: Response;
     try {
-      const response = await fetcher(url, {
+      response = await fetcher(url, {
         method: "GET",
         signal: AbortSignal.timeout(10_000),
       });
-
-      if (!response.ok) {
-        logger.info("[readiness-probe] Poll got non-OK response", {
-          status: response.status,
-          threadId,
-        });
-        continue;
-      }
-
-      const data = (await response.json()) as {
-        messages?: Array<{ role: string; text: string; messageId?: string }>;
-      };
-
-      const messages = data.messages ?? [];
-      const assistantMessages = messages.filter((m) => m.role === "assistant");
-
-      for (const msg of assistantMessages) {
-        const text = msg.text.toLowerCase();
-        if (text.includes("3") || text.includes("three")) {
-          return {
-            ok: true,
-            responseText: msg.text.slice(0, 100),
-          };
-        }
-      }
-
-      if (assistantMessages.length > 0) {
-        logger.info("[readiness-probe] Got assistant response but no valid answer yet", {
-          threadId,
-          count: assistantMessages.length,
-          lastText: assistantMessages[assistantMessages.length - 1]?.text.slice(0, 100),
-        });
-      }
-    } catch (err) {
-      logger.info("[readiness-probe] Poll error (will retry)", {
-        threadId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    } catch {
+      // Network/timeout error — transient, keep polling
+      continue;
     }
+
+    if ([500, 502, 503, 504, 404].includes(response.status)) {
+      // Transient HTTP error (5xx, etc.) — keep polling, services may still be restarting
+      logger.info("[readiness-probe] Poll got non-OK response", {
+        status: response.status,
+        threadId,
+      });
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Got ${response.status} from ${response.url}`);
+    }
+
+    const data = (await response.json()) as {
+      messages?: Array<{ role: string; text: string; messageId?: string }>;
+    };
+
+    const messages = data.messages ?? [];
+
+    const assistantResponses = messages.flatMap((m) => (m.role === "assistant" ? m.text : []));
+    const text = assistantResponses.join("\n");
+    if (!text) continue;
+
+    if (EXPECTED_ANSWER.test(text)) {
+      return text.slice(0, 100);
+    }
+
+    throw Object.assign(new Error(`Wrong answer: ${JSON.stringify(text)}.`), {
+      retryable: false,
+    });
   }
 
-  return {
-    ok: false,
-    detail: `Timed out after ${MAX_WAIT_MS / 1000}s waiting for valid response`,
-  };
+  throw new Error(`Timed out after ${MAX_WAIT_MS / 1000}s waiting for valid response`);
 }
 
 function sleep(ms: number): Promise<void> {

@@ -96,31 +96,33 @@ export const spinnerWaiter = Object.assign(
           `Spinner visible, waiting up to ${settings.spinnerTimeout - 2000}ms for ${locator}`,
         );
 
-        // Spinner is visible - wait longer for the element
-        const appeared = await waitForVisible(locator, {
+        // Spinner is visible — wait for the element, but bail early if the spinner
+        // disappears (the loading operation finished without producing the expected element).
+        const waitResult = await waitForVisibleWhileSpinning(locator, spinnerLocator, {
           timeout: settings.spinnerTimeout - 2000,
         });
 
-        if (appeared) {
+        if (waitResult === "appeared") {
           settings.log(`${locator} appeared after waiting`);
           return next();
         }
 
-        // Element still not visible - check if spinner is stuck
-        const spinnerStillVisible = await spinnerLocator.isVisible();
-        if (spinnerStillVisible) {
-          settings.log(`Spinner still visible after ${settings.spinnerTimeout}ms, UI likely stuck`);
+        if (waitResult === "spinner-gone") {
+          settings.log(
+            `Spinner disappeared but element not visible — loading finished without expected result`,
+          );
         } else {
-          settings.log(`Spinner gone but element not visible`);
+          settings.log(`Spinner still visible after ${settings.spinnerTimeout}ms, UI likely stuck`);
         }
 
         // Call action anyway (will likely fail), adjust error message
         try {
           return await next();
         } catch (error) {
-          const message = spinnerStillVisible
-            ? `Spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`
-            : `Neither spinner nor the element is visible after ${settings.spinnerTimeout}ms.`;
+          const message =
+            waitResult === "spinner-gone"
+              ? `Loading finished (spinner disappeared) but the expected element never appeared.`
+              : `Spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`;
           adjustError(error as Error, [message], "spinner-waiter.ts");
           throw error;
         }
@@ -142,6 +144,28 @@ async function waitForVisible(locator: Locator, { timeout = 1000 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
+}
+
+/**
+ * Wait for `target` to become visible, but bail early if `spinner` disappears.
+ * Returns "appeared" if target showed up, "spinner-gone" if loading finished
+ * without the target, or "timeout" if spinner was still visible at deadline.
+ */
+async function waitForVisibleWhileSpinning(
+  target: Locator,
+  spinner: Locator,
+  { timeout = 1000 } = {},
+): Promise<"appeared" | "spinner-gone" | "timeout"> {
+  const start = Date.now();
+  // Give the spinner a grace period before checking — it may flicker during transitions
+  const spinnerGracePeriodMs = 3000;
+  while (Date.now() - start < timeout) {
+    if (await target.isVisible()) return "appeared";
+    const elapsed = Date.now() - start;
+    if (elapsed > spinnerGracePeriodMs && !(await spinner.isVisible())) return "spinner-gone";
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return "timeout";
 }
 
 export { defaultSelectors };

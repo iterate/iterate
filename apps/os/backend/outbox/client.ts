@@ -31,13 +31,6 @@ export type InternalEventTypes = {
     projectId: string;
     responseText: string;
   };
-  /** The readiness probe failed (timeout or wrong answer). */
-  "machine:probe-failed": {
-    machineId: string;
-    projectId: string;
-    detail: string;
-    attempt: number;
-  };
   /** A user or system requested a machine/daemon restart. */
   "machine:restart-requested": {
     machineId: string;
@@ -45,6 +38,11 @@ export type InternalEventTypes = {
   };
   /** Machine was promoted to active state. */
   "machine:activated": {
+    machineId: string;
+    projectId: string;
+  };
+  /** OS pushed setup data (env vars, repos) to the daemon via tool.writeFile/execCommand. */
+  "machine:setup-pushed": {
     machineId: string;
     projectId: string;
   };

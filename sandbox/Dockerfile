@@ -200,7 +200,9 @@ RUN sudo mkdir -p /usr/local/share/ca-certificates/iterate && \
 
 # Warm OpenCode plugin deps (esp auth) by downloading from npm; speeds first session.
 # Use a free model — no API keys are available at build time.
-RUN opencode run --model opencode/kimi-k2.5-free "Hello" || true
+# First make sure --version works to confirm it's installed correctly.
+RUN opencode --version
+RUN opencode run --model opencode/gpt-5-nano "what is 1+2" || true
 
 ARG GIT_SHA=unknown
 # Keep a functional git repo inside the image for tools/tests that call git.

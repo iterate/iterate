@@ -124,10 +124,16 @@ When a machine shows `status=error` in the dashboard:
 2. Check daemon logs: `docker logs <container-name> 2>&1 | tail -100`
 3. Common causes:
    - **Readiness probe failed** — the platform sends "1+2=?" via webchat and polls for "3". Check for `500` or OpenCode session errors in logs. Probe code: `apps/os/backend/services/machine-readiness-probe.ts`
-   - **Daemon bootstrap failed** — daemon couldn't fetch env/config from control plane. Look for `[bootstrap] Fatal error` in logs
+   - **Daemon bootstrap failed** — daemon couldn't report status to control plane. Look for `[bootstrap] Fatal error` in logs
    - **OpenCode not ready** — race between daemon accepting HTTP and OpenCode server starting. Look for `Failed to create OpenCode session`
 4. Key log patterns: `webchat/webhook`, `readiness-probe`, `opencode`, `bootstrap`
-5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (probe + activation), `apps/os/backend/services/machine-creation.ts`
+5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (setup + probe + activation), `apps/os/backend/services/machine-creation.ts`, `apps/os/backend/services/machine-setup.ts`
+
+### Debugging machine lifecycle (dev)
+
+- Query the local dev DB (`machine`, `outbox_event` tables) to find recent machines, check state and event history. The postgres port is docker-mapped — use `docker port` to find it. DB name is `os`.
+- For fly machines, `doppler run --config dev -- fly logs -a <external_id> --no-tail` shows daemon/pidnap logs. The `external_id` column on the machine row is the fly app name.
+- The `pgmq.q_consumer_job_queue` and `pgmq.a_consumer_job_queue` tables show pending/archived outbox jobs.
 
 ### Getting logs from Daytona machines (production)
 

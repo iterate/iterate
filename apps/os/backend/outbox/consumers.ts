@@ -11,7 +11,6 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars } from "../services/machine-creation.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
-import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -20,7 +19,7 @@ export const registerConsumers = () => {
   // ── Provisioning pipeline ──────────────────────────────────────────────
   //
   // machine:created → provisionMachine
-  // (daemon reports status via reportStatus → machine:daemon-status-reported → probe pipeline)
+  // (daemon reports status via reportStatus → machine:daemon-status-reported → setup + probe pipeline)
 
   cc.registerConsumer({
     name: "provisionMachine",
@@ -105,22 +104,62 @@ export const registerConsumers = () => {
     },
   });
 
-  // ── Readiness probe pipeline ──────────────────────────────────────────
+  // ── Setup + readiness probe pipeline ────────────────────────────────
   //
-  // daemon-status-reported → sendReadinessProbe (guarded) → (probe-sent)
-  //   → pollProbeResponse → (probe-succeeded) → activateMachine → (activated)
-  //   → (probe-failed) → markMachineProbeFailure
+  // daemon-status-reported → pushMachineSetup → (setup-pushed)
+  //   → sendReadinessProbe → (probe-sent) → pollProbeResponse
+  //     → (probe-succeeded) → activateMachine → (activated)
+  //     (probe failure handled by outbox retry → status="failed" in queue)
 
-  // Stage 1: Daemon reported status — if ready + provisioned, send the probe message.
-  // `when` skips the consumer entirely (not even enqueued) for non-ready / unprovisioned reports.
+  // Stage 0: Daemon reported ready — push env vars and clone repos.
   cc.registerConsumer({
-    name: "sendReadinessProbe",
+    name: "pushMachineSetup",
     on: "machine:daemon-status-reported",
     when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
-    visibilityTimeout: "90s", // send retries up to 60s + margin
-    delay: () => "30s", // opencode needs some time to restart after env vars are applied.
+    visibilityTimeout: "120s", // env write + repo clones can take a while
     retry: (job) => {
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "15s" };
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying setup push", delay: "10s" };
+      return { retry: false, reason: "setup push failed after retries" };
+    },
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.info("[pushMachineSetup] Skipping, machine no longer starting", {
+          machineId,
+          state: machine.state,
+        });
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const { pushSetupToMachine } = await import("../services/machine-setup.ts");
+      await pushSetupToMachine(db, env, machine);
+
+      // Emit setup-pushed so the readiness probe can begin
+      await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
+        machineId,
+        projectId,
+      });
+
+      logger.info("[pushMachineSetup] Setup pushed to machine", { machineId });
+      return `setup pushed to ${machineId}`;
+    },
+  });
+
+  // Stage 1: Setup pushed — wait for services to restart, then send readiness probe.
+  cc.registerConsumer({
+    name: "sendReadinessProbe",
+    on: "machine:setup-pushed",
+    visibilityTimeout: "45s", // send retries up to 30s + margin
+    delay: () => "5s", // brief pause for env vars to take effect
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "5s" };
       return { retry: false, reason: "probe send failed after retries" };
     },
     async handler(params) {
@@ -171,11 +210,11 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "pollProbeResponse",
     on: "machine:probe-sent",
-    visibilityTimeout: "150s", // poll runs up to 120s + margin
+    visibilityTimeout: "75s", // poll runs up to 60s + margin
     retry: (job) => {
-      // Polling itself already retries internally for 120s. An outbox retry here
-      // covers worker-level failures (e.g. worker restarted mid-poll).
-      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "10s" };
+      // Polling runs up to 60s internally, or fails immediately on wrong answer.
+      // Outbox retry covers worker-level failures (e.g. worker restarted mid-poll).
+      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "5s" };
       return { retry: false, reason: "poll failed after retry" };
     },
     async handler(params) {
@@ -200,36 +239,16 @@ export const registerConsumers = () => {
         throw new Error(`Could not build fetcher for machine ${machineId}`);
       }
 
-      const pollResult = await pollForProbeAnswer(fetcher, threadId);
+      const responseText = await pollForProbeAnswer(fetcher, threadId);
 
-      if (pollResult.ok) {
-        await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
-          machineId,
-          projectId,
-          responseText: pollResult.responseText,
-        });
-
-        logger.info("[pollProbeResponse] Probe succeeded", {
-          machineId,
-          responseText: pollResult.responseText,
-        });
-        return `probe succeeded: "${pollResult.responseText}"`;
-      }
-
-      // Probe failed — emit failure event (don't throw, the failure is a fact to record)
-      await cc.send({ transaction: db, parent: db }, "machine:probe-failed", {
+      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
         machineId,
         projectId,
-        detail: pollResult.detail,
-        attempt: params.job.attempt,
+        responseText,
       });
 
-      logger.error("[pollProbeResponse] Probe failed", {
-        machineId,
-        detail: pollResult.detail,
-        attempt: params.job.attempt,
-      });
-      return `probe failed: ${pollResult.detail}`;
+      logger.info("[pollProbeResponse] Probe succeeded", { machineId, responseText });
+      return `probe succeeded: "${responseText}"`;
     },
   });
 
@@ -289,31 +308,7 @@ export const registerConsumers = () => {
       });
 
       logger.info(`[activateMachine] Machine activated:${activated}`, { machineId });
-      if (activated) await broadcastInvalidation(env).catch(() => {});
       return `machine activated:${activated}`;
-    },
-  });
-
-  // Stage 3b: Probe failed — mark the machine as errored.
-  cc.registerConsumer({
-    name: "markMachineProbeFailure",
-    on: "machine:probe-failed",
-    async handler(params) {
-      const { machineId, detail } = params.payload;
-      const db = getDb();
-
-      const machine = await db.query.machine.findFirst({
-        where: eq(schema.machine.id, machineId),
-      });
-      if (!machine) throw new Error(`Machine ${machineId} not found`);
-
-      if (machine.state !== "starting") {
-        return `skipped: machine state is ${machine.state}`;
-      }
-
-      await broadcastInvalidation(env).catch(() => {});
-      logger.error("[markMachineProbeFailure] Machine probe failed", { machineId, detail });
-      return `marked as error: ${detail}`;
     },
   });
 

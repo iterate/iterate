@@ -26,7 +26,12 @@ interface Machine {
     payload: Record<string, unknown>;
     createdAt: Date;
   } | null;
-  pendingConsumers?: string[];
+  consumers?: Array<{
+    name: string;
+    status: "pending" | "retrying" | "failed";
+    readCount: number;
+    lastResult: string | null;
+  }>;
 }
 
 interface MachineTableProps {
@@ -131,7 +136,7 @@ export function MachineTable({
                 <DaemonStatus
                   state={machine.state}
                   lastEvent={machine.lastEvent}
-                  pendingConsumers={machine.pendingConsumers}
+                  consumers={machine.consumers}
                 />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>
