@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "plugins": [{ "name": "@effect/language-service" }],
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "esnext.disposable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vitest/importMeta"],
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*", "effect-stream-manager/**/*", "fetcher.ts", "entrypoint.ts"],
+  "exclude": ["node_modules"]
+}
