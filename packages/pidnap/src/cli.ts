@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { format } from "node:util";
@@ -9,7 +10,9 @@ import * as v from "valibot";
 import Table from "cli-table3";
 import { os as osBase } from "@orpc/server";
 import { createCli, type TrpcCliMeta } from "trpc-cli";
-import pkg from "../package.json" assert { type: "json" };
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
 import { router } from "./api/server.ts";
 import { Manager, ManagerConfig } from "./manager.ts";
 import { logger } from "./logger.ts";
