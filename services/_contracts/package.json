@@ -1,0 +1,28 @@
+{
+  "name": "@iterate-com/services-contracts",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./events": "./events/index.ts",
+    "./lib": "./lib/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/openapi-client": "^1.13.5",
+    "@orpc/zod": "1.13.5",
+    "hono": "^4.11.3",
+    "partysocket": "^1.1.6",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}
