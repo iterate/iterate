@@ -97,6 +97,7 @@ export const registerConsumers = () => {
         .set({ metadata: mergedMetadata })
         .where(eq(schema.machine.id, machineId));
 
+      await broadcastInvalidation(env).catch(() => {});
       logger.info("[provisionMachine] Machine provisioned", {
         machineId,
         type: machine.type,
@@ -110,7 +111,7 @@ export const registerConsumers = () => {
   // daemon-status-reported → pushMachineSetup → (setup-pushed)
   //   → sendReadinessProbe → (probe-sent) → pollProbeResponse
   //     → (probe-succeeded) → activateMachine → (activated)
-  //     → (probe-failed) → markMachineProbeFailure
+  //     (probe failure handled by outbox retry → status="failed" in queue)
 
   // Stage 0: Daemon reported ready — push env vars and clone repos.
   cc.registerConsumer({
@@ -148,6 +149,7 @@ export const registerConsumers = () => {
         projectId,
       });
 
+      await broadcastInvalidation(env).catch(() => {});
       logger.info("[pushMachineSetup] Setup pushed to machine", { machineId });
       return `setup pushed to ${machineId}`;
     },
@@ -198,6 +200,7 @@ export const registerConsumers = () => {
         messageId: sendResult.messageId,
       });
 
+      await broadcastInvalidation(env).catch(() => {});
       logger.info("[sendReadinessProbe] Probe message sent", {
         machineId,
         threadId: sendResult.threadId,
@@ -249,6 +252,7 @@ export const registerConsumers = () => {
           responseText: pollResult.responseText,
         });
 
+        await broadcastInvalidation(env).catch(() => {});
         logger.info("[pollProbeResponse] Probe succeeded", {
           machineId,
           responseText: pollResult.responseText,
@@ -256,20 +260,9 @@ export const registerConsumers = () => {
         return `probe succeeded: "${pollResult.responseText}"`;
       }
 
-      // Probe failed — emit failure event (don't throw, the failure is a fact to record)
-      await cc.send({ transaction: db, parent: db }, "machine:probe-failed", {
-        machineId,
-        projectId,
-        detail: pollResult.detail,
-        attempt: params.job.attempt,
-      });
-
-      logger.error("[pollProbeResponse] Probe failed", {
-        machineId,
-        detail: pollResult.detail,
-        attempt: params.job.attempt,
-      });
-      return `probe failed: ${pollResult.detail}`;
+      // Throw so the outbox retry machinery handles it. When retries exhaust,
+      // the consumer stays in the queue with status="failed" and the UI shows it.
+      throw new Error(`probe failed: ${pollResult.detail}`);
     },
   });
 
@@ -331,29 +324,6 @@ export const registerConsumers = () => {
       logger.info(`[activateMachine] Machine activated:${activated}`, { machineId });
       if (activated) await broadcastInvalidation(env).catch(() => {});
       return `machine activated:${activated}`;
-    },
-  });
-
-  // Stage 3b: Probe failed — mark the machine as errored.
-  cc.registerConsumer({
-    name: "markMachineProbeFailure",
-    on: "machine:probe-failed",
-    async handler(params) {
-      const { machineId, detail } = params.payload;
-      const db = getDb();
-
-      const machine = await db.query.machine.findFirst({
-        where: eq(schema.machine.id, machineId),
-      });
-      if (!machine) throw new Error(`Machine ${machineId} not found`);
-
-      if (machine.state !== "starting") {
-        return `skipped: machine state is ${machine.state}`;
-      }
-
-      await broadcastInvalidation(env).catch(() => {});
-      logger.error("[markMachineProbeFailure] Machine probe failed", { machineId, detail });
-      return `marked as error: ${detail}`;
     },
   });
 

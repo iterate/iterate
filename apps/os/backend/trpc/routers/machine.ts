@@ -17,10 +17,7 @@ import { logger } from "../../tag-logger.ts";
 import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { outboxClient } from "../../outbox/client.ts";
-import {
-  getLatestMachineEvents,
-  getMachinePendingConsumers,
-} from "../../utils/machine-metadata.ts";
+import { getLatestMachineEvents, getMachineConsumers } from "../../utils/machine-metadata.ts";
 import {
   buildCanonicalMachineIngressUrl,
   getIngressSchemeFromPublicUrl,
@@ -184,12 +181,12 @@ export const machineRouter = router({
       const [enriched, eventMap, consumerMap] = await Promise.all([
         Promise.all(machines.map((m) => enrichMachineWithProviderInfo(m, ctx.env))),
         getLatestMachineEvents(ctx.db, machineIds),
-        getMachinePendingConsumers(ctx.db, machineIds),
+        getMachineConsumers(ctx.db, machineIds),
       ]);
       return enriched.map((m) => ({
         ...m,
         lastEvent: eventMap.get(m.id) ?? null,
-        pendingConsumers: consumerMap.get(m.id) ?? [],
+        consumers: consumerMap.get(m.id) ?? [],
       }));
     }),
 
@@ -218,12 +215,12 @@ export const machineRouter = router({
       const [enriched, eventMap, consumerMap] = await Promise.all([
         enrichMachineWithProviderInfo(m, ctx.env),
         getLatestMachineEvents(ctx.db, [m.id]),
-        getMachinePendingConsumers(ctx.db, [m.id]),
+        getMachineConsumers(ctx.db, [m.id]),
       ]);
       return {
         ...enriched,
         lastEvent: eventMap.get(m.id) ?? null,
-        pendingConsumers: consumerMap.get(m.id) ?? [],
+        consumers: consumerMap.get(m.id) ?? [],
       };
     }),
 

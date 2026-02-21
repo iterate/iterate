@@ -67,7 +67,6 @@ const MACHINE_EVENT_NAMES = [
   "machine:daemon-status-reported",
   "machine:probe-sent",
   "machine:probe-succeeded",
-  "machine:probe-failed",
   "machine:activated",
   "machine:restart-requested",
 ] as const;
@@ -89,6 +88,15 @@ const MACHINE_CONSUMER_NAMES = [
 ] as const;
 
 export type MachineConsumerName = (typeof MACHINE_CONSUMER_NAMES)[number];
+
+/** Enriched consumer info for the frontend — includes retry/failure state. */
+export type MachineConsumer = {
+  name: MachineConsumerName;
+  status: "pending" | "retrying" | "failed";
+  readCount: number;
+  /** Latest processing result string (e.g. error message from last attempt) */
+  lastResult: string | null;
+};
 
 /**
  * Query the latest machine lifecycle event for each given machineId.
@@ -140,42 +148,73 @@ export async function getLatestMachineEvents(
 }
 
 /**
- * Query the consumer job queue for pending/in-flight jobs related to the given machines.
- * Returns a map of machineId → list of consumer names that are scheduled or processing.
+ * Query the consumer job queue (live + archive) for jobs related to the given machines.
+ * Returns a map of machineId → enriched consumer info including status, attempt count, and errors.
  *
- * This is an abstraction over the pgmq queue internals — if the outbox later emits
- * consumer lifecycle events, this function can be swapped to query those instead.
+ * Live queue has pending/retrying consumers. Archive has succeeded/failed consumers.
+ * We include failed archived consumers so the UI can show what went wrong.
  */
-export async function getMachinePendingConsumers(
+export async function getMachineConsumers(
   db: DB,
   machineIds: string[],
-): Promise<Map<string, MachineConsumerName[]>> {
+): Promise<Map<string, MachineConsumer[]>> {
   if (machineIds.length === 0) return new Map();
+
+  const machineIdFilter = sql.join(
+    machineIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const consumerNameFilter = sql.join(
+    [...MACHINE_CONSUMER_NAMES].map((n) => sql`${n}`),
+    sql`, `,
+  );
 
   const raw = await db.execute(sql`
     SELECT
       message->'event_payload'->>'machineId' AS machine_id,
-      message->>'consumer_name' AS consumer_name
+      message->>'consumer_name' AS consumer_name,
+      coalesce(message->>'status', 'pending') AS status,
+      read_ct,
+      message->'processing_results' AS processing_results
     FROM pgmq.q_consumer_job_queue
-    WHERE message->'event_payload'->>'machineId' IN (${sql.join(
-      machineIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
-      AND message->>'consumer_name' IN (${sql.join(
-        [...MACHINE_CONSUMER_NAMES].map((n) => sql`${n}`),
-        sql`, `,
-      )})
+    WHERE message->'event_payload'->>'machineId' IN (${machineIdFilter})
+      AND message->>'consumer_name' IN (${consumerNameFilter})
+
+    UNION ALL
+
+    SELECT
+      message->'event_payload'->>'machineId' AS machine_id,
+      message->>'consumer_name' AS consumer_name,
+      coalesce(message->>'status', 'pending') AS status,
+      read_ct,
+      message->'processing_results' AS processing_results
+    FROM pgmq.a_consumer_job_queue
+    WHERE message->'event_payload'->>'machineId' IN (${machineIdFilter})
+      AND message->>'consumer_name' IN (${consumerNameFilter})
+      AND message->>'status' = 'failed'
   `);
 
   const rows = (Array.isArray(raw) ? raw : ((raw as { rows: unknown[] }).rows ?? [])) as Array<{
     machine_id: string;
     consumer_name: string;
+    status: string;
+    read_ct: number;
+    processing_results: unknown[] | null;
   }>;
 
-  const result = new Map<string, MachineConsumerName[]>();
+  const result = new Map<string, MachineConsumer[]>();
   for (const row of rows) {
     const existing = result.get(row.machine_id) ?? [];
-    existing.push(row.consumer_name as MachineConsumerName);
+    const results = Array.isArray(row.processing_results) ? row.processing_results : [];
+    const lastResult = results.length > 0 ? String(results[results.length - 1]) : null;
+    existing.push({
+      name: row.consumer_name as MachineConsumerName,
+      status: (row.status === "retrying" || row.status === "failed"
+        ? row.status
+        : "pending") as MachineConsumer["status"],
+      readCount: row.read_ct,
+      lastResult,
+    });
     result.set(row.machine_id, existing);
   }
   return result;

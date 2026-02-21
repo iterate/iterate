@@ -381,12 +381,8 @@ function MachineDetailPage() {
     };
   })();
 
-  const lastEventName = machine.lastEvent?.name;
-  const lastEventPayload = machine.lastEvent?.payload;
-  const issueMessage =
-    lastEventName === "machine:probe-failed" && lastEventPayload?.detail
-      ? String(lastEventPayload.detail)
-      : null;
+  const failedConsumer = machine.consumers?.find((c) => c.status === "failed");
+  const issueMessage = failedConsumer?.lastResult ?? null;
 
   const machineJson = JSON.stringify(machine, null, 2);
 
@@ -419,7 +415,7 @@ function MachineDetailPage() {
               <DaemonStatus
                 state={machine.state}
                 lastEvent={machine.lastEvent}
-                pendingConsumers={machine.pendingConsumers}
+                consumers={machine.consumers}
               />
             </dd>
           </div>
@@ -570,7 +566,7 @@ function MachineDetailPage() {
 
         {!agentsLoading && agents.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            {machine.state === "active" && lastEventName === "machine:activated"
+            {machine.state === "active" && machine.lastEvent?.name === "machine:activated"
               ? "No agents found."
               : "Agents appear once the machine is active and daemon is ready."}
           </p>

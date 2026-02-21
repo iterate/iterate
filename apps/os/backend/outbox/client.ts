@@ -31,13 +31,6 @@ export type InternalEventTypes = {
     projectId: string;
     responseText: string;
   };
-  /** The readiness probe failed (timeout or wrong answer). */
-  "machine:probe-failed": {
-    machineId: string;
-    projectId: string;
-    detail: string;
-    attempt: number;
-  };
   /** A user or system requested a machine/daemon restart. */
   "machine:restart-requested": {
     machineId: string;

@@ -26,6 +26,7 @@ import {
 import { EmptyState } from "../../components/empty-state.tsx";
 import { MachineTable } from "../../components/machine-table.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
+import { getMachineStatus } from "../../components/machine-status.ts";
 
 /** Metadata key used by each provider to override the default image/snapshot */
 const SNAPSHOT_META: Record<string, { key: string; label: string; placeholder: string }> = {
@@ -108,7 +109,17 @@ function ProjectMachinesPage() {
     includeArchived: false,
   });
 
-  const { data: machines } = useSuspenseQuery(machineListQueryOptions);
+  const { data: machines } = useSuspenseQuery({
+    ...machineListQueryOptions,
+    refetchInterval: (query) => {
+      const list = query.state.data;
+      if (!list) return false;
+      const anyLoading = list.some(
+        (m) => getMachineStatus(m.state, m.lastEvent, m.consumers).loading,
+      );
+      return anyLoading ? 3000 : false;
+    },
+  });
 
   const createMachine = useMutation({
     mutationFn: async ({

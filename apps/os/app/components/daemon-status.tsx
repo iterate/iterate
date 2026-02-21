@@ -1,3 +1,6 @@
+import { Spinner } from "./ui/spinner.tsx";
+import { getMachineStatus, type ConsumerInfo } from "./machine-status.ts";
+
 interface DaemonStatusProps {
   state: "starting" | "active" | "detached" | "archived";
   lastEvent?: {
@@ -5,17 +8,16 @@ interface DaemonStatusProps {
     payload: Record<string, unknown>;
     createdAt: Date;
   } | null;
-  pendingConsumers?: string[];
+  consumers?: ConsumerInfo[];
 }
 
-export function DaemonStatus({ state, lastEvent, pendingConsumers = [] }: DaemonStatusProps) {
-  const lastEventName = lastEvent?.name ?? "null";
-  const pendingConsumersRaw =
-    pendingConsumers.length > 0 ? `[${pendingConsumers.join(",")}]` : "[]";
+export function DaemonStatus({ state, lastEvent, consumers = [] }: DaemonStatusProps) {
+  const { label, loading } = getMachineStatus(state, lastEvent, consumers);
 
   return (
-    <span className="font-mono text-xs text-muted-foreground break-all">
-      {`state=${state} lastEvent=${lastEventName} pendingConsumers=${pendingConsumersRaw}`}
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      {loading && <Spinner className="size-3" />}
+      {label}
     </span>
   );
 }
