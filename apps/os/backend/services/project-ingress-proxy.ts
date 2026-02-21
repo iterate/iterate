@@ -1,20 +1,21 @@
 import { and, eq } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import { minimatch } from "minimatch";
+import {
+  isProjectIngressHostname,
+  parseProjectIngressHostname,
+  type IngressTarget,
+  type ParsedIngressHostname,
+} from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { AuthSession } from "../auth/auth.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
-import { normalizeProjectIngressCanonicalHost } from "../utils/project-ingress-url.ts";
 
-const DEFAULT_TARGET_PORT = 3000;
 const SANDBOX_INGRESS_PORT = 8080;
-const MAX_PORT = 65_535;
+const DEFAULT_TARGET_PORT = 3000;
 const TARGET_HOST_HEADER = "x-iterate-proxy-target-host";
-const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
-const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
 export const PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH =
   "/api/project-ingress-proxy-auth/bridge-start";
 export const PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH = "/_/exchange-token";
@@ -33,14 +34,6 @@ const HOP_BY_HOP_HEADERS = [
 ];
 
 const EXCLUDE_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
-
-type IngressRouteTarget =
-  | { kind: "project"; projectSlug: string; targetPort: number; isPortExplicit: boolean }
-  | { kind: "machine"; machineId: string; targetPort: number; isPortExplicit: boolean };
-
-type ResolveHostnameResult =
-  | { ok: true; target: IngressRouteTarget; rootDomain: string }
-  | { ok: false; error: "invalid_hostname" | "invalid_port" | "invalid_project_slug" };
 
 function jsonError(status: number, error: string, details?: Record<string, unknown>): Response {
   return Response.json(details ? { error, details } : { error }, { status });
@@ -72,123 +65,29 @@ export function getProjectIngressRequestHostname(request: Request): string {
   return new URL(request.url).hostname.toLowerCase();
 }
 
-export function parseProjectIngressProxyHostMatchers(raw: string): string[] {
-  const values = raw
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-  return [...new Set(values)];
+/**
+ * Check if a hostname should be handled as project ingress.
+ * Uses the PROJECT_INGRESS_DOMAIN env var — matches any subdomain of it.
+ */
+export function shouldHandleProjectIngressHostname(hostname: string, env: CloudflareEnv): boolean {
+  return isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN);
 }
 
-export function getProjectIngressProxyHostMatchers(env: CloudflareEnv): string[] {
-  return parseProjectIngressProxyHostMatchers(env.PROJECT_INGRESS_PROXY_HOST_MATCHERS);
-}
-
-export function shouldHandleProjectIngressHostname(
-  hostname: string,
-  hostMatchers: string[],
-): boolean {
-  return getMatchingProjectIngressHostMatcher(hostname, hostMatchers) !== null;
-}
-
-function getMatchingProjectIngressHostMatcher(
-  hostname: string,
-  hostMatchers: string[],
-): string | null {
-  const normalizedHostname = hostname.toLowerCase();
-  for (const matcher of hostMatchers) {
-    if (
-      minimatch(normalizedHostname, matcher, {
-        nocase: true,
-        dot: true,
-        noext: false,
-        noglobstar: false,
-      })
-    ) {
-      return matcher;
-    }
-  }
-  return null;
-}
-
-function buildHostnameParseDetails(params: {
-  hostname: string;
-  hostMatchers: string[];
-  matchedHostMatcher: string | null;
-  resolvedHost?: ResolveHostnameResult;
-}): Record<string, unknown> {
-  const labels = params.hostname.toLowerCase().split(".").filter(Boolean);
-  const details: Record<string, unknown> = {
-    hostname: params.hostname,
-    hostnameLabels: labels,
-    hostMatchers: params.hostMatchers,
-    matchedHostMatcher: params.matchedHostMatcher,
-  };
-
-  if (params.resolvedHost) {
-    if (params.resolvedHost.ok) {
-      details.parsedTarget =
-        params.resolvedHost.target.kind === "project"
-          ? {
-              kind: "project",
-              projectSlug: params.resolvedHost.target.projectSlug,
-              targetPort: params.resolvedHost.target.targetPort,
-              rootDomain: params.resolvedHost.rootDomain,
-            }
-          : {
-              kind: "machine",
-              machineId: params.resolvedHost.target.machineId,
-              targetPort: params.resolvedHost.target.targetPort,
-              rootDomain: params.resolvedHost.rootDomain,
-            };
-    } else {
-      details.parsedTargetError = params.resolvedHost.error;
-    }
-  }
-
-  return details;
-}
-
-function parseTargetPort(rawPort: string): number | null {
-  if (!/^\d+$/.test(rawPort)) return null;
-  const port = Number(rawPort);
-  if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) return null;
-  return port;
-}
-
+/**
+ * Build the canonical hostname for a project ingress target.
+ * E.g. `4096__my-proj.iterate.app` or `my-proj.iterate.app` (port 3000 default).
+ */
 export function buildCanonicalProjectIngressProxyHostname(params: {
-  target: IngressRouteTarget;
-  canonicalProjectIngressProxyBaseHost: string;
+  target: IngressTarget;
+  projectIngressDomain: string;
 }): string {
-  const { target, canonicalProjectIngressProxyBaseHost } = params;
+  const { target, projectIngressDomain } = params;
   const identifier = target.kind === "project" ? target.projectSlug : target.machineId;
   const hostToken =
     target.targetPort === DEFAULT_TARGET_PORT && !target.isPortExplicit
       ? identifier
       : `${target.targetPort}__${identifier}`;
-  return `${hostToken}.${canonicalProjectIngressProxyBaseHost}`;
-}
-
-export function resolveEffectiveProjectIngressCanonicalHost(params: {
-  configuredCanonicalHost: string;
-  resolvedRootDomain: string;
-  appStage: string;
-}): string | null {
-  const configuredCanonicalHost = normalizeProjectIngressCanonicalHost(
-    params.configuredCanonicalHost,
-  );
-  if (!configuredCanonicalHost) return null;
-  const isDevStage = params.appStage === "dev" || params.appStage.startsWith("dev-");
-  if (isDevStage && configuredCanonicalHost.endsWith(".dev.iterate.com")) {
-    const expectedDevMachineCanonicalHost = configuredCanonicalHost.replace(
-      /\.dev\.iterate\.com$/,
-      ".dev.iterate.app",
-    );
-    if (params.resolvedRootDomain === expectedDevMachineCanonicalHost) {
-      return expectedDevMachineCanonicalHost;
-    }
-  }
-  return configuredCanonicalHost;
+  return `${hostToken}.${projectIngressDomain}`;
 }
 
 export function normalizeProjectIngressProxyRedirectPath(rawPath: string | undefined): string {
@@ -236,104 +135,8 @@ export function buildControlPlaneProjectIngressProxyBridgeStartUrl(params: {
   return controlPlaneBridgeStartUrl;
 }
 
-export function resolveCanonicalProjectIngressHostForBridge(params: {
-  configuredCanonicalHost: string;
-  appStage: string;
-  hostMatchers: string[];
-}): string | null {
-  const configuredCanonicalHost = normalizeProjectIngressCanonicalHost(
-    params.configuredCanonicalHost,
-  );
-  if (!configuredCanonicalHost) return null;
-
-  const candidates = [configuredCanonicalHost];
-  const isDevStage = params.appStage === "dev" || params.appStage.startsWith("dev-");
-  if (isDevStage && configuredCanonicalHost.endsWith(".dev.iterate.com")) {
-    const devMachineCanonicalHost = configuredCanonicalHost.replace(
-      /\.dev\.iterate\.com$/,
-      ".dev.iterate.app",
-    );
-    candidates.unshift(devMachineCanonicalHost);
-  }
-
-  for (const canonicalHost of candidates) {
-    if (shouldHandleProjectIngressHostname(`mach_probe.${canonicalHost}`, params.hostMatchers)) {
-      return canonicalHost;
-    }
-  }
-
-  return candidates[0] ?? null;
-}
-
 function isAlwaysControlPlanePath(pathname: string): boolean {
   return pathname === PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH;
-}
-
-function parseTargetToken(
-  token: string,
-): { identifier: string; targetPort: number; isPortExplicit: boolean } | null {
-  if (!token) return null;
-
-  const separatorIndex = token.indexOf("__");
-  if (separatorIndex === -1) {
-    return { identifier: token, targetPort: DEFAULT_TARGET_PORT, isPortExplicit: false };
-  }
-
-  if (separatorIndex === 0) return null;
-
-  const rawPort = token.slice(0, separatorIndex);
-  const identifier = token.slice(separatorIndex + 2);
-  if (!identifier) return null;
-
-  const targetPort = parseTargetPort(rawPort);
-  if (!targetPort) return null;
-
-  return { identifier, targetPort, isPortExplicit: true };
-}
-
-function isValidProjectSlug(slug: string): boolean {
-  return (
-    PROJECT_SLUG_PATTERN.test(slug) &&
-    /[a-z]/.test(slug) &&
-    slug.length <= 50 &&
-    !RESERVED_PROJECT_SLUGS.has(slug)
-  );
-}
-
-export function resolveIngressHostname(hostname: string): ResolveHostnameResult {
-  const normalizedHostname = hostname.toLowerCase();
-  const labels = normalizedHostname.split(".").filter(Boolean);
-  if (labels.length < 3) return { ok: false, error: "invalid_hostname" };
-
-  const parsed = parseTargetToken(labels[0] ?? "");
-  if (!parsed) return { ok: false, error: "invalid_port" };
-  if (parsed.identifier.startsWith("mach_")) {
-    return {
-      ok: true,
-      target: {
-        kind: "machine",
-        machineId: parsed.identifier,
-        targetPort: parsed.targetPort,
-        isPortExplicit: parsed.isPortExplicit,
-      },
-      rootDomain: labels.slice(1).join("."),
-    };
-  }
-
-  if (!isValidProjectSlug(parsed.identifier)) {
-    return { ok: false, error: "invalid_project_slug" };
-  }
-
-  return {
-    ok: true,
-    target: {
-      kind: "project",
-      projectSlug: parsed.identifier,
-      targetPort: parsed.targetPort,
-      isPortExplicit: parsed.isPortExplicit,
-    },
-    rootDomain: labels.slice(1).join("."),
-  };
 }
 
 type ResolveMachineForIngressResult = {
@@ -345,7 +148,7 @@ type ResolveMachineForIngressResult = {
 };
 
 async function resolveMachineForIngress(
-  target: IngressRouteTarget,
+  target: IngressTarget,
   userId: string,
   isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
@@ -496,6 +299,42 @@ async function proxyWithFetcher(
   });
 }
 
+function buildParseDetails(params: {
+  hostname: string;
+  projectIngressDomain: string;
+  resolvedHost?: ParsedIngressHostname;
+}): Record<string, unknown> {
+  const labels = params.hostname.toLowerCase().split(".").filter(Boolean);
+  const details: Record<string, unknown> = {
+    hostname: params.hostname,
+    hostnameLabels: labels,
+    projectIngressDomain: params.projectIngressDomain,
+  };
+
+  if (params.resolvedHost) {
+    if (params.resolvedHost.ok) {
+      details.parsedTarget =
+        params.resolvedHost.target.kind === "project"
+          ? {
+              kind: "project",
+              projectSlug: params.resolvedHost.target.projectSlug,
+              targetPort: params.resolvedHost.target.targetPort,
+              rootDomain: params.resolvedHost.rootDomain,
+            }
+          : {
+              kind: "machine",
+              machineId: params.resolvedHost.target.machineId,
+              targetPort: params.resolvedHost.target.targetPort,
+              rootDomain: params.resolvedHost.rootDomain,
+            };
+    } else {
+      details.parsedTargetError = params.resolvedHost.error;
+    }
+  }
+
+  return details;
+}
+
 export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
@@ -503,86 +342,45 @@ export async function handleProjectIngressRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const requestHostname = getProjectIngressRequestHostname(request);
-  const hostMatchers = getProjectIngressProxyHostMatchers(env);
-  if (hostMatchers.length === 0) {
-    logger.error("[project-ingress] PROJECT_INGRESS_PROXY_HOST_MATCHERS is empty");
-    return jsonError(500, "ingress_not_configured", { hostname: requestHostname, hostMatchers });
+  const projectIngressDomain = env.PROJECT_INGRESS_DOMAIN;
+
+  if (!projectIngressDomain) {
+    logger.error("[project-ingress] PROJECT_INGRESS_DOMAIN is empty");
+    return jsonError(500, "ingress_not_configured", { hostname: requestHostname });
   }
 
-  const matchedHostMatcher = getMatchingProjectIngressHostMatcher(requestHostname, hostMatchers);
-  if (!matchedHostMatcher) {
+  if (!isProjectIngressHostname(requestHostname, projectIngressDomain)) {
     return jsonError(
       404,
       "not_found",
-      buildHostnameParseDetails({
+      buildParseDetails({
         hostname: requestHostname,
-        hostMatchers,
-        matchedHostMatcher,
+        projectIngressDomain,
       }),
     );
   }
 
-  const resolvedHost = resolveIngressHostname(requestHostname);
+  const resolvedHost = parseProjectIngressHostname(requestHostname);
   if (!resolvedHost.ok) {
-    if (resolvedHost.error === "invalid_port") {
-      return jsonError(
-        400,
-        "invalid_port",
-        buildHostnameParseDetails({
-          hostname: requestHostname,
-          hostMatchers,
-          matchedHostMatcher,
-          resolvedHost,
-        }),
-      );
-    }
-    if (resolvedHost.error === "invalid_project_slug") {
-      return jsonError(
-        400,
-        "invalid_project_slug",
-        buildHostnameParseDetails({
-          hostname: requestHostname,
-          hostMatchers,
-          matchedHostMatcher,
-          resolvedHost,
-        }),
-      );
-    }
     return jsonError(
-      400,
-      "invalid_hostname",
-      buildHostnameParseDetails({
-        hostname: requestHostname,
-        hostMatchers,
-        matchedHostMatcher,
-        resolvedHost,
-      }),
+      resolvedHost.error === "invalid_port"
+        ? 400
+        : resolvedHost.error === "invalid_project_slug"
+          ? 400
+          : 400,
+      resolvedHost.error,
+      buildParseDetails({ hostname: requestHostname, projectIngressDomain, resolvedHost }),
     );
   }
 
-  const canonicalProjectIngressProxyBaseHost = resolveEffectiveProjectIngressCanonicalHost({
-    configuredCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    resolvedRootDomain: resolvedHost.rootDomain,
-    appStage: env.APP_STAGE,
-  });
-  if (!canonicalProjectIngressProxyBaseHost) {
-    logger.error("[project-ingress] Invalid PROJECT_INGRESS_PROXY_CANONICAL_HOST", {
-      projectIngressProxyCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    });
-    return jsonError(500, "ingress_not_configured", {
-      hostname: requestHostname,
-      hostMatchers,
-      projectIngressProxyCanonicalHost: env.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    });
-  }
-
-  const canonicalProjectIngressProxyHostname = buildCanonicalProjectIngressProxyHostname({
+  // Build canonical hostname — always use the PROJECT_INGRESS_DOMAIN
+  const canonicalHostname = buildCanonicalProjectIngressProxyHostname({
     target: resolvedHost.target,
-    canonicalProjectIngressProxyBaseHost,
+    projectIngressDomain,
   });
-  if (requestHostname !== canonicalProjectIngressProxyHostname) {
+  if (requestHostname !== canonicalHostname) {
     const redirectUrl = new URL(url.toString());
-    redirectUrl.host = canonicalProjectIngressProxyHostname;
+    redirectUrl.host = canonicalHostname;
     return Response.redirect(redirectUrl.toString(), 301);
   }
 
@@ -593,16 +391,15 @@ export async function handleProjectIngressRequest(
   if (!session) {
     const controlPlaneBridgeStartUrl = buildControlPlaneProjectIngressProxyBridgeStartUrl({
       controlPlanePublicUrl: env.VITE_PUBLIC_URL,
-      projectIngressProxyHost: canonicalProjectIngressProxyHostname,
+      projectIngressProxyHost: canonicalHostname,
       redirectPath: `${url.pathname}${url.search}`,
     });
     return Response.redirect(controlPlaneBridgeStartUrl.toString(), 302);
   }
 
-  const parseDetails = buildHostnameParseDetails({
+  const parseDetails = buildParseDetails({
     hostname: requestHostname,
-    hostMatchers,
-    matchedHostMatcher,
+    projectIngressDomain,
     resolvedHost,
   });
 

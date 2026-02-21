@@ -36,13 +36,14 @@ const reactionsRemoveMock = vi.fn().mockResolvedValue({ ok: true });
 const apiCallMock = vi.fn().mockResolvedValue({ ok: true });
 const chatPostMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
-vi.mock("@slack/web-api", () => ({
-  WebClient: vi.fn(() => ({
-    reactions: { add: reactionsAddMock, remove: reactionsRemoveMock },
-    apiCall: apiCallMock,
-    chat: { postMessage: chatPostMessageMock },
-  })),
-}));
+vi.mock("@slack/web-api", () => {
+  class MockWebClient {
+    reactions = { add: reactionsAddMock, remove: reactionsRemoveMock };
+    apiCall = apiCallMock;
+    chat = { postMessage: chatPostMessageMock };
+  }
+  return { WebClient: MockWebClient };
+});
 
 // SLACK_BOT_TOKEN needed for getSlackClient()
 vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test-token");
@@ -502,10 +503,7 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
 
-      vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
-      vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
-      vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
-      vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
       vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
 
       selectLimitQueue.push([]); // storeEvent dedup check
@@ -559,10 +557,29 @@ describe("slack router", () => {
           thread_ts: threadTs,
         }),
       );
-      const postMessageText = String(chatPostMessageMock.mock.calls[0]?.[0]?.text ?? "");
+      const postMessageArg = chatPostMessageMock.mock.calls[0]?.[0] ?? {};
+      const postMessageText = String(postMessageArg.text ?? "");
       expect(postMessageText).toContain("sess_abc123");
-      expect(postMessageText).toContain("Harness Web UI (direct proxy)");
-      expect(postMessageText).toContain("terminal?command=");
+
+      // Should include Slack blocks with buttons
+      const blocks = postMessageArg.blocks as unknown[];
+      expect(blocks).toBeDefined();
+      expect(blocks.length).toBeGreaterThanOrEqual(1);
+
+      // Should have an actions block with buttons for web UI and terminal
+      const actionsBlock = blocks.find(
+        (b: unknown) => (b as { type: string }).type === "actions",
+      ) as { elements: { type: string; text: { text: string }; url: string }[] } | undefined;
+      expect(actionsBlock).toBeDefined();
+      const buttonTexts = actionsBlock!.elements.map((e) => e.text.text);
+      expect(buttonTexts).toContain("Open Web UI");
+      expect(buttonTexts).toContain("Open Terminal");
+
+      // Verify URLs use canonical ingress host
+      const webButton = actionsBlock!.elements.find((e) => e.text.text === "Open Web UI");
+      const termButton = actionsBlock!.elements.find((e) => e.text.text === "Open Terminal");
+      expect(webButton?.url).toMatch(/4096__my-proj\.iterate\.app/);
+      expect(termButton?.url).toMatch(/my-proj\.iterate\.app/);
 
       expect(reactionsRemoveMock).not.toHaveBeenCalled();
     });
@@ -605,6 +622,9 @@ describe("slack router", () => {
     });
 
     it("waits for pending reactions.add before cleanup remove on !debug intercept", async () => {
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+
       const threadTs = "4141414141.414141";
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;

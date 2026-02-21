@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import { createMachineStub, type MachineStub } from "@iterate-com/sandbox/providers/machine-stub";
+import { buildMachinePortUrl } from "@iterate-com/shared/project-ingress";
 import {
   router,
   projectProtectedProcedure,
@@ -18,11 +19,7 @@ import { DAEMON_DEFINITIONS, getDaemonsWithWebUI } from "../../daemons.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { getLatestMachineEvents, getMachineConsumers } from "../../utils/machine-metadata.ts";
-import {
-  buildCanonicalMachineIngressUrl,
-  getIngressSchemeFromPublicUrl,
-  normalizeProjectIngressCanonicalHost,
-} from "../../utils/project-ingress-url.ts";
+import { getIngressSchemeFromPublicUrl } from "../../utils/project-ingress-url.ts";
 import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
 import type { AppRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/app-router.ts";
 
@@ -63,29 +60,13 @@ async function enrichMachineWithProviderInfo<T extends typeof schema.machine.$in
     return { ...machine, metadata, services: [] };
   }
 
-  const canonicalHost = normalizeProjectIngressCanonicalHost(
-    cloudflareEnv.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-  );
-  if (!canonicalHost) {
-    logger.error("Invalid PROJECT_INGRESS_PROXY_CANONICAL_HOST in machine router", {
-      projectIngressProxyCanonicalHost: cloudflareEnv.PROJECT_INGRESS_PROXY_CANONICAL_HOST,
-    });
-    return { ...machine, metadata, services: [] };
-  }
-
-  const isDevStage =
-    cloudflareEnv.APP_STAGE === "dev" || cloudflareEnv.APP_STAGE.startsWith("dev-");
-  const machineServiceHost =
-    isDevStage && canonicalHost.endsWith(".dev.iterate.com")
-      ? canonicalHost.replace(/\.dev\.iterate\.com$/, ".dev.iterate.app")
-      : canonicalHost;
-
+  const projectIngressDomain = cloudflareEnv.PROJECT_INGRESS_DOMAIN;
   const scheme = getIngressSchemeFromPublicUrl(cloudflareEnv.VITE_PUBLIC_URL);
 
   const services = getDaemonsWithWebUI().map((daemon) => {
-    const url = buildCanonicalMachineIngressUrl({
+    const url = buildMachinePortUrl({
       scheme,
-      canonicalHost: machineServiceHost,
+      projectIngressDomain,
       machineId: machine.id,
       port: daemon.internalPort,
     });

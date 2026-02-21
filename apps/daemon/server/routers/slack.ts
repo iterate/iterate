@@ -54,11 +54,16 @@ import type {
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
+  KnownBlock,
+  SectionBlock,
+  ActionsBlock,
+  Button,
+  RichTextBlock,
 } from "@slack/types";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { trpcRouter } from "../trpc/router.ts";
-import { runAgentCommand } from "../utils/agent-commands.ts";
+import { runAgentCommand, type AgentCommandMatch } from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -349,11 +354,14 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    await postSlackThreadMessage({
+    const blocks =
+      commandResult.command === "debug" ? buildDebugCommandBlocks(commandResult) : undefined;
+
+    await getSlackClient().chat.postMessage({
       channel,
-      threadTs,
+      thread_ts: threadTs,
       text: commandResult.resultMarkdown,
-      requestId,
+      ...(blocks ? { blocks } : {}),
     });
 
     return c.json({
@@ -635,32 +643,73 @@ async function setThreadStatus(context: SlackThreadContext, rawStatus: string): 
   }
 }
 
-async function postSlackThreadMessage(params: {
-  channel: string;
-  threadTs: string;
-  text: string;
-  requestId?: string;
-}): Promise<void> {
-  try {
-    await getSlackClient().chat.postMessage({
-      channel: params.channel,
-      thread_ts: params.threadTs,
-      text: params.text,
+// ──────────────────────── Slack block builders ──────────────────────────────
+
+function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[] {
+  const r = commandResult.result as {
+    agentPath: string;
+    agentHarness: string | null;
+    sessionSource: string | null;
+    terminalUrl: string;
+    webUrl: string;
+  };
+
+  const fields = [
+    `*Agent path*\n\`${r.agentPath}\``,
+    ...(r.agentHarness ? [`*Harness*\n${r.agentHarness}`] : []),
+    ...(r.sessionSource ? [`*Session source*\n${r.sessionSource}`] : []),
+  ];
+
+  const blocks: KnownBlock[] = [
+    {
+      type: "section",
+      fields: fields.map((text) => ({ type: "mrkdwn" as const, text })),
+    } satisfies SectionBlock,
+  ];
+
+  const buttons: Button[] = [];
+
+  if (r.webUrl) {
+    buttons.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open Web UI" },
+      url: r.webUrl,
+      style: "primary",
     });
-    logger.log("[slack] postSlackThreadMessage ok", {
-      requestId: params.requestId,
-      channel: params.channel,
-      threadTs: params.threadTs,
-    });
-  } catch (error) {
-    logger.error("[slack] postSlackThreadMessage failed", {
-      requestId: params.requestId,
-      channel: params.channel,
-      threadTs: params.threadTs,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
   }
+
+  if (r.terminalUrl) {
+    buttons.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open Terminal" },
+      url: r.terminalUrl,
+    });
+  }
+
+  if (buttons.length > 0) {
+    blocks.push({
+      type: "actions",
+      elements: buttons,
+    } satisfies ActionsBlock);
+  }
+
+  // Full agent metadata as a collapsible-style code block
+  const agentJson = JSON.stringify(commandResult.result, null, 2);
+  blocks.push({
+    type: "rich_text",
+    elements: [
+      {
+        type: "rich_text_section",
+        elements: [{ type: "text", text: "Full agent metadata", style: { bold: true } }],
+      },
+      {
+        type: "rich_text_preformatted",
+        elements: [{ type: "text", text: agentJson }],
+      },
+    ],
+  } satisfies RichTextBlock);
+
+  return blocks;
 }
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
