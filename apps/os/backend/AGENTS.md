@@ -72,8 +72,9 @@ await db.insert(organization).values({...});
 ```ts
 import { logger } from "./tag-logger.ts";
 
-logger.info("User created", { userId: user.id });
-logger.error("Failed to process", { error });
+logger.set({ user: { id: user.id, email: user.email } });
+logger.info("User created");
+logger.error("Failed to process", error);
 ```
 
 ## tRPC Routers

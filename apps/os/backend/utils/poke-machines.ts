@@ -43,11 +43,8 @@ async function buildDaemonTransport(
     ]);
     return { baseUrl, fetcher };
   } catch (err) {
-    logger.warn("[poke-machines] Failed to build daemon transport", {
-      machineId: machine.id,
-      type: machine.type,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.error(`[poke-machines] Failed to build daemon transport type=${machine.type}`, err);
     return null;
   }
 }
@@ -62,9 +59,8 @@ async function pokeMachineToRefresh(
 ): Promise<void> {
   const daemonTransport = await buildDaemonTransport(machine, env);
   if (!daemonTransport) {
-    logger.warn("[poke-machines] Could not build daemon transport for machine", {
-      machineId: machine.id,
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.warn("[poke-machines] Could not build daemon transport for machine");
     return;
   }
 
@@ -72,7 +68,8 @@ async function pokeMachineToRefresh(
 
   try {
     await client.daemon.platform.refreshEnv.mutate();
-    logger.info("[poke-machines] Poked machine to refresh env", { machineId: machine.id });
+    logger.set({ machine: { id: machine.id } });
+    logger.info("[poke-machines] Poked machine to refresh env");
   } catch (err) {
     logger.error("[poke-machines] Failed to poke machine for refresh", err);
   }
@@ -92,14 +89,15 @@ export async function pokeRunningMachinesToRefresh(
   });
 
   if (runningMachines.length === 0) {
-    logger.info("[poke-machines] No running machines to poke", { projectId });
+    logger.set({ project: { id: projectId } });
+    logger.info("[poke-machines] No running machines to poke");
     return;
   }
 
-  logger.info("[poke-machines] Poking machines to refresh env", {
-    projectId,
-    machineCount: runningMachines.length,
-  });
+  logger.set({ project: { id: projectId } });
+  logger.info(
+    `[poke-machines] Poking machines to refresh env machineCount=${runningMachines.length}`,
+  );
 
   await Promise.all(runningMachines.map((machine) => pokeMachineToRefresh(machine, env)));
 }

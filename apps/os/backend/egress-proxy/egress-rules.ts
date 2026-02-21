@@ -85,16 +85,9 @@ export async function matchesEgressRule(
     const result = await expr.evaluate(context);
     return !!result;
   } catch (err) {
-    const errorMessage =
-      err instanceof Error
-        ? err.message
-        : typeof err === "object" && err !== null
-          ? JSON.stringify(err)
-          : String(err);
-    logger.warn("Failed to evaluate egress rule", {
+    logger.error("Failed to evaluate egress rule", err, {
       expression,
       url: urlString,
-      error: errorMessage,
     });
     return false;
   }

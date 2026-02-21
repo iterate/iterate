@@ -132,7 +132,8 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
             return { data: { ...user, image } };
           },
           after: async (user) => {
-            logger.info("User signed up", { userId: user.id, email: user.email });
+            logger.set({ user: { id: user.id, email: user.email } });
+            logger.info("User signed up");
             // Track user_signed_up event in PostHog using waitUntil to ensure delivery
             waitUntil(
               captureServerEvent(envParam, {
@@ -147,7 +148,9 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                   },
                 },
               }).catch((error) => {
-                logger.error("Failed to track user_signed_up event", { error, userId: user.id });
+                logger.error("Failed to track user_signed_up event", error, {
+                  user: { id: user.id },
+                });
               }),
             );
           },
@@ -206,14 +209,14 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 });
 
                 if ("error" in result) {
-                  logger.error("[EMAIL OTP] Failed to send OTP email", {
-                    email,
-                    error: result.error,
-                  });
+                  logger.error(
+                    `[EMAIL OTP] Failed to send OTP email to ${email}`,
+                    new Error(result.error),
+                  );
                   throw new Error(`Failed to send verification email: ${result.error}`);
                 }
 
-                logger.info("[EMAIL OTP] Sent OTP email", { email, emailId: result.id });
+                logger.info("[EMAIL OTP] Sent OTP email");
               },
             }),
           ]

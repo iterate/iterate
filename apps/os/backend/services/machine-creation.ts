@@ -185,7 +185,8 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
     return { payload: { machineId }, newMachine: inserted };
   });
 
-  logger.info("Machine record created", { machineId, projectId, type });
+  logger.set({ machine: { id: machineId }, project: { id: projectId } });
+  logger.info(`Machine record created type=${type}`);
 
   return { machine: newMachine, apiKey };
 }

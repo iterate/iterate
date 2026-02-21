@@ -73,11 +73,8 @@ async function buildMachineForwardFetcher(
     });
     return await runtime.getFetcher(3000);
   } catch (err) {
-    logger.warn("[Slack Webhook] Failed to build forward fetcher", {
-      machineId: machine.id,
-      type: machine.type,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.set({ machine: { id: machine.id } });
+    logger.error(`[Slack Webhook] Failed to build forward fetcher type=${machine.type}`, err);
     return null;
   }
 }
@@ -133,8 +130,10 @@ export async function forwardSlackWebhookToMachine(
           span.setAttribute("forward.error", `http_${resp.status}`);
           logger.error("[Slack Webhook] Forward failed", {
             machine,
-            targetPath,
-            status: resp.status,
+            request: {
+              status: resp.status,
+              path: targetPath,
+            },
             text: await resp.text(),
             correlation,
           });
@@ -142,19 +141,19 @@ export async function forwardSlackWebhookToMachine(
         }
 
         span.setAttribute("forward.success", true);
-        logger.info("[Slack Webhook] Forwarded to machine", {
-          machineId: machine.id,
-          targetPath,
+        logger.set({
+          path: targetPath,
           correlation,
+          machine: { id: machine.id },
         });
+        logger.info("[Slack Webhook] Forwarded to machine");
         return { success: true };
       } catch (err) {
         span.setAttribute("forward.success", false);
         span.setAttribute("forward.error", err instanceof Error ? err.message : String(err));
-        logger.error("[Slack Webhook] Forward error", {
-          err,
-          machineId: machine.id,
-          targetPath,
+        logger.error("[Slack Webhook] Forward error", err, {
+          machine: { id: machine.id },
+          path: targetPath,
           correlation,
         });
         return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -209,7 +208,10 @@ export async function revokeSlackToken(accessToken: string): Promise<boolean> {
     });
 
     if (!response.ok) {
-      logger.warn("Slack auth.revoke HTTP error", { status: response.status });
+      const responseBody = (await response.text().catch(() => "<no body>")).slice(0, 300);
+      logger.warn(
+        `Slack auth.revoke HTTP error: status=${response.status} body=${responseBody || "<empty>"}`,
+      );
       return false;
     }
 
@@ -220,7 +222,7 @@ export async function revokeSlackToken(accessToken: string): Promise<boolean> {
       if (data.error === "invalid_auth" || data.error === "token_revoked") {
         return true;
       }
-      logger.warn("Slack auth.revoke API error", { error: data.error });
+      logger.warn("Slack auth.revoke API error");
       return false;
     }
 
@@ -254,7 +256,7 @@ slackApp.get(
 
     // Handle OAuth denial/error from Slack
     if (error) {
-      logger.warn("Slack OAuth error", { error });
+      logger.warn(`Slack OAuth error: ${error}`);
       return c.redirect("/?error=slack_oauth_denied");
     }
 
@@ -284,10 +286,9 @@ slackApp.get(
     const { projectId, userId, callbackURL } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.warn("Slack callback user mismatch", {
-        sessionUserId: c.var.session.user.id,
-        stateUserId: userId,
-      });
+      logger.warn(
+        `Slack callback user mismatch sessionUserId=${c.var.session.user.id} stateUserId=${userId}`,
+      );
       return c.json({ error: "User mismatch - please restart the Slack connection flow" }, 403);
     }
 
@@ -546,7 +547,8 @@ slackApp.post("/webhook", async (c) => {
       async (span) => {
         try {
           if (!teamId) {
-            logger.warn("[Slack Webhook] No team_id in payload", { correlation });
+            logger.set({ correlation });
+            logger.warn("[Slack Webhook] No team_id in payload");
             span.setAttribute("process.result", "missing_team_id");
             // Still track the event, just without groups
             trackWebhookEvent(env, {
@@ -601,7 +603,8 @@ slackApp.post("/webhook", async (c) => {
 
           const projectId = connection?.projectId;
           if (!projectId) {
-            logger.warn("[Slack Webhook] No project for team", { teamId, correlation });
+            logger.set({ correlation });
+            logger.warn(`[Slack Webhook] No project for team teamId=${teamId}`);
             span.setAttribute("process.result", "missing_project_connection");
             return;
           }
@@ -628,7 +631,7 @@ slackApp.post("/webhook", async (c) => {
           });
           span.setAttribute("process.result", "ok");
         } catch (err) {
-          logger.error("[Slack Webhook] Background error", { err, correlation });
+          logger.error("[Slack Webhook] Background error", err, { correlation });
           span.setAttribute("process.result", "error");
           throw err;
         }
