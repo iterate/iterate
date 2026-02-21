@@ -156,10 +156,10 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "sendReadinessProbe",
     on: "machine:setup-pushed",
-    visibilityTimeout: "90s", // send retries up to 60s + margin
-    delay: () => "30s", // opencode needs time to restart after env vars are written
+    visibilityTimeout: "45s", // send retries up to 30s + margin
+    delay: () => "5s", // brief pause for env vars to take effect
     retry: (job) => {
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "15s" };
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "5s" };
       return { retry: false, reason: "probe send failed after retries" };
     },
     async handler(params) {
@@ -210,11 +210,11 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "pollProbeResponse",
     on: "machine:probe-sent",
-    visibilityTimeout: "150s", // poll runs up to 120s + margin
+    visibilityTimeout: "75s", // poll runs up to 60s + margin
     retry: (job) => {
-      // Polling itself already retries internally for 120s. An outbox retry here
-      // covers worker-level failures (e.g. worker restarted mid-poll).
-      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "10s" };
+      // Polling runs up to 60s internally, or fails immediately on wrong answer.
+      // Outbox retry covers worker-level failures (e.g. worker restarted mid-poll).
+      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "5s" };
       return { retry: false, reason: "poll failed after retry" };
     },
     async handler(params) {
@@ -239,25 +239,16 @@ export const registerConsumers = () => {
         throw new Error(`Could not build fetcher for machine ${machineId}`);
       }
 
-      const pollResult = await pollForProbeAnswer(fetcher, threadId);
+      const responseText = await pollForProbeAnswer(fetcher, threadId);
 
-      if (pollResult.ok) {
-        await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
-          machineId,
-          projectId,
-          responseText: pollResult.responseText,
-        });
+      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
+        machineId,
+        projectId,
+        responseText,
+      });
 
-        logger.info("[pollProbeResponse] Probe succeeded", {
-          machineId,
-          responseText: pollResult.responseText,
-        });
-        return `probe succeeded: "${pollResult.responseText}"`;
-      }
-
-      // Throw so the outbox retry machinery handles it. When retries exhaust,
-      // the consumer stays in the queue with status="failed" and the UI shows it.
-      throw new Error(`probe failed: ${pollResult.detail}`);
+      logger.info("[pollProbeResponse] Probe succeeded", { machineId, responseText });
+      return `probe succeeded: "${responseText}"`;
     },
   });
 

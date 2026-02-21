@@ -67,6 +67,7 @@ export type Transactable<D extends DBLike> = DBLike & {
 
 type RetryFn = (
   job: ConsumerJobQueueMessage,
+  error: unknown,
 ) =>
   | { retry: false; reason: string; delay?: never }
   | { retry: true; reason: string; delay: TimePeriod };
@@ -98,11 +99,7 @@ export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
 
 export type QueuerEvent = {
-  consumerName: string;
-  eventName: string;
-  eventPayload: Record<string, unknown>;
-  status: "success" | "retrying" | "failed";
-  attempt: number;
+  job: ConsumerJobQueueMessage;
   error?: string;
 };
 
@@ -221,7 +218,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           }),
         );
         results.push(result);
-        await db.execute(sql`
+        const [updated]: Array<typeof job> = await db.execute(sql`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
           set message = jsonb_set(
             message,
@@ -229,24 +226,23 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             message->'processing_results' || jsonb_build_array(${`#${job.read_ct} success: ${String(result)}`}::text)
           ) || '{"status": "success"}'::jsonb
           where msg_id = ${job.msg_id}::bigint
+          returning *
         `);
         await db.execute(sql`
           select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
         `);
-        emit("statusChange", {
-          consumerName: consumer!.name,
-          eventName: job.message.event_name,
-          eventPayload: job.message.event_payload,
-          status: "success",
-          attempt: job.read_ct,
-        });
+        emit("statusChange", { job: updated });
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
         if (!job) {
           logger.error(`[outbox] unparseable message, skipping`, { job: _job, error: e });
           continue;
         }
-        const retry = (consumer?.retry ?? defaultRetryFn)(job);
+        let retryFn = consumer?.retry ?? defaultRetryFn;
+        if ((e as Record<string, unknown>)?.retryable === false) {
+          retryFn = () => ({ retry: false, reason: "Error marked non-retryable." });
+        }
+        const retry = retryFn(job, e);
         const retryMessage = Object.entries(retry)
           .map(([k, v]) => `${k}: ${v}`)
           .join(". ");
@@ -254,7 +250,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
         const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
 
-        await db.execute(sql`
+        const [updated]: Array<typeof job> = await db.execute(sql`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
           set message = jsonb_set(
             message,
@@ -263,14 +259,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           ) || ${statusObj}::jsonb
           where msg_id = ${job.msg_id}::bigint
         `);
-        const eventData: QueuerEvent = {
-          consumerName: job.message.consumer_name,
-          eventName: job.message.event_name,
-          eventPayload: job.message.event_payload,
-          status: retry.retry ? "retrying" : "failed",
-          attempt: job.read_ct,
-          error: String(e),
-        };
+        const eventData: QueuerEvent = { job: updated, error: String(e) };
         if (!retry.retry) {
           logger.warn(
             `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
@@ -546,10 +535,13 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
       return { addResult, result };
     });
 
-    if (addResult.matchedConsumers > 0) {
+    for (const delay of addResult.delays) {
+      let delayMs = periodSeconds(delay) * 1000;
+      delayMs = Math.max(20, delayMs * 1.1); // add 10% buffer to avoid race conditions, add 20ms minimum to let transactions complete
+      if (delayMs > 120_000) continue; // don't bother with super long delays
       waitUntil(
         (async () => {
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
           return queuer.processQueue(parent as DBConnection);
         })(),
       );
