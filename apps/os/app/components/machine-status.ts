@@ -48,7 +48,10 @@ export function getMachineStatus(
       return { loading: false, label: `Failed: ${consumerLabel}` };
     }
     if (top.status === "retrying") {
-      return { loading: true, label: `Retrying ${consumerLabel} (attempt ${top.readCount})...` };
+      return {
+        loading: true,
+        label: `Retrying ${consumerLabel} (attempt ${top.readCount + 1})...`,
+      };
     }
     return { loading: true, label: `${current}. Running ${consumerLabel}...` };
   }

@@ -11,7 +11,6 @@ import {
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars } from "../services/machine-creation.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
-import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -97,7 +96,6 @@ export const registerConsumers = () => {
         .set({ metadata: mergedMetadata })
         .where(eq(schema.machine.id, machineId));
 
-      await broadcastInvalidation(env).catch(() => {});
       logger.info("[provisionMachine] Machine provisioned", {
         machineId,
         type: machine.type,
@@ -149,7 +147,6 @@ export const registerConsumers = () => {
         projectId,
       });
 
-      await broadcastInvalidation(env).catch(() => {});
       logger.info("[pushMachineSetup] Setup pushed to machine", { machineId });
       return `setup pushed to ${machineId}`;
     },
@@ -200,7 +197,6 @@ export const registerConsumers = () => {
         messageId: sendResult.messageId,
       });
 
-      await broadcastInvalidation(env).catch(() => {});
       logger.info("[sendReadinessProbe] Probe message sent", {
         machineId,
         threadId: sendResult.threadId,
@@ -252,7 +248,6 @@ export const registerConsumers = () => {
           responseText: pollResult.responseText,
         });
 
-        await broadcastInvalidation(env).catch(() => {});
         logger.info("[pollProbeResponse] Probe succeeded", {
           machineId,
           responseText: pollResult.responseText,
@@ -322,7 +317,6 @@ export const registerConsumers = () => {
       });
 
       logger.info(`[activateMachine] Machine activated:${activated}`, { machineId });
-      if (activated) await broadcastInvalidation(env).catch(() => {});
       return `machine activated:${activated}`;
     },
   });

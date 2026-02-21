@@ -97,6 +97,19 @@ export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
 export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
 
+export type QueuerEvent = {
+  consumerName: string;
+  eventName: string;
+  eventPayload: Record<string, unknown>;
+  status: "success" | "retrying" | "failed";
+  attempt: number;
+  error?: string;
+};
+
+export type QueuerEventMap = {
+  statusChange: QueuerEvent;
+};
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
@@ -112,6 +125,15 @@ export interface Queuer<DBConnection> {
   processQueue: (db: DBConnection) => Promise<string>;
   peekQueue: (db: DBConnection, options?: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
   peekArchive: (db: DBConnection, options?: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
+
+  on: <K extends keyof QueuerEventMap>(
+    event: K,
+    listener: (data: QueuerEventMap[K]) => void,
+  ) => void;
+  off: <K extends keyof QueuerEventMap>(
+    event: K,
+    listener: (data: QueuerEventMap[K]) => void,
+  ) => void;
 }
 
 /** Helper to normalize drizzle execute results (postgres.js returns array-like, we need .rows/.rowCount) */
@@ -128,6 +150,18 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
   const { queueName } = queueOptions;
   const pgmqQueueTableName = `q_${queueName}`;
   const pgmqArchiveTableName = `a_${queueName}`;
+
+  const listeners: { [K in keyof QueuerEventMap]?: Set<(data: QueuerEventMap[K]) => void> } = {};
+  const emit = <K extends keyof QueuerEventMap>(event: K, data: QueuerEventMap[K]) => {
+    for (const fn of listeners[event] ?? []) {
+      try {
+        fn(data);
+      } catch (e) {
+        logger.error(`[outbox] listener error for ${event}`, e);
+      }
+    }
+  };
+
   const processQueue: Queuer<DBLike>["processQueue"] = async (db) => {
     const raw = await db.execute(
       sql`
@@ -199,6 +233,13 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         await db.execute(sql`
           select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
         `);
+        emit("statusChange", {
+          consumerName: consumer!.name,
+          eventName: job.message.event_name,
+          eventPayload: job.message.event_payload,
+          status: "success",
+          attempt: job.read_ct,
+        });
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
         if (!job) {
@@ -222,6 +263,14 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           ) || ${statusObj}::jsonb
           where msg_id = ${job.msg_id}::bigint
         `);
+        const eventData: QueuerEvent = {
+          consumerName: job.message.consumer_name,
+          eventName: job.message.event_name,
+          eventPayload: job.message.event_payload,
+          status: retry.retry ? "retrying" : "failed",
+          attempt: job.read_ct,
+          error: String(e),
+        };
         if (!retry.retry) {
           logger.warn(
             `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
@@ -242,6 +291,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             )
           `);
         }
+        emit("statusChange", eventData);
       }
     }
 
@@ -325,6 +375,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         `),
       );
       return ConsumerJobQueueMessage.array().parse(result.rows);
+    },
+    on: (event, listener) => {
+      (listeners[event] ??= new Set()).add(listener as (data: QueuerEvent) => void);
+    },
+    off: (event, listener) => {
+      listeners[event]?.delete(listener as (data: QueuerEvent) => void);
     },
   };
 };
