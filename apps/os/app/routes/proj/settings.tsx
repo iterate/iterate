@@ -16,12 +16,6 @@ import {
 
 type ProjectSandboxProvider = "daytona" | "docker" | "fly";
 
-const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
-  daytona: "Daytona (Cloud)",
-  docker: "Docker",
-  fly: "Fly.io",
-};
-
 export const Route = createFileRoute("/_auth/proj/$projectSlug/settings")({
   component: ProjectSettingsPage,
   loader: ({ context }) => {
@@ -45,18 +39,22 @@ function ProjectSettingsPage() {
     trpc.project.getAvailableSandboxProviders.queryOptions(),
   );
 
-  const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      projectSlug: params.projectSlug,
-      includeArchived: false,
-    }),
-  );
-
   const enabledSandboxProviders = sandboxProviders.providers.filter(
     (provider) => !provider.disabledReason,
   );
 
-  const hasRunningMachines = machines.some((m) => m.state === "active" || m.state === "starting");
+  // Always include the current provider in dropdown options, even if it's now disabled
+  const dropdownProviders = enabledSandboxProviders.some(
+    (p) => p.type === projectWithOrg.sandboxProvider,
+  )
+    ? enabledSandboxProviders
+    : [
+        {
+          type: projectWithOrg.sandboxProvider as ProjectSandboxProvider,
+          label: projectWithOrg.sandboxProvider,
+        },
+        ...enabledSandboxProviders,
+      ];
 
   const project = projectWithOrg;
   const [name, setName] = useState(project.name);
@@ -121,8 +119,6 @@ function ProjectSettingsPage() {
     }
   };
 
-  const canChangeProvider = enabledSandboxProviders.length >= 2 && !hasRunningMachines;
-
   return (
     <div className="p-4 space-y-8">
       <form onSubmit={handleSubmit}>
@@ -144,37 +140,22 @@ function ProjectSettingsPage() {
             </Field>
             <Field>
               <FieldLabel htmlFor="project-sandbox-provider">Sandbox provider</FieldLabel>
-              {canChangeProvider ? (
-                <Select
-                  value={sandboxProvider}
-                  onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
-                  disabled={updateProject.isPending}
-                >
-                  <SelectTrigger id="project-sandbox-provider">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {enabledSandboxProviders.map((provider) => (
-                      <SelectItem key={provider.type} value={provider.type}>
-                        {provider.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <>
-                  <Input
-                    id="project-sandbox-provider"
-                    value={SANDBOX_PROVIDER_LABELS[sandboxProvider] ?? sandboxProvider}
-                    disabled
-                  />
-                  {hasRunningMachines && enabledSandboxProviders.length >= 2 && (
-                    <p className="text-xs text-muted-foreground">
-                      Archive all machines to change the sandbox provider.
-                    </p>
-                  )}
-                </>
-              )}
+              <Select
+                value={sandboxProvider}
+                onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
+                disabled={updateProject.isPending}
+              >
+                <SelectTrigger id="project-sandbox-provider">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {dropdownProviders.map((provider) => (
+                    <SelectItem key={provider.type} value={provider.type}>
+                      {provider.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
           </FieldSet>
           <Field orientation="horizontal">

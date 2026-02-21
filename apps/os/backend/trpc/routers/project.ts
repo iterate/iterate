@@ -41,12 +41,10 @@ import { logger } from "../../tag-logger.ts";
 export const projectRouter = router({
   getAvailableSandboxProviders: publicProcedure.query(({ ctx }) => {
     const providers = getProjectSandboxProviderOptions(ctx.env, import.meta.env.DEV);
-    const enabledProviders = providers.filter((provider) => !provider.disabledReason);
 
     return {
       providers,
       defaultProvider: getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV),
-      showProviderSelector: enabledProviders.length >= 2,
     };
   }),
 

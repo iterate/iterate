@@ -16,12 +16,6 @@ import {
 
 type ProjectSandboxProvider = "daytona" | "docker" | "fly";
 
-const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
-  daytona: "Daytona (Cloud)",
-  docker: "Docker",
-  fly: "Fly.io",
-};
-
 export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
   loader: ({ context, params }) => {
@@ -111,32 +105,25 @@ function NewProjectPage() {
                 autoFocus
               />
             </Field>
-            {sandboxProviders.showProviderSelector ? (
-              <Field>
-                <FieldLabel>Sandbox provider</FieldLabel>
-                <Select
-                  value={sandboxProvider}
-                  onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
-                  disabled={createProject.isPending}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {enabledSandboxProviders.map((provider) => (
-                      <SelectItem key={provider.type} value={provider.type}>
-                        {provider.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            ) : (
-              <Field>
-                <FieldLabel>Sandbox provider</FieldLabel>
-                <Input value={SANDBOX_PROVIDER_LABELS[sandboxProvider]} disabled />
-              </Field>
-            )}
+            <Field>
+              <FieldLabel>Sandbox provider</FieldLabel>
+              <Select
+                value={sandboxProvider}
+                onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
+                disabled={createProject.isPending}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {enabledSandboxProviders.map((provider) => (
+                    <SelectItem key={provider.type} value={provider.type}>
+                      {provider.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </FieldSet>
           <Field orientation="horizontal">
             <Button
