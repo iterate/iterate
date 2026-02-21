@@ -12,16 +12,6 @@ import {
   type CreatePushSubscriptionPayloadInput,
 } from "../push-subscriptions.ts";
 
-export interface RpcWebSocket {
-  readonly readyState: 0 | 1 | 2 | 3;
-  addEventListener: (
-    type: string,
-    listener: (event: unknown) => void,
-    options?: boolean | AddEventListenerOptions,
-  ) => void;
-  send: (data: string | ArrayBufferLike | Uint8Array) => void;
-}
-
 interface AsyncDisposable {
   readonly [Symbol.asyncDispose]: () => Promise<void>;
 }
@@ -30,9 +20,6 @@ interface WaitOptions {
   readonly timeoutMs?: number;
   readonly intervalMs?: number;
 }
-
-export const asRpcWebSocket = (websocket: WebSocket): RpcWebSocket =>
-  websocket as unknown as RpcWebSocket;
 
 export const uniquePath = (name: string): string =>
   `/test/${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

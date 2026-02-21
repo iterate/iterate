@@ -64,18 +64,33 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const errorMessage = (error: unknown): string => {
-  if (!(error instanceof Error)) return String(error);
+  if (error instanceof Error) {
+    const extra = isRecord(error)
+      ? {
+          code: error["code"],
+          status: error["status"],
+        }
+      : undefined;
 
-  const withOrpcFields = error as Error & {
-    readonly code?: unknown;
-    readonly status?: unknown;
-  };
+    return [
+      error.message,
+      ...(typeof extra?.code === "string" ? [`code=${extra.code}`] : []),
+      ...(typeof extra?.status === "number" ? [`status=${extra.status}`] : []),
+    ].join(" | ");
+  }
 
-  return [
-    error.message,
-    ...(typeof withOrpcFields.code === "string" ? [`code=${withOrpcFields.code}`] : []),
-    ...(typeof withOrpcFields.status === "number" ? [`status=${withOrpcFields.status}`] : []),
-  ].join(" | ");
+  return String(error);
+};
+
+const parseJsonObject = (
+  input: string,
+  kind: "Event payload" | "Metadata",
+): Record<string, unknown> => {
+  const parsed = JSON.parse(input || "{}");
+  if (!isRecord(parsed)) {
+    throw new Error(`${kind} must be a JSON object`);
+  }
+  return parsed;
 };
 
 const streamPathFromLocation = (): string => {
@@ -580,10 +595,7 @@ export function App() {
     if (trimmedType.length === 0) throw new Error("Event type is required");
     const parsedType = IterateEventType.parse(trimmedType);
 
-    const payload = JSON.parse(eventPayload || "{}") as unknown;
-    if (!isRecord(payload)) {
-      throw new Error("Event payload must be a JSON object");
-    }
+    const payload = parseJsonObject(eventPayload, "Event payload");
 
     if (openStreamPathRef.current !== path) {
       await connectStream(path, { syncHistory: true });
@@ -599,10 +611,7 @@ export function App() {
 
   const onSetMetadata = useCallback(async (): Promise<void> => {
     const path = normalizePath(streamPathInput);
-    const parsed = JSON.parse(metadataInput || "{}") as unknown;
-    if (!isRecord(parsed)) {
-      throw new Error("Metadata must be a JSON object");
-    }
+    const parsed = parseJsonObject(metadataInput, "Metadata");
 
     if (openStreamPathRef.current !== path) {
       await connectStream(path, { syncHistory: true });

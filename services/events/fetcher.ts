@@ -1,18 +1,46 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { randomUUID } from "node:crypto";
+import { inspect } from "node:util";
 
 import { Hono } from "hono";
 import { attachDefaultServiceRoutes } from "@iterate-com/services-contracts/lib";
 import { serviceManifest, type EventsServiceEnv } from "@iterate-com/services-contracts/events";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
-import { implement } from "@orpc/server";
+import { implement, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { WebSocketServer } from "ws";
 
 import { disposeEventOperations, getEventOperations } from "./effect-stream-manager/singleton.ts";
+
+const SHOULD_LOG_ORPC = process.env.NODE_ENV !== "test";
+
+const toErrorWithStack = (error: unknown): string => {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}\n${error.stack ?? "(stack unavailable)"}`;
+  }
+
+  return inspect(error, {
+    depth: 8,
+    colors: false,
+    breakLength: 140,
+    compact: false,
+  });
+};
+
+const logOrpcRequest = (message: string): void => {
+  if (!SHOULD_LOG_ORPC) return;
+  console.log(`[events:orpc] ${message}`);
+};
+
+const logOrpcError = (message: string, error: unknown): void => {
+  if (!SHOULD_LOG_ORPC) return;
+  console.error(`[events:orpc:error] ${message}`);
+  console.error(toErrorWithStack(error));
+};
 
 export const eventsService = async (env: EventsServiceEnv) => {
   const ops = await getEventOperations(env);
@@ -40,56 +68,41 @@ export const eventsService = async (env: EventsServiceEnv) => {
       new OpenAPIReferencePlugin({
         docsPath: "/docs",
         specPath: "/openapi.json",
-        docsTitle: "Durable Stream API Reference",
+        docsTitle: "Events API",
         schemaConverters: [new ZodToJsonSchemaConverter()],
-        docsConfig: {
-          layout: "modern",
-          theme: "bluePlanet",
-          searchHotKey: "k",
-          operationTitleSource: "summary",
-          showSidebar: true,
-          hideSearch: false,
-          tagsSorter: "alpha",
-          operationsSorter: "method",
-          orderSchemaPropertiesBy: "alpha",
-          orderRequiredPropertiesFirst: true,
-          documentDownloadType: "both",
-        },
-        docsHead: `
-          <meta name="description" content="Events Service API" />
-          <style>body { margin: 0; }</style>
-        `,
         specGenerateOptions: {
           info: {
             title: "Iterate Events Service API",
             version: serviceManifest.version,
-            description:
-              "Events service API. Authentication is enforced by the Iterate OS worker ingress proxy before requests reach this service.",
+            description: "Durable event streams API.",
           },
-          tags: [
-            { name: "Streams", description: "Stream append/read/list operations" },
-            {
-              name: "Subscriptions",
-              description: "Push subscription registration and acknowledgements",
-            },
-          ],
           servers: [{ url: "/api" }],
-          components: {
-            securitySchemes: {
-              ingressProxyAuth: {
-                type: "http",
-                scheme: "bearer",
-                description:
-                  "Ingress authentication is handled by the Iterate OS worker proxy layer.",
-              },
-            },
-          },
         },
       }),
     ],
   });
 
-  const rpcHandler = new RPCHandler(router);
+  const rpcHandler = new RPCHandler(router, {
+    interceptors: [
+      onError((error, params) => {
+        const maybeStatus =
+          typeof error === "object" &&
+          error !== null &&
+          "status" in error &&
+          typeof (error as { status?: unknown }).status === "number"
+            ? (error as { status: number }).status
+            : undefined;
+        const requestPath = new URL(params.request.url, "http://localhost").pathname;
+        const procedurePath =
+          "path" in params && typeof params.path === "string" ? params.path : "unknown";
+
+        logOrpcError(
+          `handler error status=${maybeStatus ?? "unknown"} request=${params.request.method} ${requestPath} procedure=${procedurePath}`,
+          error,
+        );
+      }),
+    ],
+  });
   const wsHandler = new WebSocketRPCHandler(router);
 
   const wss = new WebSocketServer({ noServer: true });
@@ -101,11 +114,39 @@ export const eventsService = async (env: EventsServiceEnv) => {
   attachDefaultServiceRoutes(app);
 
   app.use("/orpc/*", async (c, next) => {
-    const { matched, response } = await rpcHandler.handle(c.req.raw, {
-      prefix: "/orpc",
-    });
-    if (matched) return c.newResponse(response.body, response);
-    await next();
+    const requestId = randomUUID().slice(0, 8);
+    const requestPath = new URL(c.req.raw.url, "http://localhost");
+    const startedAt = Date.now();
+
+    logOrpcRequest(
+      `[${requestId}] request ${c.req.raw.method} ${requestPath.pathname}${requestPath.search}`,
+    );
+
+    try {
+      const { matched, response } = await rpcHandler.handle(c.req.raw, {
+        prefix: "/orpc",
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      if (matched) {
+        logOrpcRequest(
+          `[${requestId}] response status=${response.status} durationMs=${elapsedMs} ${requestPath.pathname}${requestPath.search}`,
+        );
+        return c.newResponse(response.body, response);
+      }
+
+      logOrpcRequest(
+        `[${requestId}] pass-through durationMs=${elapsedMs} ${requestPath.pathname}${requestPath.search}`,
+      );
+      await next();
+    } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
+      logOrpcError(
+        `[${requestId}] uncaught durationMs=${elapsedMs} ${requestPath.pathname}${requestPath.search}`,
+        error,
+      );
+      throw error;
+    }
   });
 
   app.use("/api/*", async (c, next) => {
@@ -130,6 +171,7 @@ export const eventsService = async (env: EventsServiceEnv) => {
     handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
       const { pathname } = new URL(req.url ?? "/", "http://localhost");
       if (pathname !== "/orpc/ws" && pathname !== "/orpc/ws/") return;
+      logOrpcRequest(`ws-upgrade request ${pathname}`);
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
     },
 

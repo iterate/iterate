@@ -1,4 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
+import { oz } from "@orpc/zod";
 import { JSON_SCHEMA_REGISTRY } from "@orpc/zod/zod4";
 import * as z from "zod/v4";
 import {
@@ -28,6 +29,13 @@ const TraceContext = z.object({
 
 const PlainUnknownRecord = z.record(z.string(), z.unknown());
 const PlainStringRecord = z.record(z.string().min(1), z.string());
+const orpcUrlSchema = oz.url();
+
+export const CallbackURL = z.url().refine((value) => {
+  const parsed = new URL(value);
+  return orpcUrlSchema.safeParse(parsed).success;
+}, "Invalid URL");
+export type CallbackURL = z.infer<typeof CallbackURL>;
 
 export const PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE =
   `${ITERATE_EVENT_TYPE_PREFIX}events/stream/push-subscription-callback-added` as const;
@@ -67,7 +75,7 @@ const PushSubscriptionType = z.enum([
 
 export const PushSubscriptionCallbackAddedPayload = z.object({
   type: PushSubscriptionType,
-  URL: z.url(),
+  URL: CallbackURL,
   subscriptionSlug: z.string().min(1),
   retryPolicy: PushSubscriptionRetryPolicy.optional(),
   jsonataFilter: z.string().min(1).optional(),

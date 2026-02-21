@@ -20,18 +20,9 @@ import {
   type EventBusContract,
   type EventsServiceEnv,
 } from "@iterate-com/services-contracts/events";
+import { asRpcWebSocket, type RpcWebSocket } from "@iterate-com/services-contracts/lib";
 
 import { eventsService } from "../../fetcher.ts";
-
-interface RpcWebSocket {
-  readonly readyState: 0 | 1 | 2 | 3;
-  addEventListener: (
-    type: string,
-    listener: (event: unknown) => void,
-    options?: boolean | AddEventListenerOptions,
-  ) => void;
-  send: (data: string | ArrayBufferLike | Uint8Array) => void;
-}
 
 export interface OrpcTestServer {
   readonly url: string;
@@ -176,7 +167,7 @@ export const startOrpcTestFixture = async <TContract extends AnyContractRouter>(
     const websocket =
       clientOptions.websocket ??
       (websocketCtor !== undefined
-        ? (new websocketCtor(clientOptions.url ?? server.websocketURL) as unknown as RpcWebSocket)
+        ? asRpcWebSocket(new websocketCtor(clientOptions.url ?? server.websocketURL))
         : undefined);
 
     if (websocket === undefined) {
@@ -194,7 +185,7 @@ export const startOrpcTestFixture = async <TContract extends AnyContractRouter>(
   ): Promise<OrpcTestWebSocketClientFixture<TContract>> => {
     const websocket = new WebSocket(input.url ?? server.websocketURL);
     const client = createWebSocketClient({
-      websocket: websocket as unknown as RpcWebSocket,
+      websocket: asRpcWebSocket(websocket),
     });
 
     return {

@@ -66,7 +66,7 @@ const rowToEvent = (row: EventRow): Event =>
     path: StreamPath.make(row.path),
     offset: Offset.make(row.offset),
     type: EventType.make(row.type),
-    payload: JSON.parse(row.payload) as Payload,
+    payload: parsePayloadJson(row.payload),
     version: Version.make(row.version),
     createdAt: DateTime.unsafeFromDate(new Date(row.created_at)),
     trace: TraceContext.make({
@@ -78,12 +78,23 @@ const rowToEvent = (row: EventRow): Event =>
     }),
   });
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const parsePayloadJson = (input: string): Payload => {
+  const parsed = JSON.parse(input);
+
+  if (!isRecord(parsed)) {
+    throw new Error("Expected persisted event payload to be a JSON object");
+  }
+
+  return parsed;
+};
+
 const parseMetadataJson = (input: string): Record<string, unknown> => {
   try {
-    const parsed = JSON.parse(input) as unknown;
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    const parsed = JSON.parse(input);
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -243,9 +254,7 @@ export const sqliteLayer = (
               .all();
 
             return rows.flatMap((row): PushSubscriptionState[] => {
-              const subscription = parsePushSubscriptionPayload(
-                JSON.parse(row.subscriptionJson) as unknown,
-              );
+              const subscription = parsePushSubscriptionPayload(JSON.parse(row.subscriptionJson));
               if (subscription === undefined) return [];
 
               return [

@@ -23,7 +23,6 @@ export class StreamManager extends Context.Tag("@app/StreamManager")<
     /** List stream metadata/stats */
     readonly listStreams: () => Effect.Effect<ReadonlyArray<StreamInfo>>;
 
-    // TODO: Add errors
     /** Subscribe to live events, optionally starting after an offset */
     readonly subscribe: (input: { path?: StreamPath; from?: Offset }) => Stream.Stream<Event>;
 

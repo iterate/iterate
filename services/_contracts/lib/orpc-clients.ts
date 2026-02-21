@@ -1,6 +1,9 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
-import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
+import {
+  RPCLink as WebSocketRPCLink,
+  type LinkWebsocketClientOptions,
+} from "@orpc/client/websocket";
 import {
   type AnyContractRouter,
   inferRPCMethodFromContractRouter,
@@ -17,15 +20,27 @@ import {
   type ServiceManifestLike,
 } from "./service-url.ts";
 
-export interface RpcWebSocket {
-  readonly readyState: 0 | 1 | 2 | 3;
-  addEventListener: (
-    type: string,
-    listener: (event: unknown) => void,
-    options?: boolean | AddEventListenerOptions,
-  ) => void;
-  send: (data: string | ArrayBufferLike | Uint8Array) => void;
-}
+export type OrpcRpcWebSocket = LinkWebsocketClientOptions["websocket"];
+export type RpcWebSocket = OrpcRpcWebSocket;
+
+export const isRpcWebSocket = (value: unknown): value is RpcWebSocket => {
+  if (typeof value !== "object" || value === null) return false;
+
+  const readyState = Reflect.get(value, "readyState");
+  const addEventListener = Reflect.get(value, "addEventListener");
+  const send = Reflect.get(value, "send");
+
+  return (
+    (readyState === 0 || readyState === 1 || readyState === 2 || readyState === 3) &&
+    typeof addEventListener === "function" &&
+    typeof send === "function"
+  );
+};
+
+export const asRpcWebSocket = (value: unknown): RpcWebSocket => {
+  if (isRpcWebSocket(value)) return value;
+  throw new Error("Expected websocket with readyState/addEventListener/send");
+};
 
 interface BaseServiceClientOptions<TContract extends AnyContractRouter> {
   readonly env: ServiceClientEnv;
@@ -70,12 +85,14 @@ export const createOrpcRpcWebSocketServiceClient = <TContract extends AnyContrac
 ): ContractRouterClient<TContract> => {
   const websocket =
     options.websocket ??
-    (new PartySocketWebSocket(resolveServiceOrpcWebSocketUrl(options), undefined, {
-      WebSocket: globalThis.WebSocket,
-      maxRetries: 20,
-      minReconnectionDelay: 250,
-      maxReconnectionDelay: 3_000,
-    }) as unknown as RpcWebSocket);
+    asRpcWebSocket(
+      new PartySocketWebSocket(resolveServiceOrpcWebSocketUrl(options), undefined, {
+        ...(globalThis.WebSocket ? { WebSocket: globalThis.WebSocket } : {}),
+        maxRetries: 20,
+        minReconnectionDelay: 250,
+        maxReconnectionDelay: 3_000,
+      }),
+    );
 
   const link = new WebSocketRPCLink({ websocket });
   return createORPCClient(link);

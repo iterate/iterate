@@ -9,7 +9,6 @@ overrides:
   '@babel/parser': ^7.28.0
   workerd: 1.20260205.0
   miniflare: 4.20260205.0
-  zod: 4.3.6
 
 importers:
 
@@ -145,7 +144,7 @@ importers:
         specifier: ^2.8.1
         version: 2.8.2
       zod:
-        specifier: 4.3.6
+        specifier: ^4.1.13
         version: 4.3.6
 
   apps/daemon:
@@ -472,7 +471,7 @@ importers:
         specifier: ^2.7.0
         version: 2.8.2
       zod:
-        specifier: 4.3.6
+        specifier: ^4.1.11
         version: 4.3.6
     devDependencies:
       '@effect/experimental':
@@ -626,8 +625,8 @@ importers:
         specifier: 4.51.0
         version: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod:
-        specifier: 4.3.6
-        version: 4.3.6
+        specifier: 4.1.12
+        version: 4.1.12
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: 1.15.3
@@ -712,7 +711,7 @@ importers:
         version: 0.24.0(hono@4.11.3)(miniflare@4.20260205.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.64.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@hono/zod-validator':
         specifier: ^0.7.5
-        version: 0.7.5(hono@4.11.3)(zod@4.3.6)
+        version: 0.7.5(hono@4.11.3)(zod@4.1.12)
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.67.0(react@19.2.3))
@@ -724,10 +723,10 @@ importers:
         version: link:../../packages/shared
       '@mariozechner/pi-ai':
         specifier: ^0.42.0
-        version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+        version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.42.0
-        version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+        version: 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       '@neondatabase/serverless':
         specifier: ^1.0.2
         version: 1.0.2
@@ -928,7 +927,7 @@ importers:
         version: 1.0.2
       trpc-cli:
         specifier: 0.12.4
-        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -954,8 +953,8 @@ importers:
         specifier: ^2.8.2
         version: 2.8.2
       zod:
-        specifier: 4.3.6
-        version: 4.3.6
+        specifier: 4.1.12
+        version: 4.1.12
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.15.3
@@ -1095,10 +1094,10 @@ importers:
         version: 2.2.6
       trpc-cli:
         specifier: 0.12.4
-        version: 0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       zod:
-        specifier: 4.3.6
-        version: 4.3.6
+        specifier: 4.1.12
+        version: 4.1.12
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -1218,15 +1217,15 @@ importers:
         specifier: ^7.10.0
         version: 7.18.2
       zod:
-        specifier: 4.3.6
-        version: 4.3.6
+        specifier: ^3.25.30
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
       trpc-cli:
         specifier: ^0.12.4
-        version: 0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1258,7 +1257,7 @@ importers:
         specifier: ^1.1.6
         version: 1.1.6
       zod:
-        specifier: 4.3.6
+        specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
       '@types/node':
@@ -1331,7 +1330,7 @@ importers:
         specifier: ^2.8.2
         version: 2.8.2
       zod:
-        specifier: 4.3.6
+        specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
       '@effect/language-service':
@@ -1398,13 +1397,13 @@ packages:
     resolution: {integrity: sha512-oVAG6q72KsjKlrYdLhWjRO7rcqAR8CjokAbYuyVZoCO4Uh2PH/VzZoxZav71w2ipwlXhHCNaInGYWNs889MMDA==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25.76 || ^4.1.8
 
   '@ai-sdk/provider-utils@3.0.18':
     resolution: {integrity: sha512-ypv1xXMsgGcNKUP+hglKqtdDuMg68nWHucPPAhIENrbFAI+xCHiqPVN8Zllxyv1TNZwGWUghPxJXU+Mqps0YRQ==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25.76 || ^4.1.8
 
   '@ai-sdk/provider@2.0.0':
     resolution: {integrity: sha512-6o7Y2SeO9vFKB8lArHXehNuusnpddKPk7xqL7T2/b+OvXMRIXUO1rR4wcv1hAFUAT9avGZshty3Wlua/XA7TvA==}
@@ -1417,13 +1416,13 @@ packages:
     resolution: {integrity: sha512-ZepnDG6r91je1LvrHST2C67m3olgmiYfrhnj4Elyj8AGqOHGYig1zDIPVhGF0u62y0rVVri2mGFDYQI0oW/LBw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^4.0.0
 
   '@anthropic-ai/sdk@0.71.2':
     resolution: {integrity: sha512-TGNDEUuEstk/DKu0/TflXAEt+p+p/WhTlFzEnoosvbaDU2LTjm42igSdlL0VijrKpWejtOKxX0b8A7uc+XiSAQ==}
     hasBin: true
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25.0 || ^4.0.0
     peerDependenciesMeta:
       zod:
         optional: true
@@ -3176,7 +3175,7 @@ packages:
     resolution: {integrity: sha512-n4l4hutkfYU07PzRUHBOVzUEn38VSfrh+UVE5d0w4lyfWDOEhzxIupqo5iakRiJL44c3vTuFJBvcmUl8b9agIA==}
     peerDependencies:
       hono: '>=3.9.0'
-      zod: 4.3.6
+      zod: ^3.25.0 || ^4.0.0
 
   '@hookform/resolvers@5.2.2':
     resolution: {integrity: sha512-A/IxlMLShx3KjV/HeTcTfaMxdwy690+L/ZADoeaTltLx+CVuzkeVIPuybK3jrRfw7YZnmdKsVVHAlEPIAEUNlA==}
@@ -4284,7 +4283,7 @@ packages:
     peerDependencies:
       '@orpc/contract': 1.13.5
       '@orpc/server': 1.13.5
-      zod: 4.3.6
+      zod: '>=3.25.0'
 
   '@oslojs/asn1@1.0.0':
     resolution: {integrity: sha512-zw/wn0sj0j0QKbIXfIlnEcTviaCzYOY3V5rAyjR6YtOByFtJiT574+8p9Wlach0lZH9fddD4yb9laEAIl4vXQA==}
@@ -6793,7 +6792,7 @@ packages:
     resolution: {integrity: sha512-MZOkL9++nY5PfkpWKBR3Rv+Oygxpb9S16ctv8h91GvrSif7UnNEdPMVZe3bUyMd2djxf0AtBk/csBixP0WwWZQ==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25.76 || ^4.1.8
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
@@ -9898,7 +9897,7 @@ packages:
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
-      zod: 4.3.6
+      zod: ^3.25 || ^4.0
     peerDependenciesMeta:
       ws:
         optional: true
@@ -11140,7 +11139,7 @@ packages:
       '@valibot/to-json-schema': ^1.1.0
       effect: ^3.14.2 || ^4.0.0
       valibot: ^1.1.0
-      zod: 4.3.6
+      zod: ^3.24.0 || ^4.0.0
     peerDependenciesMeta:
       '@orpc/server':
         optional: true
@@ -11165,7 +11164,7 @@ packages:
       '@valibot/to-json-schema': ^1.1.0
       effect: ^3.14.2 || ^4.0.0
       valibot: ^1.1.0
-      zod: 4.3.6
+      zod: ^3.24.0 || ^4.0.0
     peerDependenciesMeta:
       '@orpc/server':
         optional: true
@@ -11973,13 +11972,22 @@ packages:
   zod-to-json-schema@3.25.0:
     resolution: {integrity: sha512-HvWtU2UG41LALjajJrML6uQejQhNJx+JBO9IflpSja4R03iNWfKXrj6W2h7ljuLyc1nKS+9yDyL/9tD1U/yBnQ==}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25 || ^4
 
   zod-validation-error@4.0.2:
     resolution: {integrity: sha512-Q6/nZLe6jxuU80qb/4uJ4t5v2VEZ44lzQjPDhYJNztRQ4wyWc6VF3D3Kb/fAuPetZQnhS3hnajCf9CsWesghLQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: 4.3.6
+      zod: ^3.25.0 || ^4.0.0
+
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+
+  zod@4.1.12:
+    resolution: {integrity: sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==}
+
+  zod@4.1.8:
+    resolution: {integrity: sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ==}
 
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
@@ -12077,6 +12085,12 @@ snapshots:
       '@img/sharp-linuxmusl-arm64': 0.33.5
       '@img/sharp-linuxmusl-x64': 0.33.5
       '@img/sharp-win32-x64': 0.33.5
+
+  '@anthropic-ai/sdk@0.71.2(zod@4.1.12)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 4.1.12
 
   '@anthropic-ai/sdk@0.71.2(zod@4.3.6)':
     dependencies:
@@ -14360,6 +14374,11 @@ snapshots:
       miniflare: 4.20260205.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       wrangler: 4.64.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
+  '@hono/zod-validator@0.7.5(hono@4.11.3)(zod@4.1.12)':
+    dependencies:
+      hono: 4.11.3
+      zod: 4.1.12
+
   '@hono/zod-validator@0.7.5(hono@4.11.3)(zod@4.3.6)':
     dependencies:
       hono: 4.11.3
@@ -14806,10 +14825,42 @@ snapshots:
       '@mariozechner/clipboard-win32-arm64-msvc': 0.3.0
       '@mariozechner/clipboard-win32-x64-msvc': 0.3.0
 
+  '@mariozechner/pi-agent-core@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-tui': 0.42.0
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-agent-core@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)':
     dependencies:
       '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
       '@mariozechner/pi-tui': 0.42.0
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.71.2(zod@4.1.12)
+      '@google/genai': 1.34.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.47
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chalk: 5.6.2
+      openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      partial-json: 0.1.7
+      zod-to-json-schema: 3.25.0(zod@4.1.12)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -14830,6 +14881,30 @@ snapshots:
       openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
       partial-json: 0.1.7
       zod-to-json-schema: 3.25.0(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@mariozechner/clipboard': 0.3.0
+      '@mariozechner/pi-agent-core': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-ai': 0.42.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-tui': 0.42.0
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.2
+      file-type: 21.3.0
+      glob: 11.1.0
+      jiti: 2.6.1
+      marked: 15.0.12
+      minimatch: 10.1.1
+      proper-lockfile: 4.1.2
+      sharp: 0.34.5
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -14878,8 +14953,8 @@ snapshots:
 
   '@mistralai/mistralai@1.10.0':
     dependencies:
-      zod: 4.3.6
-      zod-to-json-schema: 3.25.0(zod@4.3.6)
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.0(zod@3.25.76)
 
   '@mjackson/node-fetch-server@0.2.0': {}
 
@@ -15172,7 +15247,7 @@ snapshots:
   '@opencode-ai/plugin@1.1.36':
     dependencies:
       '@opencode-ai/sdk': 1.1.36
-      zod: 4.3.6
+      zod: 4.1.8
 
   '@opencode-ai/sdk@1.1.18': {}
 
@@ -17800,7 +17875,7 @@ snapshots:
       recast: 0.23.11
       source-map: 0.7.6
       tsx: 4.21.0
-      zod: 4.3.6
+      zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
 
@@ -17819,7 +17894,7 @@ snapshots:
       babel-dead-code-elimination: 1.0.11
       chokidar: 3.6.0
       unplugin: 2.3.11
-      zod: 4.3.6
+      zod: 3.25.76
     optionalDependencies:
       '@tanstack/react-router': 1.147.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
@@ -17841,7 +17916,7 @@ snapshots:
       babel-dead-code-elimination: 1.0.11
       chokidar: 3.6.0
       unplugin: 2.3.11
-      zod: 4.3.6
+      zod: 3.25.76
     optionalDependencies:
       '@tanstack/react-router': 1.147.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       vite: 7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
@@ -17898,7 +17973,7 @@ snapshots:
       vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       vitefu: 1.1.1(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       xmlbuilder2: 4.0.3
-      zod: 4.3.6
+      zod: 3.25.76
     transitivePeerDependencies:
       - '@rsbuild/core'
       - '@tanstack/react-router'
@@ -20154,7 +20229,7 @@ snapshots:
       recast: 0.23.11
       safe-stringify: 1.2.0
       strip-ansi: 6.0.1
-      zod: 4.3.6
+      zod: 3.25.76
       zx: 8.8.5
     transitivePeerDependencies:
       - babel-plugin-macros
@@ -22288,6 +22363,11 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
+  openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
+    optionalDependencies:
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      zod: 4.1.12
+
   openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6):
     optionalDependencies:
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -23747,7 +23827,7 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
 
-  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
@@ -23756,7 +23836,7 @@ snapshots:
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
-      zod: 4.3.6
+      zod: 4.1.12
 
   trpc-cli@0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
     dependencies:
@@ -23769,7 +23849,7 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.3.6
 
-  trpc-cli@0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+  trpc-cli@0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
@@ -23778,7 +23858,18 @@ snapshots:
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.18
       valibot: 1.2.0(typescript@5.9.3)
-      zod: 4.3.6
+      zod: 3.25.76
+
+  trpc-cli@0.12.4(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.18)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+    dependencies:
+      commander: 14.0.2
+    optionalDependencies:
+      '@orpc/server': 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      effect: 3.19.18
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.1.12
 
   ts-algebra@2.0.0: {}
 
@@ -24687,6 +24778,14 @@ snapshots:
   zimmerframe@1.1.4:
     optional: true
 
+  zod-to-json-schema@3.25.0(zod@3.25.76):
+    dependencies:
+      zod: 3.25.76
+
+  zod-to-json-schema@3.25.0(zod@4.1.12):
+    dependencies:
+      zod: 4.1.12
+
   zod-to-json-schema@3.25.0(zod@4.3.6):
     dependencies:
       zod: 4.3.6
@@ -24694,6 +24793,12 @@ snapshots:
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
       zod: 4.3.6
+
+  zod@3.25.76: {}
+
+  zod@4.1.12: {}
+
+  zod@4.1.8: {}
 
   zod@4.3.6: {}
 
