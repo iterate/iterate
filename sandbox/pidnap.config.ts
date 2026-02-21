@@ -97,6 +97,17 @@ export default defineConfig({
       },
     },
     {
+      name: "events-service",
+      definition: {
+        command: "pnpm",
+        args: ["dev"],
+        cwd: `${iterateRepo}/services/events`,
+      },
+      options: {
+        restartPolicy: "always",
+      },
+    },
+    {
       name: "daemon-backend",
       definition: {
         command: "tsx",

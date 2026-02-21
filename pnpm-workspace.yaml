@@ -4,6 +4,7 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - services/*
   - sandbox
   - packages/*
   - packages/pidnap/docker
