@@ -43,6 +43,33 @@ testSlower("slow button fails when spinner times out", async ({ page }) => {
   expect(error.message).toMatch(/spinner was still visible after .*/i);
 });
 
+test("bails early when spinner disappears without expected element", async ({ page }) => {
+  // Override page content for this test: spinner shows for 2s then disappears with wrong result
+  await page.setContent(`
+    <button id="start" onclick="
+      document.querySelector('#result').textContent = 'processing...';
+      setTimeout(() => document.querySelector('#result').textContent = 'Failed: something went wrong', 2000);
+      setTimeout(() => document.querySelector('#result').textContent = 'success', 10_000); // should be too little, too late
+    ">start operation</button>
+    <div id="result"></div>
+  `);
+
+  spinnerWaiter.settings.enterWith({ spinnerTimeout: 30_000 });
+  await page.locator("#start").click();
+
+  const start = Date.now();
+  const error = await page
+    .locator("#result", { hasText: "success" })
+    .waitFor()
+    .catch((e: Error) => e);
+  const elapsed = Date.now() - start;
+
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toMatch(/Loading finished.*spinner disappeared/i);
+  // Should bail within ~10s (2s spinner + 3s grace + buffer), not wait full 30s
+  expect(elapsed).toBeLessThan(15_000);
+});
+
 function getTestPageHtml(slowMutationTimeout: number) {
   return `
     <head><title>Spinner Waiter Test</title></head>

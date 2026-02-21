@@ -5,7 +5,7 @@
 // before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { sql } from "drizzle-orm";
+import { sql, SQL } from "drizzle-orm";
 import { initTRPC, type AnyTRPCRouter, type AnyTRPCProcedure } from "@trpc/server";
 import { z } from "zod/v4";
 import { logger } from "../tag-logger.ts";
@@ -22,7 +22,7 @@ export const outboxALS = new AsyncLocalStorage<OutboxCausation>();
 
 // Minimal DB interface - just needs to run raw SQL via drizzle's execute
 
-type RawQueryResult = { rows: any[]; rowCount: number };
+type RawQueryResult<T> = { rows: T[]; rowCount: number };
 
 export const ConsumerEvent = z.object({
   event_name: z.string(),
@@ -134,14 +134,20 @@ export interface Queuer<DBConnection> {
 }
 
 /** Helper to normalize drizzle execute results (postgres.js returns array-like, we need .rows/.rowCount) */
-function normalizeResult(result: unknown): RawQueryResult {
+function normalizeResult<T>(result: unknown): RawQueryResult<T> {
   // postgres.js via drizzle returns the rows array directly with additional properties
   if (Array.isArray(result)) {
     return { rows: [...result], rowCount: result.length };
   }
-  const r = result as RawQueryResult;
+  const r = result as RawQueryResult<T>;
   return { rows: r.rows ?? [], rowCount: r.rowCount ?? 0 };
 }
+
+const getExec = <D extends DBLike>(db: D) => {
+  const exec = async <T>(sql: SQL<T>) => normalizeResult<T>(await db.execute(sql));
+  const rows = async <T>(sql: SQL<T>) => (await exec(sql)).rows;
+  return Object.assign(exec, { rows });
+};
 
 export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DBLike> => {
   const { queueName } = queueOptions;
@@ -160,7 +166,8 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
   };
 
   const processQueue: Queuer<DBLike>["processQueue"] = async (db) => {
-    const raw = await db.execute(
+    const exec = getExec(db);
+    const jobQueueMessages = await exec(
       sql`
         select * from pgmq.read(
           queue_name => ${queueName}::text,
@@ -169,7 +176,6 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         )
       `,
     );
-    const jobQueueMessages = normalizeResult(raw);
     if (jobQueueMessages.rowCount)
       logger.info(`[outbox] processing ${jobQueueMessages.rowCount} messages`);
     const results: Array<string | void> = [];
@@ -193,7 +199,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         }
         logger.info(`[outbox] START msg_id=${job.msg_id} consumer=${consumer.name}`);
         if (consumer.visibilityTimeout) {
-          await db.execute(sql`
+          await exec(sql`
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
@@ -218,7 +224,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           }),
         );
         results.push(result);
-        const [updated]: Array<typeof job> = await db.execute(sql`
+        const [updated] = await exec.rows(sql<typeof job>`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
           set message = jsonb_set(
             message,
@@ -228,7 +234,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           where msg_id = ${job.msg_id}::bigint
           returning *
         `);
-        await db.execute(sql`
+        await exec(sql`
           select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
         `);
         emit("statusChange", { job: updated });
@@ -250,7 +256,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
         const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
 
-        const [updated]: Array<typeof job> = await db.execute(sql`
+        const [updated] = await exec.rows(sql<typeof job>`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
           set message = jsonb_set(
             message,
@@ -258,21 +264,20 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             message->'processing_results' || jsonb_build_array(${`#${job.read_ct} error: ${String(e)}. ${retryMessage}`}::text)
           ) || ${statusObj}::jsonb
           where msg_id = ${job.msg_id}::bigint
+          returning *
         `);
         const eventData: QueuerEvent = { job: updated, error: String(e) };
         if (!retry.retry) {
           logger.warn(
             `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,
           );
-          const archived = normalizeResult(
-            await db.execute(sql`
-              select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
-            `),
-          );
+          const archived = await exec(sql`
+            select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
+          `);
           if (!archived.rows[0]) throw new Error(`Failed to archive message ${job.msg_id}`);
         } else {
           logger.info(`[outbox] Setting msg_id=${job.msg_id} to visible in ${retry.delay}`);
-          await db.execute(sql`
+          await exec(sql`
             select pgmq.set_vt(
               queue_name => ${queueName}::text,
               msg_id => ${job.msg_id}::bigint,
@@ -296,13 +301,12 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     logger.info(`[outbox] adding to pgmq:${params.name}`);
     const causation = outboxALS.getStore();
     const context = causation ? { causedBy: causation } : {};
-    const insertResult = normalizeResult(
-      await db.execute(sql`
-        insert into outbox_event (name, payload, context)
-        values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
-        returning id
-      `),
-    );
+    const exec = getExec(db);
+    const insertResult = await exec(sql<typeof InsertedEvent>`
+      insert into outbox_event (name, payload, context)
+      values (${params.name}, ${JSON.stringify(params.payload)}, ${JSON.stringify(context)}::jsonb)
+      returning id
+    `);
     const eventInsertion = InsertedEvent.parse(insertResult.rows[0]);
 
     const consumersForPath = Object.values(consumers[`eventName:${params.name}`] || {});
@@ -316,7 +320,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     for (const consumer of filteredConsumers) {
       const delay = consumer.delay({ payload: params.payload });
       delays.push(delay);
-      await db.execute(sql`
+      await exec(sql`
         select from pgmq.send(
           queue_name  => ${queueName}::text,
           msg         => ${JSON.stringify({
@@ -342,27 +346,25 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     enqueue,
     processQueue: (db) => processQueue(db),
     peekQueue: async (db, options = {}) => {
-      const result = normalizeResult(
-        await db.execute(sql`
-          select * from pgmq.${sql.identifier(pgmqQueueTableName)}
-          where read_ct >= ${options.minReadCount || 0}
-          order by enqueued_at desc
-          limit ${options.limit || 10}
-          offset ${options.offset || 0}
-        `),
-      );
+      const exec = getExec(db);
+      const result = await exec(sql`
+        select * from pgmq.${sql.identifier(pgmqQueueTableName)}
+        where read_ct >= ${options.minReadCount || 0}
+        order by enqueued_at desc
+        limit ${options.limit || 10}
+        offset ${options.offset || 0}
+      `);
       return ConsumerJobQueueMessage.array().parse(result.rows);
     },
     peekArchive: async (db, options = {}) => {
-      const result = normalizeResult(
-        await db.execute(sql`
-          select * from pgmq.${sql.identifier(pgmqArchiveTableName)}
-          where read_ct >= ${options.minReadCount || 0}
-          order by archived_at desc
-          limit ${options.limit || 10}
-          offset ${options.offset || 0}
-        `),
-      );
+      const exec = getExec(db);
+      const result = await exec(sql`
+        select * from pgmq.${sql.identifier(pgmqArchiveTableName)}
+        where read_ct >= ${options.minReadCount || 0}
+        order by archived_at desc
+        limit ${options.limit || 10}
+        offset ${options.offset || 0}
+      `);
       return ConsumerJobQueueMessage.array().parse(result.rows);
     },
     on: (event, listener) => {

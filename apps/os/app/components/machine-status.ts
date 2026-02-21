@@ -56,5 +56,5 @@ export function getMachineStatus(
     return { loading: true, label: `${current}. Running ${consumerLabel}...` };
   }
 
-  return { label: `Status: ${current}. Waiting...`, loading: true };
+  return { label: `Status: ${current}. Waiting for daemon...`, loading: true };
 }
