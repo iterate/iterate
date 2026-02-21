@@ -2,6 +2,7 @@
  * Machine setup service — resolves env vars and repos for a machine,
  * then pushes them to the daemon via tool.writeFile and tool.execCommand.
  */
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
@@ -174,19 +175,19 @@ export async function pushSetupToMachine(
   const transport = await buildDaemonTransport(machine, env);
   const client = createDaemonClient(transport);
 
-  // Read existing env file — if content matches, setup was already pushed.
-  // Skip the entire push (env write + repo clones) to avoid:
-  // 1. Triggering a pidnap restart from an identical .env write
-  // 2. git clone failing because the target directories already exist
-  const existing = await client.tool.readFile.query({ path: "~/.iterate/.env" });
-  if (existing.exists && existing.content === envFileContent) {
-    logger.info("[machine-setup] .env already up to date, skipping setup push", {
+  // Idempotency: hash the full setup intent (env content + repo list) and write a
+  // sentinel file at the end. On retry, if the sentinel matches, skip everything.
+  const setupFingerprint = hashSetupIntent(envFileContent, repos);
+  const sentinelPath = "~/.iterate/.setup-done";
+  const existingSentinel = await client.tool.readFile.query({ path: sentinelPath });
+  if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
+    logger.info("[machine-setup] Setup already completed (sentinel matches), skipping", {
       machineId: machine.id,
     });
     return;
   }
 
-  // Write env file
+  // Write env file first so pidnap picks up env vars immediately
   logger.info("[machine-setup] Writing .env to machine", {
     machineId: machine.id,
     contentLength: envFileContent.length,
@@ -197,7 +198,7 @@ export async function pushSetupToMachine(
     mode: 0o600,
   });
 
-  // Clone repos
+  // Clone repos — skip already-cloned dirs so retries after partial failure work
   for (const repo of repos) {
     logger.info("[machine-setup] Cloning repo on machine", {
       machineId: machine.id,
@@ -210,6 +211,20 @@ export async function pushSetupToMachine(
     await client.tool.execCommand.mutate({
       command: ["mkdir", "-p", parentDir],
     });
+
+    // Skip if already cloned (retry-safe)
+    const dirCheck = await client.tool.execCommand
+      .mutate({ command: ["test", "-d", `${repo.path}/.git`] })
+      .then((r) => r.exitCode === 0)
+      .catch(() => false);
+
+    if (dirCheck) {
+      logger.info("[machine-setup] Repo already cloned, skipping", {
+        machineId: machine.id,
+        repo: `${repo.owner}/${repo.name}`,
+      });
+      continue;
+    }
 
     // Clone — try with branch first, fall back to default
     try {
@@ -229,6 +244,14 @@ export async function pushSetupToMachine(
       });
     }
   }
+
+  // Write sentinel file last — marks the full setup as complete.
+  // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
+  await client.tool.writeFile.mutate({
+    path: sentinelPath,
+    content: setupFingerprint,
+    mode: 0o600,
+  });
 
   logger.info("[machine-setup] Setup push complete", {
     machineId: machine.id,
@@ -291,4 +314,14 @@ export async function pushEnvToRunningMachines(
       }
     }),
   );
+}
+
+/** Hash the full setup intent (env content + sorted repo paths) into a short fingerprint. */
+function hashSetupIntent(envFileContent: string, repos: RepoInfo[]): string {
+  const repoPaths = repos.map((r) => r.path).sort();
+  return createHash("sha256")
+    .update(envFileContent)
+    .update(repoPaths.join("\n"))
+    .digest("hex")
+    .slice(0, 16);
 }

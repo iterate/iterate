@@ -121,7 +121,7 @@ export const toolsRouter = createTRPCRouter({
       z.object({
         path: z.string().describe("File path to write. ~ is resolved to the home directory."),
         content: z.string().describe("File content to write"),
-        mode: z.number().optional().describe("File permissions mode (default: 0o644)"),
+        mode: z.number().optional().describe("File permissions mode"),
       }),
     )
     .mutation(async ({ input }) => {
@@ -129,7 +129,7 @@ export const toolsRouter = createTRPCRouter({
         ? path.join(homedir(), input.path.slice(1))
         : input.path;
       await mkdir(path.dirname(resolvedPath), { recursive: true });
-      await writeFile(resolvedPath, input.content, { mode: input.mode ?? 0o644 });
+      await writeFile(resolvedPath, input.content, input.mode ? { mode: input.mode } : undefined);
       return { path: resolvedPath, bytesWritten: Buffer.byteLength(input.content) };
     }),
 

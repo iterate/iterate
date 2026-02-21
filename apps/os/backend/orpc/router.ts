@@ -7,6 +7,7 @@ import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { parseTokenIdFromApiKey } from "../egress-proxy/api-key-utils.ts";
+import { decrypt } from "../utils/encryption.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import type { CloudflareEnv } from "../../env.ts";
 import { outboxClient } from "../outbox/client.ts";
@@ -66,6 +67,13 @@ async function authenticateApiKey(
   if (accessToken.revokedAt) {
     logger.warn("Access token revoked", { tokenId });
     throw new ORPCError("UNAUTHORIZED", { message: "Token has been revoked" });
+  }
+
+  // Decrypt the stored token and compare with the provided API key
+  const storedToken = await decrypt(accessToken.encryptedToken);
+  if (apiKey !== storedToken) {
+    logger.warn("Invalid API key for token", { tokenId });
+    throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
   }
 
   const machine = await db.query.machine.findFirst({

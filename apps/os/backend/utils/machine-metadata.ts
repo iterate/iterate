@@ -82,6 +82,7 @@ export type MachineLastEvent = {
 /** Consumer names that are relevant for UI status derivation. */
 const MACHINE_CONSUMER_NAMES = [
   "provisionMachine",
+  "pushMachineSetup",
   "sendReadinessProbe",
   "pollProbeResponse",
   "activateMachine",

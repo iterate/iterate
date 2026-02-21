@@ -115,10 +115,25 @@ export async function pollForProbeAnswer(
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
 
-    const response = await fetcher(url, {
-      method: "GET",
-      signal: AbortSignal.timeout(10_000),
-    });
+    let response: Response;
+    try {
+      response = await fetcher(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      // Network/timeout error — transient, keep polling
+      continue;
+    }
+
+    if ([500, 502, 503, 504, 404].includes(response.status)) {
+      // Transient HTTP error (5xx, etc.) — keep polling, services may still be restarting
+      logger.info("[readiness-probe] Poll got non-OK response", {
+        status: response.status,
+        threadId,
+      });
+      continue;
+    }
 
     if (!response.ok) {
       throw new Error(`Got ${response.status} from ${response.url}`);
