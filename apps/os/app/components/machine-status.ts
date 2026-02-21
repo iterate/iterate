@@ -26,7 +26,7 @@ export function getMachineStatus(
     createdAt: Date;
   } | null,
   consumers: ConsumerInfo[] = [],
-): { label: string; loading: boolean } {
+): { label: string; loading: boolean; errored?: boolean } {
   if (state === "active" || state === "archived" || state === "detached") {
     return { label: properCase(state), loading: false };
   }
@@ -45,7 +45,7 @@ export function getMachineStatus(
     const consumerLabel = properCase(top.name).toLowerCase();
 
     if (top.status === "failed") {
-      return { loading: false, label: `Failed: ${consumerLabel}` };
+      return { loading: false, label: `Failed: ${consumerLabel}`, errored: true };
     }
     if (top.status === "retrying") {
       return {

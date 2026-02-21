@@ -12,10 +12,13 @@ interface DaemonStatusProps {
 }
 
 export function DaemonStatus({ state, lastEvent, consumers = [] }: DaemonStatusProps) {
-  const { label, loading } = getMachineStatus(state, lastEvent, consumers);
+  const { label, loading, errored } = getMachineStatus(state, lastEvent, consumers);
 
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+    <span
+      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+      {...(errored && { "data-type": "error" })}
+    >
       {loading && <Spinner className="size-3" />}
       {label}
     </span>

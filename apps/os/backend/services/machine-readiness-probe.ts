@@ -5,7 +5,7 @@ import type * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
 export const PROBE_THREAD_ID = "__readiness-probe__";
-const PROBE_TEXT = "What is one plus four? Reply with just the answer, nothing else.";
+const PROBE_TEXT = "What is one plus two? Reply with just the answer, nothing else.";
 const EXPECTED_ANSWER = /3|three/i;
 const POLL_INTERVAL_MS = 3_000;
 const SEND_RETRY_INTERVAL_MS = 3_000;

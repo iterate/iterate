@@ -5,7 +5,7 @@ import { spinnerWaiter } from "./index.ts";
 const test = base.extend<{ slowMutationTimeout: number }>({
   slowMutationTimeout: 2000,
   page: async ({ page, slowMutationTimeout }, use, testInfo) => {
-    await using _page = await addPlugins(page, testInfo, [spinnerWaiter()]);
+    await using _page = await addPlugins({ page, testInfo, plugins: [spinnerWaiter()] });
     await _page.setContent(getTestPageHtml(slowMutationTimeout));
     await use(_page);
   },
