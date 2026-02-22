@@ -8,7 +8,7 @@ Runs as a thin bootstrapper that:
 
 1. Resolves an `iterate/iterate` checkout.
 2. Clones/install deps when needed.
-3. Loads `apps/os/backend/trpc/root.ts` from that checkout.
+3. Loads `apps/os/backend/orpc/root.ts` from that checkout.
 4. Exposes commands like `iterate os ...` and `iterate whoami`.
 
 ## Requirements
@@ -92,7 +92,7 @@ Merge precedence is shallow:
 1. `ITERATE_REPO_DIR`
 2. `workspaces[process.cwd()].repoPath`
 3. `global.repoPath`
-4. nearest parent directory containing `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/trpc/root.ts`
+4. nearest parent directory containing `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/orpc/root.ts`
 5. default managed checkout path `${XDG_DATA_HOME:-~/.local/share}/iterate/repo`
 
 `repoPath` shortcuts in `setup`:

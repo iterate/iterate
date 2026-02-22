@@ -53,7 +53,7 @@ function getCronAgentPath(agentPathSegment: string): string {
   return `/cron/${agentPathSegment}`;
 }
 
-/** Check whether an active agent exists via tRPC. */
+/** Check whether an active agent exists via oRPC. */
 async function agentExists(agentPath: string): Promise<boolean> {
   const agent = await createRouterClient(daemonRouter, { context: {} }).getAgent({
     path: agentPath,

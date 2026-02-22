@@ -21,7 +21,7 @@ Skip signup: request OTP to any `+test@nustom.com` email, enter `424242` as OTP.
 
 Prefer alternatives:
 
-- **Data fetching**: Use `useSuspenseQuery` with tRPC
+- **Data fetching**: Use `useSuspenseQuery` with oRPC
 - **Derived state**: Compute during render
 - **Event responses**: Handle in event handlers
 - **Reset state**: Use a key prop
@@ -34,14 +34,14 @@ useEffect IS appropriate for:
 
 **Never use useEffect for data fetching.**
 
-### Data Fetching with tRPC
+### Data Fetching with oRPC
 
 Always use `useSuspenseQuery` with proper Suspense boundaries:
 
 ```tsx
 const { data } = useSuspenseQuery(
-  trpc.agent.conversation.getConversation.queryOptions({
-    conversationId: "123",
+  orpc.agent.conversation.getConversation.queryOptions({
+    input: { conversationId: "123" },
   }),
 );
 ```

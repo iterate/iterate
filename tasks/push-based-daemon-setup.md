@@ -14,7 +14,7 @@ Daemon does too much on startup: reports ready, pulls env vars via `getEnv`, app
 
 **Daemon:** starts listening, reports "ready", done. Tiny, fast, dumb.
 
-**OS:** reacts to "daemon is ready" by pushing setup data via new tRPC procedures (`tool.writeFile`, `tool.execCommand`).
+**OS:** reacts to "daemon is ready" by pushing setup data via new oRPC procedures (`tool.writeFile`, `tool.execCommand`).
 
 ## Daemon changes
 
@@ -54,7 +54,7 @@ In `outbox/client.ts`.
 
 On `machine:daemon-status-reported`, guarded `status === "ready" && externalId`.
 
-- Build daemon tRPC client
+- Build daemon oRPC client
 - Generate `.env` content on OS side (port `buildProxyAndCaLines` + dotenv formatting from daemon)
 - Call `tool.writeFile({ path: "~/.iterate/.env", content, mode: 0o600 })`
 - For each repo: `tool.execCommand({ command: ["git", "clone", "--branch", branch, "--single-branch", url, path] })`

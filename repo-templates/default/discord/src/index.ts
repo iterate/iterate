@@ -189,7 +189,7 @@ async function resolveConversationThread(
 
 async function ensureAgentSubscription(agentPath: string): Promise<boolean> {
   const createResult = await postDaemonJson<{ result: { data: { wasNewlyCreated: boolean } } }>(
-    "/api/trpc/daemon.getOrCreateAgent",
+    "/api/orpc/daemon/getOrCreateAgent",
     {
       agentPath,
       createWithEvents: [],
@@ -198,7 +198,7 @@ async function ensureAgentSubscription(agentPath: string): Promise<boolean> {
 
   console.log("[discord] created agent", createResult);
 
-  await postDaemonJson<unknown>("/api/trpc/daemon.subscribeToAgentChanges", {
+  await postDaemonJson<unknown>("/api/orpc/daemon/subscribeToAgentChanges", {
     agentPath,
     callbackUrl: new URL("/state-changed-callback", PUBLIC_BASE_URL).toString(),
   });

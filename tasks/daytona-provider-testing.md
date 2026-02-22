@@ -21,7 +21,7 @@ Validate that sandbox integration tests work against Daytona provider, not just 
    - Daytona-only timeout-heavy tests increased to avoid false negatives from remote startup latency.
 3. Review comments closed:
    - Docker Zod v4 default bug fixed (`DOCKER_HOST_SYNC_ENABLED` now `optional().transform(...)`).
-   - Daemon client helper now supports typed generic return (no untyped `createTRPCClient` usage at callsite).
+   - Daemon client helper now supports typed generic return (no untyped oRPC client usage at callsite).
    - Fly shared-egress test now cleanly skips when `FLY_API_TOKEN` is not present.
 4. Dependency boundary docs clarified in `sandbox/README.md`:
    - one-way dependency flow documented explicitly.
