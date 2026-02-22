@@ -10,6 +10,7 @@ import Replicate from "replicate";
 import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
+import { ORPCError } from "@orpc/server";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
 
 function getWebchatClient() {
@@ -206,7 +207,7 @@ export const toolsRouter = {
     )
     .handler(async ({ input }) => {
       const cwd = input.cwd || process.cwd();
-      const generatedDir = path.join(cwd, "_generated");
+      const generatedDir = path.join(cwd, "_generated.ignoreme");
       const filename = input.filename || `${new Date().toISOString().replaceAll(":", ".")}.ts`;
       const filepath = path.join(generatedDir, filename);
       await mkdir(path.dirname(filepath), { recursive: true });
@@ -252,7 +253,9 @@ export const toolsRouter = {
           nodeOptions: { cwd },
         });
         if (result.exitCode !== 0) {
-          throw new Error(`Typecheck failed: ${result.stdout + result.stderr}`);
+          throw new ORPCError("BAD_REQUEST", {
+            message: `Typecheck failed:\n${(result.stdout + result.stderr).trim()}`,
+          });
         }
       }
 
@@ -306,7 +309,14 @@ export const toolsRouter = {
       // function body so getters only fire when user code actually references them.
       const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-      const execute = new AsyncFunction(...clientNames, "require", "console", input.code);
+      let execute: (...args: unknown[]) => Promise<unknown>;
+      try {
+        execute = new AsyncFunction(...clientNames, "require", "console", input.code);
+      } catch (e) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
       // Build lazy proxies: each is a thin wrapper that defers to the real client
       // only on first property access, so missing env vars don't blow up if unused.
       const lazyArgs = clientNames.map(
@@ -338,58 +348,61 @@ export const toolsRouter = {
       return result;
     }),
 
-  printenv: publicProcedure.input(z.object({}).optional()).handler(() => {
-    const envFilePath = path.join(homedir(), ".iterate/.env");
-    let content: string;
-    try {
-      content = readFileSync(envFilePath, "utf-8");
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
-        activeEnvVars: [],
-        recommendedEnvVars: [],
-      };
-    }
-
-    const lines = content.split("\n");
-    type EnvVar = { name: string; description?: string };
-    const activeEnvVars: EnvVar[] = [];
-    const recommendedEnvVars: EnvVar[] = [];
-
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index]?.trim();
-      if (!line) {
-        continue;
+  printenv: publicProcedure
+    .meta({ description: "List environment variables from ~/.iterate/.env" })
+    .input(z.object({}).optional())
+    .handler(() => {
+      const envFilePath = path.join(homedir(), ".iterate/.env");
+      let content: string;
+      try {
+        content = readFileSync(envFilePath, "utf-8");
+      } catch (error) {
+        return {
+          success: false,
+          error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
+          activeEnvVars: [],
+          recommendedEnvVars: [],
+        };
       }
 
-      const getDescription = (): string | undefined => {
-        if (index > 0) {
-          const previous = lines[index - 1]?.trim();
-          if (previous?.startsWith("#") && !previous.startsWith("#[")) {
-            return previous.replace(/^#\s*/, "");
-          }
+      const lines = content.split("\n");
+      type EnvVar = { name: string; description?: string };
+      const activeEnvVars: EnvVar[] = [];
+      const recommendedEnvVars: EnvVar[] = [];
+
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index]?.trim();
+        if (!line) {
+          continue;
         }
-        return undefined;
+
+        const getDescription = (): string | undefined => {
+          if (index > 0) {
+            const previous = lines[index - 1]?.trim();
+            if (previous?.startsWith("#") && !previous.startsWith("#[")) {
+              return previous.replace(/^#\s*/, "");
+            }
+          }
+          return undefined;
+        };
+
+        const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
+        if (recommendedMatch) {
+          recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
+          continue;
+        }
+
+        const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
+        if (activeMatch) {
+          activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
+        }
+      }
+
+      return {
+        success: true,
+        activeEnvVars,
+        recommendedEnvVars,
+        envFilePath,
       };
-
-      const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
-      if (recommendedMatch) {
-        recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
-        continue;
-      }
-
-      const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
-      if (activeMatch) {
-        activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
-      }
-    }
-
-    return {
-      success: true,
-      activeEnvVars,
-      recommendedEnvVars,
-      envFilePath,
-    };
-  }),
+    }),
 };

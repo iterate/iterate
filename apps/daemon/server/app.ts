@@ -3,7 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { parseRouter } from "trpc-cli";
 import { RPCHandler } from "@orpc/server/fetch";
-import { onError } from "@orpc/server";
+import { onError, ORPCError } from "@orpc/server";
 import { propagation, context, type TextMapGetter } from "@opentelemetry/api";
 import { getOtelConfig } from "./utils/otel-init.ts";
 import { logEmitterStorage } from "./orpc/init.ts";
@@ -98,6 +98,26 @@ const orpcHandler = new RPCHandler(appRouter, {
         console.error(message, errorDetails);
       } else {
         console.warn(message, errorDetails);
+      }
+    }),
+  ],
+  // The daemon is a local-only service, so expose full error details to callers.
+  // clientInterceptors run around procedure execution, BEFORE oRPC wraps errors
+  // into redacted INTERNAL_SERVER_ERROR. Re-throwing as a defined ORPCError here
+  // means the outer handler's toORPCError() pass-through keeps our message intact.
+  clientInterceptors: [
+    onError((error) => {
+      if (error instanceof ORPCError) {
+        throw new ORPCError(error.code, {
+          status: error.status,
+          message: String(error.cause || error),
+          cause: error.cause,
+        });
+      } else {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: String(error),
+          cause: error,
+        });
       }
     }),
   ],
