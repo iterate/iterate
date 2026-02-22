@@ -1,7 +1,11 @@
 import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
+import { ORPCError } from "@orpc/server";
+import {
+  projectProtectedProcedure,
+  projectProtectedMutation,
+  ProjectInput,
+} from "../procedures.ts";
 import { projectEnvVar, secret } from "../../db/schema.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import { waitUntil } from "../../../env.ts";
@@ -9,17 +13,20 @@ import { logger } from "../../tag-logger.ts";
 import { getUnifiedEnvVars } from "../../utils/env-vars.ts";
 import { parseMagicString } from "../../egress-proxy/egress-proxy.ts";
 
-export const envVarRouter = router({
+export const envVarRouter = {
   /**
    * List all environment variables for a project.
    * Returns a unified list including global vars, connection vars, user-defined vars,
    * and recommended vars (user-scoped secrets like Google OAuth).
    */
-  list: projectProtectedProcedure.query(({ ctx }) => getUnifiedEnvVars(ctx.db, ctx.project.id)),
+  list: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(({ context: ctx }) => getUnifiedEnvVars(ctx.db, ctx.project.id)),
 
   set: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         key: z
           .string()
           .min(1)
@@ -34,7 +41,7 @@ export const envVarRouter = router({
         machineId: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // TODO: remove machineId support entirely
       const existing = await ctx.db.query.projectEnvVar.findFirst({
         where: and(
@@ -81,8 +88,7 @@ export const envVarRouter = router({
         .returning();
 
       if (!created) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: "Failed to create environment variable",
         });
       }
@@ -108,12 +114,13 @@ export const envVarRouter = router({
   delete: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         key: z.string(),
         // TODO: remove machineId - we're no longer supporting machine-specific env vars
         machineId: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // TODO: remove machineId support entirely
       const existing = await ctx.db.query.projectEnvVar.findFirst({
         where: and(
@@ -124,15 +131,11 @@ export const envVarRouter = router({
       });
 
       if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Environment variable not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Environment variable not found" });
       }
 
       if (existing.type === "system") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "System environment variables cannot be deleted manually",
         });
       }
@@ -161,4 +164,4 @@ export const envVarRouter = router({
 
       return { success: true };
     }),
-});
+};

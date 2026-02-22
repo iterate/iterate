@@ -2,7 +2,7 @@ import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-ro
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useMemo } from "react";
 import { Spinner } from "../../components/ui/spinner.tsx";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
@@ -17,8 +17,10 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
   // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
-      trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
+      orpc.organization.withProjects.queryOptions({
+        input: {
+          organizationSlug: params.organizationSlug,
+        },
       }),
     );
 
@@ -29,7 +31,7 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug")({
 
   // loader: Prefetch data (non-blocking, shows spinner if not ready)
   loader: ({ context }) => {
-    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+    context.queryClient.prefetchQuery(orpc.user.myOrganizations.queryOptions());
   },
 
   component: OrgLayout,
@@ -40,11 +42,13 @@ function OrgLayout() {
   const { user } = useSessionUser();
   const [headerActions, setHeaderActions] = useHeaderActions();
 
-  const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
+  const { data: organizations } = useSuspenseQuery(orpc.user.myOrganizations.queryOptions());
 
   const { data: currentOrg } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.withProjects.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 

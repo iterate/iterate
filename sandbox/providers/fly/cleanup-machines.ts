@@ -1,4 +1,4 @@
-import { initTRPC } from "@trpc/server";
+import { os } from "@orpc/server";
 import { createCli } from "trpc-cli";
 import { z } from "zod/v4";
 
@@ -188,10 +188,8 @@ async function listAppNamesByPrefix(params: {
   return appNames;
 }
 
-const t = initTRPC.create();
-
-const router = t.router({
-  cleanup: t.procedure
+const router = {
+  cleanup: os
     .meta({ description: "Stop or delete idle Fly machines for a given prefix", default: true })
     .input(
       z.object({
@@ -212,7 +210,7 @@ const router = t.router({
         iAmTotallySure: z.boolean().optional().meta({ hidden: true }),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const env = FlyEnv.parse(process.env);
       const token = resolveFlyToken(env);
       if (!token) {
@@ -313,6 +311,6 @@ const router = t.router({
 
       return `done: stopped=${stoppedCount} deleted=${deletedCount} deletedApps=${deletedApps} skipped=${skippedCount}`;
     }),
-});
+};
 
 createCli({ router }).run();

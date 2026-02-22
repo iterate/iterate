@@ -1,8 +1,12 @@
 import { z } from "zod/v4";
 import { and, eq, isNull, or } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import { typeid } from "typeid-js";
-import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
+import {
+  projectProtectedProcedure,
+  projectProtectedMutation,
+  ProjectInput,
+} from "../procedures.ts";
 import { secret } from "../../db/schema.ts";
 import { encryptWithSecret } from "../../utils/encryption-core.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
@@ -10,44 +14,47 @@ import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 import { secretKeyToEnvVar } from "../../utils/env-vars.ts";
 
-export const secretRouter = router({
-  listProjectSecrets: projectProtectedProcedure.query(async ({ ctx }) => {
-    // Fetch secrets for project scope and global scope
-    // Global: all scope fields are null
-    // Project: projectId matches current project
-    const secrets = await ctx.db.query.secret.findMany({
-      where: or(
-        // Global secrets (all scope fields null)
-        and(isNull(secret.organizationId), isNull(secret.projectId), isNull(secret.userId)),
-        // Project secrets
-        eq(secret.projectId, ctx.project.id),
-      ),
-      orderBy: (secrets, { asc }) => [asc(secrets.key)],
-    });
+export const secretRouter = {
+  listProjectSecrets: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      // Fetch secrets for project scope and global scope
+      // Global: all scope fields are null
+      // Project: projectId matches current project
+      const secrets = await ctx.db.query.secret.findMany({
+        where: or(
+          // Global secrets (all scope fields null)
+          and(isNull(secret.organizationId), isNull(secret.projectId), isNull(secret.userId)),
+          // Project secrets
+          eq(secret.projectId, ctx.project.id),
+        ),
+        orderBy: (secrets, { asc }) => [asc(secrets.key)],
+      });
 
-    // Transform to frontend format
-    return secrets.map((s) => ({
-      id: s.id,
-      key: s.key,
-      description: s.description,
-      egressProxyRule: s.egressProxyRule,
-      isGlobal: s.organizationId === null && s.projectId === null && s.userId === null,
-      scope: s.projectId
-        ? "project"
-        : s.organizationId
-          ? "organization"
-          : s.userId
-            ? "user"
-            : "global",
-      recommendedEnvVar: secretKeyToEnvVar(s.key),
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-    }));
-  }),
+      // Transform to frontend format
+      return secrets.map((s) => ({
+        id: s.id,
+        key: s.key,
+        description: s.description,
+        egressProxyRule: s.egressProxyRule,
+        isGlobal: s.organizationId === null && s.projectId === null && s.userId === null,
+        scope: s.projectId
+          ? "project"
+          : s.organizationId
+            ? "organization"
+            : s.userId
+              ? "user"
+              : "global",
+        recommendedEnvVar: secretKeyToEnvVar(s.key),
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+      }));
+    }),
 
   create: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         key: z
           .string()
           .min(1)
@@ -60,11 +67,10 @@ export const secretRouter = router({
         description: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const encryptionSecret = ctx.env.ENCRYPTION_SECRET;
       if (!encryptionSecret) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: "Encryption secret not configured",
         });
       }
@@ -75,8 +81,7 @@ export const secretRouter = router({
       });
 
       if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
+        throw new ORPCError("CONFLICT", {
           message: "A secret with this key already exists in this project",
         });
       }
@@ -98,10 +103,7 @@ export const secretRouter = router({
         .returning();
 
       if (!created) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create secret",
-        });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create secret" });
       }
 
       // Poke running machines to refresh their env vars
@@ -125,35 +127,29 @@ export const secretRouter = router({
   update: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         id: z.string(),
         value: z.string().min(1).optional(),
         description: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Verify the secret exists and belongs to this project
       const existing = await ctx.db.query.secret.findFirst({
         where: eq(secret.id, input.id),
       });
 
       if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Secret not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Secret not found" });
       }
 
       // Prevent editing global secrets
       if (!existing.projectId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Global secrets cannot be edited",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Global secrets cannot be edited" });
       }
 
       if (existing.projectId !== ctx.project.id) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "You don't have permission to edit this secret",
         });
       }
@@ -169,8 +165,7 @@ export const secretRouter = router({
       if (input.value) {
         const encryptionSecret = ctx.env.ENCRYPTION_SECRET;
         if (!encryptionSecret) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: "Encryption secret not configured",
           });
         }
@@ -208,27 +203,24 @@ export const secretRouter = router({
   updateByKey: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         key: z.string(),
         value: z.string().min(1),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Find the secret by key for this project
       const existing = await ctx.db.query.secret.findFirst({
         where: and(eq(secret.projectId, ctx.project.id), eq(secret.key, input.key)),
       });
 
       if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Secret not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Secret not found" });
       }
 
       const encryptionSecret = ctx.env.ENCRYPTION_SECRET;
       if (!encryptionSecret) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: "Encryption secret not configured",
         });
       }
@@ -258,33 +250,27 @@ export const secretRouter = router({
   delete: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         id: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Verify the secret exists and belongs to this project
       const existing = await ctx.db.query.secret.findFirst({
         where: eq(secret.id, input.id),
       });
 
       if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Secret not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Secret not found" });
       }
 
       // Prevent deleting global secrets
       if (!existing.projectId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Global secrets cannot be deleted",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Global secrets cannot be deleted" });
       }
 
       if (existing.projectId !== ctx.project.id) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "You don't have permission to delete this secret",
         });
       }
@@ -300,4 +286,4 @@ export const secretRouter = router({
 
       return { success: true };
     }),
-});
+};

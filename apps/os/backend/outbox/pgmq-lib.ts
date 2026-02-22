@@ -1,12 +1,12 @@
 // outbox "library" implementation using pgmq. it could be split out into a separate package some day.
-// it also has a trpc plugin for easily registering consumers and sending events from procedures.
+// it also has an oRPC middleware for easily registering consumers and sending events from procedures.
 // before splitting out we'd probably want to abstract out things like drizzle first
 
 // before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sql, SQL } from "drizzle-orm";
-import { initTRPC, type AnyTRPCRouter, type AnyTRPCProcedure } from "@trpc/server";
+import { os, type Procedure, type InferSchemaInput, type InferSchemaOutput } from "@orpc/server";
 import { z } from "zod/v4";
 import { logger } from "../tag-logger.ts";
 
@@ -384,8 +384,8 @@ export type ConsumerPluginCtx = {
 export type WaitUntilFn = (promise: Promise<unknown>) => undefined | void;
 
 /**
- * Creates a tRPC middleware that injects a `sendTrpc` helper into context.
- * Use `ctx.sendTrpc(tx, output)` in a mutation to enqueue an outbox event.
+ * Creates an oRPC middleware that injects a `sendEvent` helper into context.
+ * Use `context.sendEvent(tx, output)` in a handler to enqueue an outbox event.
  */
 export const createPostProcedureConsumerPlugin = <
   EventTypes extends Record<string, {}>,
@@ -394,17 +394,15 @@ export const createPostProcedureConsumerPlugin = <
   ...args: Parameters<typeof createConsumerClient<EventTypes, DBConnection>>
 ) => {
   const consumerClient = createConsumerClient(...args);
-  const pluginTrpc = initTRPC.context<{ db: DBConnection }>().create();
 
-  return pluginTrpc.procedure.use(async ({ getRawInput, next, ctx: _ctx, path }) => {
+  return os.$context<{ db: DBConnection }>().middleware(async ({ context, next, path }, input) => {
     return next({
-      ctx: {
-        sendTrpc: async <T extends {}>(db: DBConnection, output: T) => {
-          const input = await getRawInput();
+      context: {
+        sendEvent: async <T extends {}>(db: DBConnection, output: T) => {
           const payload = { input, output };
           await consumerClient.send(
-            { transaction: db as DBLike, parent: _ctx.db as DBLike },
-            `trpc:${path}`,
+            { transaction: db as DBLike, parent: context.db as DBLike },
+            `rpc:${path.join(".")}`,
             payload,
           );
 
@@ -428,7 +426,7 @@ export const defaultRetryFn: RetryFn = (job) => {
   };
 };
 
-/** Extract the procedures from a trpc router def */
+/** Extract the procedures from an oRPC router (plain object of nested procedures) */
 export type FlattenProcedures<P, Prefix extends string = ""> =
   ProcUnion<P, Prefix> extends infer U
     ? {
@@ -442,13 +440,13 @@ export type FlattenProcedures<P, Prefix extends string = ""> =
     : never;
 
 type ProcUnion<P, Prefix extends string = ""> = {
-  [K in keyof P]: P[K] extends AnyTRPCProcedure
+  [K in Exclude<keyof P, "~orpc">]: P[K] extends { "~orpc": object }
     ? {
         path: `${Prefix}${Extract<K, string>}`;
         proc: P[K];
       }
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
-}[keyof P];
+}[Exclude<keyof P, "~orpc">];
 
 /**
  * Create a typed consumer client for registering consumers and sending events.
@@ -559,28 +557,20 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   };
 };
 
-/** Types-only helper to extract event types from a tRPC router */
-export const getTrpcEventTypes = <R extends AnyTRPCRouter>() => {
-  type FlatProcedures = FlattenProcedures<R["_def"]["procedures"]>;
-  type ProcedureTypes<P extends keyof FlatProcedures> = FlatProcedures[P] extends {
-    _def: { $types: { input: infer I; output: infer O } };
-  }
-    ? { input: I; output: O }
+/** Extract input/output from an oRPC Procedure type */
+type ProcedureIO<P> =
+  P extends Procedure<any, any, infer TInputSchema, infer TOutputSchema, any, any>
+    ? { input: InferSchemaInput<TInputSchema>; output: InferSchemaOutput<TOutputSchema> }
     : never;
 
-  type EventableProcedureName = {
-    [K in keyof FlatProcedures]: ProcedureTypes<K>["output"] extends { $enqueued?: true }
-      ? Extract<K, string>
-      : never;
-  }[keyof FlatProcedures];
-
-  type EventTypes = {
-    [K in EventableProcedureName as `trpc:${K}`]: ProcedureTypes<K>;
-  };
-
-  return { EventTypes: {} as EventTypes };
+/**
+ * Extract typed event map from an oRPC router.
+ * Only includes procedures whose output has `$enqueued` (i.e. procedures that emit outbox events).
+ */
+export type RouterEventTypes<R extends Record<string, any>> = {
+  [K in keyof FlattenProcedures<R> as ProcedureIO<FlattenProcedures<R>[K]>["output"] extends {
+    $enqueued?: true;
+  }
+    ? `rpc:${Extract<K, string>}`
+    : never]: ProcedureIO<FlattenProcedures<R>[K]>;
 };
-
-export type TrpcEventTypes<R extends AnyTRPCRouter> = ReturnType<
-  typeof getTrpcEventTypes<R>
->["EventTypes"];

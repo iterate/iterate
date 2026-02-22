@@ -4,15 +4,14 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
-import { createTRPCClient, httpLink } from "@trpc/client";
-import { initTRPC } from "@trpc/server";
-import type { AnyRouter } from "@trpc/server";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import superjson from "superjson";
-import { createCli, type parseRouter } from "trpc-cli";
-import { proxify } from "trpc-cli/dist/proxify.js";
+import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import { z } from "zod/v4";
+import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
@@ -56,8 +55,6 @@ const isAgent =
   process.env.OPENCODE === "1" ||
   Boolean(process.env.OPENCODE_SESSION) ||
   Boolean(process.env.CLAUDE_CODE);
-
-const t = initTRPC.meta().create();
 
 const readConfigFile = (): ConfigFile => {
   if (!existsSync(CONFIG_PATH)) {
@@ -289,13 +286,23 @@ const osAuthDance = async (authConfig: AuthConfig) => {
   return { userCookies, userClient };
 };
 
-const loadAppRouter = async (params: {
+const loadRemoteProcedures = async (params: {
   baseUrl: string;
 }): Promise<{ procedures: ParsedRouter }> => {
   const url = `${params.baseUrl}/api/trpc-cli-procedures`;
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`${url} got ${response.status}: ${await response.text()}`);
+    let text = await response.text();
+    if (text.includes("<title>")) {
+      text = "HTML with title: " + text.split("<title>")[1].split("</title>")[0];
+    } else if (["<html>", "<body>", "<head>", "!DOCTYPE html"].some((s) => text.includes(s))) {
+      text = "<html>...</html>";
+    } else {
+      text = text.split("\n")[0];
+      if (text.length > 50) text = text.slice(0, 50) + "...";
+    }
+
+    throw new Error(`${url} got ${response.status}: ${text}`);
   }
 
   let router: any;
@@ -311,45 +318,63 @@ const loadAppRouter = async (params: {
   return router as { procedures: ParsedRouter };
 };
 
+/** Wraps an oRPC client so `wrapper[dotPath].query(input)` and `.mutate(input)` work (for trpc-cli proxify compat) */
+const orpcToTrpcStyleClient = (orpcClient: unknown) => {
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop: string) => {
+        const parts = prop.split(".");
+        let current: any = orpcClient;
+        for (const part of parts) current = current[part];
+        return { query: (input: any) => current(input), mutate: (input: any) => current(input) };
+      },
+    },
+  );
+};
+
 const getOsProcedures = async (params: { baseUrl: string }) => {
-  const appRouter = await loadAppRouter(params);
-  const proxiedRouter = proxify(appRouter.procedures, async () => {
-    return createTRPCClient({
-      links: [
-        httpLink({
-          url: `${params.baseUrl}/api/trpc/`,
-          transformer: superjson,
-          fetch: async (request, init) => {
-            const authConfig = readAuthConfig(process.cwd());
-            if (authConfig instanceof Error) throw authConfig;
-            const { userCookies } = await osAuthDance(authConfig);
-            const headers = new Headers(init?.headers);
-            headers.set("cookie", userCookies);
-            return fetch(request, { ...init, headers });
-          },
-        }),
-      ],
-    });
+  const appRouter = await loadRemoteProcedures(params);
+  const proxiedRouter = proxifyOrpc(appRouter.procedures, () => {
+    const client = createORPCClient(
+      new RPCLink({
+        url: `${params.baseUrl}/api/orpc/`,
+        fetch: async (request: URL | Request, init?: RequestInit) => {
+          const authConfig = readAuthConfig(process.cwd());
+          if (authConfig instanceof Error) throw authConfig;
+          const { userCookies } = await osAuthDance(authConfig);
+          // Merge headers from both the Request object and init
+          const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
+          headers.set("cookie", userCookies);
+          return fetch(request, { ...init, headers });
+        },
+      }),
+    );
+    return orpcToTrpcStyleClient(client);
   });
 
   return proxiedRouter;
 };
 
 /**
- * Creates a fetch wrapper that calls /api/trpc-stream/* instead of /api/trpc/*.
+ * Creates a fetch wrapper that calls /api/orpc-stream/* instead of /api/orpc/*.
  * The streaming endpoint returns SSE: log lines as `event: log` and the final
- * tRPC response as `event: response`, which we reassemble into a normal Response.
+ * oRPC response as `event: response`, which we reassemble into a normal Response.
  */
 const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
   return async (input: any, init: any) => {
-    // Rewrite URL from /api/trpc/X to /api/trpc-stream/X
+    // Rewrite URL from /api/orpc/X to /api/orpc-stream/X
+    // RPCLink passes a Request object as `input` with method/body/headers on it,
+    // while `init` only contains extra options like `{ redirect: 'manual' }`.
+    // We must construct a new Request to preserve method, body, and headers.
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const rewritten = url.replace(
-      `${daemonBaseUrl}/api/trpc/`,
-      `${daemonBaseUrl}/api/trpc-stream/`,
+      `${daemonBaseUrl}/api/orpc/`,
+      `${daemonBaseUrl}/api/orpc-stream/`,
     );
-    const res = await fetch(rewritten, init);
-    if (rewritten === url) return res;
+    if (rewritten === url) return fetch(input, init);
+    const fetchInput = input instanceof Request ? new Request(rewritten, input) : rewritten;
+    const res = await fetch(fetchInput, init);
 
     const contentType = res.headers.get("content-type") || "";
     // If the daemon didn't respond with SSE, pass through as-is (non-streaming endpoint)
@@ -382,7 +407,7 @@ const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
         }
       }
     }
-    // Reconstruct a normal Response from the final payload so tRPC client is happy
+    // Reconstruct a normal Response from the final payload so oRPC client is happy
     return new Response(responseBody, {
       status: res.status,
       headers: { "content-type": "application/json" },
@@ -391,25 +416,24 @@ const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
 };
 
 const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
-  const daemonRouter = await loadAppRouter({ baseUrl: params.daemonBaseUrl });
-  const proxiedRouter = proxify(daemonRouter.procedures, async () => {
-    return createTRPCClient({
-      links: [
-        httpLink({
-          url: `${params.daemonBaseUrl}/api/trpc/`,
-          fetch: streamingFetch(params.daemonBaseUrl),
-        }),
-      ],
-    });
+  const daemonRouter = await loadRemoteProcedures({ baseUrl: params.daemonBaseUrl });
+  const proxiedRouter = proxifyOrpc(daemonRouter.procedures, async () => {
+    const client = createORPCClient(
+      new RPCLink({
+        url: `${params.daemonBaseUrl}/api/orpc/`,
+        fetch: streamingFetch(params.daemonBaseUrl),
+      }),
+    );
+    return orpcToTrpcStyleClient(client);
   });
 
   return proxiedRouter;
 };
 
 const launcherProcedures = {
-  doctor: t.procedure
+  doctor: os
     .meta({ description: "Show launcher config and resolved runtime options" })
-    .mutation(async () => {
+    .handler(async () => {
       const configFile = readConfigFile();
       const parsed = ConfigFile.safeParse(configFile);
       if (!parsed.success) {
@@ -419,10 +443,10 @@ const launcherProcedures = {
       if (current instanceof Error) throw current;
       return { configPath: CONFIG_PATH, current };
     }),
-  setup: t.procedure
+  setup: os
     .input(SetupInput.partial())
     .meta({ prompt: true, description: "Configure auth + launcher defaults for current workspace" })
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       writeNewConfig({
         scope: input.scope || "workspace",
         patch: {
@@ -439,7 +463,7 @@ const launcherProcedures = {
       return { configPath: CONFIG_PATH, current };
     }),
 
-  whoami: t.procedure.mutation(async () => {
+  whoami: os.handler(async () => {
     const authConfig = readAuthConfig(process.cwd());
     if (authConfig instanceof Error) throw authConfig;
     const { userClient } = await osAuthDance(authConfig);
@@ -452,20 +476,16 @@ export const getCli = async () => {
 
   const errorProcedure = (problem: string) => (e: Error) => {
     const message = `${problem}: ${e.message}`;
-    return t.procedure.meta({ description: message }).mutation(() => {
+    return os.meta({ description: message }).handler(() => {
       throw new Error(problem, { cause: e });
     });
   };
 
-  const routers: AnyRouter[] = [t.router(launcherProcedures)];
+  const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
 
   if (authConfig instanceof Error) {
-    routers.push(
-      t.router({
-        os: errorProcedure(`Invalid auth config`)(authConfig),
-        daemon: errorProcedure(`Invalid auth config`)(authConfig),
-      }),
-    );
+    const procedure = errorProcedure(`Invalid auth config`)(authConfig);
+    routers.push({ os: procedure, daemon: procedure });
   } else {
     const [osProcedures, daemonProcedures] = await Promise.allSettled([
       getOsProcedures({ baseUrl: authConfig.osBaseUrl }),
@@ -473,31 +493,21 @@ export const getCli = async () => {
     ]);
 
     if (osProcedures.status === "fulfilled") {
-      routers.push(t.router({ os: osProcedures.value }));
+      routers.push({ os: osProcedures.value });
     } else {
-      routers.push(
-        t.router({
-          os: errorProcedure(`Couldn't connect to os at ${authConfig.osBaseUrl}`)(
-            osProcedures.reason,
-          ),
-        }),
-      );
+      const message = `Couldn't connect to os at ${authConfig.osBaseUrl}`;
+      routers.push({ os: errorProcedure(message)(osProcedures.reason) });
     }
     if (daemonProcedures.status === "fulfilled") {
       // don't nest daemon procedures under "daemon"
       routers.push(daemonProcedures.value);
     } else {
-      routers.push(
-        t.router({
-          daemon: errorProcedure(`Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`)(
-            daemonProcedures.reason,
-          ),
-        }),
-      );
+      const message = `Couldn't connect to daemon at ${authConfig.daemonBaseUrl}`;
+      routers.push({ daemon: errorProcedure(message)(daemonProcedures.reason) });
     }
   }
 
-  const router = t.mergeRouters(...routers);
+  const router = Object.assign({}, ...routers);
 
   const cli = createCli({
     router,
@@ -512,4 +522,40 @@ export const getCli = async () => {
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
   await cli.run({ prompts: cliPrompts });
+};
+
+// todo: move this to trpc-cli
+export const proxifyOrpc = <R extends AnyRouter>(
+  router: R | ReturnType<typeof parseRouter>,
+  getClient: (procedurePath: string) => unknown,
+) => {
+  const parsed = Array.isArray(router) ? router : parseRouter({ router });
+  const outputRouterRecord = {};
+  for (const [procedurePath, info] of parsed) {
+    const parts = procedurePath.split(".");
+    let currentRouter: any = outputRouterRecord;
+    for (const part of parts.slice(0, -1)) {
+      currentRouter = currentRouter[part] ||= {};
+    }
+    const schemas = info.inputSchemas.success ? info.inputSchemas.value : [];
+    const standardSchema: StandardSchemaV1 & { toJsonSchema: () => {} } = {
+      "~standard": {
+        vendor: "trpc-cli",
+        version: 1,
+        validate: (value: unknown) => ({ value }),
+      },
+      toJsonSchema: () => {
+        if (schemas.length === 0) return {};
+        if (schemas.length === 1) return schemas[0];
+        return { allOf: schemas };
+      },
+    };
+    currentRouter[parts[parts.length - 1]] = os
+      .input(standardSchema)
+      .handler(async ({ input }: any) => {
+        const client: any = await getClient(procedurePath);
+        return client[procedurePath].query(input);
+      });
+  }
+  return outputRouterRecord;
 };

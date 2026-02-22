@@ -1,14 +1,18 @@
 import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import { typeid } from "typeid-js";
-import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
+import {
+  projectProtectedProcedure,
+  projectProtectedMutation,
+  ProjectInput,
+} from "../procedures.ts";
 import { projectAccessToken } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { generateProjectAccessKey } from "../../services/machine-creation.ts";
 
-export const accessTokenRouter = router({
-  list: projectProtectedProcedure.query(async ({ ctx }) => {
+export const accessTokenRouter = {
+  list: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     const tokens = await ctx.db.query.projectAccessToken.findMany({
       where: eq(projectAccessToken.projectId, ctx.project.id),
       orderBy: (token, { desc }) => [desc(token.createdAt)],
@@ -26,10 +30,11 @@ export const accessTokenRouter = router({
   create: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         name: z.string().min(1).max(100),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const tokenId = typeid("pat").toString();
       const rawToken = generateProjectAccessKey(tokenId);
       const encryptedToken = await encrypt(rawToken);
@@ -45,10 +50,7 @@ export const accessTokenRouter = router({
         .returning();
 
       if (!created) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create access token",
-        });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create access token" });
       }
 
       return {
@@ -62,10 +64,11 @@ export const accessTokenRouter = router({
   revoke: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         id: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const existing = await ctx.db.query.projectAccessToken.findFirst({
         where: and(
           eq(projectAccessToken.id, input.id),
@@ -75,10 +78,7 @@ export const accessTokenRouter = router({
       });
 
       if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Access token not found or already revoked",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Access token not found or already revoked" });
       }
 
       const [revoked] = await ctx.db
@@ -93,4 +93,4 @@ export const accessTokenRouter = router({
         revokedAt: revoked.revokedAt,
       };
     }),
-});
+};

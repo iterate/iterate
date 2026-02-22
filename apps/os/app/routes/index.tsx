@@ -5,7 +5,7 @@ import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { toast } from "sonner";
 import { Building2, Check, X } from "lucide-react";
 import { authMiddleware } from "../lib/auth-middleware.ts";
-import { trpc, trpcClient } from "../lib/trpc.tsx";
+import { orpc, orpcClient } from "../lib/orpc.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { CenteredLayout } from "../components/centered-layout.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../components/ui/field.tsx";
@@ -26,7 +26,7 @@ import { slugify } from "../../backend/utils/slug.ts";
 const getDefaultOrgName = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const user = await context.variables.trpcCaller.user.me();
+    const user = await context.variables.orpcCaller.user.me();
     const [localPart, domain] = user.email.split("@");
     // For free email providers (gmail, yahoo, etc), use the username as the org name
     // For work emails, use the domain (without .com suffix)
@@ -38,7 +38,7 @@ const getDefaultOrgName = createServerFn({ method: "GET" })
 const maybeRedirectToOrg = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const organizations = await context.variables.trpcCaller.user.myOrganizations();
+    const organizations = await context.variables.orpcCaller.user.myOrganizations();
 
     // If user has orgs, redirect to their project/org
     if (organizations && organizations.length > 0) {
@@ -84,12 +84,12 @@ function IndexPage() {
   const [name, setName] = useState(defaultOrgName);
 
   const { data: pendingInvites } = useSuspenseQuery(
-    trpc.organization.myPendingInvites.queryOptions(),
+    orpc.organization.myPendingInvites.queryOptions(),
   );
 
   const acceptInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.acceptInvite.mutate({ inviteId });
+      return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
       toast.success(`Joined ${org.name}!`);
@@ -102,7 +102,7 @@ function IndexPage() {
 
   const declineInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.declineInvite.mutate({ inviteId });
+      return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
       toast.success("Invite declined");
@@ -114,10 +114,10 @@ function IndexPage() {
 
   const createOrg = useMutation({
     mutationFn: async (orgName: string) => {
-      return trpcClient.organization.create.mutate({ name: orgName });
+      return orpcClient.organization.create({ name: orgName });
     },
     onSuccess: (org) => {
-      queryClient.setQueryData<Organization[]>(trpc.user.myOrganizations.queryKey(), (old) => [
+      queryClient.setQueryData<Organization[]>(orpc.user.myOrganizations.key(), (old) => [
         ...(old || []),
         { ...org, role: "owner", instances: [] },
       ]);

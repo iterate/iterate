@@ -14,7 +14,7 @@ import {
 import { z } from "zod/v4";
 import { ms, parse as msParse } from "ms";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
@@ -497,12 +497,12 @@ function OutboxPage() {
   );
 
   const { data, isFetching } = useQuery({
-    ...trpc.admin.outbox.listEvents.queryOptions(serverInput),
+    ...orpc.admin.outbox.listEvents.queryOptions({ input: serverInput }),
     placeholderData: (prev) => prev,
   });
 
   const processQueue = useMutation({
-    mutationFn: () => trpcClient.admin.outbox.process.mutate(),
+    mutationFn: () => orpcClient.admin.outbox.process(),
     onSuccess: (result) => {
       toast.success(result);
       invalidateAll();
@@ -512,7 +512,7 @@ function OutboxPage() {
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({
-      queryKey: trpc.admin.outbox.listEvents.queryOptions().queryKey,
+      queryKey: orpc.admin.outbox.listEvents.queryOptions().queryKey,
     });
   };
 

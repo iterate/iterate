@@ -13,7 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../components/daemon-status.tsx";
@@ -129,20 +129,26 @@ function MachineDetailPage() {
   const { user } = useSessionUser();
   const isAdmin = user.role === "admin";
 
-  const machineQueryKey = trpc.machine.byId.queryKey({
-    projectSlug: params.projectSlug,
-    machineId: params.machineId,
+  const machineQueryKey = orpc.machine.byId.key({
+    input: {
+      projectSlug: params.projectSlug,
+      machineId: params.machineId,
+    },
   });
 
-  const machineListQueryKey = trpc.machine.list.queryKey({
-    projectSlug: params.projectSlug,
-    includeArchived: false,
+  const machineListQueryKey = orpc.machine.list.key({
+    input: {
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
   });
 
   const { data: machine } = useSuspenseQuery(
-    trpc.machine.byId.queryOptions({
-      projectSlug: params.projectSlug,
-      machineId: params.machineId,
+    orpc.machine.byId.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
     }),
   );
 
@@ -151,7 +157,7 @@ function MachineDetailPage() {
 
   const restartMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.restart.mutate({
+      return orpcClient.machine.restart({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -167,7 +173,7 @@ function MachineDetailPage() {
 
   const restartDaemon = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.restartDaemon.mutate({
+      return orpcClient.machine.restartDaemon({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -183,7 +189,7 @@ function MachineDetailPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.delete.mutate({
+      return orpcClient.machine.delete({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -204,24 +210,22 @@ function MachineDetailPage() {
   };
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(
-    trpc.machine.listAgents.queryOptions(
-      {
+    orpc.machine.listAgents.queryOptions({
+      input: {
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
-      {
-        // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
-        // or machine:daemon-status-reported, disabling the query permanently.
-        // Fix: fetch all events for the machine (not just lastEvent), then check
-        // events.has("machine:activated"). That way even detached machines still
-        // render their agents list, which is useful.
-        enabled:
-          machine.state === "active" &&
-          (machine.lastEvent?.name === "machine:activated" ||
-            machine.lastEvent?.name === "machine:probe-succeeded"),
-        refetchInterval: 10000,
-      },
-    ),
+      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+      // or machine:daemon-status-reported, disabling the query permanently.
+      // Fix: fetch all events for the machine (not just lastEvent), then check
+      // events.has("machine:activated"). That way even detached machines still
+      // render their agents list, which is useful.
+      enabled:
+        machine.state === "active" &&
+        (machine.lastEvent?.name === "machine:activated" ||
+          machine.lastEvent?.name === "machine:probe-succeeded"),
+      refetchInterval: 10000,
+    }),
   );
 
   const agents = [...(agentsData?.agents ?? [])].sort(

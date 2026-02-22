@@ -4,10 +4,12 @@
  */
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
+import type { RouterClient } from "@orpc/server";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
-import type { AppRouter } from "../../../daemon/server/trpc/app-router.ts";
+import type { AppRouter } from "../../../daemon/server/orpc/app-router.ts";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
@@ -27,15 +29,15 @@ type RepoInfo = {
   name: string;
 };
 
-function createDaemonClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
-  return createTRPCClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        url: `${params.baseUrl}/api/trpc`,
-        ...(params.fetcher ? { fetch: params.fetcher } : {}),
-      }),
-    ],
+function createDaemonClient(params: {
+  baseUrl: string;
+  fetcher?: SandboxFetcher;
+}): RouterClient<AppRouter> {
+  const link = new RPCLink({
+    url: `${params.baseUrl}/api/orpc`,
+    ...(params.fetcher ? { fetch: params.fetcher as typeof globalThis.fetch } : {}),
   });
+  return createORPCClient(link);
 }
 
 async function buildDaemonTransport(
@@ -179,7 +181,7 @@ export async function pushSetupToMachine(
   // sentinel file at the end. On retry, if the sentinel matches, skip everything.
   const setupFingerprint = hashSetupIntent(envFileContent, repos);
   const sentinelPath = "~/.iterate/.setup-done";
-  const existingSentinel = await client.tool.readFile.query({ path: sentinelPath });
+  const existingSentinel = await client.tool.readFile({ path: sentinelPath });
   if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
     logger.info("[machine-setup] Setup already completed (sentinel matches), skipping", {
       machineId: machine.id,
@@ -192,7 +194,7 @@ export async function pushSetupToMachine(
     machineId: machine.id,
     contentLength: envFileContent.length,
   });
-  await client.tool.writeFile.mutate({
+  await client.tool.writeFile({
     path: "~/.iterate/.env",
     content: envFileContent,
     mode: 0o600,
@@ -208,14 +210,14 @@ export async function pushSetupToMachine(
 
     // mkdir -p for parent dir first
     const parentDir = repo.path.split("/").slice(0, -1).join("/");
-    await client.tool.execCommand.mutate({
+    await client.tool.execCommand({
       command: ["mkdir", "-p", parentDir],
     });
 
     // Skip if already cloned (retry-safe)
-    const dirCheck = await client.tool.execCommand
-      .mutate({ command: ["test", "-d", `${repo.path}/.git`] })
-      .then((r) => r.exitCode === 0)
+    const dirCheck = await client.tool
+      .execCommand({ command: ["test", "-d", `${repo.path}/.git`] })
+      .then((r: { exitCode: number }) => r.exitCode === 0)
       .catch(() => false);
 
     if (dirCheck) {
@@ -228,7 +230,7 @@ export async function pushSetupToMachine(
 
     // Clone — try with branch first, fall back to default
     try {
-      await client.tool.execCommand.mutate({
+      await client.tool.execCommand({
         command: ["git", "clone", "--branch", repo.branch, "--single-branch", repo.url, repo.path],
         timeout: 120_000,
       });
@@ -238,7 +240,7 @@ export async function pushSetupToMachine(
         machineId: machine.id,
         repo: `${repo.owner}/${repo.name}`,
       });
-      await client.tool.execCommand.mutate({
+      await client.tool.execCommand({
         command: ["git", "clone", repo.url, repo.path],
         timeout: 120_000,
       });
@@ -247,7 +249,7 @@ export async function pushSetupToMachine(
 
   // Write sentinel file last — marks the full setup as complete.
   // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
-  await client.tool.writeFile.mutate({
+  await client.tool.writeFile({
     path: sentinelPath,
     content: setupFingerprint,
     mode: 0o600,
@@ -293,14 +295,14 @@ export async function pushEnvToRunningMachines(
         const transport = await buildDaemonTransport(machine, env);
         const client = createDaemonClient(transport);
         // Read first to skip no-op writes (avoids unnecessary pidnap restarts)
-        const existing = await client.tool.readFile.query({ path: "~/.iterate/.env" });
+        const existing = await client.tool.readFile({ path: "~/.iterate/.env" });
         if (existing.exists && existing.content === envFileContent) {
           logger.info("[machine-setup] .env already up to date, skipping", {
             machineId: machine.id,
           });
           return;
         }
-        await client.tool.writeFile.mutate({
+        await client.tool.writeFile({
           path: "~/.iterate/.env",
           content: envFileContent,
           mode: 0o600,

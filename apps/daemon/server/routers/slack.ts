@@ -60,9 +60,10 @@ import type {
   Button,
   RichTextBlock,
 } from "@slack/types";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { daemonRouter } from "../orpc/router.ts";
 import { runAgentCommand, type AgentCommandMatch } from "../utils/agent-commands.ts";
 
 const logger = console;
@@ -217,7 +218,7 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  const caller = trpcRouter.createCaller({});
+  const caller = createRouterClient(daemonRouter, { context: {} });
 
   // ── Reaction events ──
   // Reactions never create agents; they only forward to an existing one.

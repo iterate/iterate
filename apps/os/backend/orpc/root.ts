@@ -1,4 +1,3 @@
-import { router } from "./trpc.ts";
 import { userRouter } from "./routers/user.ts";
 import { organizationRouter } from "./routers/organization.ts";
 import { projectRouter } from "./routers/project.ts";
@@ -12,7 +11,8 @@ import { eventRouter } from "./routers/event.ts";
 import { secretRouter } from "./routers/secret.ts";
 import { webchatRouter } from "./routers/webchat.ts";
 
-export const appRouter = router({
+/** oRPC app router — plain object assembling all sub-routers */
+export const appRouter = {
   user: userRouter,
   organization: organizationRouter,
   project: projectRouter,
@@ -25,6 +25,6 @@ export const appRouter = router({
   event: eventRouter,
   secret: secretRouter,
   webchat: webchatRouter,
-});
+};
 
 export type AppRouter = typeof appRouter;

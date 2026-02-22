@@ -1,13 +1,13 @@
 import { homedir } from "node:os";
-import { agentTrpcRouter } from "../routers/agents.ts";
+import { agentOrpcRouter } from "../routers/agents.ts";
 import type { SerializedAgent, SerializedAgentRoute } from "../routers/agents.ts";
-import { createTRPCRouter, mergeRouters, publicProcedure } from "./init.ts";
+import { publicProcedure } from "./init.ts";
 import { getCustomerRepoPath } from "./platform.ts";
 
-const baseProcedures = createTRPCRouter({
-  hello: publicProcedure.query(() => ({ message: "Hello from tRPC!" })),
+const baseProcedures = {
+  hello: publicProcedure.handler(() => ({ message: "Hello from oRPC!" })),
 
-  getServerCwd: publicProcedure.query(async () => {
+  getServerCwd: publicProcedure.handler(async () => {
     return {
       cwd: process.cwd(),
       homeDir: homedir(),
@@ -15,7 +15,7 @@ const baseProcedures = createTRPCRouter({
     };
   }),
 
-  restartDaemon: publicProcedure.mutation(async (): Promise<{ success: boolean }> => {
+  restartDaemon: publicProcedure.handler(async (): Promise<{ success: boolean }> => {
     const { reportStatusToPlatform } = await import("../start.ts");
 
     await reportStatusToPlatform({ status: "stopping" }).catch((err) => {
@@ -29,8 +29,8 @@ const baseProcedures = createTRPCRouter({
 
     return { success: true };
   }),
-});
+};
 
-export const trpcRouter = mergeRouters(baseProcedures, agentTrpcRouter);
+export const daemonRouter = { ...baseProcedures, ...agentOrpcRouter };
 
 export type { SerializedAgent, SerializedAgentRoute };

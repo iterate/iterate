@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { authenticatedServerFn } from "../lib/auth-middleware.ts";
-import { trpc } from "../lib/trpc.tsx";
+import { orpc } from "../lib/orpc.tsx";
 import { useSessionUser } from "../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../hooks/use-posthog-identity.tsx";
 
@@ -10,11 +10,11 @@ export const Route = createFileRoute("/_auth")({
   beforeLoad: () => assertAuthenticated(),
   loader: async ({ context }) => {
     // Blocking: must have user data before rendering any auth-required content
-    await context.queryClient.ensureQueryData(trpc.user.me.queryOptions());
-    await context.queryClient.ensureQueryData(trpc.admin.impersonationInfo.queryOptions());
+    await context.queryClient.ensureQueryData(orpc.user.me.queryOptions());
+    await context.queryClient.ensureQueryData(orpc.admin.impersonationInfo.queryOptions());
 
     // Non-blocking: prefetch org list for sidebar switcher (available earlier)
-    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+    context.queryClient.prefetchQuery(orpc.user.myOrganizations.queryOptions());
   },
   component: AuthRequiredLayout,
 });

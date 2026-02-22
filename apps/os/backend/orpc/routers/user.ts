@@ -1,16 +1,16 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { router, protectedProcedure } from "../trpc.ts";
+import { protectedProcedure } from "../procedures.ts";
 import { user, organizationUserMembership } from "../../db/schema.ts";
 
-export const userRouter = router({
+export const userRouter = {
   // Get current user
-  me: protectedProcedure.query(async ({ ctx }) => {
+  me: protectedProcedure.handler(async ({ context: ctx }) => {
     return ctx.user;
   }),
 
   // Get user's organizations
-  myOrganizations: protectedProcedure.query(async ({ ctx }) => {
+  myOrganizations: protectedProcedure.handler(async ({ context: ctx }) => {
     const memberships = await ctx.db.query.organizationUserMembership.findMany({
       where: eq(organizationUserMembership.userId, ctx.user.id),
       with: {
@@ -29,7 +29,7 @@ export const userRouter = router({
   }),
 
   // Get user's memberships with org details (for settings page)
-  memberships: protectedProcedure.query(async ({ ctx }) => {
+  memberships: protectedProcedure.handler(async ({ context: ctx }) => {
     const memberships = await ctx.db.query.organizationUserMembership.findMany({
       where: eq(organizationUserMembership.userId, ctx.user.id),
       with: {
@@ -56,7 +56,7 @@ export const userRouter = router({
         image: z.string().url().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const [updated] = await ctx.db
         .update(user)
         .set({
@@ -68,4 +68,4 @@ export const userRouter = router({
 
       return updated;
     }),
-});
+};

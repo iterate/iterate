@@ -1,13 +1,13 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import {
-  router,
   publicProcedure,
   publicMutation,
   protectedProcedure,
   projectProtectedProcedure,
-} from "../trpc.ts";
+  ProjectInput,
+} from "../procedures.ts";
 import {
   user,
   organization,
@@ -35,17 +35,16 @@ function generateDefaultAvatar(email: string): string {
  * Testing router - provides helpers for test setup
  * These endpoints are only available in non-production environments
  */
-export const testingRouter = router({
+export const testingRouter = {
   // Health check
-  health: publicProcedure.query(() => {
+  health: publicProcedure.handler(() => {
     return { status: "ok", timestamp: new Date().toISOString() };
   }),
 
   // Trigger query invalidation broadcast (for e2e tests)
-  triggerInvalidation: publicMutation.mutation(async () => {
+  triggerInvalidation: publicMutation.handler(async () => {
     if (!isNonProd) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
+      throw new ORPCError("FORBIDDEN", {
         message: "Testing endpoints are not available in production",
       });
     }
@@ -61,10 +60,9 @@ export const testingRouter = router({
         role: z.enum(["user", "admin"]).default("user"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
@@ -97,10 +95,9 @@ export const testingRouter = router({
         projectName: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
@@ -150,10 +147,9 @@ export const testingRouter = router({
         organizationSlug: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
@@ -179,15 +175,15 @@ export const testingRouter = router({
   seedSlackConnection: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         teamId: z.string().min(1),
         teamName: z.string().optional(),
         teamDomain: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
@@ -228,14 +224,14 @@ export const testingRouter = router({
   insertEvent: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         type: z.string().min(1),
         payload: z.record(z.string(), z.unknown()).default({}),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
@@ -252,4 +248,4 @@ export const testingRouter = router({
 
       return newEvent;
     }),
-});
+};

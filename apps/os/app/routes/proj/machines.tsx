@@ -12,7 +12,7 @@ import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-q
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { z } from "zod/v4";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import {
@@ -83,14 +83,16 @@ function ProjectMachinesPage() {
   };
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
   const sandboxProvider = project.sandboxProvider;
 
   const { data: defaultSnapshots } = useSuspenseQuery(
-    trpc.machine.getDefaultSnapshots.queryOptions(),
+    orpc.machine.getDefaultSnapshots.queryOptions(),
   );
   const defaultSnapshotForProvider =
     sandboxProvider === "daytona"
@@ -104,9 +106,11 @@ function ProjectMachinesPage() {
   const [snapshotOverride, setSnapshotOverride] = useState(defaultSnapshotForProvider);
   const [flyMachineCpus, setFlyMachineCpus] = useState(String(defaultFlyMachineCpus));
 
-  const machineListQueryOptions = trpc.machine.list.queryOptions({
-    projectSlug: params.projectSlug,
-    includeArchived: false,
+  const machineListQueryOptions = orpc.machine.list.queryOptions({
+    input: {
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
   });
 
   const { data: machines } = useSuspenseQuery({
@@ -129,7 +133,7 @@ function ProjectMachinesPage() {
       name: string;
       metadata?: Record<string, unknown>;
     }) => {
-      return trpcClient.machine.create.mutate({
+      return orpcClient.machine.create({
         projectSlug: params.projectSlug,
         name,
         metadata,
@@ -150,7 +154,7 @@ function ProjectMachinesPage() {
 
   const archiveMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.archive.mutate({
+      return orpcClient.machine.archive({
         projectSlug: params.projectSlug,
         machineId,
       });
@@ -166,7 +170,7 @@ function ProjectMachinesPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.delete.mutate({
+      return orpcClient.machine.delete({
         projectSlug: params.projectSlug,
         machineId,
       });
@@ -182,7 +186,7 @@ function ProjectMachinesPage() {
 
   const restartMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.restart.mutate({
+      return orpcClient.machine.restart({
         projectSlug: params.projectSlug,
         machineId,
       });

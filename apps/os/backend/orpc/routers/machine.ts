@@ -1,16 +1,18 @@
 import { z } from "zod/v4";
 import { eq, and, or, gt, ne } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { ORPCError } from "@orpc/server";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import { createMachineStub, type MachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { buildMachinePortUrl } from "@iterate-com/shared/project-ingress";
+import type { RouterClient } from "@orpc/server";
 import {
-  router,
   projectProtectedProcedure,
   projectProtectedMutation,
   publicProcedure,
-} from "../trpc.ts";
+  ProjectInput,
+} from "../procedures.ts";
 import * as schema from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
@@ -21,18 +23,16 @@ import { outboxClient } from "../../outbox/client.ts";
 import { getLatestMachineEvents, getMachineConsumers } from "../../utils/machine-metadata.ts";
 import { getIngressSchemeFromPublicUrl } from "../../utils/project-ingress-url.ts";
 import { getProjectSandboxProviderOptions } from "../../utils/sandbox-providers.ts";
-import type { AppRouter as DaemonTRPCRouter } from "../../../../daemon/server/trpc/app-router.ts";
-
-function createDaemonTrpcClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
+function createDaemonClient(params: { baseUrl: string; fetcher?: SandboxFetcher }) {
   const { baseUrl, fetcher } = params;
-  return createTRPCClient<DaemonTRPCRouter>({
-    links: [
-      httpBatchLink({
-        url: `${baseUrl}/api/trpc`,
-        ...(fetcher ? { fetch: fetcher } : {}),
-      }),
-    ],
-  });
+  return createORPCClient(
+    new RPCLink({
+      url: `${baseUrl}/api/orpc`,
+      ...(fetcher ? { fetch: fetcher } : {}),
+    }),
+  ) as unknown as RouterClient<
+    typeof import("../../../../daemon/server/orpc/app-router.ts").appRouter
+  >;
 }
 
 function parsePositiveIntegerOrDefault(value: string | undefined, fallback: number): number {
@@ -114,10 +114,7 @@ async function getProviderForMachine(
   });
 
   if (!machine) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Machine not found",
-    });
+    throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
   }
 
   const runtime = await createMachineStub({
@@ -130,15 +127,16 @@ async function getProviderForMachine(
   return { runtime, machine };
 }
 
-export const machineRouter = router({
+export const machineRouter = {
   // List machines in project
   list: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         includeArchived: z.boolean().default(false).optional(),
       }),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const includeArchived = input.includeArchived ?? false;
 
       // Show non-archived machines, plus recently archived ones (last 60s) for smooth UI transition
@@ -175,10 +173,11 @@ export const machineRouter = router({
   byId: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const m = await ctx.db.query.machine.findFirst({
         where: and(
           eq(schema.machine.id, input.machineId),
@@ -187,10 +186,7 @@ export const machineRouter = router({
       });
 
       if (!m) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
       }
 
       const [enriched, eventMap, consumerMap] = await Promise.all([
@@ -210,10 +206,11 @@ export const machineRouter = router({
   getProviderState: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const { runtime, machine } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
@@ -246,11 +243,12 @@ export const machineRouter = router({
   create: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         name: z.string().min(1).max(100),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       try {
         const result = await createMachineForProject({
           db: ctx.db,
@@ -268,8 +266,7 @@ export const machineRouter = router({
 
         return result.machine;
       } catch (err) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Failed to create machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
@@ -279,10 +276,11 @@ export const machineRouter = router({
   archive: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
@@ -299,15 +297,11 @@ export const machineRouter = router({
         .returning();
 
       if (!updated) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
       }
 
       await runtime.archive().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
@@ -319,10 +313,11 @@ export const machineRouter = router({
   restart: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
@@ -347,8 +342,7 @@ export const machineRouter = router({
       });
 
       await runtime.restart().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Failed to restart machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
@@ -361,10 +355,11 @@ export const machineRouter = router({
   restartDaemon: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
@@ -393,13 +388,12 @@ export const machineRouter = router({
         runtime.getBaseUrl(3000),
         runtime.getFetcher(3000),
       ]);
-      const daemonClient = createDaemonTrpcClient({
+      const daemonClient = createDaemonClient({
         baseUrl: daemonBaseUrl,
         fetcher: daemonFetcher,
       });
-      await daemonClient.daemon.restartDaemon.mutate().catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+      await daemonClient.daemon.restartDaemon().catch((err: unknown) => {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Failed to restart daemon: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
@@ -411,10 +405,11 @@ export const machineRouter = router({
   delete: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const { runtime } = await getProviderForMachine(
         ctx.db,
         ctx.project.id,
@@ -440,17 +435,14 @@ export const machineRouter = router({
         .returning();
 
       if (deleted.length === 0) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
       }
 
       return { success: true };
     }),
 
   // Get daemon definitions (for frontend to know what daemons exist)
-  getDaemonDefinitions: publicProcedure.query(() => {
+  getDaemonDefinitions: publicProcedure.handler(() => {
     return {
       daemons: DAEMON_DEFINITIONS,
       daemonsWithWebUI: getDaemonsWithWebUI(),
@@ -458,7 +450,7 @@ export const machineRouter = router({
   }),
 
   // Get default snapshot/image for each provider (used by create-machine UI)
-  getDefaultSnapshots: publicProcedure.query(({ ctx }) => {
+  getDefaultSnapshots: publicProcedure.handler(({ context: ctx }) => {
     return {
       daytona: ctx.env.DAYTONA_DEFAULT_SNAPSHOT ?? null,
       fly: ctx.env.FLY_DEFAULT_IMAGE ?? null,
@@ -468,7 +460,7 @@ export const machineRouter = router({
   }),
 
   // Get available machine types (checks which providers are configured)
-  getAvailableMachineTypes: publicProcedure.query(({ ctx }) => {
+  getAvailableMachineTypes: publicProcedure.handler(({ context: ctx }) => {
     const types: Array<{
       type: (typeof schema.MachineType)[number];
       label: string;
@@ -490,10 +482,11 @@ export const machineRouter = router({
   listAgents: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         machineId: z.string(),
       }),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const machineRecord = await ctx.db.query.machine.findFirst({
         where: and(
           eq(schema.machine.id, input.machineId),
@@ -501,10 +494,7 @@ export const machineRouter = router({
         ),
       });
       if (!machineRecord) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Machine not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
       }
 
       const runtime = await createMachineStub({
@@ -517,14 +507,14 @@ export const machineRouter = router({
         runtime.getBaseUrl(3000),
         runtime.getFetcher(3000),
       ]);
-      const daemonClient = createDaemonTrpcClient({
+      const daemonClient = createDaemonClient({
         baseUrl: daemonBaseUrl,
         fetcher: daemonFetcher,
       });
       const [agents, serverInfo] = await Promise.all([
-        daemonClient.daemon.listAgents.query(),
-        daemonClient.daemon.getServerCwd.query(),
+        daemonClient.daemon.listAgents(),
+        daemonClient.daemon.getServerCwd(),
       ]);
       return { agents, customerRepoPath: serverInfo.customerRepoPath };
     }),
-});
+};

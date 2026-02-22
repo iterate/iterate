@@ -116,12 +116,12 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.0
         version: 22.0.0
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@slack/web-api':
         specifier: ^7.12.0
         version: 7.13.0
-      '@trpc/server':
-        specifier: ^11.7.1
-        version: 11.7.2(typescript@5.9.3)
       dedent:
         specifier: ^1.7.0
         version: 1.7.0
@@ -133,7 +133,7 @@ importers:
         version: 0.23.11
       trpc-cli:
         specifier: ^0.12.0
-        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
+        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -218,6 +218,12 @@ importers:
       '@orpc/contract':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/react-query':
+        specifier: ^1.13.4
+        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/client@1.13.4(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.16)(@tanstack/react-query@5.90.16(react@19.2.3))(react@19.2.3)
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@radix-ui/react-avatar':
         specifier: ^1.1.11
         version: 1.1.11(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -296,15 +302,6 @@ importers:
       '@tanstack/router-plugin':
         specifier: ^1.147.3
         version: 1.149.0(@tanstack/react-router@1.147.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
-      '@trpc/client':
-        specifier: ^11.4.3
-        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server':
-        specifier: ^11.4.3
-        version: 11.7.2(typescript@5.9.3)
-      '@trpc/tanstack-react-query':
-        specifier: ^11.4.3
-        version: 11.7.2(@tanstack/react-query@5.90.16(react@19.2.3))(@trpc/client@11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.2(typescript@5.9.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       '@xterm/addon-clipboard':
         specifier: 0.3.0-beta.103
         version: 0.3.0-beta.103(@xterm/xterm@6.1.0-beta.103)
@@ -434,9 +431,6 @@ importers:
       streamdown:
         specifier: ^1.6.11
         version: 1.6.11(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@19.2.3)
-      superjson:
-        specifier: ^2.2.2
-        version: 2.2.6
       tailwind-merge:
         specifier: ^3.4.0
         version: 3.4.0
@@ -451,7 +445,7 @@ importers:
         version: 1.3.1
       trpc-cli:
         specifier: 0.12.4
-        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
@@ -558,15 +552,6 @@ importers:
       '@tanstack/react-query':
         specifier: 5.90.5
         version: 5.90.5(react@19.2.0)
-      '@trpc/client':
-        specifier: 11.7.1
-        version: 11.7.1(@trpc/server@11.7.1(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server':
-        specifier: 11.7.1
-        version: 11.7.1(typescript@5.9.3)
-      '@trpc/tanstack-react-query':
-        specifier: 11.7.1
-        version: 11.7.1(@tanstack/react-query@5.90.5(react@19.2.0))(@trpc/client@11.7.1(@trpc/server@11.7.1(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.1(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -745,9 +730,15 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.38.0
         version: 1.38.0
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)
       '@orpc/openapi':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@orpc/react-query':
+        specifier: ^1.13.4
+        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/client@1.13.4(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.16)(@tanstack/react-query@5.90.16(react@19.2.3))(react@19.2.3)
       '@orpc/server':
         specifier: ^1.13.4
         version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -805,15 +796,6 @@ importers:
       '@tanstack/virtual-file-routes':
         specifier: ^1.145.4
         version: 1.145.4
-      '@trpc/client':
-        specifier: ^11.7.2
-        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server':
-        specifier: ^11.7.2
-        version: 11.7.2(typescript@5.9.3)
-      '@trpc/tanstack-react-query':
-        specifier: ^11.7.2
-        version: 11.7.2(@tanstack/react-query@5.90.16(react@19.2.3))(@trpc/client@11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.2(typescript@5.9.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       alchemy:
         specifier: ^0.83.0
         version: 0.83.3(@aws-sdk/client-s3@3.962.0)(@cloudflare/vite-plugin@1.15.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(bufferutil@4.0.9)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)(stripe@20.1.2(@types/node@24.10.1))(utf-8-validate@5.0.10)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260205.0)(wrangler@4.64.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -913,9 +895,6 @@ importers:
       stripe:
         specifier: ^20.1.2
         version: 20.1.2(@types/node@24.10.1)
-      superjson:
-        specifier: ^2.2.6
-        version: 2.2.6
       tailwind-merge:
         specifier: ^3.4.0
         version: 3.4.0
@@ -927,7 +906,7 @@ importers:
         version: 1.0.2
       trpc-cli:
         specifier: 0.12.4
-        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -1080,21 +1059,18 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.0.0
-      '@trpc/client':
-        specifier: ^11.7.2
-        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server':
-        specifier: ^11.7.2
-        version: 11.7.2(typescript@5.9.3)
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       better-auth:
         specifier: 1.4.3
         version: 1.4.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(solid-js@1.9.10)
-      superjson:
-        specifier: ^2.2.2
-        version: 2.2.6
       trpc-cli:
         specifier: 0.12.4
-        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12)
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -1131,7 +1107,7 @@ importers:
         version: 17.2.3
       trpc-cli:
         specifier: ^0.12.2
-        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
+        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -1204,12 +1180,12 @@ importers:
       '@daytonaio/sdk':
         specifier: ^0.128.1
         version: 0.128.1(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@trpc/client':
-        specifier: ^11.1.4
-        version: 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server':
-        specifier: ^11.1.4
-        version: 11.7.2(typescript@5.9.3)
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       pidnap:
         specifier: workspace:*
         version: link:../packages/pidnap
@@ -1225,7 +1201,7 @@ importers:
         version: 25.0.10
       trpc-cli:
         specifier: ^0.12.4
-        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76)
+        version: 0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -4168,6 +4144,13 @@ packages:
   '@orpc/openapi@1.13.4':
     resolution: {integrity: sha512-jghTrIVbqgXNcTNQWxhJT3rb8s5ixg3b9dBkho+g1Z8jA+/mw39iEShrUks35kZstQITw+dT1+66bOJzCzbaLg==}
 
+  '@orpc/react-query@1.13.5':
+    resolution: {integrity: sha512-Rh3ys81ZTCKIiBcPczafLFpv2elsJi5v9PvmmMPsAr+7QwN4/URk1TERqACeSVGd2ZNdgetdkn8GW/s/7tB1XQ==}
+    peerDependencies:
+      '@orpc/client': 1.13.5
+      '@tanstack/react-query': '>=5.80.2'
+      react: '>=18.3.0'
+
   '@orpc/server@1.13.4':
     resolution: {integrity: sha512-noGqSP53KpH+2UvCpIoOCMPn5LY5UIB674ijzSZ2LYHT0EUNGpOgYd5Rab09VUAaG2NejwJc9VvWztFW3Op08w==}
     peerDependencies:
@@ -4181,6 +4164,14 @@ packages:
 
   '@orpc/shared@1.13.4':
     resolution: {integrity: sha512-TYt9rLG/BUkNQBeQ6C1tEiHS/Seb8OojHgj9GlvqyjHJhMZx5qjsIyTW6RqLPZJ4U2vgK6x4Her36+tlFCKJug==}
+    peerDependencies:
+      '@opentelemetry/api': '>=1.9.0'
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+
+  '@orpc/shared@1.13.5':
+    resolution: {integrity: sha512-yBFD9FqwazpbcOegEOZ0kAz7i9oNO110HX5AV5YAPGh+zxOY3RfZFXODQ5kBR1mr2nyo4ju+5ohYbJppZuWlcA==}
     peerDependencies:
       '@opentelemetry/api': '>=1.9.0'
     peerDependenciesMeta:
@@ -4209,6 +4200,12 @@ packages:
 
   '@orpc/standard-server@1.13.4':
     resolution: {integrity: sha512-ZOzgfVp6XUg+wVYw+gqesfRfGPtQbnBIrIiSnFMtZF+6ncmFJeF2Shc4RI2Guqc0Qz25juy8Ogo4tX3YqysOcg==}
+
+  '@orpc/tanstack-query@1.13.5':
+    resolution: {integrity: sha512-DUgwJ/IiXAf7CFes2eLFKwFS9bBB4y6OZCiiualHiBE8nUumUw1/ErbXJnD52JbbyT9EriITInUM5iz0c1PBjQ==}
+    peerDependencies:
+      '@orpc/client': 1.13.5
+      '@tanstack/query-core': '>=5.80.2'
 
   '@oslojs/asn1@1.0.0':
     resolution: {integrity: sha512-zw/wn0sj0j0QKbIXfIlnEcTviaCzYOY3V5rAyjR6YtOByFtJiT574+8p9Wlach0lZH9fddD4yb9laEAIl4vXQA==}
@@ -6092,46 +6089,9 @@ packages:
   '@tokenlens/models@1.3.0':
     resolution: {integrity: sha512-9mx7ZGeewW4ndXAiD7AT1bbCk4OpJeortbjHHyNkgap+pMPPn1chY6R5zqe1ggXIUzZ2l8VOAKfPqOvpcrisJw==}
 
-  '@trpc/client@11.7.1':
-    resolution: {integrity: sha512-uOnAjElKI892/U6aQMcBHYs3x7mme3Cvv1F87ytBL56rBvs7+DyK7r43zgaXKf13+GtPEI6ex5xjVUfyDW8XcQ==}
+  '@trpc/server@11.10.0':
+    resolution: {integrity: sha512-zZjTrR6He61e5TiT7e/bQqab/jRcXBZM8Fg78Yoo8uh5pz60dzzbYuONNUCOkafv5ppXVMms4NHYfNZgzw50vg==}
     peerDependencies:
-      '@trpc/server': 11.7.1
-      typescript: '>=5.7.2'
-
-  '@trpc/client@11.7.2':
-    resolution: {integrity: sha512-OQxqUMfpDvjcszo9dbnqWQXnW2L5IbrKSz2H7l8s+mVM3EvYw7ztQ/gjFIN3iy0NcamiQfd4eE6qjcb9Lm+63A==}
-    peerDependencies:
-      '@trpc/server': 11.7.2
-      typescript: '>=5.7.2'
-
-  '@trpc/server@11.7.1':
-    resolution: {integrity: sha512-N3U8LNLIP4g9C7LJ/sLkjuPHwqlvE3bnspzC4DEFVdvx2+usbn70P80E3wj5cjOTLhmhRiwJCSXhlB+MHfGeCw==}
-    peerDependencies:
-      typescript: '>=5.7.2'
-
-  '@trpc/server@11.7.2':
-    resolution: {integrity: sha512-AgB26PXY69sckherIhCacKLY49rxE2XP5h38vr/KMZTbLCL1p8IuIoKPjALTcugC2kbyQ7Lbqo2JDVfRSmPmfQ==}
-    peerDependencies:
-      typescript: '>=5.7.2'
-
-  '@trpc/tanstack-react-query@11.7.1':
-    resolution: {integrity: sha512-qc7kz4NY7CCvCxLy5HGptfKd3e3yJnWmTd6/Gkr4IY8B73PNFmcHKvLWE4kzU7r+R72MfT57TXrCEJ7ErLSMtw==}
-    peerDependencies:
-      '@tanstack/react-query': ^5.80.3
-      '@trpc/client': 11.7.1
-      '@trpc/server': 11.7.1
-      react: '>=18.2.0'
-      react-dom: '>=18.2.0'
-      typescript: '>=5.7.2'
-
-  '@trpc/tanstack-react-query@11.7.2':
-    resolution: {integrity: sha512-3XrY0b8lV0Fhj4Z2hVn1d1ZJzq2/stbc2F1e9Y6RrUWOfLmOKHlEVHYO1QfDGM6rqj66DkUj7eA593hAI0VTkQ==}
-    peerDependencies:
-      '@tanstack/react-query': ^5.80.3
-      '@trpc/client': 11.7.2
-      '@trpc/server': 11.7.2
-      react: '>=18.2.0'
-      react-dom: '>=18.2.0'
       typescript: '>=5.7.2'
 
   '@tybys/wasm-util@0.10.1':
@@ -7260,10 +7220,6 @@ packages:
 
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
-    engines: {node: '>=18'}
-
-  copy-anything@4.0.5:
-    resolution: {integrity: sha512-7Vv6asjS4gMOuILabD3l739tsaxFQmC+a7pLZm02zyvs8p977bL3zEgq3yDk5rn9B0PbYgIv++jmHcuUab4RhA==}
     engines: {node: '>=18'}
 
   core-js-compat@3.46.0:
@@ -8915,10 +8871,6 @@ packages:
   is-weakset@2.0.4:
     resolution: {integrity: sha512-mfcwb6IzQyOKTs84CQMrOwW4gQcaTOAWJ0zzJCl2WSPDrWk/OzDaImWFH3djXhb24g4eudZfLRozAvPGw4d9hQ==}
     engines: {node: '>= 0.4'}
-
-  is-what@5.5.0:
-    resolution: {integrity: sha512-oG7cgbmg5kLYae2N5IVd3jm2s+vldjxJzK1pcu9LfpGuQ93MQSzo0okvRna+7y5ifrD+20FE8FvjusyGaz14fw==}
-    engines: {node: '>=18'}
 
   is-wsl@3.1.0:
     resolution: {integrity: sha512-UcVfVfaK4Sc4m7X3dUSoHoozQGBEFeDC+zVo06t98xe8CzHSZZBekNXH+tu0NalHolcJ/QAGqS46Hef7QXBIMw==}
@@ -10892,10 +10844,6 @@ packages:
   stylis@4.3.6:
     resolution: {integrity: sha512-yQ3rwFWRfwNUY7H5vpU0wfdkNSnvnJinhF9830Swlaxl03zsOjCfmX0ugac+3LtK0lYSgwL/KXc8oYL3mG4YFQ==}
 
-  superjson@2.2.6:
-    resolution: {integrity: sha512-H+ue8Zo4vJmV2nRjpx86P35lzwDT3nItnIsocgumgr0hHMQ+ZGq5vrERg9kJBo5AWGmxZDhzDo+WVIJqkB0cGA==}
-    engines: {node: '>=16'}
-
   supports-color@10.2.2:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
@@ -11198,6 +11146,10 @@ packages:
 
   type-fest@5.4.0:
     resolution: {integrity: sha512-wfkA6r0tBpVfGiyO+zbf9e10QkRQSlK9F2UvyfnjoCmrvH2bjHyhPzhugSBOuq1dog3P0+FKckqe+Xf6WKVjwg==}
+    engines: {node: '>=20'}
+
+  type-fest@5.4.4:
+    resolution: {integrity: sha512-JnTrzGu+zPV3aXIUhnyWJj4z/wigMsdYajGLIYakqyOW1nPllzXEJee0QQbHj+CTIQtXGlAjuK0UY+2xTyjVAw==}
     engines: {node: '>=20'}
 
   typed-array-buffer@1.0.3:
@@ -15460,6 +15412,17 @@ snapshots:
       - fastify
       - ws
 
+  '@orpc/react-query@1.13.5(@opentelemetry/api@1.9.0)(@orpc/client@1.13.4(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.16)(@tanstack/react-query@5.90.16(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      '@orpc/client': 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.5(@opentelemetry/api@1.9.0)
+      '@orpc/tanstack-query': 1.13.5(@opentelemetry/api@1.9.0)(@orpc/client@1.13.4(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.16)
+      '@tanstack/react-query': 5.90.16(react@19.2.3)
+      react: 19.2.3
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@tanstack/query-core'
+
   '@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
     dependencies:
       '@orpc/client': 1.13.4(@opentelemetry/api@1.9.0)
@@ -15483,7 +15446,14 @@ snapshots:
   '@orpc/shared@1.13.4(@opentelemetry/api@1.9.0)':
     dependencies:
       radash: 12.1.1
-      type-fest: 5.4.0
+      type-fest: 5.4.4
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
+
+  '@orpc/shared@1.13.5(@opentelemetry/api@1.9.0)':
+    dependencies:
+      radash: 12.1.1
+      type-fest: 5.4.4
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
 
@@ -15529,6 +15499,14 @@ snapshots:
   '@orpc/standard-server@1.13.4(@opentelemetry/api@1.9.0)':
     dependencies:
       '@orpc/shared': 1.13.4(@opentelemetry/api@1.9.0)
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  '@orpc/tanstack-query@1.13.5(@opentelemetry/api@1.9.0)(@orpc/client@1.13.4(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.90.16)':
+    dependencies:
+      '@orpc/client': 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/shared': 1.13.5(@opentelemetry/api@1.9.0)
+      '@tanstack/query-core': 5.90.16
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
@@ -17815,41 +17793,10 @@ snapshots:
     dependencies:
       '@tokenlens/core': 1.3.0
 
-  '@trpc/client@11.7.1(@trpc/server@11.7.1(typescript@5.9.3))(typescript@5.9.3)':
-    dependencies:
-      '@trpc/server': 11.7.1(typescript@5.9.3)
-      typescript: 5.9.3
-
-  '@trpc/client@11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)':
-    dependencies:
-      '@trpc/server': 11.7.2(typescript@5.9.3)
-      typescript: 5.9.3
-
-  '@trpc/server@11.7.1(typescript@5.9.3)':
+  '@trpc/server@11.10.0(typescript@5.9.3)':
     dependencies:
       typescript: 5.9.3
-
-  '@trpc/server@11.7.2(typescript@5.9.3)':
-    dependencies:
-      typescript: 5.9.3
-
-  '@trpc/tanstack-react-query@11.7.1(@tanstack/react-query@5.90.5(react@19.2.0))(@trpc/client@11.7.1(@trpc/server@11.7.1(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.1(typescript@5.9.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.3)':
-    dependencies:
-      '@tanstack/react-query': 5.90.5(react@19.2.0)
-      '@trpc/client': 11.7.1(@trpc/server@11.7.1(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server': 11.7.1(typescript@5.9.3)
-      react: 19.2.0
-      react-dom: 19.2.0(react@19.2.0)
-      typescript: 5.9.3
-
-  '@trpc/tanstack-react-query@11.7.2(@tanstack/react-query@5.90.16(react@19.2.3))(@trpc/client@11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.7.2(typescript@5.9.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(typescript@5.9.3)':
-    dependencies:
-      '@tanstack/react-query': 5.90.16(react@19.2.3)
-      '@trpc/client': 11.7.2(@trpc/server@11.7.2(typescript@5.9.3))(typescript@5.9.3)
-      '@trpc/server': 11.7.2(typescript@5.9.3)
-      react: 19.2.3
-      react-dom: 19.2.3(react@19.2.3)
-      typescript: 5.9.3
+    optional: true
 
   '@tybys/wasm-util@0.10.1':
     dependencies:
@@ -19168,10 +19115,6 @@ snapshots:
   cookie-es@2.0.0: {}
 
   cookie@1.1.1: {}
-
-  copy-anything@4.0.5:
-    dependencies:
-      is-what: 5.5.0
 
   core-js-compat@3.46.0:
     dependencies:
@@ -20996,8 +20939,6 @@ snapshots:
     dependencies:
       call-bound: 1.0.4
       get-intrinsic: 1.3.0
-
-  is-what@5.5.0: {}
 
   is-wsl@3.1.0:
     dependencies:
@@ -23430,10 +23371,6 @@ snapshots:
 
   stylis@4.3.6: {}
 
-  superjson@2.2.6:
-    dependencies:
-      copy-anything: 4.0.5
-
   supports-color@10.2.2: {}
 
   supports-color@7.2.0:
@@ -23569,45 +23506,45 @@ snapshots:
 
   trough@2.2.0: {}
 
-  trpc-cli@0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13):
+  trpc-cli@0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
       '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@trpc/server': 11.10.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.13
 
-  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@3.25.76):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
       '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@trpc/server': 11.10.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
       zod: 3.25.76
 
-  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.12):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
       '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@trpc/server': 11.10.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.1.12
 
-  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.7.2(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13):
+  trpc-cli@0.12.4(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.14)(valibot@1.2.0(typescript@5.9.3))(zod@4.1.13):
     dependencies:
       commander: 14.0.2
     optionalDependencies:
       '@orpc/server': 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@trpc/server': 11.7.2(typescript@5.9.3)
+      '@trpc/server': 11.10.0(typescript@5.9.3)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
       effect: 3.19.14
       valibot: 1.2.0(typescript@5.9.3)
@@ -23700,6 +23637,10 @@ snapshots:
   type-fest@4.41.0: {}
 
   type-fest@5.4.0:
+    dependencies:
+      tagged-tag: 1.0.0
+
+  type-fest@5.4.4:
     dependencies:
       tagged-tag: 1.0.0
 

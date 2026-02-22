@@ -1,16 +1,17 @@
 import { z } from "zod/v4";
 import { eq, desc } from "drizzle-orm";
-import { router, projectProtectedProcedure } from "../trpc.ts";
+import { projectProtectedProcedure, ProjectInput } from "../procedures.ts";
 import * as schema from "../../db/schema.ts";
 
-export const eventRouter = router({
+export const eventRouter = {
   list: projectProtectedProcedure
     .input(
       z.object({
+        ...ProjectInput.shape,
         limit: z.number().int().min(1).max(100).default(50),
       }),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const events = await ctx.db.query.event.findMany({
         where: eq(schema.event.projectId, ctx.project.id),
         orderBy: [desc(schema.event.createdAt)],
@@ -18,4 +19,4 @@ export const eventRouter = router({
       });
       return events;
     }),
-});
+};
