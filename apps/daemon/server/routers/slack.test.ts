@@ -446,6 +446,40 @@ describe("slack router", () => {
       expect(getOrCreateAgentMock).toHaveBeenCalledTimes(1);
     });
 
+    it("ignores our own bot's messages even if they contain a self-mention", async () => {
+      const ts = "6666666666.888888";
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_self_mention",
+        event: {
+          type: "message",
+          ts,
+          channel: "C_TEST",
+          user: botUserId, // our own bot
+          text: `Quoting <@${botUserId}>: hello world`,
+          bot_profile: { id: "B_BOT", name: "Our Bot" },
+          event_ts: ts,
+          channel_type: "channel",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("bot's own message");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
     it("ignores messages without bot authorization", async () => {
       const ts = "5555555555.555555";
 

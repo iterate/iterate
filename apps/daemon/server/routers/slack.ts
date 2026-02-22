@@ -171,18 +171,22 @@ type MessageCase =
   | "new_thread_mention"
   | "mid_thread_mention"
   | "fyi_message"
+  | "assistant_thread_started"
   | "reaction_added"
   | "reaction_removed"
   | "ignored";
 
 interface ParsedMessage {
-  case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
+  case: "new_thread_mention" | "mid_thread_mention" | "fyi_message";
   event: AppMentionEvent | GenericMessageEvent;
   threadTs: string;
-  /** When true, the agent should be created but no prompt should be sent.
-   *  Used for assistant_thread_started where the user's actual message
-   *  arrives as a separate follow-up event. */
-  skipPrompt?: boolean;
+}
+
+interface ParsedAssistantThread {
+  case: "assistant_thread_started";
+  userId: string;
+  channel: string;
+  threadTs: string;
 }
 
 interface ParsedReaction {
@@ -192,8 +196,22 @@ interface ParsedReaction {
   channel: string;
 }
 
-function isParsedReaction(parsed: ParsedMessage | ParsedReaction): parsed is ParsedReaction {
+type ParsedEvent =
+  | ParsedMessage
+  | ParsedAssistantThread
+  | ParsedReaction
+  | { case: "ignored"; reason: string };
+
+function isParsedReaction(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedReaction {
   return parsed.case === "reaction_added" || parsed.case === "reaction_removed";
+}
+
+function isParsedAssistantThread(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedAssistantThread {
+  return parsed.case === "assistant_thread_started";
 }
 
 slackRouter.use("*", async (c, next) => {
@@ -280,6 +298,30 @@ slackRouter.post("/webhook", async (c) => {
     });
   }
 
+  // ── assistant_thread_started (DM opened) ──
+  // Create the agent so the user's first actual message can be forwarded.
+  // No prompt is sent — there's no user message yet.
+  if (isParsedAssistantThread(parsed)) {
+    const agentPath = getAgentPath(parsed.threadTs);
+    const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+
+    if (result.wasNewlyCreated) {
+      void caller.subscribeToAgentChanges({
+        agentPath,
+        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
+      });
+    }
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: result.wasNewlyCreated,
+      case: "assistant_thread_started",
+      eventId,
+      requestId,
+    });
+  }
+
   // ── Message events (mentions & FYI) ──
 
   const { event, threadTs } = parsed;
@@ -288,8 +330,7 @@ slackRouter.post("/webhook", async (c) => {
   const messageTs = event.ts || threadTs;
 
   // For @mentions, start a context cycle and add eyes immediately.
-  // Skip emoji for assistant_thread_started — there's no user message to react to yet.
-  if (isMention && !parsed.skipPrompt) {
+  if (isMention) {
     ensureSlackThreadContext({
       agentPath,
       channel: event.channel || "",
@@ -396,19 +437,6 @@ slackRouter.post("/webhook", async (c) => {
     void caller.subscribeToAgentChanges({
       agentPath,
       callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
-    });
-  }
-
-  // assistant_thread_started: agent created, but no user message yet. The user's
-  // actual first message will arrive as a follow-up event and be forwarded then.
-  if (parsed.skipPrompt) {
-    return c.json({
-      success: true,
-      queued: false,
-      created: wasNewlyCreated,
-      case: "assistant_thread_started",
-      eventId,
-      requestId,
     });
   }
 
@@ -743,34 +771,23 @@ function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[]
 }
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
-function parseWebhookPayload(
-  payload: SlackWebhookPayload,
-): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
+function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
 
   // ── assistant_thread_started (DMs via Slack's assistant UI) ──
-  // Slack sends this instead of a regular message event when a user opens
-  // a DM thread with a bot that has the assistant:write scope. We create
-  // the agent so that the user's first actual message (which arrives as a
-  // follow-up `message` event in the thread) can be forwarded to it.
+  // Slack sends this instead of a regular message when a user opens a DM
+  // thread with a bot that has the assistant:write scope.
   if (event.type === "assistant_thread_started") {
     if (!botUserId) {
       return { case: "ignored", reason: "Ignored: no bot user recipient" };
     }
     const thread = (event as AssistantThreadStartedEvent).assistant_thread;
     return {
-      case: "new_thread_mention",
-      event: {
-        type: "app_mention",
-        ts: thread.thread_ts,
-        text: "",
-        user: thread.user_id,
-        channel: thread.channel_id,
-        event_ts: (event as AssistantThreadStartedEvent).event_ts,
-      } as AppMentionEvent,
+      case: "assistant_thread_started",
+      userId: thread.user_id,
+      channel: thread.channel_id,
       threadTs: thread.thread_ts,
-      skipPrompt: true,
     };
   }
 
@@ -790,15 +807,20 @@ function parseWebhookPayload(
     };
   }
 
+  // ── Self-message guard ──
+  // Always ignore our own bot's messages to prevent feedback loops.
+  if (botUserId && "user" in event && event.user === botUserId) {
+    return { case: "ignored", reason: "Ignored: bot's own message" };
+  }
+
   // ── Bot messages ──
-  // Ignore bot messages UNLESS they @mention our bot (another bot asking us
-  // to do something). Check mention before dropping.
+  // Ignore bot messages UNLESS they @mention our bot (another bot asking
+  // us to do something).
   const isBotMessage =
     ("bot_profile" in event && event.bot_profile) ||
     ("subtype" in event && event.subtype === "bot_message");
-  const textMentionsUs = botUserId && event.text?.includes(`<@${botUserId}>`);
 
-  if (isBotMessage && !textMentionsUs) {
+  if (isBotMessage && !event.text?.includes(`<@${botUserId}>`)) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
@@ -816,7 +838,7 @@ function parseWebhookPayload(
   const isDM = "channel_type" in event && event.channel_type === "im";
   const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`) || isDM;
 
-  let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
+  let messageCase: ParsedMessage["case"];
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
   } else if (isMention && !isNewThread) {
