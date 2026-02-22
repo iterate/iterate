@@ -58,11 +58,6 @@ export const makeOrpcClient = createIsomorphicFn()
       ),
   );
 
-/** React Query utils — provides `.queryOptions()`, `.mutationOptions()`, `.key()` etc. */
-export function makeOrpc(_queryClient: QueryClient, orpcClient: ReturnType<typeof makeOrpcClient>) {
-  return createORPCReactQueryUtils(orpcClient);
-}
-
 export function ORPCProvider({
   children,
   queryClient,

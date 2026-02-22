@@ -6,7 +6,7 @@
  *
  * These tests verify:
  * - Pidnap process supervision (env var reloading, process state)
- * - Daemon-backend HTTP endpoints and tRPC
+ * - Daemon-backend HTTP endpoints and oRPC
  * - Container restart with daemon recovery
  *
  * For lightweight tests that don't need pidnap/daemon (git, CLI tools, container setup),

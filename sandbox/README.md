@@ -88,7 +88,7 @@ Actual image used for sandbox creation
 | Docker   | `DOCKER_DEFAULT_IMAGE` | `registry.depot.dev/{depotProjectId}:sha-abc1234` |
 | Fly      | `FLY_DEFAULT_IMAGE`    | `registry.fly.io/iterate-sandbox:sha-abc1234`     |
 
-The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` tRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
+The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` oRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
 
 ## Build
 

@@ -195,7 +195,7 @@ FROM pgmq.q_consumer_job_queue
 WHERE msg_id IN (...);
 ```
 
-Queue only processes when triggered via `waitUntil` after an event is enqueued — there is no cron. If messages are stuck, use the admin "Process Queue" button or call `admin.outbox.processQueue` tRPC endpoint.
+Queue only processes when triggered via `waitUntil` after an event is enqueued — there is no cron. If messages are stuck, use the admin "Process Queue" button or call `admin.outbox.processQueue` oRPC endpoint.
 
 ### Deployment checklist — migrations
 

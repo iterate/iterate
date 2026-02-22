@@ -63,7 +63,7 @@ Daemon (/api/integrations/slack/webhook)
 | `docker` | `http://localhost:{metadata.port}/api/integrations/slack/webhook`          |
 | `fly`    | `https://3001__{machineId}.{canonicalHost}/api/integrations/slack/webhook` |
 
-## tRPC Endpoints
+## oRPC Endpoints
 
 - `project.getSlackWebhookTargetMachine`: Get current webhook target machine for Slack
 - `project.setSlackWebhookTargetMachine`: Set/update webhook target machine (pass `null` to disable)

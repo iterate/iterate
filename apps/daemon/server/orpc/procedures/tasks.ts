@@ -91,7 +91,7 @@ async function getTaskBySlug(slug: string) {
   return null;
 }
 
-// TODO: oRPC doesn't support .meta() — descriptions from tRPC .meta({ description }) are dropped for now
+// TODO: oRPC doesn't support .meta() — descriptions from .meta({ description }) are dropped for now
 export const tasksRouter = {
   list: publicProcedure.handler(async () => {
     return listTasks();

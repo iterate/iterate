@@ -93,7 +93,7 @@ function getLazyClients() {
   };
 }
 
-// TODO: oRPC doesn't support .meta() — descriptions from tRPC .meta({ description }) are dropped for now
+// TODO: oRPC doesn't support .meta() — descriptions from .meta({ description }) are dropped for now
 export const toolsRouter = {
   readFile: publicProcedure
     .input(

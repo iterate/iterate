@@ -1,6 +1,6 @@
 # Daemon
 
-A local daemon for managing coding agents with a web UI. Built with Hono (server) and React + TanStack Router (client).
+A local daemon for managing coding agents with a web UI. Built with Hono (server) and React + TanStack Router (client). API layer uses oRPC.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ A local daemon for managing coding agents with a web UI. Built with Hono (server
 │  │   Vite Dev Server      │      │    Hono API Server          │    │
 │  │   (port 3000)          │      │    (port 3001)              │    │
 │  │                        │      │                             │    │
-│  │  - React SPA (HMR)     │ ───► │  - /api/trpc/*              │    │
+│  │  - React SPA (HMR)     │ ───► │  - /api/orpc/*              │    │
 │  │  - Proxies /api/*      │ ws   │  - /api/health              │    │
 │  │                        │      │  - /api/pty (WebSocket)     │    │
 │  └────────────────────────┘      └─────────────────────────────┘    │
@@ -25,7 +25,7 @@ A local daemon for managing coding agents with a web UI. Built with Hono (server
 │  │                    Hono Server (port 3001)                    │   │
 │  │                                                               │   │
 │  │  - Serves static SPA from ./dist                              │   │
-│  │  - /api/trpc/*                                                │   │
+│  │  - /api/orpc/*                                                │   │
 │  │  - /api/health                                                │   │
 │  │  - /api/pty (WebSocket for terminal)                          │   │
 │  └──────────────────────────────────────────────────────────────┘   │
@@ -51,13 +51,13 @@ apps/daemon/
 ├── client/              # React SPA (TanStack Router)
 │   ├── components/      # UI components
 │   ├── hooks/           # React hooks
-│   ├── integrations/    # tRPC and TanStack Query setup
+│   ├── integrations/    # oRPC and TanStack Query setup
 │   ├── routes/          # File-based routes
 │   ├── main.tsx         # Client entry point
 │   └── router.tsx       # Router configuration
 ├── server/              # Hono API server
 │   ├── routers/         # API route handlers
-│   ├── trpc/            # tRPC router and procedures
+│   ├── orpc/            # oRPC router and procedures
 │   ├── db/              # Database schema and client
 │   ├── utils/           # Shared utilities (Hono app, WebSocket)
 │   └── app.ts           # Main Hono app with middleware
@@ -68,9 +68,9 @@ apps/daemon/
 
 ## API Endpoints
 
-### tRPC (`/api/trpc/*`)
+### oRPC (`/api/orpc/*`)
 
-All application data is accessed via tRPC procedures.
+All application data is accessed via oRPC procedures.
 
 ### WebSocket (`/api/pty`)
 
