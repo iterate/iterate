@@ -166,13 +166,12 @@ The `os` worker handles all oRPC calls from daemons. To debug 500s from the cont
 
 ### Querying the production database
 
-Get the prod DB connection string from the `db:studio:prd` script:
+Get the prod DB connection string from the `db:studio:prd` script. Run from `apps/os/`:
 
 ```bash
-DB_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_POSTGRES_URL)
-npx tsx -e "
+doppler run --config prd -- npx tsx -e "
 import postgres from 'postgres';
-const sql = postgres('$DB_URL', { prepare: false, ssl: 'require' });
+const sql = postgres(process.env.PLANETSCALE_PROD_POSTGRES_URL!, { prepare: false, ssl: 'require' });
 async function main() {
   // your queries here
   await sql.end();
@@ -182,6 +181,40 @@ main();
 ```
 
 Needs `ssl: 'require'` (PlanetScale). Wrap in `async function main()` — top-level await doesn't work with tsx eval.
+
+**Column naming:** The DB uses `snake_case` columns (e.g. `external_id`, `project_id`, `created_at`), not camelCase. Use `SELECT *` first if unsure of column names.
+
+### Looking up machine info (production)
+
+To find the active machine for a project, its Fly app name, and Fly machine ID:
+
+```bash
+# 1. Find active machine in DB (from apps/os/)
+doppler run --config prd -- npx tsx -e "
+import postgres from 'postgres';
+const sql = postgres(process.env.PLANETSCALE_PROD_POSTGRES_URL!, { prepare: false, ssl: 'require' });
+async function main() {
+  const machines = await sql\`SELECT id, name, state, external_id, created_at FROM machine WHERE project_id = '<PROJECT_ID>' ORDER BY created_at DESC LIMIT 5\`;
+  console.log(JSON.stringify(machines, null, 2));
+  await sql.end();
+}
+main();
+"
+# external_id = Fly app name (e.g. prd-iterate-mach-01kj3...)
+
+# 2. Get Fly machine ID
+doppler run --config prd -- fly machines list -a <external_id>
+
+# 3. Get logs
+doppler run --config prd -- fly logs -a <external_id> --no-tail
+
+# 4. Search logs for specific patterns
+doppler run --config prd -- fly logs -a <external_id> --no-tail 2>&1 | grep -i 'slack\|error\|ERR'
+```
+
+Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873`.
+
+**Fly log limitations:** `fly logs --no-tail` only returns recent logs (last ~30min). Bootstrap/startup logs may not be visible if the machine started hours ago.
 
 ### Outbox queue operations
 
@@ -211,6 +244,7 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - **Readiness probe pipeline** — machine activation uses a staged event pipeline: `daemon-ready` → `probe-sent` → `probe-succeeded` → `activated`. Each stage is a separate consumer. The `reportStatus` handler emits `machine:daemon-ready` only when daemon reports ready AND `externalId` exists AND `daemonStatus !== "probing"`. If `externalId` is missing (provisioning still running), `machine-creation.ts` emits the deferred `daemon-ready` after provisioning completes. See `apps/os/backend/outbox/consumers.ts` for the full pipeline.
 - **oRPC errors were silent** — prior to adding the `onError` interceptor on `RPCHandler` in `worker.ts`, unhandled errors in oRPC handlers were swallowed into generic 500s with no logging. The `cf-ray` response header can be used to correlate daemon-side errors with CF Worker dashboard logs.
 - **Queue head-of-line blocking** — `processQueue` reads 2 messages at a time by VT order. A stale probe poll (120s timeout) blocks all messages behind it. Archive stale messages via pgmq to unblock.
+- **Pidnap env lifecycle** — pidnap spawns child processes with env vars merged from the config `env`, the global `envFile`, and `process.env`. If a process has `reloadDelay: false`, it never restarts on env file changes, so env vars written after process start are invisible. Use `pidnap process reload <name> -d '<definition-json>' -r true` to force a restart with fresh env. Plain `pidnap process restart` re-applies env defaults too (reload under the hood). The env watcher still tracks file contents even when reload is disabled.
 
 ## Pointers
 

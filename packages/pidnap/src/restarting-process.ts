@@ -224,11 +224,19 @@ export class RestartingProcess {
   }
 
   /**
+   * Update the process definition without restarting.
+   * The new definition takes effect on the next start/restart.
+   */
+  updateDefinition(newDefinition: ProcessDefinition): void {
+    this.lazyProcess.updateDefinition(newDefinition);
+  }
+
+  /**
    * Update process definition and optionally restart with new config
    */
   async reload(newDefinition: ProcessDefinition, restartImmediately = true): Promise<void> {
     this.logger.info(`Reloading process with new definition`);
-    this.lazyProcess.updateDefinition(newDefinition);
+    this.updateDefinition(newDefinition);
 
     if (restartImmediately) {
       // Restart with force=true to apply changes immediately

@@ -113,8 +113,9 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        // Keep reload disabled to avoid restart loops when daemon rewrites ~/.iterate/.env.
-        reloadDelay: false,
+        // Reload after OS pushes ~/.iterate/.env (contains SLACK_BOT_TOKEN etc.)
+        // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
+        reloadDelay: 500,
       },
     },
     {
