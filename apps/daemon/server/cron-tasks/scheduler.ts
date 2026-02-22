@@ -9,8 +9,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CronTime } from "cron";
 import dedent from "dedent";
-import { getCustomerRepoPath } from "../trpc/platform.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { createRouterClient } from "@orpc/server";
+import { getCustomerRepoPath } from "../orpc/platform.ts";
+import { daemonRouter } from "../orpc/router.ts";
 import {
   type ParsedTask,
   parseTaskFile,
@@ -54,7 +55,9 @@ function getCronAgentPath(agentPathSegment: string): string {
 
 /** Check whether an active agent exists via tRPC. */
 async function agentExists(agentPath: string): Promise<boolean> {
-  const agent = await trpcRouter.createCaller({}).getAgent({ path: agentPath });
+  const agent = await createRouterClient(daemonRouter, { context: {} }).getAgent({
+    path: agentPath,
+  });
   return agent !== null;
 }
 

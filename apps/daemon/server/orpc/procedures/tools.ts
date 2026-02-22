@@ -10,7 +10,7 @@ import Replicate from "replicate";
 import { Resend } from "resend";
 import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
-import { createTRPCRouter, logEmitterStorage, publicProcedure } from "../init.ts";
+import { logEmitterStorage, publicProcedure } from "../init.ts";
 
 function getWebchatClient() {
   const daemonPort = process.env.PORT || "3001";
@@ -92,15 +92,15 @@ function getLazyClients() {
   };
 }
 
-export const toolsRouter = createTRPCRouter({
+// TODO: oRPC doesn't support .meta() — descriptions from tRPC .meta({ description }) are dropped for now
+export const toolsRouter = {
   readFile: publicProcedure
-    .meta({ description: "Read a file from the filesystem" })
     .input(
       z.object({
         path: z.string().describe("File path to read. ~ is resolved to the home directory."),
       }),
     )
-    .query(async ({ input }) => {
+    .handler(async ({ input }) => {
       const resolvedPath = input.path.startsWith("~")
         ? path.join(homedir(), input.path.slice(1))
         : input.path;
@@ -116,7 +116,6 @@ export const toolsRouter = createTRPCRouter({
     }),
 
   writeFile: publicProcedure
-    .meta({ description: "Write a file to the filesystem" })
     .input(
       z.object({
         path: z.string().describe("File path to write. ~ is resolved to the home directory."),
@@ -124,7 +123,7 @@ export const toolsRouter = createTRPCRouter({
         mode: z.number().optional().describe("File permissions mode"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const resolvedPath = input.path.startsWith("~")
         ? path.join(homedir(), input.path.slice(1))
         : input.path;
@@ -134,7 +133,6 @@ export const toolsRouter = createTRPCRouter({
     }),
 
   execCommand: publicProcedure
-    .meta({ description: "Execute a shell command" })
     .input(
       z.object({
         command: z
@@ -148,7 +146,7 @@ export const toolsRouter = createTRPCRouter({
         timeout: z.number().optional().describe("Timeout in milliseconds (default: 120000)"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const [command, ...args] = input.command;
       if (!command) throw new Error("command array must have at least one element");
       const result = await exec(command, args, {
@@ -165,7 +163,6 @@ export const toolsRouter = createTRPCRouter({
     }),
 
   execTs: publicProcedure
-    .meta({ description: "Execute TypeScript with access to integration clients" })
     .input(
       z.object({
         cwd: z
@@ -207,7 +204,7 @@ export const toolsRouter = createTRPCRouter({
         `),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const cwd = input.cwd || process.cwd();
       const generatedDir = path.join(cwd, "_generated");
       const filename = input.filename || `${new Date().toISOString().replaceAll(":", ".")}.ts`;
@@ -266,7 +263,6 @@ export const toolsRouter = createTRPCRouter({
       return module_.default(clients);
     }),
   execJs: publicProcedure
-    .meta({ description: "Execute JavaScript with access to integration clients" })
     .input(
       z.object({
         code: z.string().meta({ positional: true }).describe(dedent`
@@ -302,7 +298,7 @@ export const toolsRouter = createTRPCRouter({
         `),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const require = createRequire(import.meta.url);
       const clients = getLazyClients();
       // Each client name becomes a top-level variable in the executed code.
@@ -342,61 +338,58 @@ export const toolsRouter = createTRPCRouter({
       return result;
     }),
 
-  printenv: publicProcedure
-    .meta({ description: "List environment variables from ~/.iterate/.env" })
-    .input(z.object({}).optional())
-    .query(() => {
-      const envFilePath = path.join(homedir(), ".iterate/.env");
-      let content: string;
-      try {
-        content = readFileSync(envFilePath, "utf-8");
-      } catch (error) {
-        return {
-          success: false,
-          error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
-          activeEnvVars: [],
-          recommendedEnvVars: [],
-        };
-      }
-
-      const lines = content.split("\n");
-      type EnvVar = { name: string; description?: string };
-      const activeEnvVars: EnvVar[] = [];
-      const recommendedEnvVars: EnvVar[] = [];
-
-      for (let index = 0; index < lines.length; index++) {
-        const line = lines[index]?.trim();
-        if (!line) {
-          continue;
-        }
-
-        const getDescription = (): string | undefined => {
-          if (index > 0) {
-            const previous = lines[index - 1]?.trim();
-            if (previous?.startsWith("#") && !previous.startsWith("#[")) {
-              return previous.replace(/^#\s*/, "");
-            }
-          }
-          return undefined;
-        };
-
-        const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
-        if (recommendedMatch) {
-          recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
-          continue;
-        }
-
-        const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
-        if (activeMatch) {
-          activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
-        }
-      }
-
+  printenv: publicProcedure.input(z.object({}).optional()).handler(() => {
+    const envFilePath = path.join(homedir(), ".iterate/.env");
+    let content: string;
+    try {
+      content = readFileSync(envFilePath, "utf-8");
+    } catch (error) {
       return {
-        success: true,
-        activeEnvVars,
-        recommendedEnvVars,
-        envFilePath,
+        success: false,
+        error: `Failed to read ${envFilePath}: ${error instanceof Error ? error.message : String(error)}`,
+        activeEnvVars: [],
+        recommendedEnvVars: [],
       };
-    }),
-});
+    }
+
+    const lines = content.split("\n");
+    type EnvVar = { name: string; description?: string };
+    const activeEnvVars: EnvVar[] = [];
+    const recommendedEnvVars: EnvVar[] = [];
+
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index]?.trim();
+      if (!line) {
+        continue;
+      }
+
+      const getDescription = (): string | undefined => {
+        if (index > 0) {
+          const previous = lines[index - 1]?.trim();
+          if (previous?.startsWith("#") && !previous.startsWith("#[")) {
+            return previous.replace(/^#\s*/, "");
+          }
+        }
+        return undefined;
+      };
+
+      const recommendedMatch = line.match(/^#\[recommended\]\s*([A-Z][A-Z0-9_]*)=/);
+      if (recommendedMatch) {
+        recommendedEnvVars.push({ name: recommendedMatch[1], description: getDescription() });
+        continue;
+      }
+
+      const activeMatch = line.match(/^([A-Z][A-Z0-9_]*)=/);
+      if (activeMatch) {
+        activeEnvVars.push({ name: activeMatch[1], description: getDescription() });
+      }
+    }
+
+    return {
+      success: true,
+      activeEnvVars,
+      recommendedEnvVars,
+      envFilePath,
+    };
+  }),
+};

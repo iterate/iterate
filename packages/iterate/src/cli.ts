@@ -4,12 +4,12 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
-import { createTRPCClient, httpLink } from "@trpc/client";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { initTRPC } from "@trpc/server";
 import type { AnyRouter } from "@trpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import superjson from "superjson";
 import { createCli, type parseRouter } from "trpc-cli";
 import { proxify } from "trpc-cli/dist/proxify.js";
 import { z } from "zod/v4";
@@ -311,42 +311,55 @@ const loadAppRouter = async (params: {
   return router as { procedures: ParsedRouter };
 };
 
+/** Wraps an oRPC client so `wrapper[dotPath].query(input)` and `.mutate(input)` work (for trpc-cli proxify compat) */
+const orpcToTrpcStyleClient = (orpcClient: unknown) => {
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop: string) => {
+        const parts = prop.split(".");
+        let current: any = orpcClient;
+        for (const part of parts) current = current[part];
+        return { query: (input: any) => current(input), mutate: (input: any) => current(input) };
+      },
+    },
+  );
+};
+
 const getOsProcedures = async (params: { baseUrl: string }) => {
   const appRouter = await loadAppRouter(params);
   const proxiedRouter = proxify(appRouter.procedures, async () => {
-    return createTRPCClient({
-      links: [
-        httpLink({
-          url: `${params.baseUrl}/api/trpc/`,
-          transformer: superjson,
-          fetch: async (request, init) => {
-            const authConfig = readAuthConfig(process.cwd());
-            if (authConfig instanceof Error) throw authConfig;
-            const { userCookies } = await osAuthDance(authConfig);
-            const headers = new Headers(init?.headers);
-            headers.set("cookie", userCookies);
-            return fetch(request, { ...init, headers });
-          },
-        }),
-      ],
-    });
+    const client = createORPCClient(
+      new RPCLink({
+        url: `${params.baseUrl}/api/orpc/`,
+        fetch: async (request: URL | Request, init?: RequestInit) => {
+          const authConfig = readAuthConfig(process.cwd());
+          if (authConfig instanceof Error) throw authConfig;
+          const { userCookies } = await osAuthDance(authConfig);
+          const headers = new Headers(init?.headers);
+          headers.set("cookie", userCookies);
+          return fetch(request, { ...init, headers });
+        },
+      }),
+    );
+    return orpcToTrpcStyleClient(client);
   });
 
   return proxiedRouter;
 };
 
 /**
- * Creates a fetch wrapper that calls /api/trpc-stream/* instead of /api/trpc/*.
+ * Creates a fetch wrapper that calls /api/orpc-stream/* instead of /api/orpc/*.
  * The streaming endpoint returns SSE: log lines as `event: log` and the final
- * tRPC response as `event: response`, which we reassemble into a normal Response.
+ * oRPC response as `event: response`, which we reassemble into a normal Response.
  */
 const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
   return async (input: any, init: any) => {
-    // Rewrite URL from /api/trpc/X to /api/trpc-stream/X
+    // Rewrite URL from /api/orpc/X to /api/orpc-stream/X
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const rewritten = url.replace(
-      `${daemonBaseUrl}/api/trpc/`,
-      `${daemonBaseUrl}/api/trpc-stream/`,
+      `${daemonBaseUrl}/api/orpc/`,
+      `${daemonBaseUrl}/api/orpc-stream/`,
     );
     const res = await fetch(rewritten, init);
     if (rewritten === url) return res;
@@ -382,7 +395,7 @@ const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
         }
       }
     }
-    // Reconstruct a normal Response from the final payload so tRPC client is happy
+    // Reconstruct a normal Response from the final payload so oRPC client is happy
     return new Response(responseBody, {
       status: res.status,
       headers: { "content-type": "application/json" },
@@ -393,14 +406,13 @@ const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
 const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
   const daemonRouter = await loadAppRouter({ baseUrl: params.daemonBaseUrl });
   const proxiedRouter = proxify(daemonRouter.procedures, async () => {
-    return createTRPCClient({
-      links: [
-        httpLink({
-          url: `${params.daemonBaseUrl}/api/trpc/`,
-          fetch: streamingFetch(params.daemonBaseUrl),
-        }),
-      ],
-    });
+    const client = createORPCClient(
+      new RPCLink({
+        url: `${params.daemonBaseUrl}/api/orpc/`,
+        fetch: streamingFetch(params.daemonBaseUrl),
+      }),
+    );
+    return orpcToTrpcStyleClient(client);
   });
 
   return proxiedRouter;

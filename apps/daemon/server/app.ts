@@ -2,12 +2,12 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { parseRouter } from "trpc-cli";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { RPCHandler } from "@orpc/server/fetch";
+import { onError } from "@orpc/server";
 import { propagation, context, type TextMapGetter } from "@opentelemetry/api";
 import { getOtelConfig } from "./utils/otel-init.ts";
-import { logEmitterStorage } from "./trpc/init.ts";
-import { appRouter } from "./trpc/app-router.ts";
+import { logEmitterStorage } from "./orpc/init.ts";
+import { appRouter } from "./orpc/app-router.ts";
 import { baseApp } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 import { slackRouter } from "./routers/slack.ts";
@@ -79,44 +79,53 @@ app.get("/api/observability", (c) => {
   });
 });
 
-const trpcOnError = ({
-  error,
-  path,
-}: {
-  error: { message: string; stack?: string };
-  path?: string;
-}) => {
-  const procedurePath = path ?? "unknown";
-  const status = getHTTPStatusCodeFromError(
-    error as Parameters<typeof getHTTPStatusCodeFromError>[0],
-  );
-  if (status >= 500) {
-    console.error(`tRPC Error ${status} in ${procedurePath}: ${error.message}`);
-  } else {
-    console.warn(`tRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
-  }
-};
-
-app.all("/api/trpc/*", (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    allowMethodOverride: true,
-    onError: trpcOnError,
-  });
+const orpcHandler = new RPCHandler(appRouter, {
+  interceptors: [
+    onError((error) => {
+      const maybeStatus =
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
+      const errorDetails =
+        error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          : { name: "NonErrorThrowable", message: String(error), stack: "unavailable" };
+      const message = `oRPC Error ${maybeStatus ?? "unknown"}: ${errorDetails.message}`;
+      if (!maybeStatus || maybeStatus >= 500) {
+        console.error(message, errorDetails);
+      } else {
+        console.warn(message, errorDetails);
+      }
+    }),
+  ],
 });
 
-// Streaming variant: same as /api/trpc/* but wraps the response in SSE so that
+app.all("/api/orpc/*", async (c) => {
+  const { matched, response } = await orpcHandler.handle(c.req.raw, {
+    prefix: "/api/orpc",
+    context: {},
+  });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  return c.json({ error: "Not found" }, 404);
+});
+
+// Streaming variant: same as /api/orpc/* but wraps the response in SSE so that
 // console.log calls inside execJs (or any procedure that emits to the log
 // emitter) are streamed to the caller in real-time.
 // Uses AsyncLocalStorage so concurrent requests each get their own emitter.
-app.all("/api/trpc-stream/*", (c) => {
+app.all("/api/orpc-stream/*", async (c) => {
   const emitter = new EventTarget();
 
-  // Rewrite the request URL so fetchRequestHandler sees /api/trpc/...
+  // Rewrite the request URL so oRPC handler sees /api/orpc/...
   const url = new URL(c.req.url);
-  url.pathname = url.pathname.replace("/api/trpc-stream/", "/api/trpc/");
+  url.pathname = url.pathname.replace("/api/orpc-stream/", "/api/orpc/");
   const rewrittenReq = new Request(url.toString(), c.req.raw);
 
   const stream = new ReadableStream({
@@ -130,24 +139,22 @@ app.all("/api/trpc-stream/*", (c) => {
         send("log", JSON.stringify(e.detail));
       }) as EventListener);
 
-      // Run the tRPC handler inside the AsyncLocalStorage context so that
+      // Run the oRPC handler inside the AsyncLocalStorage context so that
       // execJs (and any other procedure) can read the emitter via getStore().
       logEmitterStorage
-        .run(emitter, () =>
-          fetchRequestHandler({
-            endpoint: "/api/trpc",
-            req: rewrittenReq,
-            router: appRouter,
-            allowMethodOverride: true,
-            onError: trpcOnError,
-          }),
-        )
-        .then(async (res) => {
+        .run(emitter, async () => {
+          const { response } = await orpcHandler.handle(rewrittenReq, {
+            prefix: "/api/orpc",
+            context: {},
+          });
+          return response ?? new Response("Not found", { status: 404 });
+        })
+        .then(async (res: Response) => {
           const body = await res.text();
           send("response", body);
           controller.close();
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           send("response", JSON.stringify({ error: String(err) }));
           controller.close();
         });

@@ -389,7 +389,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "logGreeting",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
     handler: (params) => {
       logger.info(
@@ -401,7 +401,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "unstableConsumer",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("unstable"),
     handler: (params) => {
       if (params.job.attempt > 2) {
@@ -413,7 +413,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "badConsumer",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     retry: (job) => {
       if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: "1s" };
       return { retry: false, reason: "max retries reached" };

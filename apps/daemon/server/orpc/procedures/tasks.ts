@@ -15,7 +15,7 @@ import {
   serializeTask,
   slugToFilename,
 } from "../../cron-tasks/scheduler.ts";
-import { createTRPCRouter, publicProcedure } from "../init.ts";
+import { publicProcedure } from "../init.ts";
 
 /** Parse a duration string (e.g. "1h", "30m", "2 days") or ISO timestamp. */
 const DueInput = z
@@ -91,20 +91,17 @@ async function getTaskBySlug(slug: string) {
   return null;
 }
 
-export const tasksRouter = createTRPCRouter({
-  list: publicProcedure.meta({ description: "List active tasks" }).query(async () => {
+// TODO: oRPC doesn't support .meta() — descriptions from tRPC .meta({ description }) are dropped for now
+export const tasksRouter = {
+  list: publicProcedure.handler(async () => {
     return listTasks();
   }),
 
-  get: publicProcedure
-    .meta({ description: "Get a task by slug" })
-    .input(z.object({ slug: SlugInput }))
-    .query(async ({ input }) => {
-      return getTaskBySlug(input.slug);
-    }),
+  get: publicProcedure.input(z.object({ slug: SlugInput })).handler(async ({ input }) => {
+    return getTaskBySlug(input.slug);
+  }),
 
   add: publicProcedure
-    .meta({ description: "Add a new task" })
     .input(
       z.object({
         slug: SlugInput.describe("Task slug (e.g. 'daily-report')"),
@@ -117,7 +114,7 @@ export const tasksRouter = createTRPCRouter({
         priority: TaskPriority.default("normal"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const tasksDir = await getTasksDir();
       await fs.mkdir(tasksDir, { recursive: true });
 
@@ -148,30 +145,25 @@ export const tasksRouter = createTRPCRouter({
     }),
 
   complete: publicProcedure
-    .meta({ description: "Mark a task as completed and move to archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       return completeTask(input.slug, input.note);
     }),
 
   abandon: publicProcedure
-    .meta({ description: "Abandon a task and move to archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       return abandonTask(input.slug, input.note);
     }),
 
   reopen: publicProcedure
-    .meta({ description: "Reopen a task from archive" })
     .input(z.object({ slug: SlugInput, note: NoteInput }))
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       return reopenTask(input.slug, input.note);
     }),
 
-  processPending: publicProcedure
-    .meta({ description: "Process tasks that are due" })
-    .mutation(async () => {
-      await processPendingTasks();
-      return { success: true };
-    }),
-});
+  processPending: publicProcedure.handler(async () => {
+    await processPendingTasks();
+    return { success: true };
+  }),
+};

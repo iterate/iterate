@@ -2,7 +2,7 @@ import { createRouter, Link, type ErrorComponentProps } from "@tanstack/react-ro
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "./routeTree.gen";
-import { makeQueryClient, TRPCProvider } from "./lib/trpc.tsx";
+import { makeQueryClient, ORPCProvider } from "./lib/orpc.tsx";
 import { Spinner } from "./components/ui/spinner.tsx";
 
 /* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
@@ -66,7 +66,7 @@ export function getRouter() {
     defaultPendingMinMs: 200,
     defaultPendingComponent: DefaultPendingComponent,
     defaultErrorComponent: DefaultErrorComponent,
-    Wrap: ({ children }) => <TRPCProvider queryClient={queryClient}>{children}</TRPCProvider>,
+    Wrap: ({ children }) => <ORPCProvider queryClient={queryClient}>{children}</ORPCProvider>,
   });
 
   setupRouterSsrQueryIntegration({

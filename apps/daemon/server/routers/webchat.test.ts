@@ -6,15 +6,17 @@ const getOrCreateAgentMock = vi.fn();
 const getAgentMock = vi.fn();
 const subscribeToAgentChangesMock = vi.fn();
 
-vi.mock("../trpc/router.ts", () => ({
-  trpcRouter: {
-    createCaller: vi.fn(() => ({
+vi.mock("@orpc/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@orpc/server")>();
+  return {
+    ...actual,
+    createRouterClient: vi.fn(() => ({
       getOrCreateAgent: getOrCreateAgentMock,
       getAgent: getAgentMock,
       subscribeToAgentChanges: subscribeToAgentChangesMock,
     })),
-  },
-}));
+  };
+});
 
 vi.mock("../db/index.ts", () => ({
   db: {

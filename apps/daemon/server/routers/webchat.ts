@@ -34,9 +34,10 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { daemonRouter } from "../orpc/router.ts";
 import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
@@ -148,7 +149,7 @@ webchatRouter.post("/webhook", async (c) => {
   }
 
   const agentPath = getAgentPathForThread(webchatThreadId);
-  const caller = trpcRouter.createCaller({});
+  const caller = createRouterClient(daemonRouter, { context: {} });
   const { agent, wasNewlyCreated } = await caller.getOrCreateAgent({
     agentPath,
     createWithEvents: [],

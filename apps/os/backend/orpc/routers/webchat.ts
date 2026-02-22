@@ -1,7 +1,11 @@
 import { and, eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
-import { router, projectProtectedMutation, projectProtectedProcedure } from "../trpc.ts";
+import {
+  projectProtectedMutation,
+  projectProtectedProcedure,
+  ProjectInput,
+} from "../procedures.ts";
 import * as schema from "../../db/schema.ts";
 import {
   forwardWebchatWebhookToMachine,
@@ -27,8 +31,8 @@ const GetThreadMessagesInput = z.object({
   threadId: z.string().trim().min(1).max(200).optional(),
 });
 
-export const webchatRouter = router({
-  listThreads: projectProtectedProcedure.query(async ({ ctx }) => {
+export const webchatRouter = {
+  listThreads: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     const machine = await ctx.db.query.machine.findFirst({
       where: and(eq(schema.machine.projectId, ctx.project.id), eq(schema.machine.state, "active")),
     });
@@ -39,7 +43,7 @@ export const webchatRouter = router({
 
     const response = await listWebchatThreadsFromMachine(machine, ctx.env);
     if (!response.success) {
-      throw new TRPCError({ code: "BAD_GATEWAY", message: response.error });
+      throw new ORPCError("BAD_GATEWAY", { message: response.error });
     }
 
     return response.data;
@@ -47,7 +51,7 @@ export const webchatRouter = router({
 
   getThreadMessages: projectProtectedProcedure
     .input(z.object({ projectSlug: z.string(), ...GetThreadMessagesInput.shape }))
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (!input.threadId) {
         return { threadId: "", messages: [] };
       }
@@ -65,10 +69,7 @@ export const webchatRouter = router({
 
       const response = await listWebchatMessagesFromMachine(machine, input.threadId, ctx.env);
       if (!response.success) {
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: response.error,
-        });
+        throw new ORPCError("BAD_GATEWAY", { message: response.error });
       }
 
       return response.data;
@@ -76,7 +77,7 @@ export const webchatRouter = router({
 
   sendMessage: projectProtectedMutation
     .input(z.object({ projectSlug: z.string(), ...SendMessageInput.shape }))
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const machine = await ctx.db.query.machine.findFirst({
         where: and(
           eq(schema.machine.projectId, ctx.project.id),
@@ -85,8 +86,7 @@ export const webchatRouter = router({
       });
 
       if (!machine) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
+        throw new ORPCError("PRECONDITION_FAILED", {
           message: "No active machine for this project. Create or start a machine first.",
         });
       }
@@ -106,12 +106,9 @@ export const webchatRouter = router({
 
       const response = await forwardWebchatWebhookToMachine(machine, payload, ctx.env);
       if (!response.success) {
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: response.error,
-        });
+        throw new ORPCError("BAD_GATEWAY", { message: response.error });
       }
 
       return response.data;
     }),
-});
+};

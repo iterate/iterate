@@ -2,14 +2,14 @@ import { z } from "zod/v4";
 import { startServer } from "../start.ts";
 import { tasksRouter } from "./procedures/tasks.ts";
 import { toolsRouter } from "./procedures/tools.ts";
-import { createTRPCRouter, publicProcedure } from "./init.ts";
-import { trpcRouter } from "./router.ts";
+import { publicProcedure } from "./init.ts";
+import { daemonRouter } from "./router.ts";
 
-export const appRouter = createTRPCRouter({
-  daemon: trpcRouter,
+export const appRouter = {
+  daemon: daemonRouter,
   tool: toolsRouter,
   task: tasksRouter,
-  server: createTRPCRouter({
+  server: {
     start: publicProcedure
       .input(
         z.object({
@@ -17,11 +17,11 @@ export const appRouter = createTRPCRouter({
           hostname: z.string().default("localhost"),
         }),
       )
-      .mutation(async ({ input }) => {
+      .handler(async ({ input }) => {
         const server = await startServer(input);
         return { success: true, address: server.address() };
       }),
-  }),
-});
+  },
+};
 
 export type AppRouter = typeof appRouter;

@@ -42,7 +42,8 @@ vi.mock("../db/index.ts", () => ({
   db: testDb,
 }));
 
-const { trpcRouter } = await import("./router.ts");
+const { createRouterClient } = await import("@orpc/server");
+const { daemonRouter } = await import("./router.ts");
 
 describe("getOrCreateAgent", () => {
   beforeEach(() => {
@@ -66,7 +67,7 @@ describe("getOrCreateAgent", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     const result = await caller.getOrCreateAgent({
       agentPath: "/test/archived-with-route",
       createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
@@ -99,7 +100,7 @@ describe("getOrCreateAgent", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     const result = await caller.getOrCreateAgent({
       agentPath: "/test/archived-no-route",
       createWithEvents: [{ type: "iterate:agent:prompt-added", message: "resume" }],
@@ -131,7 +132,7 @@ describe("getOrCreateAgent", () => {
       }),
     );
 
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     await expect(
       caller.getOrCreateAgent({
         agentPath: "/test/archived-create-fails",
@@ -163,7 +164,7 @@ describe("getOrCreateAgent", () => {
       }),
     );
 
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     const promises = Array.from({ length: 10 }, () =>
       caller.getOrCreateAgent({
         agentPath: "/test/concurrent",

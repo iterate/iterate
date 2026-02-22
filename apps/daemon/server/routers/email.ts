@@ -16,9 +16,10 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { daemonRouter } from "../orpc/router.ts";
 
 const logger = console;
 const DAEMON_PORT = process.env.PORT || "3001";
@@ -99,7 +100,7 @@ emailRouter.post("/webhook", async (c) => {
     const emailBody = payload._iterate?.emailBody;
 
     // Get or create the agent — wasNewlyCreated tells us if this is a new thread or a reply.
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     const { wasNewlyCreated } = await caller.getOrCreateAgent({
       agentPath,
       createWithEvents: [],

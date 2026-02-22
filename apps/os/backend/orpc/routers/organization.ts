@@ -1,13 +1,13 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import {
-  router,
   protectedProcedure,
   protectedMutation,
   orgProtectedProcedure,
   orgAdminMutation,
-} from "../trpc.ts";
+  OrgInput,
+} from "../procedures.ts";
 import {
   organization,
   organizationUserMembership,
@@ -17,22 +17,21 @@ import {
 } from "../../db/schema.ts";
 import { slugify } from "../../utils/slug.ts";
 
-export const organizationRouter = router({
+export const organizationRouter = {
   create: protectedMutation
     .input(
       z.object({
         name: z.string().min(1).max(100),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const slug = slugify(input.name);
       const existing = await ctx.db.query.organization.findFirst({
         where: eq(organization.slug, slug),
       });
 
       if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
+        throw new ORPCError("CONFLICT", {
           message: "An organization with this name already exists",
         });
       }
@@ -43,10 +42,7 @@ export const organizationRouter = router({
         .returning();
 
       if (!newOrg) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create organization",
-        });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create organization" });
       }
 
       await ctx.db.insert(organizationUserMembership).values({
@@ -59,7 +55,7 @@ export const organizationRouter = router({
     }),
 
   // Get organization by slug
-  bySlug: orgProtectedProcedure.query(async ({ ctx }) => {
+  bySlug: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     return {
       ...ctx.organization,
       role: ctx.membership?.role,
@@ -67,7 +63,7 @@ export const organizationRouter = router({
   }),
 
   // Get organization with projects
-  withProjects: orgProtectedProcedure.query(async ({ ctx }) => {
+  withProjects: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const org = await ctx.db.query.organization.findFirst({
       where: eq(organization.id, ctx.organization.id),
       with: {
@@ -85,10 +81,11 @@ export const organizationRouter = router({
   update: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         name: z.string().min(1).max(100).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const [updated] = await ctx.db
         .update(organization)
         .set({
@@ -101,7 +98,7 @@ export const organizationRouter = router({
     }),
 
   // Get organization members
-  members: orgProtectedProcedure.query(async ({ ctx }) => {
+  members: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const members = await ctx.db.query.organizationUserMembership.findMany({
       where: eq(organizationUserMembership.organizationId, ctx.organization.id),
       with: {
@@ -126,20 +123,18 @@ export const organizationRouter = router({
   addMember: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         email: z.string().email(),
         role: z.enum(UserRole).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const existingUser = await ctx.db.query.user.findFirst({
         where: eq(user.email, input.email),
       });
 
       if (!existingUser) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "User not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "User not found" });
       }
 
       const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
@@ -154,10 +149,7 @@ export const organizationRouter = router({
       }
 
       if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners can add other owners",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Only owners can add other owners" });
       }
 
       const [membership] = await ctx.db
@@ -170,10 +162,7 @@ export const organizationRouter = router({
         .returning();
 
       if (!membership) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to add member",
-        });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to add member" });
       }
 
       return membership;
@@ -183,25 +172,20 @@ export const organizationRouter = router({
   updateMemberRole: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         userId: z.string(),
         role: z.enum(UserRole),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Can't change your own role
       if (input.userId === ctx.user.id) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Cannot change your own role",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Cannot change your own role" });
       }
 
       // Only owners can promote to owner
       if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners can promote to owner",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Only owners can promote to owner" });
       }
 
       const [updated] = await ctx.db
@@ -222,14 +206,14 @@ export const organizationRouter = router({
   removeMember: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         userId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Can't remove yourself
       if (input.userId === ctx.user.id) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Cannot remove yourself from the organization",
         });
       }
@@ -243,10 +227,7 @@ export const organizationRouter = router({
       });
 
       if (targetMembership?.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners can remove other owners",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Only owners can remove other owners" });
       }
 
       await ctx.db
@@ -262,12 +243,9 @@ export const organizationRouter = router({
     }),
 
   // Delete organization (owner only)
-  delete: orgAdminMutation.mutation(async ({ ctx }) => {
+  delete: orgAdminMutation.input(OrgInput).handler(async ({ context: ctx }) => {
     if (ctx.membership?.role !== "owner") {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Only owners can delete organizations",
-      });
+      throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
     }
 
     await ctx.db.delete(organization).where(eq(organization.id, ctx.organization.id));
@@ -279,11 +257,12 @@ export const organizationRouter = router({
   createInvite: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         email: z.email(),
         role: z.enum(UserRole).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Check if user is already a member
       const existingUser = await ctx.db.query.user.findFirst({
         where: eq(user.email, input.email),
@@ -298,8 +277,7 @@ export const organizationRouter = router({
         });
 
         if (existingMembership) {
-          throw new TRPCError({
-            code: "CONFLICT",
+          throw new ORPCError("CONFLICT", {
             message: "User is already a member of this organization",
           });
         }
@@ -314,18 +292,12 @@ export const organizationRouter = router({
       });
 
       if (existingInvite) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "Invite already sent to this email",
-        });
+        throw new ORPCError("CONFLICT", { message: "Invite already sent to this email" });
       }
 
       // Only owners can invite as owner
       if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners can invite other owners",
-        });
+        throw new ORPCError("FORBIDDEN", { message: "Only owners can invite other owners" });
       }
 
       const [invite] = await ctx.db
@@ -342,7 +314,7 @@ export const organizationRouter = router({
     }),
 
   // List pending invites for the organization
-  listInvites: orgProtectedProcedure.query(async ({ ctx }) => {
+  listInvites: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const invites = await ctx.db.query.organizationInvite.findMany({
       where: eq(organizationInvite.organizationId, ctx.organization.id),
       with: {
@@ -365,8 +337,8 @@ export const organizationRouter = router({
 
   // Cancel/delete an invite
   cancelInvite: orgAdminMutation
-    .input(z.object({ inviteId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .input(z.object({ ...OrgInput.shape, inviteId: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
       await ctx.db
         .delete(organizationInvite)
         .where(
@@ -380,7 +352,7 @@ export const organizationRouter = router({
     }),
 
   // Get invites for the current user (across all orgs)
-  myPendingInvites: protectedProcedure.query(async ({ ctx }) => {
+  myPendingInvites: protectedProcedure.handler(async ({ context: ctx }) => {
     const invites = await ctx.db.query.organizationInvite.findMany({
       where: eq(organizationInvite.email, ctx.user.email),
       with: {
@@ -408,7 +380,7 @@ export const organizationRouter = router({
   // Accept an invite
   acceptInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const invite = await ctx.db.query.organizationInvite.findFirst({
         where: and(
           eq(organizationInvite.id, input.inviteId),
@@ -420,10 +392,7 @@ export const organizationRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Invite not found or not for this user",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Invite not found or not for this user" });
       }
 
       // Add user to organization
@@ -442,7 +411,7 @@ export const organizationRouter = router({
   // Decline an invite
   declineInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const invite = await ctx.db.query.organizationInvite.findFirst({
         where: and(
           eq(organizationInvite.id, input.inviteId),
@@ -451,10 +420,7 @@ export const organizationRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Invite not found or not for this user",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Invite not found or not for this user" });
       }
 
       await ctx.db.delete(organizationInvite).where(eq(organizationInvite.id, invite.id));
@@ -463,7 +429,7 @@ export const organizationRouter = router({
     }),
 
   // Leave an organization (self-removal)
-  leave: orgProtectedProcedure.mutation(async ({ ctx }) => {
+  leave: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     await ctx.db
       .delete(organizationUserMembership)
       .where(
@@ -475,4 +441,4 @@ export const organizationRouter = router({
 
     return { success: true };
   }),
-});
+};

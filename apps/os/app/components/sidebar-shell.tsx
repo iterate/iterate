@@ -6,7 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fromString } from "typeid-js";
 import { authClient, signOut } from "../lib/auth-client.ts";
-import { trpc, trpcClient } from "../lib/trpc.tsx";
+import { orpc, orpcClient } from "../lib/orpc.tsx";
 import { useDebounce } from "../hooks/use-debounce.ts";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
 import { Button } from "./ui/button.tsx";
@@ -73,12 +73,10 @@ function ImpersonationDialog({
   const debouncedValue = useDebounce(value, 500);
 
   const emailUsersQuery = useQuery(
-    trpc.admin.searchUsersByEmail.queryOptions(
-      { searchEmail: debouncedValue },
-      {
-        enabled: debouncedValue.length > 0 && type === "email",
-      },
-    ),
+    orpc.admin.searchUsersByEmail.queryOptions({
+      input: { searchEmail: debouncedValue },
+      enabled: debouncedValue.length > 0 && type === "email",
+    }),
   );
 
   const isValid = useMemo(() => {
@@ -205,7 +203,7 @@ function ImpersonationDialog({
 
 async function resolveImpersonation(type: ImpersonationType, value: string): Promise<string> {
   if (type === "email") {
-    const user = await trpcClient.admin.findUserByEmail.query({ email: value });
+    const user = await orpcClient.admin.findUserByEmail({ email: value });
     if (!user) {
       throw new Error("User not found");
     }
@@ -215,7 +213,7 @@ async function resolveImpersonation(type: ImpersonationType, value: string): Pro
     return value;
   }
   if (type === "project_id") {
-    const projectOwner = await trpcClient.admin.getProjectOwner.query({ projectId: value });
+    const projectOwner = await orpcClient.admin.getProjectOwner({ projectId: value });
     if (!projectOwner) {
       throw new Error("Project not found");
     }
@@ -229,7 +227,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
   const posthog = usePostHog();
 
   const impersonationInfoQuery = useQuery(
-    trpc.admin.impersonationInfo.queryOptions(undefined, {
+    orpc.admin.impersonationInfo.queryOptions({
       staleTime: 1000 * 60 * 5,
     }),
   );

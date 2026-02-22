@@ -1,16 +1,17 @@
 import { z } from "zod/v4";
 import { eq, and, isNull, inArray } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
+import { ORPCError } from "@orpc/server";
 import * as arctic from "arctic";
 import {
-  router,
   publicProcedure,
   protectedProcedure,
   orgProtectedProcedure,
   projectProtectedProcedure,
   orgAdminMutation,
   projectProtectedMutation,
-} from "../trpc.ts";
+  OrgInput,
+  ProjectInput,
+} from "../procedures.ts";
 import { project, verification, projectRepo, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
@@ -38,8 +39,8 @@ import {
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 
-export const projectRouter = router({
-  getAvailableSandboxProviders: publicProcedure.query(({ ctx }) => {
+export const projectRouter = {
+  getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
     const providers = getProjectSandboxProviderOptions(ctx.env, import.meta.env.DEV);
     const enabledProviders = providers.filter((provider) => !provider.disabledReason);
 
@@ -54,17 +55,14 @@ export const projectRouter = router({
   // Returns just enough info to display the project/org names and slugs
   getProjectInfoById: protectedProcedure
     .input(z.object({ projectId: z.string() }))
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const proj = await ctx.db.query.project.findFirst({
         where: eq(project.id, input.projectId),
         with: { organization: true },
       });
 
       if (!proj) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Project not found" });
       }
 
       return {
@@ -77,7 +75,7 @@ export const projectRouter = router({
     }),
 
   // List projects in organization
-  list: orgProtectedProcedure.query(async ({ ctx }) => {
+  list: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const projects = await ctx.db.query.project.findMany({
       where: eq(project.organizationId, ctx.organization.id),
       orderBy: (proj, { desc }) => [desc(proj.createdAt)],
@@ -88,7 +86,7 @@ export const projectRouter = router({
 
   // Get project by slug (project slugs are globally unique)
   // Returns project with organization info
-  bySlug: projectProtectedProcedure.query(async ({ ctx }) => {
+  bySlug: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     return {
       ...ctx.project,
       organization: ctx.organization,
@@ -98,24 +96,21 @@ export const projectRouter = router({
   create: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         name: z.string().min(1).max(100),
         slug: z.string().min(1).max(50).optional(), // Optional: defaults to org slug if first project
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const availableProviders = getAvailableProjectSandboxProviders(ctx.env, import.meta.env.DEV);
       if (availableProviders.length === 0) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No sandbox providers are enabled",
-        });
+        throw new ORPCError("PRECONDITION_FAILED", { message: "No sandbox providers are enabled" });
       }
       const sandboxProvider =
         input.sandboxProvider ?? getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
       if (!availableProviders.includes(sandboxProvider)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
+        throw new ORPCError("BAD_REQUEST", {
           message: `Sandbox provider '${sandboxProvider}' is not enabled`,
         });
       }
@@ -145,10 +140,7 @@ export const projectRouter = router({
         .returning();
 
       if (!newProject) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create project",
-        });
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create project" });
       }
 
       return newProject;
@@ -158,11 +150,12 @@ export const projectRouter = router({
   update: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         name: z.string().min(1).max(100).optional(),
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       if (input.sandboxProvider && input.sandboxProvider !== ctx.project.sandboxProvider) {
         // Validate provider is available
         const availableProviders = getAvailableProjectSandboxProviders(
@@ -170,8 +163,7 @@ export const projectRouter = router({
           import.meta.env.DEV,
         );
         if (!availableProviders.includes(input.sandboxProvider)) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
+          throw new ORPCError("BAD_REQUEST", {
             message: `Sandbox provider '${input.sandboxProvider}' is not enabled`,
           });
         }
@@ -184,8 +176,7 @@ export const projectRouter = router({
           ),
         });
         if (runningMachine) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
+          throw new ORPCError("PRECONDITION_FAILED", {
             message:
               "Cannot change sandbox provider while machines are running. Archive all machines first.",
           });
@@ -205,15 +196,14 @@ export const projectRouter = router({
     }),
 
   // Delete project
-  delete: projectProtectedMutation.mutation(async ({ ctx }) => {
+  delete: projectProtectedMutation.input(ProjectInput).handler(async ({ context: ctx }) => {
     // Check if this is the last project in the organization
     const projectCount = await ctx.db.query.project.findMany({
       where: eq(project.organizationId, ctx.organization.id),
     });
 
     if (projectCount.length <= 1) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
+      throw new ORPCError("FORBIDDEN", {
         message: "Cannot delete the last project in an organization",
       });
     }
@@ -227,10 +217,11 @@ export const projectRouter = router({
   startGithubInstallFlow: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         callbackURL: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const state = arctic.generateState();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -254,49 +245,53 @@ export const projectRouter = router({
     }),
 
   // List available GitHub repos from connected installation
-  listAvailableGithubRepos: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+  listAvailableGithubRepos: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const connection = ctx.project.connections.find((c) => c.provider === "github-app");
 
-    if (!connection) {
-      return { connected: false as const, repositories: [] };
-    }
+      if (!connection) {
+        return { connected: false as const, repositories: [] };
+      }
 
-    const providerData = connection.providerData as {
-      installationId: number;
-      encryptedAccessToken: string;
-    };
+      const providerData = connection.providerData as {
+        installationId: number;
+        encryptedAccessToken: string;
+      };
 
-    try {
-      const accessToken = await decrypt(providerData.encryptedAccessToken);
-      const repositories = await listInstallationRepositories(
-        accessToken,
-        providerData.installationId,
-      );
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        const repositories = await listInstallationRepositories(
+          accessToken,
+          providerData.installationId,
+        );
 
-      return { connected: true as const, repositories };
-    } catch (error) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "Failed to fetch repositories from GitHub",
-        cause: error,
-      });
-    }
-  }),
+        return { connected: true as const, repositories };
+      } catch (error) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Failed to fetch repositories from GitHub",
+          cause: error,
+        });
+      }
+    }),
 
-  listProjectRepos: projectProtectedProcedure.query(async ({ ctx }) => {
-    return ctx.project.projectRepos;
-  }),
+  listProjectRepos: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      return ctx.project.projectRepos;
+    }),
 
   addProjectRepo: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         repoId: z.number(),
         owner: z.string(),
         name: z.string(),
         defaultBranch: z.string().default("main"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const existingRepo = await ctx.db.query.projectRepo.findFirst({
         where: and(
           eq(projectRepo.projectId, ctx.project.id),
@@ -337,10 +332,11 @@ export const projectRouter = router({
   removeProjectRepo: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         repoId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       await ctx.db
         .delete(projectRepo)
         .where(and(eq(projectRepo.projectId, ctx.project.id), eq(projectRepo.id, input.repoId)));
@@ -349,58 +345,62 @@ export const projectRouter = router({
     }),
 
   // Get GitHub connection status
-  getGithubConnection: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
-    return {
-      connected: !!connection,
-      installationId: connection
-        ? (connection.providerData as { installationId?: number }).installationId
-        : null,
-    };
-  }),
+  getGithubConnection: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+      return {
+        connected: !!connection,
+        installationId: connection
+          ? (connection.providerData as { installationId?: number }).installationId
+          : null,
+      };
+    }),
 
   // Disconnect GitHub (removes connection and repo, revokes installation)
-  disconnectGithub: projectProtectedMutation.mutation(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "github-app");
-    const installationId = connection
-      ? (connection.providerData as { installationId?: number }).installationId
-      : null;
+  disconnectGithub: projectProtectedMutation
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const connection = ctx.project.connections.find((c) => c.provider === "github-app");
+      const installationId = connection
+        ? (connection.providerData as { installationId?: number }).installationId
+        : null;
 
-    if (installationId) {
-      const githubUninstalled = await deleteGitHubInstallation(ctx.env, installationId);
-      if (!githubUninstalled) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Failed to revoke GitHub App installation. Please try again or remove it manually from GitHub Settings.",
-        });
+      if (installationId) {
+        const githubUninstalled = await deleteGitHubInstallation(ctx.env, installationId);
+        if (!githubUninstalled) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            message:
+              "Failed to revoke GitHub App installation. Please try again or remove it manually from GitHub Settings.",
+          });
+        }
       }
-    }
 
-    await ctx.db.transaction(async (tx) => {
-      await tx
-        .delete(schema.projectConnection)
-        .where(
-          and(
-            eq(projectConnection.projectId, ctx.project.id),
-            eq(projectConnection.provider, "github-app"),
-          ),
-        );
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .delete(schema.projectConnection)
+          .where(
+            and(
+              eq(projectConnection.projectId, ctx.project.id),
+              eq(projectConnection.provider, "github-app"),
+            ),
+          );
 
-      await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
-    });
+        await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
+      });
 
-    return { success: true };
-  }),
+      return { success: true };
+    }),
 
   // Start Slack OAuth flow
   startSlackOAuthFlow: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         callbackURL: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const state = arctic.generateState();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -430,65 +430,67 @@ export const projectRouter = router({
     }),
 
   // Get Slack connection status
-  getSlackConnection: projectProtectedProcedure.query(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "slack");
-    const providerData = connection?.providerData as {
-      teamId?: string;
-      teamName?: string;
-      teamDomain?: string;
-    } | null;
+  getSlackConnection: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const connection = ctx.project.connections.find((c) => c.provider === "slack");
+      const providerData = connection?.providerData as {
+        teamId?: string;
+        teamName?: string;
+        teamDomain?: string;
+      } | null;
 
-    return {
-      connected: !!connection,
-      teamId: providerData?.teamId ?? null,
-      teamName: providerData?.teamName ?? null,
-      teamDomain: providerData?.teamDomain ?? null,
-    };
-  }),
+      return {
+        connected: !!connection,
+        teamId: providerData?.teamId ?? null,
+        teamName: providerData?.teamName ?? null,
+        teamDomain: providerData?.teamDomain ?? null,
+      };
+    }),
 
   // Disconnect Slack
-  disconnectSlack: projectProtectedMutation.mutation(async ({ ctx }) => {
-    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+  disconnectSlack: projectProtectedMutation
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const connection = ctx.project.connections.find((c) => c.provider === "slack");
 
-    if (!connection) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "No Slack connection found for this project",
-      });
-    }
-
-    // Revoke the Slack token (best effort - don't fail disconnect if revocation fails)
-    const providerData = connection.providerData as { encryptedAccessToken?: string };
-    if (providerData.encryptedAccessToken) {
-      try {
-        const accessToken = await decrypt(providerData.encryptedAccessToken);
-        await revokeSlackToken(accessToken);
-      } catch {
-        // Token revocation failed, but we still delete the connection
+      if (!connection) {
+        throw new ORPCError("NOT_FOUND", { message: "No Slack connection found for this project" });
       }
-    }
 
-    await ctx.db
-      .delete(schema.projectConnection)
-      .where(
-        and(
-          eq(projectConnection.projectId, ctx.project.id),
-          eq(projectConnection.provider, "slack"),
-        ),
-      );
+      // Revoke the Slack token (best effort - don't fail disconnect if revocation fails)
+      const providerData = connection.providerData as { encryptedAccessToken?: string };
+      if (providerData.encryptedAccessToken) {
+        try {
+          const accessToken = await decrypt(providerData.encryptedAccessToken);
+          await revokeSlackToken(accessToken);
+        } catch {
+          // Token revocation failed, but we still delete the connection
+        }
+      }
 
-    return { success: true };
-  }),
+      await ctx.db
+        .delete(schema.projectConnection)
+        .where(
+          and(
+            eq(projectConnection.projectId, ctx.project.id),
+            eq(projectConnection.provider, "slack"),
+          ),
+        );
+
+      return { success: true };
+    }),
 
   // Transfer Slack connection from one project to another
   // Used when a Slack workspace is already connected elsewhere and user wants to switch
   transferSlackConnection: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         slackTeamId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       // Find existing connection by Slack team ID
       const existingConnection = await ctx.db.query.projectConnection.findFirst({
         where: and(
@@ -499,10 +501,7 @@ export const projectRouter = router({
       });
 
       if (!existingConnection) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Slack workspace connection not found",
-        });
+        throw new ORPCError("NOT_FOUND", { message: "Slack workspace connection not found" });
       }
 
       // TODO: In the future, we may want to verify user has access to both projects.
@@ -512,8 +511,7 @@ export const projectRouter = router({
       // Check if target project already has a Slack connection
       const targetProjectConnection = ctx.project.connections.find((c) => c.provider === "slack");
       if (targetProjectConnection) {
-        throw new TRPCError({
-          code: "CONFLICT",
+        throw new ORPCError("CONFLICT", {
           message: "Target project already has a Slack connection. Disconnect it first.",
         });
       }
@@ -603,10 +601,11 @@ export const projectRouter = router({
   startGoogleOAuthFlow: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         callbackURL: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const state = arctic.generateState();
       const codeVerifier = arctic.generateCodeVerifier();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -640,104 +639,109 @@ export const projectRouter = router({
     }),
 
   // Get Google connection status for the current user in this project
-  getGoogleConnection: projectProtectedProcedure.query(async ({ ctx }) => {
-    // Google connections are user-scoped, so filter by userId
-    const connection = ctx.project.connections.find(
-      (c) => c.provider === "google" && c.userId === ctx.user.id,
-    );
+  getGoogleConnection: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      // Google connections are user-scoped, so filter by userId
+      const connection = ctx.project.connections.find(
+        (c) => c.provider === "google" && c.userId === ctx.user.id,
+      );
 
-    const providerData = connection?.providerData as {
-      googleUserId?: string;
-      email?: string;
-      name?: string;
-      picture?: string;
-    } | null;
+      const providerData = connection?.providerData as {
+        googleUserId?: string;
+        email?: string;
+        name?: string;
+        picture?: string;
+      } | null;
 
-    return {
-      connected: !!connection,
-      email: providerData?.email ?? null,
-      name: providerData?.name ?? null,
-      picture: providerData?.picture ?? null,
-    };
-  }),
+      return {
+        connected: !!connection,
+        email: providerData?.email ?? null,
+        name: providerData?.name ?? null,
+        picture: providerData?.picture ?? null,
+      };
+    }),
 
   // Disconnect Google (user-scoped)
-  disconnectGoogle: projectProtectedMutation.mutation(async ({ ctx }) => {
-    // Google connections are user-scoped
-    const connection = ctx.project.connections.find(
-      (c) => c.provider === "google" && c.userId === ctx.user.id,
-    );
+  disconnectGoogle: projectProtectedMutation
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      // Google connections are user-scoped
+      const connection = ctx.project.connections.find(
+        (c) => c.provider === "google" && c.userId === ctx.user.id,
+      );
 
-    if (!connection) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "No Google connection found for your account in this project",
-      });
-    }
-
-    // Revoke the Google token (best effort - don't fail disconnect if revocation fails)
-    const providerData = connection.providerData as { encryptedAccessToken?: string };
-    if (providerData.encryptedAccessToken) {
-      try {
-        const accessToken = await decrypt(providerData.encryptedAccessToken);
-        await revokeGoogleToken(accessToken);
-      } catch {
-        // Token revocation failed, but we still delete the connection
+      if (!connection) {
+        throw new ORPCError("NOT_FOUND", {
+          message: "No Google connection found for your account in this project",
+        });
       }
-    }
 
-    await ctx.db.transaction(async (tx) => {
-      // Delete the connection
-      await tx
-        .delete(schema.projectConnection)
-        .where(
-          and(
-            eq(projectConnection.projectId, ctx.project.id),
-            eq(projectConnection.provider, "google"),
-            eq(projectConnection.userId, ctx.user.id),
-          ),
-        );
+      // Revoke the Google token (best effort - don't fail disconnect if revocation fails)
+      const providerData = connection.providerData as { encryptedAccessToken?: string };
+      if (providerData.encryptedAccessToken) {
+        try {
+          const accessToken = await decrypt(providerData.encryptedAccessToken);
+          await revokeGoogleToken(accessToken);
+        } catch {
+          // Token revocation failed, but we still delete the connection
+        }
+      }
 
-      // Delete the associated secret
-      await tx
-        .delete(schema.secret)
-        .where(
-          and(
-            eq(schema.secret.projectId, ctx.project.id),
-            eq(schema.secret.key, "google.access_token"),
-            eq(schema.secret.userId, ctx.user.id),
-          ),
-        );
-    });
+      await ctx.db.transaction(async (tx) => {
+        // Delete the connection
+        await tx
+          .delete(schema.projectConnection)
+          .where(
+            and(
+              eq(projectConnection.projectId, ctx.project.id),
+              eq(projectConnection.provider, "google"),
+              eq(projectConnection.userId, ctx.user.id),
+            ),
+          );
 
-    return { success: true };
-  }),
+        // Delete the associated secret
+        await tx
+          .delete(schema.secret)
+          .where(
+            and(
+              eq(schema.secret.projectId, ctx.project.id),
+              eq(schema.secret.key, "google.access_token"),
+              eq(schema.secret.userId, ctx.user.id),
+            ),
+          );
+      });
 
-  listEgressPolicies: projectProtectedProcedure.query(async ({ ctx }) => {
-    const policies = await ctx.db.query.egressPolicy.findMany({
-      where: eq(schema.egressPolicy.projectId, ctx.project.id),
-      orderBy: (policy, { asc }) => [asc(policy.priority)],
-    });
-    return policies.map((policy) => ({
-      ...policy,
-      rule: policy.urlPattern ?? "",
-    }));
-  }),
+      return { success: true };
+    }),
+
+  listEgressPolicies: projectProtectedProcedure
+    .input(ProjectInput)
+    .handler(async ({ context: ctx }) => {
+      const policies = await ctx.db.query.egressPolicy.findMany({
+        where: eq(schema.egressPolicy.projectId, ctx.project.id),
+        orderBy: (policy, { asc }) => [asc(policy.priority)],
+      });
+      return policies.map((policy) => ({
+        ...policy,
+        rule: policy.urlPattern ?? "",
+      }));
+    }),
 
   createEgressPolicy: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         rule: z.string().min(1),
         decision: z.enum(["allow", "deny", "human_approval"]),
         priority: z.number().int().min(0).max(1000).optional(),
         reason: z.string().max(200).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const validationError = validateJsonataExpression(input.rule);
       if (validationError) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
+        throw new ORPCError("BAD_REQUEST", {
           message: `Invalid JSONata expression: ${validationError}`,
         });
       }
@@ -757,8 +761,8 @@ export const projectRouter = router({
     }),
 
   deleteEgressPolicy: projectProtectedMutation
-    .input(z.object({ policyId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .input(z.object({ ...ProjectInput.shape, policyId: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
       const [deleted] = await ctx.db
         .delete(schema.egressPolicy)
         .where(
@@ -770,7 +774,7 @@ export const projectRouter = router({
         .returning();
 
       if (!deleted) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Policy not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Policy not found" });
       }
 
       return deleted;
@@ -779,6 +783,7 @@ export const projectRouter = router({
   updateEgressPolicy: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         policyId: z.string(),
         rule: z.string().min(1),
         decision: z.enum(["allow", "deny", "human_approval"]),
@@ -786,11 +791,10 @@ export const projectRouter = router({
         reason: z.string().max(200).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const validationError = validateJsonataExpression(input.rule);
       if (validationError) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
+        throw new ORPCError("BAD_REQUEST", {
           message: `Invalid JSONata expression: ${validationError}`,
         });
       }
@@ -812,15 +816,15 @@ export const projectRouter = router({
         .returning();
 
       if (!updated) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Policy not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Policy not found" });
       }
 
       return updated;
     }),
 
   summarizeEgressApproval: projectProtectedMutation
-    .input(z.object({ approvalId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .input(z.object({ ...ProjectInput.shape, approvalId: z.string() }))
+    .handler(async ({ context: ctx, input }) => {
       const approval = await ctx.db.query.egressApproval.findFirst({
         where: and(
           eq(schema.egressApproval.id, input.approvalId),
@@ -829,7 +833,7 @@ export const projectRouter = router({
       });
 
       if (!approval) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Approval not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Approval not found" });
       }
 
       const prompt = buildApprovalSummaryPrompt(approval);
@@ -845,11 +849,12 @@ export const projectRouter = router({
   suggestEgressRule: projectProtectedMutation
     .input(
       z.object({
+        ...ProjectInput.shape,
         approvalId: z.string().optional(),
         instruction: z.string().min(1),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const approval = input.approvalId
         ? await ctx.db.query.egressApproval.findFirst({
             where: and(
@@ -860,7 +865,7 @@ export const projectRouter = router({
         : null;
 
       if (input.approvalId && !approval) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Approval not found" });
+        throw new ORPCError("NOT_FOUND", { message: "Approval not found" });
       }
 
       const prompt = buildRuleSuggestionPrompt(approval ?? null, input.instruction);
@@ -889,7 +894,7 @@ Return ONLY the JSONata expression, no explanation.`,
 
       return { rule: extractRuleExpression(suggestion) };
     }),
-});
+};
 
 function serializeRequestForPrompt(approval: typeof schema.egressApproval.$inferSelect): string {
   return JSON.stringify(

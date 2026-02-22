@@ -1,14 +1,14 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { router, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
+import { ORPCError } from "@orpc/server";
+import { orgProtectedProcedure, orgAdminMutation, OrgInput } from "../procedures.ts";
 import * as schema from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { BILLING_METERS } from "../../billing/meters.generated.ts";
 import { env } from "../../../env.ts";
 
-export const billingRouter = router({
-  getBillingAccount: orgProtectedProcedure.query(async ({ ctx }) => {
+export const billingRouter = {
+  getBillingAccount: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const account = await ctx.db.query.billingAccount.findFirst({
       where: eq(schema.billingAccount.organizationId, ctx.organization.id),
     });
@@ -19,11 +19,12 @@ export const billingRouter = router({
   createCheckoutSession: orgAdminMutation
     .input(
       z.object({
+        ...OrgInput.shape,
         successUrl: z.string().url().optional(),
         cancelUrl: z.string().url().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context: ctx, input }) => {
       const stripe = getStripe();
 
       const account = await ctx.db.transaction(async (tx) => {
@@ -42,8 +43,7 @@ export const billingRouter = router({
         }
 
         if (!existing) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: "Failed to create billing account",
           });
         }
@@ -94,8 +94,7 @@ export const billingRouter = router({
       });
 
       if (!session.url) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: "Failed to create checkout session",
         });
       }
@@ -103,7 +102,7 @@ export const billingRouter = router({
       return { url: session.url };
     }),
 
-  createPortalSession: orgAdminMutation.mutation(async ({ ctx }) => {
+  createPortalSession: orgAdminMutation.input(OrgInput).handler(async ({ context: ctx }) => {
     const stripe = getStripe();
 
     const account = await ctx.db.query.billingAccount.findFirst({
@@ -111,8 +110,7 @@ export const billingRouter = router({
     });
 
     if (!account?.stripeCustomerId) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
+      throw new ORPCError("NOT_FOUND", {
         message: "No billing account found. Please subscribe first.",
       });
     }
@@ -128,7 +126,7 @@ export const billingRouter = router({
     return { url: session.url };
   }),
 
-  getUsageSummary: orgProtectedProcedure.query(async ({ ctx }) => {
+  getUsageSummary: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const account = await ctx.db.query.billingAccount.findFirst({
       where: eq(schema.billingAccount.organizationId, ctx.organization.id),
     });
@@ -145,7 +143,7 @@ export const billingRouter = router({
     };
   }),
 
-  getAvailableMeters: orgProtectedProcedure.query(() => {
+  getAvailableMeters: orgProtectedProcedure.input(OrgInput).handler(() => {
     const meters = Object.values(BILLING_METERS);
 
     type MeterSummary = {
@@ -182,4 +180,4 @@ export const billingRouter = router({
       byCategory,
     };
   }),
-});
+};
