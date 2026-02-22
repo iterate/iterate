@@ -6,9 +6,9 @@ You are an AI agent running in an Iterate sandbox. Your agent slug (visible in t
 
 ## Communication Channels
 
-- `**slack-***`: You communicate via Slack. Use `iterate tool exec-js` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
-- `**email-***`: You communicate via email. Use `iterate tool exec-js` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
-- `**webchat-***`: You communicate via Iterate's built-in webchat. Use `iterate tool exec-js` CLI to send messages. See [WEBCHAT.md](./WEBCHAT.md) for channel-specific instructions (message types, reactions, thread context).
+- `**slack-***`: You communicate via Slack. Use `iterate tool exec-ts` CLI to send messages. See [SLACK.md](./SLACK.md) for channel-specific instructions (message types, reactions, thread context).
+- `**email-***`: You communicate via email. Use `iterate tool exec-ts` CLI to send replies. See [EMAIL.md](./EMAIL.md) for channel-specific instructions (message types, threading, formatting).
+- `**webchat-***`: You communicate via Iterate's built-in webchat. Use `iterate tool exec-ts` CLI to send messages. See [WEBCHAT.md](./WEBCHAT.md) for channel-specific instructions (message types, reactions, thread context).
 
 ## General Coding Style
 
@@ -113,7 +113,7 @@ When creating PRs, always include attribution in the PR description so reviewers
 **Building Slack thread links:** Use `slack.auth.test()` to discover the workspace domain dynamically — do NOT hardcode or guess the workspace name:
 
 ```bash
-iterate tool exec-js 'const auth = await slack.auth.test(); const workspace = new URL(auth.url).hostname.split(".")[0]; console.log(workspace)'
+iterate tool exec-ts 'const auth = await slack.auth.test(); const workspace = new URL(auth.url).hostname.split(".")[0]; console.log(workspace)'
 ```
 
 Then build the link: `https://{workspace}.slack.com/archives/{CHANNEL_ID}/p{THREAD_TS_WITHOUT_DOT}` (e.g., thread_ts `1234567890.123456` becomes `p1234567890123456`).
@@ -262,11 +262,11 @@ iterate task get --filename my-task.md
 
 Replicate provides API access to thousands of AI models for image generation, video creation, audio synthesis, and more. The `REPLICATE_API_TOKEN` env var is available globally.
 
-**Recommended: Use `iterate tool exec-js**` for programmatic access:
+**Recommended:** Use `iterate tool exec-ts` for programmatic access:
 
 ```bash
 # Generate an image
-iterate tool exec-js '
+iterate tool exec-ts '
 const output = await replicate.run("black-forest-labs/flux-schnell", {
   input: { prompt: "a photo of a cat riding a bicycle" }
 });
@@ -274,8 +274,8 @@ console.log(output);
 '
 
 # Generate and save to file
-iterate tool exec-js '
-const fs = require("fs");
+iterate tool exec-ts '
+const fs = await import("node:fs");
 const output = await replicate.run("black-forest-labs/flux-schnell", {
   input: { prompt: "a sunset over mountains" }
 });
@@ -292,7 +292,7 @@ console.log("Saved to output.png");
 Use the Replicate search API to find models for your task:
 
 ```bash
-iterate tool exec-js '
+iterate tool exec-ts '
 const results = await replicate.models.search("image generation");
 for (const model of results.results.slice(0, 5)) {
   console.log(model.owner + "/" + model.name, "-", model.description?.slice(0, 80));
@@ -305,7 +305,7 @@ for (const model of results.results.slice(0, 5)) {
 Model APIs vary significantly - parameter names differ between models (e.g., `image` vs `image_input`, single value vs array). Always check the schema before running:
 
 ```bash
-iterate tool exec-js '
+iterate tool exec-ts '
 const model = await replicate.models.get("google", "nano-banana-pro");
 console.log(JSON.stringify(model.latest_version.openapi_schema.components.schemas.Input, null, 2));
 '
@@ -316,8 +316,8 @@ console.log(JSON.stringify(model.latest_version.openapi_schema.components.schema
 Some models return a `ReadableStream` instead of URLs. Handle both cases:
 
 ```bash
-iterate tool exec-js '
-const fs = require("fs");
+iterate tool exec-ts '
+const fs = await import("node:fs");
 const imageData = fs.readFileSync("/tmp/input.png");
 const base64Image = `data:image/png;base64,${imageData.toString("base64")}`;
 

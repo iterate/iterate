@@ -846,7 +846,7 @@ function formatNewThreadMentionMessage(
 
   return [
     `[Agent Path: ${agentPath}] New Slack thread started.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
@@ -869,7 +869,7 @@ function formatMidThreadMentionMessage(
 
   const lines = [
     `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,

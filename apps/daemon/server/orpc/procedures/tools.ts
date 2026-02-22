@@ -56,6 +56,13 @@ function getWebchatClient() {
 
 const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
 
+const require = createRequire(import.meta.url);
+const tsgoBin = path.join(
+  path.dirname(require.resolve("@typescript/native-preview/package.json")),
+  "bin",
+  "tsgo.js",
+);
+
 const executionContextSourcePath = new URL("./execution-context.ts", import.meta.url).pathname;
 
 /** Generates a `context.ts` re-export pointing back to our real ExecutionContext type. */
@@ -65,7 +72,7 @@ function getContextTypeSource(generatedDir: string): string {
   return `export type { ExecutionContext } from ${JSON.stringify(rel)};`;
 }
 
-/** Lazy-initialized clients available inside execJs code */
+/** Lazy-initialized clients available inside execTs/execJs code */
 function getLazyClients(): ExecutionContext {
   let _slack: WebClient | undefined;
   let _resend: Resend | undefined;
@@ -194,9 +201,9 @@ export const toolsRouter = {
         typecheck: z
           .string()
           .or(z.literal(false))
-          .default("npx tsc --noEmit")
+          .default(`${tsgoBin} --noEmit --ignoreConfig`)
           .describe("Typecheck command. Set to false to skip typechecking."),
-        code: z.string().meta({ positional: true }).describe(dedent`
+        code: z.string().array().meta({ positional: true }).describe(dedent`
           TypeScript code to execute. Can be a full module with \`export default\`, or a shorthand expression/body that will be auto-wrapped.
 
           Available execution context is from the \`ExecutionContext\` type in \`${path.join(import.meta.dirname, path.relative(import.meta.dirname, executionContextSourcePath))}\`. It is re-exported in a \`context.ts\` file that is generated in the same directory as the code. The interface contains the following properties:
@@ -259,7 +266,7 @@ export const toolsRouter = {
       };
       const contextTypePath = path.join(generatedDir, "context.ts");
       await writeFile(contextTypePath, getContextTypeSource(generatedDir));
-      const wrappedCode = wrapCodeWithExportDefault(input.code, {
+      const wrappedCode = wrapCodeWithExportDefault(input.code.join(" "), {
         contextKeys: [...clientNames],
         contextType: `import("./context.ts").ExecutionContext`,
       });

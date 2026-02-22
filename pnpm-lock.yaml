@@ -302,6 +302,9 @@ importers:
       '@tanstack/router-plugin':
         specifier: ^1.147.3
         version: 1.149.0(@tanstack/react-router@1.147.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260203.1
+        version: 7.0.0-dev.20260203.1
       '@xterm/addon-clipboard':
         specifier: 0.3.0-beta.103
         version: 0.3.0-beta.103(@xterm/xterm@6.1.0-beta.103)
