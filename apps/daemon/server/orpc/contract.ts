@@ -23,59 +23,6 @@ export const workerContract = oc.router({
         }),
       )
       .output(z.object({ success: z.boolean() })),
-
-    /**
-     * Get environment variables and config for this machine.
-     * Called by the daemon on startup and periodically to refresh tokens.
-     * Returns environment variables (GitHub token, Slack token, etc.) and repos to clone.
-     */
-    getEnv: oc.input(z.object({ machineId: z.string() })).output(
-      z.object({
-        envVars: z.array(
-          z.object({
-            key: z.string(),
-            value: z.string(),
-            secret: z
-              .object({
-                secretKey: z.string(),
-                secretScope: z.string(),
-                machineId: z.string().optional(),
-                userId: z.string().optional(),
-                userEmail: z.string().optional(),
-              })
-              .nullable(),
-            description: z.string().nullable(),
-            source: z.discriminatedUnion("type", [
-              z.object({ type: z.literal("global"), description: z.string() }),
-              z.object({
-                type: z.literal("connection"),
-                provider: z.enum(["github", "slack", "google"]),
-              }),
-              z.object({ type: z.literal("user"), envVarId: z.string() }),
-              z.object({
-                type: z.literal("recommended"),
-                provider: z.enum(["google"]),
-                userEmail: z.string(),
-              }),
-            ]),
-          }),
-        ),
-        repos: z.array(
-          z.object({
-            url: z.string(),
-            branch: z.string(),
-            path: z.string(),
-            owner: z.string(),
-            name: z.string(),
-          }),
-        ),
-        /**
-         * When true, skip setting proxy env vars (HTTPS_PROXY, HTTP_PROXY, NODE_USE_ENV_PROXY, NODE_USE_SYSTEM_CA).
-         * Used when DANGEROUS_RAW_SECRETS_ENABLED is set and secrets are returned raw.
-         */
-        skipProxy: z.boolean().optional(),
-      }),
-    ),
   }),
 });
 

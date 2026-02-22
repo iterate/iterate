@@ -204,11 +204,12 @@ const router = t.router({
           .default("stop")
           .describe("Whether to stop or delete matching machines"),
         prefix: z
-          .enum(["dev", "stg"])
+          .enum(["dev", "stg", "prd"])
           .optional()
           .describe(
-            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Only dev/stg allowed.",
+            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Only dev/stg allowed unless --i-am-totally-sure is passed.",
           ),
+        iAmTotallySure: z.boolean().optional().meta({ hidden: true }),
       }),
     )
     .mutation(async ({ input }) => {
@@ -222,7 +223,7 @@ const router = t.router({
       if (!prefix) {
         throw new Error("Missing --prefix. Pass it explicitly or set SANDBOX_NAME_PREFIX.");
       }
-      if (!ALLOWED_PREFIXES.has(prefix)) {
+      if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
         throw new Error(
           `Prefix '${prefix}' is not allowed. This script is intentionally limited to dev/stg.`,
         );

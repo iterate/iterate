@@ -2,7 +2,6 @@ import { serve, type ServerType } from "@hono/node-server";
 import { injectWebSocket } from "./utils/hono.ts";
 import app from "./app.ts";
 import { createWorkerClient } from "./orpc/client.ts";
-import { startBootstrapRefreshScheduler, fetchBootstrapData } from "./bootstrap-refresh.ts";
 import { startCronTaskScheduler } from "./cron-tasks/scheduler.ts";
 import { loadConfig } from "./config-loader.ts";
 
@@ -14,7 +13,7 @@ export const startServer = async (params: { port: number; hostname: string }) =>
     const server = serve({ fetch: app.fetch, ...params }, () => {
       console.log(`\n[daemon] Server running at http://${params.hostname}:${params.port}`);
 
-      // Bootstrap: report status, fetch env vars, start refresh scheduler
+      // Report ready to control plane + start cron scheduler
       // Exit on errors so process manager can restart us
       bootstrapWithControlPlane().catch(async (err) => {
         console.error("[bootstrap] Fatal error during startup:", err);
@@ -36,37 +35,27 @@ type ReportStatusInput = Parameters<
 >[0];
 
 /**
- * Bootstrap the daemon with the control plane.
- * Reports status, fetches env vars, and starts the refresh scheduler.
- * Throws on error so the process can be restarted.
+ * Report daemon ready status and start background schedulers.
+ * The OS reacts to "ready" by pushing env vars, repos, etc. via tool.writeFile/execCommand.
  */
 async function bootstrapWithControlPlane(): Promise<void> {
-  const hasControlPlane = Boolean(
-    process.env.ITERATE_OS_BASE_URL && process.env.ITERATE_OS_API_KEY,
-  );
-  if (!hasControlPlane) {
-    console.log("[bootstrap] No control plane configured, running standalone");
-  } else {
-    await reportStatusToPlatform();
-  }
-
-  await fetchBootstrapData();
-
-  if (!hasControlPlane) return;
-
-  startBootstrapRefreshScheduler();
+  await reportStatusToPlatform({ status: "ready" });
   await startCronTaskScheduler();
 }
 
 /**
  * Report daemon status to the OS platform.
- * Sending "ready" should trigger the bootstrap flow where the platform sends back env vars and repos.
- * Sending anything else should update the UI so the user knows what's going on.
+ * Sending "ready" triggers the OS to push setup data (env vars, repos) to this daemon.
  */
-export async function reportStatusToPlatform({
-  status = "ready",
-}: Partial<ReportStatusInput> = {}) {
-  if (!process.env.ITERATE_OS_BASE_URL || !process.env.ITERATE_OS_API_KEY) return;
+export async function reportStatusToPlatform({ status }: Pick<ReportStatusInput, "status">) {
+  if (!process.env.ITERATE_OS_BASE_URL) {
+    console.error("[bootstrap] ITERATE_OS_BASE_URL not set, cannot report status");
+    return;
+  }
+  if (!process.env.ITERATE_OS_API_KEY) {
+    console.error("[bootstrap] ITERATE_OS_API_KEY not set, cannot report status");
+    return;
+  }
   const machineId = process.env.ITERATE_MACHINE_ID;
   if (!machineId) {
     console.error("[bootstrap] ITERATE_MACHINE_ID not set, cannot report status");
