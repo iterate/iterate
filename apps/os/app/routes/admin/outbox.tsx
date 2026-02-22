@@ -158,6 +158,20 @@ function EventCard({ event }: { event: EventWithConsumers }) {
   const [open, setOpen] = useState(false);
   const causedBy = event.context?.causedBy;
 
+  // Find a field that looks like a low-cardinality field which is probably useful to display at the top level (like "status=starting" or "reply=yes")
+  const niceLookingField = Object.entries(event.payload).find(([_key, value]) => {
+    const isPrimitive =
+      typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+    if (!isPrimitive) return false;
+    const str = String(value);
+    if (!str.trim()) return false;
+    if (str.match(/^\w+_\w{10,}$/)) return false; // typeid-ish
+    if (str.match(/^(\w+-){3}\w+$/)) return false; // uuid-ish
+    if (Date.parse(str)) return false; // date-ish
+    if (str.match(/^\d{7,}$/)) return false; // long-ass-number-ish
+    return true;
+  });
+
   return (
     <div className="border rounded-lg bg-card">
       <button
@@ -171,6 +185,11 @@ function EventCard({ event }: { event: EventWithConsumers }) {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground">#{event.id}</span>
               <span className="font-medium text-sm">{event.name}</span>
+              {niceLookingField && (
+                <span className="text-xs text-muted-foreground">
+                  ({niceLookingField[0]}={String(niceLookingField[1])})
+                </span>
+              )}
               {causedBy && (
                 <span className="text-xs text-muted-foreground">
                   &larr; #{causedBy.eventId} / {causedBy.consumerName}

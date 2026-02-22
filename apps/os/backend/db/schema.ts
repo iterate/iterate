@@ -146,6 +146,18 @@ export const verification = pgTable("better_auth_verification", (t) => ({
   expiresAt: t.timestamp().notNull(),
   ...withTimestamps,
 }));
+export const deviceCode = pgTable("device_code", (t) => ({
+  id: iterateId("dvc"),
+  deviceCode: t.text().notNull(),
+  userCode: t.text().notNull(),
+  userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+  expiresAt: t.timestamp().notNull(),
+  status: t.text().notNull(), // pending, approved, denied
+  lastPolledAt: t.timestamp(),
+  pollingInterval: t.integer(),
+  clientId: t.text(),
+  ...withTimestamps,
+}));
 // #endregion ========== Better Auth Schema ==========
 
 // #region ========== Organization & Project ==========

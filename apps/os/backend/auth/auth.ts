@@ -1,7 +1,7 @@
 import { betterAuth, APIError } from "better-auth";
 import { createAuthEndpoint } from "better-auth/api";
 import { setSessionCookie } from "better-auth/cookies";
-import { admin, emailOTP } from "better-auth/plugins";
+import { admin, bearer, deviceAuthorization, emailOTP } from "better-auth/plugins";
 import { oneTimeToken } from "better-auth/plugins/one-time-token";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
@@ -115,6 +115,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
         session: schema.session,
         account: schema.account,
         verification: schema.verification,
+        deviceCode: schema.deviceCode,
       },
     }),
     databaseHooks: {
@@ -160,6 +161,15 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     },
     plugins: [
       admin(),
+      bearer(),
+      deviceAuthorization({
+        verificationUri: "/device",
+        expiresIn: "15m",
+        interval: "5s",
+        userCodeLength: 8,
+        deviceCodeLength: 40,
+        validateClient: async (clientId) => clientId === "iterate-cli",
+      }),
       oneTimeToken({
         disableClientRequest: true,
         storeToken: "plain",
@@ -244,6 +254,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
             session: "ses",
             user: "usr",
             verification: "ver",
+            deviceCode: "dvc",
           } as Record<string, string>;
 
           return typeid(map[opts.model] ?? opts.model).toString();
