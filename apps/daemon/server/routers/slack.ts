@@ -167,15 +167,6 @@ interface SlackWebhookPayload {
   }>;
 }
 
-type MessageCase =
-  | "new_thread_mention"
-  | "mid_thread_mention"
-  | "fyi_message"
-  | "assistant_thread_started"
-  | "reaction_added"
-  | "reaction_removed"
-  | "ignored";
-
 interface ParsedMessage {
   case: "new_thread_mention" | "mid_thread_mention" | "fyi_message";
   event: AppMentionEvent | GenericMessageEvent;
@@ -807,9 +798,13 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
     };
   }
 
+  if (!botUserId) {
+    return { case: "ignored", reason: "Ignored: no bot user recipient" };
+  }
+
   // ── Self-message guard ──
   // Always ignore our own bot's messages to prevent feedback loops.
-  if (botUserId && "user" in event && event.user === botUserId) {
+  if ("user" in event && event.user === botUserId) {
     return { case: "ignored", reason: "Ignored: bot's own message" };
   }
 
@@ -822,10 +817,6 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
 
   if (isBotMessage && !event.text?.includes(`<@${botUserId}>`)) {
     return { case: "ignored", reason: "Ignored: bot message" };
-  }
-
-  if (!botUserId) {
-    return { case: "ignored", reason: "Ignored: no bot user recipient" };
   }
 
   const threadTs = event.thread_ts || event.ts;

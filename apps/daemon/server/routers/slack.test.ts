@@ -381,9 +381,9 @@ describe("slack router", () => {
           type: "message",
           ts,
           channel: "C_TEST",
-          user: botUserId,
+          user: "U_OTHER_BOT", // different from botUserId to avoid self-message guard
           text: "bot response",
-          bot_profile: { id: "B_BOT", name: "Test Bot" },
+          bot_profile: { id: "B_OTHER", name: "Another Bot" },
           event_ts: ts,
           channel_type: "channel",
         },
