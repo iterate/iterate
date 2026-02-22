@@ -370,7 +370,7 @@ describe("slack router", () => {
   });
 
   describe("ignored messages", () => {
-    it("ignores bot messages (with bot_profile)", async () => {
+    it("ignores bot messages that don't mention our bot (with bot_profile)", async () => {
       const ts = "6666666666.666666";
       const botUserId = "U_BOT";
 
@@ -383,9 +383,9 @@ describe("slack router", () => {
           type: "message",
           ts,
           channel: "C_TEST",
-          user: botUserId,
+          user: "U_OTHER_BOT", // different from botUserId to avoid self-message guard
           text: "bot response",
-          bot_profile: { id: "B_BOT", name: "Test Bot" },
+          bot_profile: { id: "B_OTHER", name: "Another Bot" },
           event_ts: ts,
           channel_type: "channel",
         },
@@ -401,6 +401,84 @@ describe("slack router", () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.message).toContain("bot message");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("processes bot messages that @mention our bot", async () => {
+      const ts = "6666666666.777777";
+      const botUserId = "U_BOT";
+      const otherBotUser = "U_OTHER_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_bot_mention",
+        event: {
+          type: "message",
+          ts,
+          channel: "C_TEST",
+          user: otherBotUser,
+          text: `<@${botUserId}> please review this PR`,
+          bot_profile: { id: "B_OTHER", name: "Another Bot" },
+          event_ts: ts,
+          channel_type: "channel",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("new_thread_mention");
+      expect(body.created).toBe(true);
+      expect(getOrCreateAgentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores our own bot's messages even if they contain a self-mention", async () => {
+      const ts = "6666666666.888888";
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_self_mention",
+        event: {
+          type: "message",
+          ts,
+          channel: "C_TEST",
+          user: botUserId, // our own bot
+          text: `Quoting <@${botUserId}>: hello world`,
+          bot_profile: { id: "B_BOT", name: "Our Bot" },
+          event_ts: ts,
+          channel_type: "channel",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("bot's own message");
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -462,6 +540,103 @@ describe("slack router", () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.message).toContain("no thread timestamp");
+    });
+  });
+
+  describe("assistant_thread_started (DMs)", () => {
+    it("creates agent on assistant_thread_started without sending a prompt", async () => {
+      const threadTs = "1111111111.111111";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_ast_1",
+        event: {
+          type: "assistant_thread_started",
+          assistant_thread: {
+            user_id: "U_USER",
+            channel_id: "D_DM_CHANNEL",
+            thread_ts: threadTs,
+            context: { force_search: false },
+          },
+          event_ts: "1111111111.222222",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("assistant_thread_started");
+      expect(body.created).toBe(true);
+      expect(body.queued).toBe(false); // no prompt sent
+      expect(getOrCreateAgentMock).toHaveBeenCalledTimes(1);
+      expect(subscribeToAgentChangesMock).toHaveBeenCalledTimes(1);
+      // No prompt should be fired
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // No eyes emoji for assistant_thread_started
+      expect(reactionsAddMock).not.toHaveBeenCalled();
+    });
+
+    it("treats DM messages as implicit mentions (channel_type im)", async () => {
+      const threadTs = "1111111111.111111";
+      const ts = "1111111111.333333";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      // Agent was previously created by assistant_thread_started
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_1",
+        event: {
+          type: "message",
+          thread_ts: threadTs,
+          ts,
+          text: "Hey can you look at my PR?",
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // DM messages are treated as mentions, not FYI
+      expect(body.case).toBe("mid_thread_mention");
+      expect(body.queued).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 

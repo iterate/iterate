@@ -134,6 +134,17 @@ const AgentUpdatedEvent = z.object({
     .passthrough(),
 });
 
+interface AssistantThreadStartedEvent {
+  type: "assistant_thread_started";
+  assistant_thread: {
+    user_id: string;
+    channel_id: string;
+    thread_ts: string;
+    context?: Record<string, unknown>;
+  };
+  event_ts: string;
+}
+
 interface SlackWebhookPayload {
   token?: string;
   team_id?: string;
@@ -146,7 +157,8 @@ interface SlackWebhookPayload {
     | GenericMessageEvent
     | BotMessageEvent
     | ReactionAddedEvent
-    | ReactionRemovedEvent;
+    | ReactionRemovedEvent
+    | AssistantThreadStartedEvent;
   authorizations?: Array<{
     enterprise_id: string | null;
     team_id: string;
@@ -156,17 +168,16 @@ interface SlackWebhookPayload {
   }>;
 }
 
-type MessageCase =
-  | "new_thread_mention"
-  | "mid_thread_mention"
-  | "fyi_message"
-  | "reaction_added"
-  | "reaction_removed"
-  | "ignored";
-
 interface ParsedMessage {
-  case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
+  case: "new_thread_mention" | "mid_thread_mention" | "fyi_message";
   event: AppMentionEvent | GenericMessageEvent;
+  threadTs: string;
+}
+
+interface ParsedAssistantThread {
+  case: "assistant_thread_started";
+  userId: string;
+  channel: string;
   threadTs: string;
 }
 
@@ -177,8 +188,22 @@ interface ParsedReaction {
   channel: string;
 }
 
-function isParsedReaction(parsed: ParsedMessage | ParsedReaction): parsed is ParsedReaction {
+type ParsedEvent =
+  | ParsedMessage
+  | ParsedAssistantThread
+  | ParsedReaction
+  | { case: "ignored"; reason: string };
+
+function isParsedReaction(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedReaction {
   return parsed.case === "reaction_added" || parsed.case === "reaction_removed";
+}
+
+function isParsedAssistantThread(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedAssistantThread {
+  return parsed.case === "assistant_thread_started";
 }
 
 slackRouter.use("*", async (c, next) => {
@@ -260,6 +285,30 @@ slackRouter.post("/webhook", async (c) => {
       queued: true,
       created: false,
       case: parsed.case,
+      eventId,
+      requestId,
+    });
+  }
+
+  // ── assistant_thread_started (DM opened) ──
+  // Create the agent so the user's first actual message can be forwarded.
+  // No prompt is sent — there's no user message yet.
+  if (isParsedAssistantThread(parsed)) {
+    const agentPath = getAgentPath(parsed.threadTs);
+    const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+
+    if (result.wasNewlyCreated) {
+      void caller.subscribeToAgentChanges({
+        agentPath,
+        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
+      });
+    }
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: result.wasNewlyCreated,
+      case: "assistant_thread_started",
       eventId,
       requestId,
     });
@@ -714,12 +763,27 @@ function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[]
 }
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
-function parseWebhookPayload(
-  payload: SlackWebhookPayload,
-): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
+function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
 
+  // ── assistant_thread_started (DMs via Slack's assistant UI) ──
+  // Slack sends this instead of a regular message when a user opens a DM
+  // thread with a bot that has the assistant:write scope.
+  if (event.type === "assistant_thread_started") {
+    if (!botUserId) {
+      return { case: "ignored", reason: "Ignored: no bot user recipient" };
+    }
+    const thread = (event as AssistantThreadStartedEvent).assistant_thread;
+    return {
+      case: "assistant_thread_started",
+      userId: thread.user_id,
+      channel: thread.channel_id,
+      threadTs: thread.thread_ts,
+    };
+  }
+
+  // ── Reactions ──
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
     if (event.item.type !== "message") {
       return { case: "ignored", reason: "Ignored: reaction not on message" };
@@ -735,15 +799,25 @@ function parseWebhookPayload(
     };
   }
 
-  if ("bot_profile" in event && event.bot_profile) {
-    return { case: "ignored", reason: "Ignored: bot message" };
-  }
-  if ("subtype" in event && event.subtype === "bot_message") {
-    return { case: "ignored", reason: "Ignored: bot message" };
-  }
-
   if (!botUserId) {
     return { case: "ignored", reason: "Ignored: no bot user recipient" };
+  }
+
+  // ── Self-message guard ──
+  // Always ignore our own bot's messages to prevent feedback loops.
+  if ("user" in event && event.user === botUserId) {
+    return { case: "ignored", reason: "Ignored: bot's own message" };
+  }
+
+  // ── Bot messages ──
+  // Ignore bot messages UNLESS they @mention our bot (another bot asking
+  // us to do something).
+  const isBotMessage =
+    ("bot_profile" in event && event.bot_profile) ||
+    ("subtype" in event && event.subtype === "bot_message");
+
+  if (isBotMessage && !event.text?.includes(`<@${botUserId}>`)) {
+    return { case: "ignored", reason: "Ignored: bot message" };
   }
 
   const threadTs = event.thread_ts || event.ts;
@@ -752,9 +826,11 @@ function parseWebhookPayload(
   }
 
   const isNewThread = !event.thread_ts;
-  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
+  // In DMs (channel_type "im"), every message is implicitly directed at the bot.
+  const isDM = "channel_type" in event && event.channel_type === "im";
+  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`) || isDM;
 
-  let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
+  let messageCase: ParsedMessage["case"];
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
   } else if (isMention && !isNewThread) {
