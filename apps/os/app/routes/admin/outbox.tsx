@@ -531,7 +531,7 @@ function OutboxPage() {
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({
-      queryKey: orpc.admin.outbox.listEvents.queryOptions().queryKey,
+      queryKey: orpc.admin.outbox.listEvents.queryOptions({ input: serverInput }).queryKey,
     });
   };
 
