@@ -121,6 +121,7 @@ export const registerConsumers = () => {
     },
     async handler(params) {
       const { machineId, projectId } = params.payload;
+      logger.set({ machine: { id: machineId } });
       const db = getDb();
 
       const machine = await db.query.machine.findFirst({
@@ -136,8 +137,16 @@ export const registerConsumers = () => {
         return `skipped: machine state is ${machine.state}`;
       }
 
-      const { pushSetupToMachine } = await import("../services/machine-setup.ts");
-      await pushSetupToMachine(db, env, machine);
+      const { getPushMachineSetupInput, pushSetupToMachine } =
+        await import("../services/machine-setup.ts");
+
+      const input = await getPushMachineSetupInput(db, env, machine);
+      if (!input) {
+        logger.info("[pushMachineSetup] Sentinel matches, skipping setup + probe");
+        return `skipped: setup already done for ${machineId}`;
+      }
+
+      await pushSetupToMachine(machine, input);
 
       // Emit setup-pushed so the readiness probe can begin
       await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
