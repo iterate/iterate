@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
+/** Prefixes allowed by default. Use --prefix to bypass this restriction. */
 const ALLOWED_PREFIXES = new Set(["dev", "stg"]);
 const LIST_APPS_PAGE_SIZE = 100;
 
@@ -202,12 +203,15 @@ const router = {
           .default("stop")
           .describe("Whether to stop or delete matching machines"),
         prefix: z
-          .enum(["dev", "stg", "prd"])
+          .string()
           .optional()
           .describe(
-            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Only dev/stg allowed unless --i-am-totally-sure is passed.",
+            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Arbitrary prefixes must start with 'test-'.",
           ),
-        iAmTotallySure: z.boolean().optional().meta({ hidden: true }),
+        all: z
+          .boolean()
+          .default(false)
+          .describe("Skip age-based filtering and clean up ALL matching machines (useful for CI)"),
       }),
     )
     .handler(async ({ input }) => {
@@ -221,10 +225,16 @@ const router = {
       if (!prefix) {
         throw new Error("Missing --prefix. Pass it explicitly or set SANDBOX_NAME_PREFIX.");
       }
-      if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
-        throw new Error(
-          `Prefix '${prefix}' is not allowed. This script is intentionally limited to dev/stg.`,
-        );
+      if (!ALLOWED_PREFIXES.has(prefix)) {
+        if (!prefix.startsWith("test-")) {
+          throw new Error(
+            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted.`,
+          );
+        }
+      }
+
+      if (input.all) {
+        console.log("WARNING: --all flag is set, age-based filtering is disabled");
       }
 
       const timeframeMs = parseDuration(input.timeframe);
@@ -237,7 +247,7 @@ const router = {
       let skippedCount = 0;
 
       console.log(
-        `fly cleanup: prefix=${prefix} action=${input.action} timeframe=${input.timeframe} cutoff=${new Date(cutoff).toISOString()} apps=${appNames.length}`,
+        `fly cleanup: prefix=${prefix} action=${input.action} timeframe=${input.timeframe} cutoff=${new Date(cutoff).toISOString()} apps=${appNames.length}${input.all ? " (--all: no age filter)" : ""}`,
       );
 
       for (const appName of appNames) {
@@ -256,6 +266,8 @@ const router = {
 
         const candidates = machines.filter((machine) => {
           if (!isIterateSandboxMachine(machine)) return false;
+          // --all skips age-based filtering (useful for CI cleanup)
+          if (input.all) return true;
           if (!machine.updated_at) return false;
           const updatedAt = Date.parse(machine.updated_at);
           if (!Number.isFinite(updatedAt)) return false;
@@ -295,14 +307,25 @@ const router = {
             console.log(`skip delete app=${appName} machine=${machine.id}: ${String(error)}`);
             continue;
           }
+        }
 
+        // Delete the app if action=delete and all machines were cleaned up (or app was empty)
+        if (input.action === "delete" && (candidates.length > 0 || machines.length === 0)) {
+          // Re-check remaining machines after deletions — only delete app if truly empty
           try {
-            await flyApi({
+            const remaining = await flyApi<FlyMachine[]>({
               token,
-              method: "DELETE",
-              path: `/v1/apps/${encodeURIComponent(appName)}`,
+              method: "GET",
+              path: `/v1/apps/${encodeURIComponent(appName)}/machines`,
             });
-            deletedApps += 1;
+            if (remaining.length === 0) {
+              await flyApi({
+                token,
+                method: "DELETE",
+                path: `/v1/apps/${encodeURIComponent(appName)}`,
+              });
+              deletedApps += 1;
+            }
           } catch {
             // best effort app cleanup
           }

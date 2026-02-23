@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { createRouterClient } from "@orpc/server";
-import { PromptAddedEvent } from "../types/events.ts";
+import { AgentEventsPayload } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { daemonRouter } from "../orpc/router.ts";
 import { withSpan } from "../utils/otel.ts";
@@ -77,14 +77,36 @@ opencodeRouter.post("/new", async (c) => {
   });
 });
 
+/**
+ * Extract prompt messages from the request payload.
+ * Expects { events: IterateEvent[] }, returns messages from all prompt-added events.
+ * Returns null if the payload doesn't match or has no prompt-added events.
+ */
+function extractPromptMessages(payload: unknown): string[] | null {
+  const parsed = AgentEventsPayload.safeParse(payload);
+  if (!parsed.success) return null;
+
+  const messages = parsed.data.events
+    .filter(
+      (e): e is { type: "iterate:agent:prompt-added"; message: string } =>
+        e.type === "iterate:agent:prompt-added",
+    )
+    .map((e) => e.message);
+
+  return messages.length > 0 ? messages : null;
+}
+
 opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
   const opencodeSessionId = c.req.param("opencodeSessionId");
   const agentPath = c.req.header("x-iterate-agent-path") ?? undefined;
   const payload = await c.req.json();
 
-  const parsed = PromptAddedEvent.safeParse(payload);
-  if (!parsed.success) {
-    return c.json({ error: "Expected an iterate:agent:prompt-added event" }, 400);
+  const messages = extractPromptMessages(payload);
+  if (!messages || messages.length === 0) {
+    return c.json(
+      { error: "Expected { events: [...] } with at least one prompt-added event" },
+      400,
+    );
   }
 
   const health = await opencodeClient.global.health();
@@ -104,7 +126,9 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
     return c.json({ error: "ANTHROPIC_API_KEY is not set" }, 503);
   }
 
-  const { message } = parsed.data;
+  // Flatten all prompt messages into a single promptAsync call with multiple text parts.
+  const parts = messages.map((text) => ({ type: "text" as const, text }));
+  const totalLength = messages.reduce((sum, m) => sum + m.length, 0);
 
   // Fire-and-forget: background the prompt so the caller returns immediately
   void withSpan(
@@ -113,7 +137,8 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
       attributes: {
         "opencode.session_id": opencodeSessionId,
         ...(agentPath ? { "agent.path": agentPath } : {}),
-        "prompt.length": message.length,
+        "prompt.length": totalLength,
+        "prompt.parts_count": parts.length,
       },
     },
     async () => {
@@ -121,7 +146,7 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
       await opencodeClient.session.promptAsync({
         sessionID: opencodeSessionId,
         directory: getOpencodeWorkingDirectory(),
-        parts: [{ type: "text", text: message }],
+        parts,
       });
     },
   ).catch((error) => {

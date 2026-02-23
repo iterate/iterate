@@ -130,7 +130,9 @@ emailRouter.post("/webhook", async (c) => {
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+      body: JSON.stringify({
+        events: [{ type: "iterate:agent:prompt-added", message }],
+      }),
     }).catch((error) => {
       logger.error(`[email] failed to post prompt for ${agentPath}`, error);
     });
@@ -265,7 +267,7 @@ function formatNewEmailMessage(
 
   return [
     `[Agent Path: ${agentPath}] New email thread started.`,
-    `Refer to EMAIL.md for how to respond via \`iterate tool exec-js\`.`,
+    `Refer to EMAIL.md for how to respond via \`iterate tool exec-ts\`.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `To: ${emailData.to.join(", ")}`,
