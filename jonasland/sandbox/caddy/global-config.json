@@ -13,31 +13,19 @@
           "listen": [":80"],
           "routes": [
             {
+              "match": [
+                {
+                  "path": ["/healthz"]
+                }
+              ],
               "handle": [
                 {
-                  "handler": "reverse_proxy",
-                  "upstreams": [
-                    {
-                      "dial": "127.0.0.1:19000"
-                    }
-                  ],
-                  "headers": {
-                    "request": {
-                      "set": {
-                        "X-Original-Host": ["{http.request.host}"],
-                        "X-Original-SNI": ["{http.request.tls.server_name}"]
-                      }
-                    }
-                  }
+                  "handler": "static_response",
+                  "status_code": 200,
+                  "body": "ok"
                 }
               ]
-            }
-          ]
-        },
-        "egress-https": {
-          "listen": [":443"],
-          "tls_connection_policies": [{}],
-          "routes": [
+            },
             {
               "handle": [
                 {
@@ -51,7 +39,49 @@
                     "request": {
                       "set": {
                         "X-Original-Host": ["{http.request.host}"],
-                        "X-Original-SNI": ["{http.request.tls.server_name}"]
+                        "X-Original-SNI": ["{http.request.tls.server_name}"],
+                        "X-Original-Proto": ["{http.request.scheme}"]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "egress-https": {
+          "listen": [":443"],
+          "tls_connection_policies": [{}],
+          "routes": [
+            {
+              "match": [
+                {
+                  "path": ["/healthz"]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "status_code": 200,
+                  "body": "ok"
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:19000"
+                    }
+                  ],
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Original-Host": ["{http.request.host}"],
+                        "X-Original-SNI": ["{http.request.tls.server_name}"],
+                        "X-Original-Proto": ["{http.request.scheme}"]
                       }
                     }
                   }

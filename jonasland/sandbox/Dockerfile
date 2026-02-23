@@ -9,7 +9,7 @@ FROM node:24-alpine
 ARG NOMAD_VERSION=1.10.4
 ARG CONSUL_VERSION=1.20.4
 
-RUN apk add --no-cache bash ca-certificates curl iproute2 iptables unzip
+RUN apk add --no-cache bash ca-certificates curl iproute2 iptables su-exec unzip
 
 RUN curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip" -o /tmp/nomad.zip && \
     unzip -q /tmp/nomad.zip -d /usr/local/bin && \
@@ -23,6 +23,8 @@ RUN curl -fsSL "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_$
 
 COPY --from=caddy-builder /tmp/caddy-with-consul /usr/local/bin/caddy-with-consul
 RUN chmod +x /usr/local/bin/caddy-with-consul
+
+RUN adduser -D -H -u 1000 caddy
 
 RUN mkdir -p /etc/jonasland/nomad/jobs /etc/jonasland/caddy /etc/jonasland/services /etc/jonasland/scripts /var/lib/nomad /var/lib/caddy
 COPY jonasland/sandbox/nomad/base.hcl /etc/jonasland/nomad/base.hcl

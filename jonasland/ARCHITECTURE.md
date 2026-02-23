@@ -32,6 +32,7 @@ Minimal local sandbox for routing all HTTP/HTTPS traffic through Caddy + Consul 
 
 - If `ITERATE_EXTERNAL_EGRESS_PROXY` is set: egress forwards to that endpoint.
 - If unset: egress forwards directly to original target from upstream headers.
+- Egress logs both request metadata and downstream status to stdout.
 
 ## How To Use
 

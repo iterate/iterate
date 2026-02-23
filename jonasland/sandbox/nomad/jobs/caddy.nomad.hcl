@@ -24,7 +24,7 @@ job "caddy" {
         command = "sh"
         args = [
           "-ec",
-          "/etc/jonasland/scripts/iptables-redirect.sh && exec caddy-with-consul run --resume --config /etc/jonasland/caddy/bootstrap.caddyfile --adapter caddyfile"
+          "/etc/jonasland/scripts/iptables-redirect.sh && exec su-exec caddy caddy-with-consul run --resume --config /etc/jonasland/caddy/bootstrap.caddyfile --adapter caddyfile"
         ]
       }
 
