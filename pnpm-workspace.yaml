@@ -5,6 +5,8 @@ packages:
   - apps/iterate-com
   - apps/os
   - sandbox
+  - jonasland/sandbox
+  - jonasland/e2e-tests
   - packages/*
   - packages/pidnap/docker
   - repo-templates/**/*

@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-com/jonasland-e2e-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
