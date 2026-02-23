@@ -26,7 +26,19 @@ async function createBuildContextTar(): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   });
 
-  for (const file of ["Dockerfile", "package.json", "Caddyfile", "egress-server.mjs", "start.sh"]) {
+  for (const file of [
+    "Dockerfile",
+    "package.json",
+    "egress-server.mjs",
+    "start.sh",
+    "caddy/Caddyfile",
+    "nomad/base.hcl",
+    "nomad/jobs/consul.nomad.hcl",
+    "nomad/jobs/caddy.nomad.hcl",
+    "nomad/jobs/openobserve.nomad.hcl",
+    "nomad/jobs/egress.nomad.hcl",
+    "nomad/jobs/events-service.nomad.hcl",
+  ]) {
     await addFile(pack, join(sandboxDir, file), file);
   }
 

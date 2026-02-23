@@ -19,11 +19,30 @@ function resolveTraceExporterUrl() {
   return `${normalized}/v1/traces`;
 }
 
+function resolveTraceExporterHeaders(): Record<string, string> | undefined {
+  const rawHeaders = process.env.OTEL_EXPORTER_OTLP_HEADERS;
+  if (!rawHeaders) return undefined;
+
+  const headers: Record<string, string> = {};
+  for (const part of rawHeaders.split(",")) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (!key || !value) continue;
+    headers[key] = value;
+  }
+
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 export function getOtelConfig() {
   const tracesEndpoint = resolveTraceExporterUrl();
+  const headers = resolveTraceExporterHeaders();
   return {
     enabled: Boolean(tracesEndpoint),
     tracesEndpoint: tracesEndpoint ?? null,
+    hasHeaders: Boolean(headers && Object.keys(headers).length > 0),
   };
 }
 
@@ -31,6 +50,7 @@ export function initializeOtel(serviceName: string) {
   if (state.__jonasland2OtelInitialized) return;
 
   const traceExporterUrl = resolveTraceExporterUrl();
+  const traceExporterHeaders = resolveTraceExporterHeaders();
   if (!traceExporterUrl) {
     state.__jonasland2OtelInitialized = true;
     return;
@@ -42,7 +62,14 @@ export function initializeOtel(serviceName: string) {
       [ATTR_SERVICE_VERSION]: process.env.npm_package_version || "0.0.0",
       "deployment.environment.name": process.env.NODE_ENV || "development",
     }),
-    spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: traceExporterUrl }))],
+    spanProcessors: [
+      new BatchSpanProcessor(
+        new OTLPTraceExporter({
+          url: traceExporterUrl,
+          headers: traceExporterHeaders,
+        }),
+      ),
+    ],
   });
 
   trace.setGlobalTracerProvider(provider);

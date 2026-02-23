@@ -1,16 +1,17 @@
 # jonasland2
 
-Minimal proof of transparent egress plus OpenAPI-first oRPC service architecture:
+Minimal local SOA sandbox for oRPC services:
 
-- Caddy (`:80`, `:443`, admin `:2019`)
-- internal MITM certs (`tls internal` + `on_demand`)
-- iptables `OUTPUT` REDIRECT on 80/443
-- tiny Node egress forwarder behind Caddy
-- `events-service` via oRPC `OpenAPIHandler` (`/api/*`)
+- Nomad (orchestration) on `:4646`
+- Consul (service discovery) on `:8500`, DNS on `:53`
+- Caddy edge proxy on `:80/:443` (dynamic SRV discovery via Consul)
+- OpenObserve in-container on `:5080`
+- `events-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
+- egress proxy service behind Caddy fallback route
 
 ## Packages
 
-- `sandbox/`: minimal Docker image (`Caddy + iptables + egress`) + build script
+- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OpenObserve`) + build script
 - `e2e/`: smoke tests using Docker SDK fixtures + MSW-backed proxy (HTTP + WS)
 - `apps/events-contract/`: oRPC contract package
 - `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs)
@@ -24,33 +25,39 @@ pnpm build
 pnpm test
 ```
 
-## SigNoz
+## Endpoints
 
-```bash
-cd jonasland2
-pnpm signoz:up
-pnpm signoz:status
-```
+OpenObserve runs in-container and is exposed through Caddy on `openobserve.iterate.localhost`.
 
-SigNoz UI: `http://127.0.0.1:8080`
+Default OpenObserve credentials:
 
-Run container and inspect mapped ports:
+- email: `root@example.com`
+- password: `Complexpass#123`
+
+Run container (Nomad client needs writable host cgroup namespace):
 
 ```bash
 docker run -d --name jonasland2-live \
-  --cap-add NET_ADMIN \
+  --privileged \
+  --cgroupns host \
   --add-host host.docker.internal:host-gateway \
-  -e OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://host.docker.internal:4318/v1/traces \
-  -P jonasland2-sandbox:local
-docker port jonasland2-live
+  -p 80:80 -p 443:443 -p 2019:2019 -p 4646:4646 -p 8500:8500 \
+  jonasland2-sandbox:local
 ```
+
+Why `node:24-trixie-slim` and not `bookworm`:
+
+- OpenObserve binary in `public.ecr.aws/zinclabs/openobserve:latest` currently requires newer glibc symbols than bookworm provides (`GLIBC_2.38`, `GLIBC_2.39`).
 
 Then hit:
 
-- Caddy health on mapped `80/tcp`: `http://127.0.0.1:<PORT>/healthz`
-- Caddy admin on mapped `2019/tcp`: `http://127.0.0.1:<PORT>/config/`
-- Events API via host header `events.iterate.localhost`:
-  - `GET /api/openapi.json`
-  - `GET /api/docs` (Scalar UI served by OpenAPI handler plugin)
-  - `GET /api/events`
-  - `POST /api/events`
+- Caddy health: `http://127.0.0.1/healthz`
+- Caddy admin: `http://127.0.0.1:2019/config/`
+- Nomad UI: `http://127.0.0.1:4646`
+- Consul UI: `http://127.0.0.1:8500`
+- Events service:
+  - `http://events.iterate.localhost/api/openapi.json`
+  - `http://events.iterate.localhost/api/docs` (Scalar)
+  - `http://events.iterate.localhost/api/events`
+- OpenObserve UI:
+  - `http://openobserve.iterate.localhost/web/`

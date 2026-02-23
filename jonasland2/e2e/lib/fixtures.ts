@@ -191,13 +191,15 @@ export async function dockerContainerFixture(params: {
   return {
     containerId: created.Id,
     async publishedPort(containerPort: string) {
-      const inspect = await docker.containerInspect(created.Id);
-      const mapping = inspect.NetworkSettings?.Ports?.[containerPort];
-      const hostPort = mapping?.[0]?.HostPort;
-      if (!hostPort) {
-        throw new Error(`No published port for ${containerPort} on container ${created.Id}`);
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const inspect = await docker.containerInspect(created.Id);
+        const mapping = inspect.NetworkSettings?.Ports?.[containerPort];
+        const hostPort = mapping?.[0]?.HostPort;
+        if (hostPort) return Number(hostPort);
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      return Number(hostPort);
+      throw new Error(`No published port for ${containerPort} on container ${created.Id}`);
     },
     async logs() {
       const stdout = new PassThrough();

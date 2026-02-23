@@ -14,6 +14,17 @@ import {
 const image = process.env.JONASLAND2_SANDBOX_IMAGE || "jonasland2-sandbox:local";
 const concurrentCaseIds = Array.from({ length: 10 }, (_, index) => `case-${String(index + 1)}`);
 
+async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<string> }) {
+  try {
+    await waitForHttpOk(url, 45_000);
+  } catch (error) {
+    const logs = await container.logs().catch(() => "(container logs unavailable)");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\ncontainer logs:\n${logs}`,
+    );
+  }
+}
+
 describe("msw proxy fixture concurrency proof", () => {
   test.concurrent("parallel fixtures bind distinct host ports", async () => {
     const fixtures = await Promise.all(
@@ -96,7 +107,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
-    await waitForHttpOk(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`);
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
     const eventsReadyDeadline = Date.now() + 60_000;
     let eventsReady = false;
     while (Date.now() < eventsReadyDeadline) {
@@ -212,7 +223,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
     const caddyAdminPort = await container.publishedPort("2019/tcp");
-    await waitForHttpOk(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`);
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
 
     msw.use(
       http.get("https://upstream.iterate.localhost/from-curl", ({ request }) => {
@@ -278,7 +289,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
-    await waitForHttpOk(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`);
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
 
     const wsClient = await execInContainer({
       containerId: container.containerId,

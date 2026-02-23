@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run smoke.e2e.test.ts"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@docker/node-sdk": "^0.0.17",

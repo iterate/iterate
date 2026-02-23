@@ -18,22 +18,49 @@ ensure_rule nat OUTPUT -m owner --uid-owner "$NODE_UID" -j RETURN
 ensure_rule nat OUTPUT -p tcp --dport 80 -j REDIRECT --to-ports 80
 ensure_rule nat OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 443
 
-su-exec node /app/node_modules/.bin/tsx /app/apps/events-service/src/server.ts &
-events_pid=$!
+wait_for_url() {
+  url="$1"
+  label="$2"
+  max_attempts="${3:-120}"
 
-# Fail fast if events-service cannot boot.
-for i in $(seq 1 40); do
-  if curl -fsS http://127.0.0.1:19010/healthz >/dev/null 2>&1; then
-    break
-  fi
+  i=1
+  while [ "$i" -le "$max_attempts" ]; do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
 
-  if ! kill -0 "$events_pid" 2>/dev/null; then
-    echo "events-service exited during startup"
-    exit 1
-  fi
+  echo "$label failed health check: $url"
+  exit 1
+}
 
-  sleep 0.25
+nomad agent -dev -config=/etc/jonasland2/nomad/base.hcl &
+NOMAD_PID="$!"
+
+stop_nomad() {
+  kill "$NOMAD_PID" 2>/dev/null || true
+}
+
+trap stop_nomad INT TERM
+
+until nomad status >/dev/null 2>&1; do
+  sleep 1
 done
 
-su-exec node node /app/egress-server.mjs &
-exec su-exec node caddy run --config /app/Caddyfile --adapter caddyfile
+nomad job run -detach /etc/jonasland2/nomad/jobs/consul.nomad.hcl
+wait_for_url "http://127.0.0.1:8500/v1/status/leader" "consul" 240
+
+printf 'nameserver 127.0.0.1\noptions ndots:0\n' > /etc/resolv.conf
+
+nomad job run -detach /etc/jonasland2/nomad/jobs/openobserve.nomad.hcl
+nomad job run -detach /etc/jonasland2/nomad/jobs/egress.nomad.hcl
+nomad job run -detach /etc/jonasland2/nomad/jobs/events-service.nomad.hcl
+nomad job run -detach /etc/jonasland2/nomad/jobs/caddy.nomad.hcl
+
+wait_for_url "http://127.0.0.1:5080/healthz" "openobserve"
+wait_for_url "http://127.0.0.1:19010/healthz" "events-service"
+wait_for_url "http://127.0.0.1:80/healthz" "caddy"
+
+wait "$NOMAD_PID"
