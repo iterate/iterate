@@ -37,10 +37,15 @@ Minimal local sandbox for routing all HTTP/HTTPS traffic through Caddy + Consul 
 ## How To Use
 
 1. Build image: `pnpm --filter ./jonasland/sandbox build`
-2. Run tests: `pnpm --filter ./jonasland/e2e-tests test`
+2. Run tests: `pnpm --filter ./jonasland/e2e-tests test:e2e`
 3. Inspect runtime with container logs + Nomad/Consul/Caddy APIs.
 
 The image is intentionally minimal (`node:24-alpine`) and installs pinned `nomad` + `consul` binaries plus a custom `caddy-with-consul` binary built with `xcaddy`.
+
+Smoke tests cover both egress paths:
+
+- `ITERATE_EXTERNAL_EGRESS_PROXY` set (`external-proxy` mode)
+- env var unset (`direct` mode fallback to original target)
 
 ## Known Limits
 
