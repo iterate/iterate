@@ -541,6 +541,48 @@ describe("slack router", () => {
       const body = await response.json();
       expect(body.message).toContain("no thread timestamp");
     });
+
+    it("ignores hidden message_changed events (Slack internal metadata updates)", async () => {
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+
+      // This replicates the real Slack event shape when Slack updates the thread
+      // root to add assistant_app_thread metadata. It has subtype "message_changed",
+      // hidden: true, no user on outer event, and a unique ts with no thread_ts.
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_hidden_1",
+        event: {
+          type: "message",
+          subtype: "message_changed",
+          hidden: true,
+          channel: "D_DM_CHANNEL",
+          channel_type: "im",
+          ts: "1771829258.000200",
+          event_ts: "1771829258.000200",
+          message: {
+            user: botUserId,
+            type: "message",
+            ts: "1771829254.437449",
+          },
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("hidden event");
+      // Must NOT create a new agent
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe("assistant_thread_started (DMs)", () => {
