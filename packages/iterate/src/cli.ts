@@ -160,14 +160,6 @@ const resolveConfig = (workspacePath: string): { name: string; config: Config } 
   return { name, config: parsed.data };
 };
 
-const getStoredSession = (configName: string): Config["session"] | null => {
-  const configFile = readConfigFile();
-  const entry = configFile.configs?.[configName];
-  if (!entry?.session) return null;
-  if (entry.session.expiresAt && new Date(entry.session.expiresAt) < new Date()) return null;
-  return entry.session;
-};
-
 const storeSession = (configName: string, session: Config["session"]): void => {
   const configFile = readConfigFile();
   const entry = configFile.configs?.[configName];
@@ -428,8 +420,8 @@ const deviceFlowLogin = async (
     // Ignore — user can open manually
   }
 
-  // Step 3: Poll for approval
-  const pollInterval = (code.interval || 5) * 1000;
+  // Step 3: Poll for approval (RFC 8628 §3.5: slow_down permanently increases interval by 5s)
+  let pollInterval = (code.interval || 5) * 1000;
   const expiresAt = Date.now() + (code.expires_in || 900) * 1000;
   console.error("Waiting for approval...");
 
@@ -454,7 +446,7 @@ const deviceFlowLogin = async (
       const errorCode = tokenBody.error as string | undefined;
       if (errorCode === "authorization_pending") continue;
       if (errorCode === "slow_down") {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        pollInterval += 5000;
         continue;
       }
       if (errorCode === "expired_token") {

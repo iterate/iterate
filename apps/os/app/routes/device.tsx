@@ -1,7 +1,7 @@
-import { useState } from "react";
 import { z } from "zod/v4";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { useMutation } from "@tanstack/react-query";
 import { CheckCircle, Monitor, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { authClient } from "../lib/auth-client.ts";
@@ -15,10 +15,6 @@ import {
   CardTitle,
 } from "../components/ui/card.tsx";
 
-/**
- * Server function: if not authenticated, redirect to login with a return URL
- * that preserves the user_code. If authenticated, return the user code.
- */
 const ensureAuthForDevice = createServerFn({ method: "GET" })
   .inputValidator(z.object({ user_code: z.string().optional() }))
   .handler(({ context, data }) => {
@@ -43,44 +39,16 @@ export const Route = createFileRoute("/device" as any)({
 });
 
 function DevicePage() {
-  const { userCode, userName } = Route.useLoaderData() as { userCode: string; userName: string };
-  const [status, setStatus] = useState<"idle" | "approving" | "approved" | "denied" | "error">(
-    "idle",
-  );
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const { userCode, userName } = Route.useLoaderData();
 
-  const handleApprove = async () => {
-    if (!userCode) {
-      toast.error("No device code provided");
-      return;
-    }
-    setStatus("approving");
-    try {
-      await (authClient as any).device.approve({
-        userCode,
-        fetchOptions: { throw: true },
-      });
-      setStatus("approved");
-    } catch (err: any) {
-      setStatus("error");
-      const message = err?.message || "Failed to approve device";
-      setErrorMessage(message);
-      toast.error(message);
-    }
-  };
+  const approve = useMutation({
+    mutationFn: () => authClient.device.approve({ userCode, fetchOptions: { throw: true } }),
+  });
 
-  const handleDeny = async () => {
-    if (!userCode) return;
-    try {
-      await (authClient as any).device.deny({
-        userCode,
-        fetchOptions: { throw: true },
-      });
-      setStatus("denied");
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to deny device");
-    }
-  };
+  const deny = useMutation({
+    mutationFn: () => authClient.device.deny({ userCode, fetchOptions: { throw: true } }),
+    onError: (err: Error) => toast.error(err.message || "Failed to deny device"),
+  });
 
   if (!userCode) {
     return (
@@ -101,7 +69,7 @@ function DevicePage() {
     );
   }
 
-  if (status === "approved") {
+  if (approve.isSuccess) {
     return (
       <CenteredLayout>
         <div className="w-full max-w-md">
@@ -120,7 +88,7 @@ function DevicePage() {
     );
   }
 
-  if (status === "denied") {
+  if (deny.isSuccess) {
     return (
       <CenteredLayout>
         <div className="w-full max-w-md">
@@ -137,6 +105,8 @@ function DevicePage() {
       </CenteredLayout>
     );
   }
+
+  const busy = approve.isPending || deny.isPending;
 
   return (
     <CenteredLayout>
@@ -158,19 +128,21 @@ function DevicePage() {
               <p className="font-mono text-2xl font-bold tracking-widest">{userCode}</p>
             </div>
 
-            {errorMessage && <p className="text-sm text-destructive text-center">{errorMessage}</p>}
+            {approve.error && (
+              <p className="text-sm text-destructive text-center">{approve.error.message}</p>
+            )}
 
             <div className="flex gap-3">
               <Button
                 variant="outline"
                 className="flex-1"
-                onClick={handleDeny}
-                disabled={status === "approving"}
+                onClick={() => deny.mutate()}
+                disabled={busy}
               >
                 Deny
               </Button>
-              <Button className="flex-1" onClick={handleApprove} disabled={status === "approving"}>
-                {status === "approving" ? "Authorizing..." : "Authorize"}
+              <Button className="flex-1" onClick={() => approve.mutate()} disabled={busy}>
+                {approve.isPending ? "Authorizing..." : "Authorize"}
               </Button>
             </div>
           </CardContent>
