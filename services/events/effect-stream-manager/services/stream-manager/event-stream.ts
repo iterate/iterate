@@ -101,9 +101,10 @@ const encodeEvent = Schema.encodeSync(Event);
 
 const WS_ACK_TIMEOUT_MS = 5_000;
 const normalizeWebsocketIdleDisconnectMs = (value: number | undefined): number => {
-  if (value === undefined) return 30_000;
-  if (!Number.isFinite(value) || value < 0) return 30_000;
-  return Math.trunc(value);
+  if (value === undefined || !Number.isFinite(value)) return 30_000;
+  const normalized = Math.trunc(value);
+  if (normalized <= 0) return 0;
+  return normalized;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -176,6 +177,7 @@ export const make = (
     const websocketIdleDisconnectMs = normalizeWebsocketIdleDisconnectMs(
       options.websocketIdleDisconnectMs,
     );
+    const appendSemaphore = yield* Effect.makeSemaphore(1);
 
     const markDelivered = (subscriptionSlug: string, offset: Offset) =>
       Effect.gen(function* () {
@@ -214,7 +216,7 @@ export const make = (
     };
 
     const resetWebSocketIdleTimer = (subscriptionSlug: string) => {
-      if (websocketIdleDisconnectMs < 0) return;
+      if (websocketIdleDisconnectMs <= 0) return;
 
       const current = wsConnections.get(subscriptionSlug);
       if (current === undefined) return;
@@ -433,7 +435,7 @@ export const make = (
       delivery: Effect.Effect<void, WebhookDeliveryError>,
     ): Effect.Effect<void> => {
       const previous = orderedChains.get(subscriptionSlug) ?? Promise.resolve();
-      const next = previous.then(() => runPromise(delivery));
+      const next = previous.catch(() => {}).then(() => runPromise(delivery));
       orderedChains.set(subscriptionSlug, next);
       void next.catch(() => {});
       return Effect.void;
@@ -573,23 +575,25 @@ export const make = (
     };
 
     const append = (eventInput: EventInput) =>
-      Effect.gen(function* () {
-        const nextOffset = formatOffset(offsetToNumber(state.lastOffset) + 1);
-        const createdAt = yield* DateTime.now;
-        const trace = yield* fromCurrentSpan;
-        const event = Event.make({ ...eventInput, path, offset: nextOffset, createdAt, trace });
+      appendSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const nextOffset = formatOffset(offsetToNumber(state.lastOffset) + 1);
+          const createdAt = yield* DateTime.now;
+          const trace = yield* fromCurrentSpan;
+          const event = Event.make({ ...eventInput, path, offset: nextOffset, createdAt, trace });
 
-        yield* storage.append(event);
-        state = reduce(state, event);
+          yield* storage.append(event);
+          state = reduce(state, event);
 
-        yield* Effect.all([
-          deliverToPushSubscriptions(event),
-          replayHistoricEventsIfRequested(event),
-        ]).pipe(Effect.forkDaemon, Effect.asVoid);
+          yield* Effect.all([
+            deliverToPushSubscriptions(event),
+            replayHistoricEventsIfRequested(event),
+          ]).pipe(Effect.forkDaemon, Effect.asVoid);
 
-        yield* PubSub.publish(pubsub, event);
-        return event;
-      });
+          yield* PubSub.publish(pubsub, event);
+          return event;
+        }),
+      );
 
     // Handle subscription requests by combining historical + live events.
     //

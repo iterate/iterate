@@ -3,8 +3,10 @@ import { oz } from "@orpc/zod";
 import { JSON_SCHEMA_REGISTRY } from "@orpc/zod/zod4";
 import * as z from "zod/v4";
 import {
+  EventVersion,
   ITERATE_EVENT_TYPE_PREFIX,
   IterateEventType,
+  TraceContext,
   typedEvent,
 } from "../lib/base-event-schema.ts";
 import packageJson from "../package.json" with { type: "json" };
@@ -18,14 +20,8 @@ export type Offset = z.infer<typeof Offset>;
 export const CreatedAt = z.string().datetime({ offset: true });
 export type CreatedAt = z.infer<typeof CreatedAt>;
 
-export const Version = z.union([z.string(), z.number()]);
+export const Version = EventVersion;
 export type Version = z.infer<typeof Version>;
-
-const TraceContext = z.object({
-  traceId: z.string(),
-  spanId: z.string(),
-  parentSpanId: z.string().nullable(),
-});
 
 const PlainUnknownRecord = z.record(z.string(), z.unknown());
 const PlainStringRecord = z.record(z.string().min(1), z.string());

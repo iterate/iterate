@@ -19,9 +19,11 @@ export const resolveServiceBaseUrl = (params: {
   if (candidate) {
     const parsed = new URL(candidate);
 
-    // Explicit ports typically indicate direct local access (for example localhost:17301).
-    // In that case we should preserve the origin exactly.
+    // Explicit ports typically indicate local access (for example localhost:3000),
+    // but the env var is project-level. Always target the requested service port.
     if (parsed.port !== "") {
+      parsed.hostname = parsed.hostname.replace(/^[0-9]+__/, "");
+      parsed.port = String(params.manifest.port);
       parsed.pathname = "/";
       parsed.search = "";
       parsed.hash = "";
