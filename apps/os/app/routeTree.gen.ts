@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/root.tsx'
 import { Route as logoutRouteImport } from './routes/logout.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
+import { Route as deviceRouteImport } from './routes/device.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as slackConflictRouteImport } from './routes/slack-conflict.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
@@ -44,6 +45,11 @@ const logoutRoute = logoutRouteImport.update({
 const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const deviceRoute = deviceRouteImport.update({
+  id: '/device',
+  path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
 const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
@@ -167,6 +173,7 @@ const projMachineDetailRoute = projMachineDetailRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/device': typeof deviceRoute
   '/login': typeof loginRoute
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
@@ -194,6 +201,7 @@ export interface FileRoutesByFullPath {
   '/proj/$projectSlug/machines/$machineId': typeof projMachineDetailRoute
 }
 export interface FileRoutesByTo {
+  '/device': typeof deviceRoute
   '/login': typeof loginRoute
   '/logout': typeof logoutRoute
   '/': typeof indexRoute
@@ -220,6 +228,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_auth': typeof authRequiredDotlayoutRouteWithChildren
+  '/device': typeof deviceRoute
   '/login': typeof loginRoute
   '/logout': typeof logoutRoute
   '/_auth/': typeof indexRoute
@@ -249,6 +258,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/device'
     | '/login'
     | '/logout'
     | '/'
@@ -276,6 +286,7 @@ export interface FileRouteTypes {
     | '/proj/$projectSlug/machines/$machineId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/device'
     | '/login'
     | '/logout'
     | '/'
@@ -301,6 +312,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_auth'
+    | '/device'
     | '/login'
     | '/logout'
     | '/_auth/'
@@ -330,6 +342,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
+  deviceRoute: typeof deviceRoute
   loginRoute: typeof loginRoute
   logoutRoute: typeof logoutRoute
 }
@@ -348,6 +361,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof loginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/device': {
+      id: '/device'
+      path: '/device'
+      fullPath: '/device'
+      preLoaderRoute: typeof deviceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -620,6 +640,7 @@ const authRequiredDotlayoutRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
+  deviceRoute: deviceRoute,
   loginRoute: loginRoute,
   logoutRoute: logoutRoute,
 }
