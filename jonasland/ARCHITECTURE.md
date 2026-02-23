@@ -10,23 +10,24 @@ Minimal local sandbox for routing all HTTP/HTTPS traffic through vanilla Caddy +
 - `consul` agent (service registry + KV)
 - `caddy` (official upstream binary, no custom modules)
 - `egress` Node.js service (logs + forwarding)
+- `whoami` demo service (tagged `caddy` for auto-routing)
 - `iptables` OUTPUT redirect (80/443)
 - `jonasland/e2e-tests` Vitest suite using Docker HTTP API
 
 ## Config Model
 
 - Static files are source of truth in repo.
-- Nomad jobs are `.nomad.hcl` files (no inline template blocks).
-- Caddy runs from static `jonasland/sandbox/caddy/Caddyfile`.
-- Caddy discovers `egress` backends via Consul DNS `A` lookups (`egress.service.consul`).
+- Nomad jobs are `.nomad.hcl` files.
+- Caddy runtime config is rendered by Nomad template in `jonasland/sandbox/nomad/jobs/caddy.nomad.hcl`.
+- `jonasland/sandbox/caddy/Caddyfile.tmpl` mirrors that template for readability and validation follow-ups.
+- Nomad template integration signals Caddy with `SIGUSR1` on catalog changes.
 - Sandbox image copies jobs from `/etc/jonasland/nomad/jobs`.
 
 ## Traffic Model
 
 - Caddy catch-all routes forward through `egress` service.
-- Upstream discovery uses `dynamic a` with resolver `127.0.0.1` and `refresh 1s`.
-- Consul DNS listens on port `53` inside the sandbox container.
-- DNS cache refresh is set to `1s` for near-real-time service changes.
+- Services with `tags=["caddy"]` are auto-routed as `<service>.localhost`.
+- Consul DNS listens on port `53` with public recursors for external lookups.
 - `iptables` redirects outbound TCP 80/443 through Caddy.
 - Local service discovery domain is Consul-native (`*.service.consul`).
 
@@ -54,7 +55,6 @@ Smoke tests cover both egress paths:
 - MVP is local-only (no Depot/Fly/Doppler).
 - Single-node dev topology.
 - Security hardening of Caddy admin API is follow-up.
-- Current Caddyfile is egress-first catch-all; automatic per-service host routing is a follow-up.
 - For Nomad-in-Docker dev mode, the container must run with host cgroup namespace and `/sys/fs/cgroup` mounted RW.
 
 ## Follow-up Tasks
