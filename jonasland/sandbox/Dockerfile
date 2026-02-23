@@ -24,4 +24,13 @@ RUN curl -fsSL "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_$
 COPY --from=caddy-builder /tmp/caddy-with-consul /usr/local/bin/caddy-with-consul
 RUN chmod +x /usr/local/bin/caddy-with-consul
 
-CMD ["nomad", "agent", "-dev"]
+RUN mkdir -p /etc/jonasland/nomad/jobs /etc/jonasland/caddy /etc/jonasland/services /etc/jonasland/scripts /var/lib/nomad /var/lib/caddy
+COPY jonasland/sandbox/nomad/base.hcl /etc/jonasland/nomad/base.hcl
+COPY jonasland/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland/nomad/jobs/
+COPY jonasland/sandbox/caddy/bootstrap.caddyfile /etc/jonasland/caddy/bootstrap.caddyfile
+COPY jonasland/sandbox/caddy/global-config.json /etc/jonasland/caddy/global-config.json
+COPY jonasland/sandbox/services/ /etc/jonasland/services/
+COPY jonasland/sandbox/scripts/ /etc/jonasland/scripts/
+RUN find /etc/jonasland/scripts -name "*.sh" -exec chmod +x {} \;
+
+CMD ["nomad", "agent", "-dev", "-config=/etc/jonasland/nomad/base.hcl"]

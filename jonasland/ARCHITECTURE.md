@@ -19,6 +19,7 @@ Minimal local sandbox for routing all HTTP/HTTPS traffic through Caddy + Consul 
 - Nomad jobs are `.nomad.hcl` files (no inline template blocks).
 - Caddy bootstrap config is a static Caddyfile.
 - Dynamic global config lives in Consul KV key `caddy/global`.
+- Sandbox image copies jobs from `/etc/jonasland/nomad/jobs`.
 
 ## Traffic Model
 

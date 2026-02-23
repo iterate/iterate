@@ -1,0 +1,80 @@
+{
+  "logging": {
+    "logs": {
+      "default": {
+        "level": "INFO"
+      }
+    }
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "egress-http": {
+          "listen": [":80"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:19000"
+                    }
+                  ],
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Original-Host": ["{http.request.host}"],
+                        "X-Original-SNI": ["{http.request.tls.server_name}"]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "egress-https": {
+          "listen": [":443"],
+          "tls_connection_policies": [{}],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:19000"
+                    }
+                  ],
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Original-Host": ["{http.request.host}"],
+                        "X-Original-SNI": ["{http.request.tls.server_name}"]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "internal",
+                "ca": "local"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
