@@ -763,6 +763,15 @@ function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[]
 }
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
+/**
+ * Check if message text contains a mention of the given user ID.
+ * Slack mentions can appear as `<@UID>` or `<@UID|displayname>`.
+ */
+function textMentionsUser(text: string | undefined, userId: string): boolean {
+  if (!text) return false;
+  return new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
+}
+
 function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
@@ -816,7 +825,7 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
     ("bot_profile" in event && event.bot_profile) ||
     ("subtype" in event && event.subtype === "bot_message");
 
-  if (isBotMessage && !event.text?.includes(`<@${botUserId}>`)) {
+  if (isBotMessage && !textMentionsUser(event.text, botUserId)) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
@@ -830,7 +839,7 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   // bot (treated as a mention). Follow-up messages in the same DM thread are
   // treated as FYI to avoid adding eyes emoji on every reply.
   const isDM = "channel_type" in event && event.channel_type === "im";
-  const isExplicitMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
+  const isExplicitMention = event.type === "app_mention" || textMentionsUser(event.text, botUserId);
   const isMention = isExplicitMention || (isDM && isNewThread);
 
   let messageCase: ParsedMessage["case"];
