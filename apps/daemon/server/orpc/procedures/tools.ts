@@ -12,8 +12,10 @@ import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
+import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
+import { wrapCodeWithExportDefault } from "./wrap-code.ts";
 
-function getWebchatClient() {
+function getWebchatClient(): WebchatClient {
   const daemonPort = process.env.PORT || "3001";
   const baseUrl = `http://localhost:${daemonPort}/api/integrations/webchat`;
 
@@ -52,8 +54,26 @@ function getWebchatClient() {
   };
 }
 
-/** Lazy-initialized clients available inside execJs code */
-function getLazyClients() {
+const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
+
+const require = createRequire(import.meta.url);
+const tsgoPackage = require("@typescript/native-preview/package.json");
+const tsgoBin = path.join(
+  path.dirname(require.resolve("@typescript/native-preview/package.json")),
+  tsgoPackage.bin.tsgo,
+);
+
+const executionContextSourcePath = new URL("./execution-context.ts", import.meta.url).pathname;
+
+/** Generates a `context.ts` re-export pointing back to our real ExecutionContext type. */
+function getContextTypeSource(generatedDir: string): string {
+  let rel = path.relative(generatedDir, executionContextSourcePath);
+  if (!rel.startsWith(".")) rel = `./${rel}`;
+  return `export type { ExecutionContext } from ${JSON.stringify(rel)};`;
+}
+
+/** Lazy-initialized clients available inside execTs/execJs code */
+function getLazyClients(): ExecutionContext {
   let _slack: WebClient | undefined;
   let _resend: Resend | undefined;
   let _replicate: Replicate | undefined;
@@ -172,45 +192,69 @@ export const toolsRouter = {
           .describe(
             "Current working directory to generate and execute the code in. Default: current working directory",
           ),
-        filename: z
-          .string()
-          .optional()
-          .describe("Filename to generate and execute the code in. Default: `${Date.now()}.ts"),
         typecheck: z
           .string()
           .or(z.literal(false))
-          .default("npx tsc --noEmit")
+          .default(`${tsgoBin} --noEmit --ignoreConfig`)
           .describe("Typecheck command. Set to false to skip typechecking."),
-        code: z.string().meta({ positional: true }).describe(dedent`
-          TypeScript code to execute. This should be in the form of a full module with a default export function which will be called with an execution context object:
+        code: z.string().array().meta({ positional: true }).describe(dedent`
+          TypeScript code to execute. Can be a full module with \`export default\`, or a shorthand expression/body that will be auto-wrapped.
 
+          Available execution context is from the \`ExecutionContext\` type in \`${path.join(import.meta.dirname, path.relative(import.meta.dirname, executionContextSourcePath))}\`. It is re-exported in a \`context.ts\` file that is generated in the same directory as the code. The interface contains the following properties:
           - \`slack\` — @slack/web-api WebClient (needs SLACK_BOT_TOKEN)
           - \`resend\` — Resend client (needs ITERATE_RESEND_API_KEY)
           - \`replicate\` — Replicate client (needs REPLICATE_API_TOKEN)
           - \`webchat\` — webchat HTTP client (.postMessage, .addReaction, .removeReaction, .getThreadMessages, .listThreads)
 
-          Example module invocation:
+          Shorthand: if the code has no \`export default\`, it is auto-wrapped into an async function.
+          Context keys used as free variables are auto-injected as destructured params.
 
-          iterate tool exec-ts 'export default async () => 123' # prints 123
-          iterate tool exec-ts 'export default async () => console.log(123)' # console.log is piped to the CLI caller so this prints 123 as well
-          iterate tool exec-ts 'export default async ({ slack, resend }) => {
+          Examples:
+
+          # Single expression
+          \`iterate tool exec-ts '"foo bar".split(" ")'\`
+          becomes: \`export default async () => "foo bar".split(" ")\`
+
+          # Multi-statement
+          \`iterate tool exec-ts 'const words = "foo bar".split(" "); return words.length'\`
+          becomes: \`export default async () => { const words = "foo bar".split(" "); return words.length }\`
+
+          # Context auto-injection
+          \`iterate tool exec-ts 'slack.chat.postMessage(...)'\`
+          becomes: \`export default async ({slack}: import("./context.ts").ExecutionContext) => slack.chat.postMessage(...)\`
+
+          # Full module form still works:
+          iterate tool exec-ts 'export default async ({ slack, resend }: import("./context.ts").ExecutionContext) => {
             await slack.chat.postMessage({ channel: "#general", text: "Hello!" });
-            await resend.emails.send({
-              from: "Agent <agent@example.com>",
-              to: ["user@example.com"],
-              subject: "Hello",
-              text: "Hi there",
-            });
-          }' # clients injected into the context are lazy-initialized, so missing env vars won't cause an error unless used
+          }'
         `),
       }),
     )
     .handler(async ({ input }) => {
       const cwd = input.cwd || process.cwd();
       const generatedDir = path.join(cwd, "_generated.ignoreme");
-      const filename = input.filename || `${new Date().toISOString().replaceAll(":", ".")}.ts`;
-      const filepath = path.join(generatedDir, filename);
-      await mkdir(path.dirname(filepath), { recursive: true });
+      const slug = new Date().toISOString().replaceAll(":", ".");
+      const folder = path.join(generatedDir, slug);
+      await mkdir(folder, { recursive: true });
+
+      const scriptPath = path.join(folder, "script.ts");
+      const tsconfigPath = path.join(folder, "tsconfig.json");
+      const tsconfig: import("type-fest").TsConfigJson = {
+        compilerOptions: {
+          target: "ES2022",
+          module: "NodeNext",
+          noEmit: true,
+          strict: true,
+          strictFunctionTypes: false,
+          skipLibCheck: true,
+          erasableSyntaxOnly: true,
+        },
+        include: ["*.ts"],
+      };
+      await writeFile(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+
+      const contextTypePath = path.join(generatedDir, "context.ts");
+      await writeFile(contextTypePath, getContextTypeSource(generatedDir));
 
       // Build a console that emits to an EventTarget so streaming callers can
       // pick up logs in real-time, while also forwarding to the real console.
@@ -219,37 +263,36 @@ export const toolsRouter = {
         (level: string) =>
         (...args: unknown[]) => {
           // Always forward to real console so daemon logs still work
-          (console as unknown as Record<string, Function>)[level]?.(...args);
+          (console as unknown as Record<string, Function>)[level](...args);
           emitter?.dispatchEvent(new CustomEvent("log", { detail: { level, args } }));
         };
-      const fakeConsole = {
-        log: capture("log"),
-        info: capture("info"),
-        warn: capture("warn"),
-        error: capture("error"),
-        debug: capture("debug"),
-      };
+      const fakeConsole = Object.fromEntries(
+        ["log", "info", "warn", "error", "debug"].map((level) => [level, capture(level)]),
+      ) as {} as typeof globalThis.console;
 
       const globalThisWithShimmedConsoles = globalThis as {} as {
         shimmedConsoles: Record<string, typeof globalThis.console>;
       };
       globalThisWithShimmedConsoles.shimmedConsoles ||= {};
       using _consoleCleanup = {
-        [Symbol.dispose]: () => delete globalThisWithShimmedConsoles.shimmedConsoles[filepath],
+        [Symbol.dispose]: () => delete globalThisWithShimmedConsoles.shimmedConsoles[scriptPath],
       };
+      globalThisWithShimmedConsoles.shimmedConsoles[scriptPath] = fakeConsole;
+      const wrappedCode = wrapCodeWithExportDefault(input.code.join(" "), {
+        contextKeys: [...clientNames],
+        contextType: `import("./context.ts").ExecutionContext`,
+      });
       const code = [
         `const globalThisWithShimmedConsoles = globalThis as {} as {shimmedConsoles?: Record<string, typeof globalThis.console>};`,
-        `const console = globalThisWithShimmedConsoles.shimmedConsoles?.[${JSON.stringify(filepath)}] || globalThis.console;`,
+        `const console = globalThisWithShimmedConsoles.shimmedConsoles?.[${JSON.stringify(scriptPath)}] || globalThis.console;`,
         ``,
-        input.code,
+        wrappedCode,
       ].join("\n");
-      globalThisWithShimmedConsoles.shimmedConsoles[filepath] =
-        fakeConsole as typeof globalThis.console;
 
-      await writeFile(filepath, code);
+      await writeFile(scriptPath, code);
       if (input.typecheck) {
         const [typecheckCommand, ...typecheckArgs] = input.typecheck.trim().split(/\s+/);
-        const result = await exec(typecheckCommand, typecheckArgs.concat(filepath), {
+        const result = await exec(typecheckCommand, typecheckArgs.concat(scriptPath), {
           nodeOptions: { cwd },
         });
         if (result.exitCode !== 0) {
@@ -261,8 +304,8 @@ export const toolsRouter = {
 
       const clients = getLazyClients();
 
-      type ModuleShape = { default: (context: typeof clients) => Promise<unknown> };
-      const module_: ModuleShape = await tsImport(filepath, { parentURL: import.meta.url });
+      type ModuleShape = { default: (context: ExecutionContext) => Promise<unknown> };
+      const module_: ModuleShape = await tsImport(scriptPath, { parentURL: import.meta.url });
       return module_.default(clients);
     }),
   execJs: publicProcedure
@@ -307,7 +350,6 @@ export const toolsRouter = {
       // Each client name becomes a top-level variable in the executed code.
       // We pass the lazy-getter object as a single arg and destructure inside the
       // function body so getters only fire when user code actually references them.
-      const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
       let execute: (...args: unknown[]) => Promise<unknown>;
       try {
