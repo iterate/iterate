@@ -192,12 +192,6 @@ export const toolsRouter = {
           .describe(
             "Current working directory to generate and execute the code in. Default: current working directory",
           ),
-        filename: z
-          .string()
-          .optional()
-          .describe(
-            "Filename to generate and execute the code in. Default: generated based on a timestamp.",
-          ),
         typecheck: z
           .string()
           .or(z.literal(false))
@@ -241,10 +235,10 @@ export const toolsRouter = {
       const generatedDir = path.join(cwd, "_generated.ignoreme");
       const slug = new Date().toISOString().replaceAll(":", ".");
       const folder = path.join(generatedDir, slug);
+      await mkdir(folder, { recursive: true });
+
       const scriptPath = path.join(folder, "script.ts");
       const tsconfigPath = path.join(folder, "tsconfig.json");
-      await mkdir(folder, { recursive: true });
-      await writeFile(scriptPath, input.code.join(" "));
       const tsconfig: import("type-fest").TsConfigJson = {
         compilerOptions: {
           target: "ES2022",

@@ -13,10 +13,11 @@ export interface WrapOptions {
  * that appear as free (undeclared) identifiers in the code.
  */
 export function wrapCodeWithExportDefault(code: string, options: WrapOptions): string {
-  if (/export\s+default\b/.test(code)) return code;
+  const sf = ts.createSourceFile("__check.ts", code, ts.ScriptTarget.ESNext, true);
+  if (hasExportDefault(sf)) return code;
 
   const { contextKeys, contextType = "any" } = options;
-  const usedContextKeys = findUsedContextKeys(code, contextKeys);
+  const usedContextKeys = findUsedContextKeys(sf, contextKeys);
   const params =
     usedContextKeys.length > 0 ? `{${usedContextKeys.join(", ")}}: ${contextType}` : "";
 
@@ -29,6 +30,17 @@ export function wrapCodeWithExportDefault(code: string, options: WrapOptions): s
     .map((line) => (line ? `  ${line}` : line))
     .join("\n");
   return `export default async (${params}) => {\n${indented}\n}`;
+}
+
+/** Check whether the code has a real `export default` declaration (not just the text inside a string/comment). */
+function hasExportDefault(sf: ts.SourceFile): boolean {
+  return sf.statements.some(
+    (s) =>
+      ts.isExportAssignment(s) ||
+      (ts.canHaveModifiers(s) &&
+        ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) &&
+        ts.getModifiers(s)?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)),
+  );
 }
 
 /**
@@ -73,11 +85,10 @@ function isSingleExpression(code: string): boolean {
  * Parse the code, collect all Identifier nodes, subtract locally-declared
  * names and well-known globals, then intersect with `contextKeys`.
  */
-function findUsedContextKeys(code: string, contextKeys: string[]): string[] {
+function findUsedContextKeys(sf: ts.SourceFile, contextKeys: string[]): string[] {
   if (contextKeys.length === 0) return [];
 
   const contextKeySet = new Set(contextKeys);
-  const sf = ts.createSourceFile("__code.ts", code, ts.ScriptTarget.ESNext, true);
 
   const declared = new Set<string>();
   const referenced = new Set<string>();
