@@ -1,0 +1,9 @@
+{
+  "name": "@iterate-com/jonasland2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter ./sandbox build",
+    "test": "pnpm --filter ./e2e test"
+  }
+}

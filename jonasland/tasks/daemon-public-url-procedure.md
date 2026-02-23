@@ -1,0 +1,1 @@
+Define a procedure on the daemon to programmatically create a public URL for a service running inside the sandbox. This is the daemon-side counterpart to the public-urls task — the mechanism by which a sandbox process can request exposure.

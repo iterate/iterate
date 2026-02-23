@@ -1,0 +1,13 @@
+{
+  "name": "@iterate-com/jonasland2-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx build-docker-image.ts"
+  },
+  "devDependencies": {
+    "@docker/node-sdk": "^0.0.17",
+    "tar-stream": "^3.1.7",
+    "tsx": "^4.20.6"
+  }
+}

@@ -1,0 +1,1 @@
+Coding agents should be able to run `sudo` and `su` to become a root user inside the sandbox. However, they must not be able to work around the `iptables` rules (egress proxy enforcement). Figure out the right capability/seccomp/namespace setup that gives root-like power without network rule escape.

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-CADDY_UID="$(id -u caddy)"
+CADDY_UID="$(id -u node)"
 
 ensure_rule() {
   table="$1"

@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-com/jonasland2-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run smoke.e2e.test.ts"
+  },
+  "devDependencies": {
+    "@docker/node-sdk": "^0.0.17",
+    "msw": "^2.12.2",
+    "vitest": "^4.0.18",
+    "ws": "^8.18.3"
+  }
+}

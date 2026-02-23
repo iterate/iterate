@@ -91,6 +91,7 @@ const server = createServer(async (req, res) => {
 
     const responseBody = Buffer.from(await response.arrayBuffer());
     const responseHeaders = sanitizeHeaders(Object.fromEntries(response.headers.entries()));
+    responseHeaders["x-egress-mode"] = target.mode;
 
     res.writeHead(response.status, responseHeaders);
     res.end(responseBody);

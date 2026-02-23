@@ -1,0 +1,1 @@
+DIY-style setup where a user can use their own personal domain with a Cloudflare tunnel pointing at their iterate sandbox. Document and support the "bring your own domain" flow for self-hosted / homelab users.

@@ -1,0 +1,1 @@
+Simulate git pulls of other repos inside the sandbox. Sandboxes should be able to pull code from external git repositories — either real pulls or a simulated/cached mechanism for dependencies and related repos.
