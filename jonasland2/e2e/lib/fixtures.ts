@@ -1,12 +1,14 @@
 import { DockerClient } from "@docker/node-sdk";
-import { setupServer, type SetupServerApi } from "msw/node";
+import { createMiddleware } from "@mswjs/http-middleware";
+import express from "express";
+import type { RequestHandler as MswRequestHandler } from "msw";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import { once, setMaxListeners } from "node:events";
+import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { WebSocketServer } from "ws";
 
-type MswHandler = Parameters<SetupServerApi["use"]>[number];
+type MswHandler = MswRequestHandler;
 type MswOnUnhandledRequest = "bypass" | "warn" | "error";
 type MswRequestPhase = "start" | "match" | "unhandled" | "end";
 
@@ -31,42 +33,10 @@ export interface WaitForRequestOptions {
   timeoutMs?: number;
 }
 
-const requestEventNameByPhase: Record<
-  MswRequestPhase,
-  "request:start" | "request:match" | "request:unhandled" | "request:end"
-> = {
-  start: "request:start",
-  match: "request:match",
-  unhandled: "request:unhandled",
-  end: "request:end",
-};
-
 let dockerClientPromise: Promise<DockerClient> | undefined;
-let mswSharedServer: SetupServerApi | undefined;
-let mswSharedServerStarted = false;
-
-const mswFixtureIdHeader = "x-msw-proxy-fixture-id";
-const mswFixtureRequestIdHeader = "x-msw-proxy-request-id";
-
 async function dockerClient(): Promise<DockerClient> {
   dockerClientPromise ??= DockerClient.fromDockerConfig();
   return await dockerClientPromise;
-}
-
-function getMswSharedServer(): SetupServerApi {
-  mswSharedServer ??= setupServer();
-  (mswSharedServer.events as { maxListeners?: number }).maxListeners = 0;
-  try {
-    setMaxListeners(0, mswSharedServer.events as unknown as NodeJS.EventEmitter);
-  } catch {
-    // best effort; not all emitters are Node EventEmitter instances
-  }
-  if (!mswSharedServerStarted) {
-    // MSW patches global request modules process-wide. Start exactly once.
-    mswSharedServer.listen({ onUnhandledRequest: "bypass" });
-    mswSharedServerStarted = true;
-  }
-  return mswSharedServer;
 }
 
 function toEnvArray(env?: Record<string, string> | string[]): string[] | undefined {
@@ -408,14 +378,8 @@ export async function mswProxyFixture(params?: {
   upstreamOrigin?: string;
 }): Promise<MswProxyFixture> {
   const upstreamOrigin = params?.upstreamOrigin ?? "https://upstream.iterate.localhost";
-  const server = getMswSharedServer();
-  const fixtureId = randomUUID();
+  const onUnhandledRequest = params?.onUnhandledRequest ?? "bypass";
   const requestRecords: MswRequestRecord[] = [];
-  const unhandledRequestIds = new Set<string>();
-  const listeners: Array<{
-    eventName: "request:start" | "request:match" | "request:unhandled" | "request:end";
-    listener: (args: { request: Request; requestId: string }) => void;
-  }> = [];
 
   let initialHandlers = [...(params?.handlers ?? [])];
   let runtimeHandlers: MswHandler[] = [];
@@ -424,85 +388,69 @@ export async function mswProxyFixture(params?: {
     return [...runtimeHandlers, ...initialHandlers];
   }
 
-  const inBoundary = <Args extends Array<unknown>, ReturnValue>(
-    callback: (...args: Args) => ReturnValue,
-  ): ((...args: Args) => ReturnValue) => {
-    return server.boundary((...args: Args) => {
-      server.resetHandlers(...activeHandlers());
-      return callback(...args);
-    });
-  };
-
-  (Object.keys(requestEventNameByPhase) as MswRequestPhase[]).forEach((phase) => {
-    const eventName = requestEventNameByPhase[phase];
-    const listener = ({ request, requestId }: { request: Request; requestId: string }) => {
-      if (request.headers.get(mswFixtureIdHeader) !== fixtureId) return;
-      requestRecords.push(recordFromEvent(phase, requestId, request));
-      if (phase === "unhandled") {
-        const fixtureRequestId = request.headers.get(mswFixtureRequestIdHeader);
-        if (fixtureRequestId) unhandledRequestIds.add(fixtureRequestId);
-      }
-    };
-    listeners.push({ eventName, listener });
-    server.events.on(eventName, listener);
-  });
-
-  const proxy = createServer(async (req, res) => {
+  const app = express();
+  app.use(async (req, res, next) => {
     try {
       const targetUrl = new URL(req.url || "/", upstreamOrigin);
-      const bodyParts: Buffer[] = [];
-      for await (const chunk of req) {
-        bodyParts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const requestId = randomUUID();
+      const requestMethod = req.method || "GET";
+      const requestForRecord = new Request(targetUrl.toString(), {
+        method: requestMethod,
+        headers: new Headers(
+          sanitizeHeaders(req.headers as unknown as Record<string, string | string[] | undefined>),
+        ),
+      });
+
+      requestRecords.push(recordFromEvent("start", requestId, requestForRecord));
+      req.url = targetUrl.toString();
+
+      const middleware = createMiddleware(...activeHandlers());
+      let passthrough = false;
+      let middlewareError: unknown;
+      await middleware(req, res, (error?: unknown) => {
+        passthrough = true;
+        middlewareError = error;
+      });
+
+      if (middlewareError) throw middlewareError;
+
+      if (!passthrough) {
+        requestRecords.push(recordFromEvent("match", requestId, requestForRecord));
+        requestRecords.push(recordFromEvent("end", requestId, requestForRecord));
+        return;
       }
 
-      const fixtureRequestId = randomUUID();
-      const headers = sanitizeHeaders(req.headers);
-      headers[mswFixtureIdHeader] = fixtureId;
-      headers[mswFixtureRequestIdHeader] = fixtureRequestId;
+      requestRecords.push(recordFromEvent("unhandled", requestId, requestForRecord));
+      requestRecords.push(recordFromEvent("end", requestId, requestForRecord));
 
-      const init: RequestInit = {
-        method: req.method,
-        headers,
-        redirect: "manual",
-      };
-
-      if (bodyParts.length > 0) {
-        init.body = Buffer.concat(bodyParts);
+      const message = `Unhandled request: ${requestMethod} ${targetUrl.toString()}`;
+      if (onUnhandledRequest === "error") {
+        res.status(500).json({ error: "msw_unhandled_request", message });
+        return;
       }
 
-      const upstream = await inBoundary(async () => await fetch(targetUrl, init))();
-
-      if (params?.onUnhandledRequest === "error" && unhandledRequestIds.has(fixtureRequestId)) {
-        throw new Error(
-          `MSW request was unhandled: ${String(init.method)} ${targetUrl.toString()}`,
-        );
-      }
-
-      const responseHeaders = sanitizeHeaders(upstream.headers);
-      const responseBody = Buffer.from(await upstream.arrayBuffer());
-
-      res.writeHead(upstream.status, responseHeaders);
-      res.end(responseBody);
+      res.status(404).json({
+        error: onUnhandledRequest === "warn" ? "msw_unhandled_request" : "mock_not_found",
+        message,
+      });
     } catch (error) {
-      res.writeHead(502, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "msw_proxy_failed",
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
+      next(error);
     }
   });
 
-  proxy.listen(0, "127.0.0.1");
+  app.use((error: unknown, _req: unknown, res: any, _next: unknown) => {
+    res.status(502).json({
+      error: "msw_proxy_failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  const proxy = app.listen(0, "127.0.0.1");
   await once(proxy, "listening");
 
   const address = proxy.address();
   if (!address || typeof address === "string") {
     proxy.close();
-    for (const { eventName, listener } of listeners) {
-      server.events.removeListener(eventName, listener);
-    }
     throw new Error("proxy address unavailable");
   }
 
@@ -518,38 +466,28 @@ export async function mswProxyFixture(params?: {
     );
     if (existing) return existing;
 
-    return await new Promise<MswRequestRecord>((resolve, reject) => {
-      const eventName = requestEventNameByPhase[phase];
-      const listener = ({ request, requestId }: { request: Request; requestId: string }) => {
-        if (request.headers.get(mswFixtureIdHeader) !== fixtureId) return;
-        const record = recordFromEvent(phase, requestId, request);
-        if (!requestMatches(record, filter)) return;
-        clearTimeout(timeout);
-        server.events.removeListener(eventName, listener);
-        resolve(record);
-      };
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const current = requestRecords.find(
+        (record) => record.phase === phase && requestMatches(record, filter),
+      );
+      if (current) return current;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
 
-      const timeout = setTimeout(() => {
-        server.events.removeListener(eventName, listener);
-        const seenForPhase = requestRecords.filter((record) => record.phase === phase);
-        reject(
-          new Error(
-            `Timed out waiting for MSW ${phase} request.\nFilter=${JSON.stringify(
-              {
-                method: filter.method,
-                url: typeof filter.url === "string" ? filter.url : String(filter.url),
-                pathname: filter.pathname,
-                predicate: Boolean(filter.predicate),
-              },
-              null,
-              2,
-            )}\nSeen:\n${summarizeRequestRecords(seenForPhase) || "(none)"}`,
-          ),
-        );
-      }, timeoutMs);
-
-      server.events.on(eventName, listener);
-    });
+    const seenForPhase = requestRecords.filter((record) => record.phase === phase);
+    throw new Error(
+      `Timed out waiting for MSW ${phase} request.\nFilter=${JSON.stringify(
+        {
+          method: filter.method,
+          url: typeof filter.url === "string" ? filter.url : String(filter.url),
+          pathname: filter.pathname,
+          predicate: Boolean(filter.predicate),
+        },
+        null,
+        2,
+      )}\nSeen:\n${summarizeRequestRecords(seenForPhase) || "(none)"}`,
+    );
   }
 
   return {
@@ -563,12 +501,12 @@ export async function mswProxyFixture(params?: {
       runtimeHandlers = [];
     },
     restoreHandlers() {
-      // Fixture handlers are reapplied per request, so one-time handlers are naturally reset.
+      // no-op: fixture uses explicit local handler arrays
     },
     boundary<Args extends Array<unknown>, ReturnValue>(
       callback: (...args: Args) => ReturnValue,
     ): (...args: Args) => ReturnValue {
-      return inBoundary(callback);
+      return callback;
     },
     listRequests(phase?: MswRequestPhase) {
       if (!phase) return [...requestRecords];
@@ -589,11 +527,9 @@ export async function mswProxyFixture(params?: {
       }
     },
     async [Symbol.asyncDispose]() {
-      proxy.close();
-      await once(proxy, "close").catch(() => undefined);
-      for (const { eventName, listener } of listeners) {
-        server.events.removeListener(eventName, listener);
-      }
+      await new Promise<void>((resolve) => {
+        proxy.close(() => resolve());
+      });
     },
   };
 }
