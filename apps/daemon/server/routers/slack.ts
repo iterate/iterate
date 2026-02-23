@@ -826,9 +826,12 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   }
 
   const isNewThread = !event.thread_ts;
-  // In DMs (channel_type "im"), every message is implicitly directed at the bot.
+  // In DMs (channel_type "im"), the first message is implicitly directed at the
+  // bot (treated as a mention). Follow-up messages in the same DM thread are
+  // treated as FYI to avoid adding eyes emoji on every reply.
   const isDM = "channel_type" in event && event.channel_type === "im";
-  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`) || isDM;
+  const isExplicitMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
+  const isMention = isExplicitMention || (isDM && isNewThread);
 
   let messageCase: ParsedMessage["case"];
   if (isMention && isNewThread) {
@@ -836,6 +839,8 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   } else if (isMention && !isNewThread) {
     messageCase = "mid_thread_mention";
   } else {
+    // Covers: DM follow-ups (isDM && !isNewThread && !isExplicitMention),
+    // and channel messages without @mention.
     messageCase = "fyi_message";
   }
 

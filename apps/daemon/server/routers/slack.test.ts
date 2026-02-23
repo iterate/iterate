@@ -593,7 +593,51 @@ describe("slack router", () => {
       expect(reactionsAddMock).not.toHaveBeenCalled();
     });
 
-    it("treats DM messages as implicit mentions (channel_type im)", async () => {
+    it("treats the first DM message as an implicit mention (channel_type im, no thread_ts)", async () => {
+      const ts = "1111111111.444444";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${ts.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_first",
+        event: {
+          type: "message",
+          ts,
+          text: "Hey can you look at my PR?",
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // First DM message is treated as a new thread mention
+      expect(body.case).toBe("new_thread_mention");
+      expect(body.queued).toBe(true);
+      expect(body.created).toBe(true);
+    });
+
+    it("treats DM follow-up messages as FYI (no eyes emoji)", async () => {
       const threadTs = "1111111111.111111";
       const ts = "1111111111.333333";
       const botUserId = "U_BOT";
@@ -601,11 +645,7 @@ describe("slack router", () => {
 
       selectLimitQueue.push([]); // storeEvent dedup check
       // Agent was previously created by assistant_thread_started
-      getOrCreateAgentMock.mockResolvedValue({
-        wasNewlyCreated: false,
-        route: null,
-        agent: buildAgent({ path: agentPath }),
-      });
+      getAgentMock.mockResolvedValue(buildAgent({ path: agentPath }));
       fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
 
       const payload = {
@@ -633,10 +673,57 @@ describe("slack router", () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.success).toBe(true);
-      // DM messages are treated as mentions, not FYI
+      // DM follow-up messages are FYI, not mentions — no eyes emoji
+      expect(body.case).toBe("fyi_message");
+      expect(body.queued).toBe(true);
+      // Should use getAgent (not getOrCreateAgent) since it's FYI
+      expect(getAgentMock).toHaveBeenCalledTimes(1);
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats DM follow-up with explicit @mention as mid_thread_mention", async () => {
+      const threadTs = "1111111111.111111";
+      const ts = "1111111111.555555";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_explicit",
+        event: {
+          type: "message",
+          thread_ts: threadTs,
+          ts,
+          text: `<@${botUserId}> actually can you also check the tests?`,
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // Explicit @mention in DM thread is still treated as mid_thread_mention
       expect(body.case).toBe("mid_thread_mention");
       expect(body.queued).toBe(true);
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 
