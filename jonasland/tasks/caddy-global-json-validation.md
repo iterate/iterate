@@ -5,5 +5,5 @@ size: s
 dependsOn: []
 ---
 
-Validate `caddy/global` JSON schema against real `caddy-consul` runtime behavior.
-Add one fixture and one focused test case for bad config diagnostics.
+Validate `jonasland/sandbox/caddy/Caddyfile` with `caddy validate` in CI and fail fast on invalid dynamic upstream config.
+Add one fixture test case for broken `dynamic a` settings and expected error output.
