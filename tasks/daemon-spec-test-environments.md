@@ -27,7 +27,7 @@ We should be able to run full Playwright-based spec tests against the daemon app
 1. Create a Playwright test suite for daemon that covers:
    - Agent creation and management
    - Terminal/ghostty interaction (typing commands, seeing output)
-   - tRPC API interactions
+   - oRPC API interactions
    - Navigation and routing
 
 2. Make these tests runnable against any of the three environments above by parameterizing the base URL

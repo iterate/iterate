@@ -4,7 +4,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Mail, LogOut, Check, X } from "lucide-react";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { CenteredLayout } from "../../components/centered-layout.tsx";
 import {
@@ -36,16 +36,16 @@ export const Route = createFileRoute("/_auth/user/settings")({
 });
 
 function UserSettingsPage() {
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const { data: memberships } = useSuspenseQuery(trpc.user.memberships.queryOptions());
+  const { data: user } = useSuspenseQuery(orpc.user.me.queryOptions());
+  const { data: memberships } = useSuspenseQuery(orpc.user.memberships.queryOptions());
   const { data: pendingInvites } = useSuspenseQuery(
-    trpc.organization.myPendingInvites.queryOptions(),
+    orpc.organization.myPendingInvites.queryOptions(),
   );
   const navigate = useNavigate();
 
   const updateUser = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.user.updateSettings.mutate({ name });
+      return orpcClient.user.updateSettings({ name });
     },
     onSuccess: () => {
       toast.success("Settings updated");
@@ -57,7 +57,7 @@ function UserSettingsPage() {
 
   const acceptInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.acceptInvite.mutate({ inviteId });
+      return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
       toast.success(`Joined ${org.name}!`);
@@ -70,7 +70,7 @@ function UserSettingsPage() {
 
   const declineInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.declineInvite.mutate({ inviteId });
+      return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
       toast.success("Invite declined");
@@ -242,7 +242,7 @@ function OrgMembershipCard({ membership }: { membership: Membership }) {
 
   const leaveOrg = useMutation({
     mutationFn: async () => {
-      return trpcClient.organization.leave.mutate({
+      return orpcClient.organization.leave({
         organizationSlug: membership.organization.slug,
       });
     },

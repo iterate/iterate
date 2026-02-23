@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -25,7 +25,7 @@ const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
 export const Route = createFileRoute("/_auth/proj/$projectSlug/settings")({
   component: ProjectSettingsPage,
   loader: ({ context }) => {
-    context.queryClient.prefetchQuery(trpc.project.getAvailableSandboxProviders.queryOptions());
+    context.queryClient.prefetchQuery(orpc.project.getAvailableSandboxProviders.queryOptions());
   },
 });
 
@@ -36,19 +36,23 @@ function ProjectSettingsPage() {
   const navigate = useNavigate({ from: Route.fullPath });
 
   const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const { data: sandboxProviders } = useSuspenseQuery(
-    trpc.project.getAvailableSandboxProviders.queryOptions(),
+    orpc.project.getAvailableSandboxProviders.queryOptions(),
   );
 
   const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      projectSlug: params.projectSlug,
-      includeArchived: false,
+    orpc.machine.list.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
     }),
   );
 
@@ -66,7 +70,7 @@ function ProjectSettingsPage() {
 
   const updateProject = useMutation({
     mutationFn: async (input: { name?: string; sandboxProvider?: ProjectSandboxProvider }) => {
-      return trpcClient.project.update.mutate({
+      return orpcClient.project.update({
         projectSlug: params.projectSlug,
         ...input,
       });
@@ -81,7 +85,7 @@ function ProjectSettingsPage() {
 
   const deleteProject = useMutation({
     mutationFn: async () => {
-      return trpcClient.project.delete.mutate({
+      return orpcClient.project.delete({
         projectSlug: params.projectSlug,
       });
     },

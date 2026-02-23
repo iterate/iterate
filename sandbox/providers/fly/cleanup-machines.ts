@@ -1,4 +1,4 @@
-import { initTRPC } from "@trpc/server";
+import { os } from "@orpc/server";
 import { createCli } from "trpc-cli";
 import { z } from "zod/v4";
 
@@ -188,10 +188,8 @@ async function listAppNamesByPrefix(params: {
   return appNames;
 }
 
-const t = initTRPC.create();
-
-const router = t.router({
-  cleanup: t.procedure
+const router = {
+  cleanup: os
     .meta({ description: "Stop or delete idle Fly machines for a given prefix", default: true })
     .input(
       z.object({
@@ -204,14 +202,15 @@ const router = t.router({
           .default("stop")
           .describe("Whether to stop or delete matching machines"),
         prefix: z
-          .enum(["dev", "stg"])
+          .enum(["dev", "stg", "prd"])
           .optional()
           .describe(
-            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Only dev/stg allowed.",
+            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Only dev/stg allowed unless --i-am-totally-sure is passed.",
           ),
+        iAmTotallySure: z.boolean().optional().meta({ hidden: true }),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const env = FlyEnv.parse(process.env);
       const token = resolveFlyToken(env);
       if (!token) {
@@ -222,7 +221,7 @@ const router = t.router({
       if (!prefix) {
         throw new Error("Missing --prefix. Pass it explicitly or set SANDBOX_NAME_PREFIX.");
       }
-      if (!ALLOWED_PREFIXES.has(prefix)) {
+      if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
         throw new Error(
           `Prefix '${prefix}' is not allowed. This script is intentionally limited to dev/stg.`,
         );
@@ -312,6 +311,6 @@ const router = t.router({
 
       return `done: stopped=${stoppedCount} deleted=${deletedCount} deletedApps=${deletedApps} skipped=${skippedCount}`;
     }),
-});
+};
 
 createCli({ router }).run();

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod/v4";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -95,8 +95,10 @@ function ProjectEnvVarsPage() {
   const [formIsSecret, setFormIsSecret] = useState(false);
   const [secretHintDismissed, setSecretHintDismissed] = useState(false);
 
-  const envVarListOptions = trpc.envVar.list.queryOptions({
-    projectSlug: params.projectSlug,
+  const envVarListOptions = orpc.envVar.list.queryOptions({
+    input: {
+      projectSlug: params.projectSlug,
+    },
   });
   const { data: allEnvVars } = useSuspenseQuery(envVarListOptions);
 
@@ -132,7 +134,7 @@ function ProjectEnvVarsPage() {
 
   const setEnvVar = useMutation({
     mutationFn: async (input: { key: string; value: string; description?: string }) => {
-      return trpcClient.envVar.set.mutate({
+      return orpcClient.envVar.set({
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
@@ -151,7 +153,7 @@ function ProjectEnvVarsPage() {
 
   const createSecret = useMutation({
     mutationFn: async (input: { key: string; value: string }) =>
-      trpcClient.secret.create.mutate({
+      orpcClient.secret.create({
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
@@ -160,7 +162,7 @@ function ProjectEnvVarsPage() {
 
   const updateSecret = useMutation({
     mutationFn: async (input: { key: string; value: string }) =>
-      trpcClient.secret.updateByKey.mutate({
+      orpcClient.secret.updateByKey({
         projectSlug: params.projectSlug,
         key: input.key,
         value: input.value,
@@ -169,7 +171,7 @@ function ProjectEnvVarsPage() {
 
   const deleteEnvVar = useMutation({
     mutationFn: async (key: string) =>
-      trpcClient.envVar.delete.mutate({ projectSlug: params.projectSlug, key }),
+      orpcClient.envVar.delete({ projectSlug: params.projectSlug, key }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: envVarListOptions.queryKey });
       setDeleteConfirmEnvVar(null);
@@ -181,13 +183,13 @@ function ProjectEnvVarsPage() {
   const setupDiscordBot = useMutation({
     mutationFn: async (input: { token: string; guildId: string }) => {
       await Promise.all([
-        trpcClient.envVar.set.mutate({
+        orpcClient.envVar.set({
           projectSlug: params.projectSlug,
           key: "DISCORD_TOKEN",
           value: input.token,
           description: "Discord bot token",
         }),
-        trpcClient.envVar.set.mutate({
+        orpcClient.envVar.set({
           projectSlug: params.projectSlug,
           key: "DISCORD_GUILD_ID",
           value: input.guildId,

@@ -1,15 +1,15 @@
-import { parseRouter } from "trpc-cli";
 import { Hono, type Context } from "hono";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { minimatch } from "minimatch";
+import { parseRouter } from "trpc-cli";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
-import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
+import { createRouterClient } from "@orpc/server";
+import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
   isProjectIngressHostname,
@@ -18,8 +18,8 @@ import {
 import type { CloudflareEnv } from "../env.ts";
 import { getDb } from "./db/client.ts";
 import { getAuth } from "./auth/auth.ts";
-import { appRouter } from "./trpc/root.ts";
-import { createContext } from "./trpc/context.ts";
+import { appRouter } from "./orpc/root.ts";
+import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { googleApp } from "./integrations/google/google.ts";
@@ -31,8 +31,14 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
+import {
+  flushRequestEvlog,
+  log as evlog,
+  setRequestEvlogFlushHandler,
+  withRequestEvlogContext,
+} from "./evlog.ts";
+import { sendEvlogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { logger } from "./tag-logger.ts";
-import { captureServerException } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -76,8 +82,87 @@ function isAllowedDomain(domain: string, rawAllowedDomains: string): boolean {
 // Register outbox consumers at module load time
 registerConsumers();
 
+const appStage =
+  process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
+
+setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
+
+initWorkersLogger({
+  env: {
+    service: "os",
+    environment: appStage,
+  },
+});
+
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+function getPostHogUserContext(
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+): PostHogUserContext {
+  return {
+    id: c.var.session?.user?.id ?? "anonymous",
+    email: c.var.session?.user?.email ?? "unknown",
+  };
+}
+
+app.use("*", async (c, next) => {
+  const requestLogger = createWorkersLogger(c.req.raw);
+  const currentContext = requestLogger.getContext();
+  const requestId =
+    typeof currentContext.requestId === "string" && currentContext.requestId.length > 0
+      ? currentContext.requestId
+      : crypto.randomUUID();
+  const method = typeof currentContext.method === "string" ? currentContext.method : c.req.method;
+  const path = typeof currentContext.path === "string" ? currentContext.path : c.req.path;
+
+  requestLogger.set({
+    request: {
+      id: requestId,
+      method,
+      path,
+      status: 500,
+      duration: 0,
+      waitUntil: false,
+    },
+    user: {
+      id: "anonymous",
+      email: "unknown",
+    },
+  });
+
+  const requestStartedAt = Date.now();
+  return withRequestEvlogContext(
+    {
+      logger: requestLogger,
+      request: {
+        requestId,
+        method,
+        path,
+      },
+      env: c.env,
+      executionCtx: c.executionCtx,
+    },
+    async () => {
+      let status = 500;
+      try {
+        await next();
+        status = c.res.status;
+      } finally {
+        const user = getPostHogUserContext(c);
+        const duration = Date.now() - requestStartedAt;
+        evlog.set({
+          request: {
+            status,
+            duration,
+          },
+          user,
+        });
+        flushRequestEvlog();
+      }
+    },
+  );
+});
 
 app.use("*", async (c, next) => {
   initializeOtel(c.env as Record<string, unknown>);
@@ -118,8 +203,8 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const trpcCaller = appRouter.createCaller(createContext(c));
-  c.set("trpcCaller", trpcCaller);
+  const orpcCaller = createRouterClient(appRouter, { context: createContext(c) });
+  c.set("orpcCaller", orpcCaller);
   return next();
 });
 
@@ -234,60 +319,73 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
 });
 
 app.onError((err, c) => {
-  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
-
-  // Capture exception to PostHog with user context
-  const error = err instanceof Error ? err : new Error(String(err));
-  const distinctId = c.var.session?.user?.id ?? "anonymous";
-  c.executionCtx?.waitUntil(
-    captureServerException(c.env, {
-      distinctId,
-      error,
-      properties: {
+  const user = getPostHogUserContext(c);
+  logger.error(
+    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+    {
+      request: {
         path: c.req.path,
         method: c.req.method,
-        userId: c.var.session?.user?.id,
+        status: 500,
       },
-    }),
+      user,
+    },
+    err,
   );
-
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", async (c) => c.var.auth.handler(c.req.raw));
+app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
-// tRPC endpoint
-app.all("/api/trpc/*", (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    allowMethodOverride: true,
-    createContext: () => createContext(c),
-    onError: ({ error, path }) => {
-      const procedurePath = path ?? "unknown";
-      const status = getHTTPStatusCodeFromError(error);
-      if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
-
-        // Capture 5xx errors to PostHog
-        const distinctId = c.var.session?.user?.id ?? "anonymous";
-        c.executionCtx?.waitUntil(
-          captureServerException(c.env, {
-            distinctId,
-            error,
-            properties: {
-              path: procedurePath,
-              trpcProcedure: procedurePath,
-              userId: c.var.session?.user?.id,
-            },
-          }),
-        );
+// oRPC endpoint for client-facing API (app router)
+const appOrpcHandler = new RPCHandler(appRouter, {
+  interceptors: [
+    onError((error, params) => {
+      const maybeStatus =
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : undefined;
+      const errorDetails =
+        error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
+          : {
+              name: "NonErrorThrowable",
+              message: String(error),
+              stack: new Error(String(error)).stack ?? "stack unavailable",
+            };
+      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
+        (error as { message?: unknown })?.message ?? error,
+      )}`;
+      if (!maybeStatus || maybeStatus >= 500) {
+        logger.error(message, errorDetails);
       } else {
-        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
+        logger.set({
+          request: {
+            status: maybeStatus,
+          },
+        });
+        logger.warn(message);
       }
-    },
+    }),
+  ],
+});
+app.all("/api/orpc/*", async (c, next) => {
+  // Skip if this is the daemon-facing endpoint (handled below)
+  if (c.req.path.startsWith("/api/orpc-daemon/")) return next();
+
+  const { matched, response } = await appOrpcHandler.handle(c.req.raw, {
+    prefix: "/api/orpc",
+    context: createContext(c),
   });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  return next();
 });
 
 // Mount integration apps
@@ -303,8 +401,8 @@ app.route("/api", egressApprovalsApp);
 // Mount egress proxy (for sandbox outbound traffic)
 app.route("", egressProxyApp);
 
-// oRPC handler for machine status (called by daemon to report ready)
-const orpcHandler = new RPCHandler(workerRouter, {
+// oRPC handler for daemon→worker communication (API key auth, separate context)
+const daemonOrpcHandler = new RPCHandler(workerRouter, {
   interceptors: [
     onError((error, params) => {
       const maybeStatus =
@@ -316,33 +414,31 @@ const orpcHandler = new RPCHandler(workerRouter, {
           : undefined;
       const errorDetails =
         error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
+          ? { name: error.name, message: error.message, stack: error.stack ?? "stack unavailable" }
           : {
               name: "NonErrorThrowable",
               message: String(error),
               stack: new Error(String(error)).stack ?? "stack unavailable",
             };
-
       const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
         (error as { message?: unknown })?.message ?? error,
       )}`;
-
       if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
+        logger.error(message, errorDetails, error);
       } else {
-        logger.warn(message, errorDetails);
+        logger.set({
+          status: maybeStatus,
+          url: params.request.url,
+        });
+        logger.warn(message);
       }
     }),
   ],
   plugins: [new RequestHeadersPlugin()],
 });
-app.all("/api/orpc/*", async (c) => {
-  const { matched, response } = await orpcHandler.handle(c.req.raw, {
-    prefix: "/api/orpc",
+app.all("/api/orpc-daemon/*", async (c) => {
+  const { matched, response } = await daemonOrpcHandler.handle(c.req.raw, {
+    prefix: "/api/orpc-daemon",
     context: {
       db: c.var.db,
       env: c.env,
@@ -409,8 +505,9 @@ export default class extends WorkerEntrypoint {
       case workerConfig.workerCrons.processOutboxQueue: {
         try {
           const result = await queuer.processQueue(db);
-          if (result !== "0 messages processed")
-            logger.info("Scheduled outbox queue processing completed", result);
+          if (result !== "0 messages processed") {
+            logger.info("Scheduled outbox queue processing completed");
+          }
         } catch (error) {
           logger.error("Scheduled outbox queue processing failed:", error);
         }

@@ -34,14 +34,14 @@ describe("Sandbox.getFetcher", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     const fetcher = await sandbox.getFetcher({ port: 3003 });
-    await fetcher("/api/trpc?batch=1", {
+    await fetcher("/api/orpc?batch=1", {
       headers: { "x-test": "yes" },
     });
 
     expect(sandbox.requestedPorts).toEqual([8080]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
-      "http://sandbox.local:8080/api/trpc?batch=1",
+      "http://sandbox.local:8080/api/orpc?batch=1",
       expect.objectContaining({
         headers: expect.any(Headers),
       }),

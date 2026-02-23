@@ -72,7 +72,7 @@ PostHog is configured via environment variables (managed by Doppler). All are op
 ### Architecture
 
 - **Client-side**: PostHog JS SDK with session replay enabled
-- **Server-side**: posthog-node for tRPC mutation tracking
+- **Server-side**: posthog-node for oRPC mutation tracking
 - **Proxy**: `/ingest/*` routes proxy to PostHog EU (`eu.i.posthog.com`) for ad-blocker bypass
 
 ### Environments
@@ -99,7 +99,7 @@ Users are identified in the auth-required layout (covering all authenticated rou
 
 ### Adding New Tracked Mutations
 
-To track a new tRPC mutation, add it to `backend/trpc/tracked-mutations.ts`:
+To track a new oRPC mutation, add it to `backend/orpc/tracked-mutations.ts`:
 
 ```typescript
 registerTrackedMutation("router.mutationName", {

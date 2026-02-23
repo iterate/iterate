@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -11,7 +11,9 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/settings")({
   loader: ({ context, params }) => {
     // Non-blocking prefetch - speeds up perceived load time
     context.queryClient.prefetchQuery(
-      trpc.organization.bySlug.queryOptions({ organizationSlug: params.organizationSlug }),
+      orpc.organization.bySlug.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
   },
   component: OrgSettingsPage,
@@ -23,14 +25,16 @@ function OrgSettingsPage() {
   });
 
   const { data: org } = useSuspenseQuery(
-    trpc.organization.bySlug.queryOptions({
-      organizationSlug: routeParams.organizationSlug,
+    orpc.organization.bySlug.queryOptions({
+      input: {
+        organizationSlug: routeParams.organizationSlug,
+      },
     }),
   );
 
   const updateOrg = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.organization.update.mutate({
+      return orpcClient.organization.update({
         organizationSlug: routeParams.organizationSlug,
         name,
       });

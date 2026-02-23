@@ -18,7 +18,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Spinner } from "../../components/ui/spinner.tsx";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
@@ -43,8 +43,10 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug")({
   beforeLoad: async ({ context, params }) => {
     // Lookup project by slug only (globally unique)
     const project = await context.queryClient.ensureQueryData(
-      trpc.project.bySlug.queryOptions({
-        projectSlug: params.projectSlug,
+      orpc.project.bySlug.queryOptions({
+        input: {
+          projectSlug: params.projectSlug,
+        },
       }),
     );
 
@@ -56,11 +58,13 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug")({
   // loader: Prefetch data (non-blocking, shows spinner if not ready)
   loader: ({ context, params }) => {
     context.queryClient.prefetchQuery(
-      trpc.project.bySlug.queryOptions({
-        projectSlug: params.projectSlug,
+      orpc.project.bySlug.queryOptions({
+        input: {
+          projectSlug: params.projectSlug,
+        },
       }),
     );
-    context.queryClient.prefetchQuery(trpc.user.myOrganizations.queryOptions());
+    context.queryClient.prefetchQuery(orpc.user.myOrganizations.queryOptions());
   },
 
   component: ProjectLayout,
@@ -78,12 +82,14 @@ function ProjectLayout() {
     throw new Error("User not found - should not happen in auth-required layout");
   }
 
-  const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
+  const { data: organizations } = useSuspenseQuery(orpc.user.myOrganizations.queryOptions());
 
   // bySlug returns project with organization
   const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
@@ -92,9 +98,11 @@ function ProjectLayout() {
 
   // Fetch machines list for breadcrumb dropdown
   const { data: machinesList } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      projectSlug: params.projectSlug,
-      includeArchived: false,
+    orpc.machine.list.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
     }),
   );
 
@@ -158,8 +166,10 @@ function ProjectLayout() {
 
   // Fetch org with projects for the sidebar
   const { data: orgWithProjects } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({
-      organizationSlug: currentOrg.slug,
+    orpc.organization.withProjects.queryOptions({
+      input: {
+        organizationSlug: currentOrg.slug,
+      },
     }),
   );
 

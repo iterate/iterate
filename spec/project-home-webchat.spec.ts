@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 import { createOrganization, createProject, login, sidebarButton, test } from "./test-helpers.ts";
+import { spinnerWaiter } from "./plugins/spinner-waiter.ts";
 
 test.describe("project home webchat", () => {
   test("shows webchat UI with machine prerequisite when no machine", async ({ page }) => {
@@ -84,6 +85,7 @@ test.describe("project home webchat", () => {
   });
 
   test("can send and receive in a webchat thread", async ({ page }) => {
+    test.setTimeout(300_000); // machine provisioning + push-setup pipeline + LLM round-trips
     test.skip(
       process.env.WEBCHAT_LLM_SPEC !== "1",
       "Set WEBCHAT_LLM_SPEC=1 to run the LLM-backed webchat spec",
@@ -96,20 +98,18 @@ test.describe("project home webchat", () => {
     await createOrganization(page);
     await createProject(page);
 
-    // Create a docker machine (needs a real daemon to handle webchat)
+    // Create a machine (provider inherited from project settings)
     await sidebarButton(page, "Machines").click();
     await page.getByRole("link", { name: "Create Machine" }).click();
-
-    await page.getByRole("combobox").click();
-    await page.getByRole("option", { name: /^Docker$/i }).click();
 
     await page.getByPlaceholder("Machine name").fill(machineName);
     await page.getByRole("button", { name: "Create" }).click();
 
-    // Wait for machine to reach "Ready" status before navigating away
-    const machineRow = page.getByRole("link", { name: machineName });
-    await machineRow.waitFor({ timeout: 90000 });
-    await machineRow.locator("text=Ready").waitFor({ timeout: 90000 });
+    // Machine pipeline: create → provision (50-120s) → setup → 30s delay → probe → activate.
+    // We expect that the UI shows an informative spinner throughout. This should fail within 1s if the spinner goes away at any point.
+    await spinnerWaiter.settings.run({ spinnerTimeout: 240_000 }, async () => {
+      await page.getByRole("heading", { name: "Active Machine", exact: true }).waitFor();
+    });
 
     // Navigate to home — prerequisite card should be gone, input enabled
     await sidebarButton(page, "Home").click();
@@ -122,8 +122,8 @@ test.describe("project home webchat", () => {
       .waitFor({ state: "hidden", timeout: 10000 })
       .catch(() => {});
 
-    // Start a new thread
-    await page.getByRole("button", { name: "New Thread" }).click();
+    // Start a new thread (exact match avoids hitting thread buttons that contain "New thread" text)
+    await page.getByRole("button", { name: "New Thread", exact: true }).click();
     const input = page.getByTestId("webchat-input");
     await input.fill("Reply with exactly: ACK");
     await page.getByTestId("webchat-send").click();

@@ -262,7 +262,7 @@ export default defineConfig([
               fixable: "code",
             },
             create: (context) => {
-              const acronyms = ["API", "HTML", "JSON", "TRPC", "MCP"];
+              const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
               /** @param {string} actualName */
               function getExpectedName(actualName) {
                 const acronymStart = acronyms.find(

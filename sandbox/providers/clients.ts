@@ -1,5 +1,5 @@
-import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
-import type { AnyRouter } from "@trpc/server";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { createClient as createPidnapClient, type Client as PidnapClient } from "pidnap/client";
 import type { Sandbox } from "./types.ts";
 
@@ -23,23 +23,17 @@ export async function getPidnapClientForSandbox(sandbox: Sandbox): Promise<Pidna
 }
 
 /**
- * Build a daemon tRPC client for sandboxes that expose daemon-backend on port 3000.
+ * Build a daemon oRPC client for sandboxes that expose daemon-backend on port 3000.
  * Caller is responsible for using this only on sandboxes that actually run daemon-backend.
  */
-export async function getDaemonClientForSandbox<TRouter extends AnyRouter = AnyRouter>(
-  sandbox: Sandbox,
-): Promise<TRPCClient<TRouter>> {
+export async function getDaemonClientForSandbox(sandbox: Sandbox) {
   const [baseUrl, fetcher] = await Promise.all([
     sandbox.getBaseUrl({ port: DAEMON_PORT }),
     sandbox.getFetcher({ port: DAEMON_PORT }),
   ]);
-  const client = createTRPCClient<AnyRouter>({
-    links: [
-      httpLink({
-        url: `${baseUrl}/api/trpc`,
-        fetch: (request) => fetcher(request),
-      }),
-    ],
+  const link = new RPCLink({
+    url: `${baseUrl}/api/orpc`,
+    fetch: (request) => fetcher(request) as Promise<Response>,
   });
-  return client as unknown as TRPCClient<TRouter>;
+  return createORPCClient(link);
 }
