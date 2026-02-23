@@ -820,6 +820,15 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
+  // ── Hidden / message_changed events ──
+  // Slack sends hidden message_changed events when it updates internal metadata
+  // (e.g. adding assistant_app_thread to the thread root). These have no user
+  // field on the outer event, a unique ts, and no thread_ts — so they'd be
+  // incorrectly classified as new_thread_mention and create duplicate agents.
+  if ("hidden" in event && event.hidden) {
+    return { case: "ignored", reason: "Ignored: hidden event" };
+  }
+
   const threadTs = event.thread_ts || event.ts;
   if (!threadTs) {
     return { case: "ignored", reason: "Ignored: no thread timestamp" };
