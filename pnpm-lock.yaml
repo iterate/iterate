@@ -452,6 +452,9 @@ importers:
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
+      type-fest:
+        specifier: ^5.4.4
+        version: 5.4.4
       unified:
         specifier: ^11.0.5
         version: 11.0.5

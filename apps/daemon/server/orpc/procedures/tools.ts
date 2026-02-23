@@ -12,10 +12,10 @@ import { z } from "zod/v4";
 import { tsImport } from "tsx/esm/api";
 import { ORPCError } from "@orpc/server";
 import { logEmitterStorage, publicProcedure } from "../init.ts";
-import type { ExecutionContext } from "./execution-context.ts";
+import type { ExecutionContext, WebchatClient } from "./execution-context.ts";
 import { wrapCodeWithExportDefault } from "./wrap-code.ts";
 
-function getWebchatClient() {
+function getWebchatClient(): WebchatClient {
   const daemonPort = process.env.PORT || "3001";
   const baseUrl = `http://localhost:${daemonPort}/api/integrations/webchat`;
 
@@ -57,10 +57,10 @@ function getWebchatClient() {
 const clientNames = ["slack", "resend", "replicate", "webchat"] as const;
 
 const require = createRequire(import.meta.url);
+const tsgoPackage = require("@typescript/native-preview/package.json");
 const tsgoBin = path.join(
   path.dirname(require.resolve("@typescript/native-preview/package.json")),
-  "bin",
-  "tsgo.js",
+  tsgoPackage.bin.tsgo,
 );
 
 const executionContextSourcePath = new URL("./execution-context.ts", import.meta.url).pathname;
@@ -239,9 +239,28 @@ export const toolsRouter = {
     .handler(async ({ input }) => {
       const cwd = input.cwd || process.cwd();
       const generatedDir = path.join(cwd, "_generated.ignoreme");
-      const filename = input.filename || `${new Date().toISOString().replaceAll(":", ".")}.ts`;
-      const filepath = path.join(generatedDir, filename);
-      await mkdir(path.dirname(filepath), { recursive: true });
+      const slug = new Date().toISOString().replaceAll(":", ".");
+      const folder = path.join(generatedDir, slug);
+      const scriptPath = path.join(folder, "script.ts");
+      const tsconfigPath = path.join(folder, "tsconfig.json");
+      await mkdir(folder, { recursive: true });
+      await writeFile(scriptPath, input.code.join(" "));
+      const tsconfig: import("type-fest").TsConfigJson = {
+        compilerOptions: {
+          target: "ES2022",
+          module: "NodeNext",
+          noEmit: true,
+          strict: true,
+          strictFunctionTypes: false,
+          skipLibCheck: true,
+          erasableSyntaxOnly: true,
+        },
+        include: ["*.ts"],
+      };
+      await writeFile(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+
+      const contextTypePath = path.join(generatedDir, "context.ts");
+      await writeFile(contextTypePath, getContextTypeSource(generatedDir));
 
       // Build a console that emits to an EventTarget so streaming callers can
       // pick up logs in real-time, while also forwarding to the real console.
@@ -262,26 +281,24 @@ export const toolsRouter = {
       };
       globalThisWithShimmedConsoles.shimmedConsoles ||= {};
       using _consoleCleanup = {
-        [Symbol.dispose]: () => delete globalThisWithShimmedConsoles.shimmedConsoles[filepath],
+        [Symbol.dispose]: () => delete globalThisWithShimmedConsoles.shimmedConsoles[scriptPath],
       };
-      const contextTypePath = path.join(generatedDir, "context.ts");
-      await writeFile(contextTypePath, getContextTypeSource(generatedDir));
+      globalThisWithShimmedConsoles.shimmedConsoles[scriptPath] = fakeConsole;
       const wrappedCode = wrapCodeWithExportDefault(input.code.join(" "), {
         contextKeys: [...clientNames],
         contextType: `import("./context.ts").ExecutionContext`,
       });
       const code = [
         `const globalThisWithShimmedConsoles = globalThis as {} as {shimmedConsoles?: Record<string, typeof globalThis.console>};`,
-        `const console = globalThisWithShimmedConsoles.shimmedConsoles?.[${JSON.stringify(filepath)}] || globalThis.console;`,
+        `const console = globalThisWithShimmedConsoles.shimmedConsoles?.[${JSON.stringify(scriptPath)}] || globalThis.console;`,
         ``,
         wrappedCode,
       ].join("\n");
-      globalThisWithShimmedConsoles.shimmedConsoles[filepath] = fakeConsole;
 
-      await writeFile(filepath, code);
+      await writeFile(scriptPath, code);
       if (input.typecheck) {
         const [typecheckCommand, ...typecheckArgs] = input.typecheck.trim().split(/\s+/);
-        const result = await exec(typecheckCommand, typecheckArgs.concat(filepath), {
+        const result = await exec(typecheckCommand, typecheckArgs.concat(scriptPath), {
           nodeOptions: { cwd },
         });
         if (result.exitCode !== 0) {
@@ -294,7 +311,7 @@ export const toolsRouter = {
       const clients = getLazyClients();
 
       type ModuleShape = { default: (context: ExecutionContext) => Promise<unknown> };
-      const module_: ModuleShape = await tsImport(filepath, { parentURL: import.meta.url });
+      const module_: ModuleShape = await tsImport(scriptPath, { parentURL: import.meta.url });
       return module_.default(clients);
     }),
   execJs: publicProcedure
