@@ -89,6 +89,12 @@ async function startNomadStack(params: {
   });
 
   await submitNomadJob(nomadUrl, params.egressJob);
+  await waitFor({
+    timeoutMs: 45_000,
+    label: "egress service in consul",
+    fn: async () => consulHasPassingService(consulUrl, "egress"),
+  });
+
   await submitNomadJob(nomadUrl, caddyJob);
 
   await waitFor({
@@ -99,11 +105,6 @@ async function startNomadStack(params: {
       const running = allocations.filter((allocation) => allocation.ClientStatus === "running");
       return running.length >= 3;
     },
-  });
-  await waitFor({
-    timeoutMs: 45_000,
-    label: "egress service in consul",
-    fn: async () => consulHasPassingService(consulUrl, "egress"),
   });
 
   await waitFor({
@@ -237,6 +238,56 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
         console.log(logs);
       }
       await mockServer.close();
+      await stopAndRemoveContainer(container.id);
+    }
+  });
+
+  test("consul-template auto-routes services tagged with caddy", async () => {
+    const name = `jonasland-smoke-autoroute-${Date.now()}`;
+    const container = await startSandboxContainer({ image, name });
+
+    try {
+      const egressJobBase = readFileSync(join(sandboxRoot, "nomad/jobs/egress.nomad.hcl"), "utf-8");
+      await startNomadStack({
+        containerId: container.id,
+        hostPorts: container.hostPorts,
+        egressJob: egressJobBase,
+      });
+
+      const nomadUrl = `http://127.0.0.1:${container.hostPorts["4646/tcp"]}`;
+      const whoamiJob = readFileSync(join(sandboxRoot, "nomad/jobs/whoami.nomad.hcl"), "utf-8");
+      await submitNomadJob(nomadUrl, whoamiJob);
+
+      await waitFor({
+        timeoutMs: 45_000,
+        label: "whoami allocations running",
+        fn: async () => {
+          const allocations = await listAllocations(nomadUrl);
+          const runningWhoami = allocations.filter(
+            (allocation) =>
+              allocation.ClientStatus === "running" && (allocation.Name || "").startsWith("whoami"),
+          );
+          return runningWhoami.length >= 2;
+        },
+      });
+
+      await waitFor({
+        timeoutMs: 45_000,
+        label: "whoami routed via caddy template",
+        fn: async () => {
+          try {
+            const body = await execInContainer({
+              containerId: container.id,
+              cmd: ["curl", "-sS", "-H", "Host: whoami.localhost", "http://127.0.0.1/"],
+            });
+            const parsed = JSON.parse(body) as { service?: string };
+            return parsed.service === "whoami";
+          } catch {
+            return false;
+          }
+        },
+      });
+    } finally {
       await stopAndRemoveContainer(container.id);
     }
   });
