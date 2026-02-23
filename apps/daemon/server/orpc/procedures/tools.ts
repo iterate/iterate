@@ -232,9 +232,9 @@ export const toolsRouter = {
     )
     .handler(async ({ input }) => {
       const cwd = input.cwd || process.cwd();
-      const generatedDir = path.join(cwd, "_generated.ignoreme");
+      const parentFolder = path.join(cwd, "_generated.ignoreme");
       const slug = new Date().toISOString().replaceAll(":", ".");
-      const folder = path.join(generatedDir, slug);
+      const folder = path.join(parentFolder, slug);
       await mkdir(folder, { recursive: true });
 
       const scriptPath = path.join(folder, "script.ts");
@@ -253,8 +253,8 @@ export const toolsRouter = {
       };
       await writeFile(tsconfigPath, JSON.stringify(tsconfig, null, 2));
 
-      const contextTypePath = path.join(generatedDir, "context.ts");
-      await writeFile(contextTypePath, getContextTypeSource(generatedDir));
+      const contextTypePath = path.join(folder, "context.ts");
+      await writeFile(contextTypePath, getContextTypeSource(folder));
 
       // Build a console that emits to an EventTarget so streaming callers can
       // pick up logs in real-time, while also forwarding to the real console.
