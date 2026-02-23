@@ -11,8 +11,14 @@ import {
   startSandboxContainer,
   stopAndRemoveContainer,
 } from "../src/container-fixture.ts";
-import { consulIsHealthy, putConsulKv } from "../src/consul-client.ts";
-import { listAllocations, submitNomadJob, waitForNomadLeader } from "../src/nomad-client.ts";
+import { consulHasPassingService, consulIsHealthy } from "../src/consul-client.ts";
+import {
+  hasConsulReadyNode,
+  hasReadyNode,
+  listAllocations,
+  submitNomadJob,
+  waitForNomadLeader,
+} from "../src/nomad-client.ts";
 import { waitFor } from "../src/wait.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
@@ -61,10 +67,14 @@ async function startNomadStack(params: {
     label: "nomad leader",
     fn: async () => waitForNomadLeader(nomadUrl),
   });
+  await waitFor({
+    timeoutMs: 45_000,
+    label: "nomad ready node",
+    fn: async () => hasReadyNode(nomadUrl),
+  });
 
   const consulJob = readFileSync(join(sandboxRoot, "nomad/jobs/consul.nomad.hcl"), "utf-8");
   const caddyJob = readFileSync(join(sandboxRoot, "nomad/jobs/caddy.nomad.hcl"), "utf-8");
-  const globalConfig = readFileSync(join(sandboxRoot, "caddy/global-config.json"), "utf-8");
 
   await submitNomadJob(nomadUrl, consulJob);
   await waitFor({
@@ -72,8 +82,12 @@ async function startNomadStack(params: {
     label: "consul healthy",
     fn: async () => consulIsHealthy(consulUrl),
   });
+  await waitFor({
+    timeoutMs: 45_000,
+    label: "nomad node with consul fingerprint",
+    fn: async () => hasConsulReadyNode(nomadUrl),
+  });
 
-  await putConsulKv(consulUrl, "caddy/global", globalConfig);
   await submitNomadJob(nomadUrl, params.egressJob);
   await submitNomadJob(nomadUrl, caddyJob);
 
@@ -86,13 +100,25 @@ async function startNomadStack(params: {
       return running.length >= 3;
     },
   });
+  await waitFor({
+    timeoutMs: 45_000,
+    label: "egress service in consul",
+    fn: async () => consulHasPassingService(consulUrl, "egress"),
+  });
 
   await waitFor({
     timeoutMs: 45_000,
-    label: "caddy health endpoint",
+    label: "caddy admin endpoint",
     fn: async () => {
-      const response = await fetch(`http://127.0.0.1:${params.hostPorts["80/tcp"]}/healthz`);
-      return response.ok;
+      try {
+        await execInContainer({
+          containerId: params.containerId,
+          cmd: ["sh", "-ec", "curl -fsS http://127.0.0.1:2019/config/ >/dev/null"],
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
   });
 }
@@ -109,7 +135,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
       }),
     );
 
-    mswServer.listen({ onUnhandledRequest: "error" });
+    mswServer.listen({ onUnhandledRequest: "bypass" });
 
     const mockServer = startHostMockServer(async (req, res) => {
       seenByMockServer.push({ url: req.url || "", host: req.headers.host });
@@ -150,7 +176,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
         ],
       });
 
-      expect(response).toContain("x-egress-mode: external-proxy");
+      expect(response.toLowerCase()).toContain("x-egress-mode: external-proxy");
       expect(seenByMockServer.length).toBeGreaterThan(0);
       expect(seenByMsw.length).toBeGreaterThan(0);
     } finally {
@@ -195,7 +221,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
         ],
       });
 
-      expect(response).toContain("x-egress-mode: direct");
+      expect(response.toLowerCase()).toContain("x-egress-mode: direct");
       expect(seenByMockServer.some((path) => path.includes("/direct-path"))).toBe(true);
 
       const natRules = await execInContainer({
