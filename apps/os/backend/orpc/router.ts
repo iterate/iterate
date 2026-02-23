@@ -51,7 +51,8 @@ async function authenticateApiKey(
 }> {
   const tokenId = parseTokenIdFromApiKey(apiKey);
   if (!tokenId) {
-    logger.warn("Invalid API key format", { apiKey: apiKey.slice(0, 20) + "..." });
+    logger.set({ apiKeyPrefix: apiKey.slice(0, 20) + "..." });
+    logger.warn("Invalid API key format");
     throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key format" });
   }
 
@@ -60,19 +61,22 @@ async function authenticateApiKey(
   });
 
   if (!accessToken) {
-    logger.warn("Access token not found", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Access token not found");
     throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
   }
 
   if (accessToken.revokedAt) {
-    logger.warn("Access token revoked", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Access token revoked");
     throw new ORPCError("UNAUTHORIZED", { message: "Token has been revoked" });
   }
 
   // Decrypt the stored token and compare with the provided API key
   const storedToken = await decrypt(accessToken.encryptedToken);
   if (apiKey !== storedToken) {
-    logger.warn("Invalid API key for token", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Invalid API key for token");
     throw new ORPCError("UNAUTHORIZED", { message: "Invalid API key" });
   }
 
@@ -82,16 +86,16 @@ async function authenticateApiKey(
   });
 
   if (!machine) {
-    logger.warn("Machine not found", { machineId });
+    logger.set({ machine: { id: machineId } });
+    logger.warn("Machine not found");
     throw new ORPCError("NOT_FOUND", { message: "Machine not found" });
   }
 
   if (machine.project.id !== accessToken.projectId) {
-    logger.warn("Machine doesn't belong to token's project", {
-      machineId,
-      machineProjectId: machine.project.id,
-      tokenProjectId: accessToken.projectId,
-    });
+    logger.set({ machine: { id: machineId } });
+    logger.warn(
+      `Machine does not belong to token's project machineProjectId=${machine.project.id} tokenProjectId=${accessToken.projectId}`,
+    );
     throw new ORPCError("FORBIDDEN", { message: "Machine doesn't belong to this project" });
   }
 
@@ -134,7 +138,8 @@ export const reportStatus = os.machines.reportStatus
       externalId: machineWithOrg.externalId,
     });
 
-    logger.info("Machine daemon status reported", { machineId: machine.id, status });
+    logger.set({ machine: { id: machine.id }, status });
+    logger.info("Machine daemon status reported");
 
     // Broadcast invalidation to update UI in real-time
     executionCtx.waitUntil(
