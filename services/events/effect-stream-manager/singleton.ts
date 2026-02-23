@@ -1,8 +1,8 @@
 import {
   PUSH_SUBSCRIPTION_CALLBACK_ADDED_TYPE,
   type PushSubscriptionCallbackAddedPayload,
-  type StreamEvent,
-  type StreamSummary,
+  type EventStreamEvent,
+  type EventStreamSummary,
   type EventsServiceEnv,
 } from "@iterate-com/services-contracts/events";
 import { IterateEventType } from "@iterate-com/services-contracts/lib";
@@ -28,7 +28,7 @@ const toDomainPath = (path: string): StreamPath =>
 
 const encodeEvent = Schema.encodeSync(Event);
 
-const toContractEvent = (event: Event): StreamEvent => {
+const toContractEvent = (event: Event): EventStreamEvent => {
   const encoded = encodeEvent(event);
   return {
     path: encoded.path,
@@ -51,7 +51,7 @@ const toContractStreamSummary = (stream: {
   readonly eventCount: number;
   readonly lastEventCreatedAt: string;
   readonly metadata: Readonly<Record<string, unknown>>;
-}): StreamSummary => ({
+}): EventStreamSummary => ({
   path: stream.path.startsWith("/") ? stream.path : `/${stream.path}`,
   createdAt: stream.createdAt,
   eventCount: stream.eventCount,
@@ -93,9 +93,9 @@ export interface EventOperations {
       readonly live?: boolean | undefined;
     },
     signal?: AbortSignal,
-  ) => AsyncGenerator<StreamEvent>;
+  ) => AsyncGenerator<EventStreamEvent>;
 
-  readonly listStreams: () => Promise<Array<StreamSummary>>;
+  readonly listStreams: () => Promise<Array<EventStreamSummary>>;
 }
 
 const createOperations = (manager: StreamManager): EventOperations => ({

@@ -418,13 +418,13 @@ describe("Push subscriptions", () => {
     ]);
   });
 
-  test("subscribe procedure appends registration event", async () => {
+  test("registerSubscription procedure appends registration event", async () => {
     await using events = await startEventBusTestFixture();
     await using callback = await startWebhookFixture({ statusCodes: [200] });
     const client = events.client;
     const pathName = uniquePath("push-subscribe-procedure");
 
-    await client.subscribe({
+    await client.registerSubscription({
       path: pathName,
       subscription: {
         type: "webhook",

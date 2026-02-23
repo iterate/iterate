@@ -5,6 +5,9 @@ import { Schema } from "effect";
 
 import { TraceContext } from "./tracing/trace-context.ts";
 
+// External API zod schemas for these domain concepts live in
+// services/_contracts/events/index.ts and should be kept in sync.
+
 // -------------------------------------------------------------------------------------
 // Branded primitives
 // -------------------------------------------------------------------------------------

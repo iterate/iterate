@@ -108,91 +108,91 @@ export const StreamMetadataUpdatedEvent = typedEvent(
 );
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
 
-const StreamEventInput = z.object({
+const EventStreamEventInput = z.object({
   type: IterateEventType,
   payload: PlainUnknownRecord,
   version: Version.optional(),
 });
 
-export const StreamEvent = StreamEventInput.extend({
+export const EventStreamEvent = EventStreamEventInput.extend({
   path: StreamPath,
   offset: Offset,
   createdAt: CreatedAt,
   trace: TraceContext,
 });
-export type StreamEvent = z.infer<typeof StreamEvent>;
+export type EventStreamEvent = z.infer<typeof EventStreamEvent>;
 
-export const StreamSummary = z.object({
+export const EventStreamSummary = z.object({
   path: StreamPath,
   createdAt: CreatedAt,
   eventCount: z.number().int().min(0),
   lastEventCreatedAt: CreatedAt,
   metadata: PlainUnknownRecord,
 });
-export type StreamSummary = z.infer<typeof StreamSummary>;
+export type EventStreamSummary = z.infer<typeof EventStreamSummary>;
 
-const StreamQuery = z.object({
+const EventStreamQuery = z.object({
   path: StreamPath,
   offset: Offset.optional(),
   live: z.boolean().optional(),
 });
 
-JSON_SCHEMA_REGISTRY.add(StreamEventInput, {
+const eventStreamEventInputExample = EventStreamEventInput.parse({
+  type: "https://events.iterate.com/events/example/value-recorded",
+  payload: { value: 42 },
+  version: "1",
+});
+
+const eventStreamEventExample = EventStreamEvent.parse({
+  path: "/projects/demo/events",
+  offset: "0000000000000001",
+  type: "https://events.iterate.com/events/example/value-recorded",
+  payload: { value: 42 },
+  version: "1",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  trace: {
+    traceId: "0af7651916cd43dd8448eb211c80319c",
+    spanId: "b7ad6b7169203331",
+    parentSpanId: null,
+  },
+});
+
+const eventStreamSummaryExample = EventStreamSummary.parse({
+  path: "/projects/demo/events",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  eventCount: 1,
+  lastEventCreatedAt: "2026-01-01T00:00:00.000Z",
+  metadata: { environment: "dev" },
+});
+
+const pushSubscriptionCallbackAddedPayloadExample = PushSubscriptionCallbackAddedPayload.parse({
+  type: "webhook",
+  URL: "https://example.com/webhook",
+  subscriptionSlug: "main",
+  retryPolicy: {
+    times: 3,
+    schedule: { type: "fixed", intervalMs: 250 },
+  },
+});
+
+JSON_SCHEMA_REGISTRY.add(EventStreamEventInput, {
   description: "Event payload accepted by append operations",
-  examples: [
-    {
-      type: "https://events.iterate.com/events/example/value-recorded",
-      payload: { value: 42 },
-      version: "1",
-    },
-  ],
+  examples: [eventStreamEventInputExample],
 });
 
-JSON_SCHEMA_REGISTRY.add(StreamEvent, {
+JSON_SCHEMA_REGISTRY.add(EventStreamEvent, {
   description: "Stored stream event with path, offset, trace, and timestamp",
-  examples: [
-    {
-      path: "/projects/demo/events",
-      offset: "0000000000000001",
-      type: "https://events.iterate.com/events/example/value-recorded",
-      payload: { value: 42 },
-      version: "1",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      trace: {
-        traceId: "0af7651916cd43dd8448eb211c80319c",
-        spanId: "b7ad6b7169203331",
-        parentSpanId: null,
-      },
-    },
-  ],
+  examples: [eventStreamEventExample],
 });
 
-JSON_SCHEMA_REGISTRY.add(StreamSummary, {
+JSON_SCHEMA_REGISTRY.add(EventStreamSummary, {
   description: "High-level stream summary used by listStreams",
-  examples: [
-    {
-      path: "/projects/demo/events",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      eventCount: 1,
-      lastEventCreatedAt: "2026-01-01T00:00:00.000Z",
-      metadata: { environment: "dev" },
-    },
-  ],
+  examples: [eventStreamSummaryExample],
 });
 
 JSON_SCHEMA_REGISTRY.add(PushSubscriptionCallbackAddedPayload, {
   description: "Push subscription registration payload",
-  examples: [
-    {
-      type: "webhook",
-      URL: "https://example.com/webhook",
-      subscriptionSlug: "main",
-      retryPolicy: {
-        times: 3,
-        schedule: { type: "fixed", intervalMs: 250 },
-      },
-    },
-  ],
+  examples: [pushSubscriptionCallbackAddedPayloadExample],
 });
 
 export const parsePushSubscriptionCallbackAddedPayload = (
@@ -224,17 +224,15 @@ export const eventBusContract = oc.router({
     .input(
       z.object({
         path: StreamPath,
-        events: z.array(StreamEventInput).min(1),
+        events: z.array(EventStreamEventInput).min(1),
       }),
     )
     .output(z.void()),
-  subscribe: oc
+  registerSubscription: oc
     .route({
       operationId: "registerPushSubscription",
       method: "POST",
-      path: "/streams/{+path}/subscribe",
-      successStatus: 204,
-      successDescription: "Subscription registration event appended",
+      path: "/streams/{+path}/subscriptions",
       summary: "Register a push subscription by appending an event",
       description: "Appends a subscription registration event to the target stream.",
       tags: ["Subscriptions"],
@@ -274,8 +272,8 @@ export const eventBusContract = oc.router({
       description: "Reads historical events and can keep the connection open for live events.",
       tags: ["Streams"],
     })
-    .input(StreamQuery)
-    .output(eventIterator(StreamEvent)),
+    .input(EventStreamQuery)
+    .output(eventIterator(EventStreamEvent)),
   listStreams: oc
     .route({
       operationId: "listStreams",
@@ -284,7 +282,7 @@ export const eventBusContract = oc.router({
       tags: ["Streams"],
     })
     .input(z.strictObject({}).optional())
-    .output(z.array(StreamSummary)),
+    .output(z.array(EventStreamSummary)),
 });
 
 const nonEmptyStringWithTrimDefault = (defaultValue: string) =>

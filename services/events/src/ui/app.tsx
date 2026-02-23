@@ -6,8 +6,8 @@ import {
   STREAM_CREATED_TYPE,
   STREAM_METADATA_UPDATED_TYPE,
   serviceManifest,
-  type StreamEvent,
-  type StreamSummary,
+  type EventStreamEvent,
+  type EventStreamSummary,
 } from "@iterate-com/services-contracts/events";
 import { IterateEventType } from "@iterate-com/services-contracts/lib";
 
@@ -149,7 +149,7 @@ const formatRelativeTime = (timestamp: string): string => {
   return `${deltaDays}d ago`;
 };
 
-const extractMetadataFromEvent = (event: StreamEvent): Record<string, unknown> | undefined => {
+const extractMetadataFromEvent = (event: EventStreamEvent): Record<string, unknown> | undefined => {
   if (event.type !== STREAM_METADATA_UPDATED_TYPE) return undefined;
   if (!isRecord(event.payload)) return undefined;
   const metadata = event.payload["metadata"];
@@ -157,7 +157,7 @@ const extractMetadataFromEvent = (event: StreamEvent): Record<string, unknown> |
   return metadata;
 };
 
-const extractStreamCreatedPath = (event: StreamEvent): string | undefined => {
+const extractStreamCreatedPath = (event: EventStreamEvent): string | undefined => {
   if (event.type !== STREAM_CREATED_TYPE) return undefined;
   if (!isRecord(event.payload)) return undefined;
 
@@ -188,7 +188,9 @@ const streamListButtonClassName =
   "w-full rounded-md px-2 py-1.5 text-left transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400";
 const sectionHeadingClassName = "mb-3 text-lg font-semibold";
 
-const closeIterator = async (iterator: AsyncIterator<StreamEvent> | undefined): Promise<void> => {
+const closeIterator = async (
+  iterator: AsyncIterator<EventStreamEvent> | undefined,
+): Promise<void> => {
   if (iterator?.return === undefined) return;
   await Promise.race([Promise.resolve(iterator.return()).catch(() => undefined), sleep(250)]);
 };
@@ -196,7 +198,7 @@ const closeIterator = async (iterator: AsyncIterator<StreamEvent> | undefined): 
 const openLiveIterator = async (
   path: string,
   transport: StreamTransport,
-): Promise<{ iterator: AsyncIterator<StreamEvent> }> => {
+): Promise<{ iterator: AsyncIterator<EventStreamEvent> }> => {
   if (transport === "websocket") {
     const websocketClient = createEventBusWebSocketClient(serviceClientOptions);
     const stream = await websocketClient.stream({ path, live: true });
@@ -211,7 +213,7 @@ export function App() {
   const [transport, setTransport] = useState<StreamTransport>("websocket");
   const [selectedStreamPath, setSelectedStreamPath] = useState<string>(DEFAULT_STREAM_PATH);
   const [streamPathInput, setStreamPathInput] = useState<string>(DEFAULT_STREAM_PATH);
-  const [streamListState, setStreamListState] = useState<Map<string, StreamSummary>>(
+  const [streamListState, setStreamListState] = useState<Map<string, EventStreamSummary>>(
     () => new Map(),
   );
   const [streamSearchInput, setStreamSearchInput] = useState<string>("");
@@ -230,16 +232,16 @@ export function App() {
     "https://events.iterate.com/events/ui/manual-event-appended",
   );
   const [eventPayload, setEventPayload] = useState<string>('{"message":"hello"}');
-  const [events, setEvents] = useState<StreamEvent[]>([]);
+  const [events, setEvents] = useState<EventStreamEvent[]>([]);
 
   const transportRef = useRef<StreamTransport>("websocket");
   const selectedStreamPathRef = useRef<string>(DEFAULT_STREAM_PATH);
-  const knownStreamsRef = useRef<Map<string, StreamSummary>>(new Map());
+  const knownStreamsRef = useRef<Map<string, EventStreamSummary>>(new Map());
   const metadataTokenRef = useRef<number>(0);
-  const metadataIteratorRef = useRef<AsyncIterator<StreamEvent> | undefined>(undefined);
+  const metadataIteratorRef = useRef<AsyncIterator<EventStreamEvent> | undefined>(undefined);
   const metadataReconnectTimerRef = useRef<number | undefined>(undefined);
   const streamTokenRef = useRef<number>(0);
-  const streamIteratorRef = useRef<AsyncIterator<StreamEvent> | undefined>(undefined);
+  const streamIteratorRef = useRef<AsyncIterator<EventStreamEvent> | undefined>(undefined);
   const openStreamPathRef = useRef<string | undefined>(undefined);
   const refreshIntervalRef = useRef<number | undefined>(undefined);
 
@@ -248,7 +250,7 @@ export function App() {
     setStatusTone(isError ? "error" : "neutral");
   }, []);
 
-  const setKnownStreams = useCallback((nextMap: Map<string, StreamSummary>): void => {
+  const setKnownStreams = useCallback((nextMap: Map<string, EventStreamSummary>): void => {
     knownStreamsRef.current = nextMap;
     setStreamListState(new Map(nextMap));
   }, []);
@@ -283,7 +285,7 @@ export function App() {
   const refreshStreams = useCallback(async (): Promise<void> => {
     const summaries = await httpClient.listStreams({});
 
-    const next = new Map<string, StreamSummary>();
+    const next = new Map<string, EventStreamSummary>();
     for (const summary of summaries) {
       let normalizedPath: string;
       try {
@@ -315,7 +317,7 @@ export function App() {
   }, [applySelectedStreamMetadata, setKnownStreams]);
 
   const updateStreamSummaryFromEvent = useCallback(
-    (event: StreamEvent): void => {
+    (event: EventStreamEvent): void => {
       let path: string;
       try {
         path = normalizePath(event.path);

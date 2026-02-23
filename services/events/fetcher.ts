@@ -51,7 +51,7 @@ export const eventsService = async (env: EventsServiceEnv) => {
     append: eventBus.append.handler(async ({ input }) => {
       await ops.appendEvents(input);
     }),
-    subscribe: eventBus.subscribe.handler(async ({ input }) => {
+    registerSubscription: eventBus.registerSubscription.handler(async ({ input }) => {
       await ops.appendSubscriptionRegistration(input);
     }),
     ackOffset: eventBus.ackOffset.handler(async ({ input }) => {
