@@ -166,7 +166,7 @@ function EventCard({ event }: { event: EventWithConsumers }) {
     const str = String(value);
     if (!str.trim()) return false;
     if (str.match(/^\w+_\w{10,}$/)) return false; // typeid-ish
-    if (str.match(/^(\w+-){3}\w+$/)) return false; // uuid-ish
+    if (str.match(/^(\w+-){4}\w+$/)) return false; // uuid-ish
     if (!Number.isNaN(Date.parse(str))) return false; // date-ish
     if (str.match(/^\d{7,}$/)) return false; // long-ass-number-ish
     return true;

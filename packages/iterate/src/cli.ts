@@ -410,12 +410,12 @@ const deviceFlowLogin = async (
   console.error(`  ${verifyUrl}\n`);
   console.error(`Your code: ${code.user_code}\n`);
 
-  // Try to open browser automatically
+  // Try to open browser automatically (execFile avoids shell injection from server-controlled URL)
   try {
-    const { exec } = await import("node:child_process");
+    const { execFile } = await import("node:child_process");
     const cmd =
       process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-    exec(`${cmd} "${verifyUrl}"`);
+    execFile(cmd, [verifyUrl]);
   } catch {
     // Ignore — user can open manually
   }
