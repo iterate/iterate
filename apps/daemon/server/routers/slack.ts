@@ -43,6 +43,9 @@
  * Structurally symmetric with webchat.ts and email.ts — if you change the
  * pattern in one, update the others to match.
  */
+import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
@@ -116,6 +119,57 @@ const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const SLACK_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/slack/agent-change-callback`;
+
+// ──────────────────────── System prompt helpers ─────────────────────────────
+
+/**
+ * Read SLACK.md from ~/.config/opencode/SLACK.md and return its content.
+ * Cached after first read. Returns empty string if the file doesn't exist.
+ */
+let cachedSlackMd: string | null = null;
+
+function readSlackMd(): string {
+  if (cachedSlackMd !== null) return cachedSlackMd;
+  try {
+    cachedSlackMd = readFileSync(join(homedir(), ".config", "opencode", "SLACK.md"), "utf8");
+  } catch {
+    cachedSlackMd = "";
+  }
+  return cachedSlackMd;
+}
+
+/**
+ * Build the system prompt for a new Slack agent session.
+ * Includes SLACK.md content so the agent knows how to communicate via Slack.
+ */
+function buildSlackSystemPrompt(): string {
+  const slackMd = readSlackMd();
+  if (!slackMd) return "";
+  return slackMd;
+}
+
+type PromptEvent = { type: "iterate:agent:prompt-added"; message: string };
+
+/**
+ * Build the { events: [...] } payload for the agent router.
+ * On first message (wasNewlyCreated), prepends a system prompt event with SLACK.md.
+ */
+function buildAgentEventsPayload(
+  message: string,
+  wasNewlyCreated: boolean,
+): { events: PromptEvent[] } {
+  const events: PromptEvent[] = [];
+
+  if (wasNewlyCreated) {
+    const systemPrompt = buildSlackSystemPrompt();
+    if (systemPrompt) {
+      events.push({ type: "iterate:agent:prompt-added", message: systemPrompt });
+    }
+  }
+
+  events.push({ type: "iterate:agent:prompt-added", message });
+  return { events };
+}
 
 /**
  * We consume `iterate:agent-updated` events delivered to the callback URL.
@@ -271,11 +325,11 @@ slackRouter.post("/webhook", async (c) => {
 
     const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
 
-    // Fire-and-forget prompt to the agent.
+    // Fire-and-forget prompt to the agent. Reactions never create agents, so wasNewlyCreated=false.
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+      body: JSON.stringify(buildAgentEventsPayload(message, false)),
     }).catch((error) => {
       logger.error(`[slack] failed to post reaction prompt for thread_ts=${threadTs}`, error);
     });
@@ -447,10 +501,11 @@ slackRouter.post("/webhook", async (c) => {
     parsed.case === "new_thread_mention" && !wasNewlyCreated ? "mid_thread_mention" : parsed.case;
 
   // Fire-and-forget prompt to the agent, just like webchat.ts.
+  // On first message (wasNewlyCreated), prepends SLACK.md as a system prompt event.
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+    body: JSON.stringify(buildAgentEventsPayload(message, wasNewlyCreated)),
   }).catch((error) => {
     logger.error(`[slack] failed to post prompt for thread_ts=${threadTs}`, error);
   });
