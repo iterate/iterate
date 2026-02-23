@@ -18,7 +18,7 @@ import {
   resolveServiceOrpcWebSocketUrl,
   type ServiceClientEnv,
   type ServiceManifestLike,
-} from "./service-url.ts";
+} from "@iterate-com/services-contracts/lib";
 
 export type OrpcRpcWebSocket = LinkWebsocketClientOptions["websocket"];
 export type RpcWebSocket = OrpcRpcWebSocket;

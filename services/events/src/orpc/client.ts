@@ -3,8 +3,8 @@ import {
   createOrpcRpcServiceClient,
   createOrpcRpcWebSocketServiceClient,
   type RpcWebSocket,
-  type ServiceClientEnv,
-} from "@iterate-com/services-contracts/lib";
+} from "@iterate-com/services-utils";
+import { type ServiceClientEnv } from "@iterate-com/services-contracts/lib";
 import { serviceManifest, type EventBusContract } from "@iterate-com/services-contracts/events";
 import type { ContractRouterClient } from "@orpc/contract";
 

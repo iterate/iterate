@@ -20,7 +20,7 @@ import {
   type EventBusContract,
   type EventsServiceEnv,
 } from "@iterate-com/services-contracts/events";
-import { asRpcWebSocket, type RpcWebSocket } from "@iterate-com/services-contracts/lib";
+import { asRpcWebSocket, type RpcWebSocket } from "@iterate-com/services-utils";
 
 import { eventsService } from "../../fetcher.ts";
 

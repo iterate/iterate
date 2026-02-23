@@ -1220,6 +1220,31 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      '@orpc/zod':
+        specifier: 1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
+      hono:
+        specifier: ^4.11.3
+        version: 4.11.3
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/_utils:
+    dependencies:
+      '@iterate-com/services-contracts':
+        specifier: workspace:*
+        version: link:../_contracts
       '@orpc/client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1229,18 +1254,9 @@ importers:
       '@orpc/openapi-client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
-      '@orpc/zod':
-        specifier: 1.13.5
-        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.3.6)
-      hono:
-        specifier: ^4.11.3
-        version: 4.11.3
       partysocket:
         specifier: ^1.1.6
         version: 1.1.6
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -1321,6 +1337,12 @@ importers:
       '@effect/vitest':
         specifier: ^0.27.0
         version: 0.27.0(effect@3.19.18)(vitest@3.2.4(@types/debug@4.1.12)(@types/node@24.10.1)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
+      '@iterate-com/sandbox':
+        specifier: workspace:*
+        version: link:../../sandbox
+      '@iterate-com/services-utils':
+        specifier: workspace:*
+        version: link:../_utils
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -1342,6 +1364,9 @@ importers:
       drizzle-kit:
         specifier: ^0.31.6
         version: 0.31.8
+      pidnap:
+        specifier: workspace:*
+        version: link:../../packages/pidnap
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

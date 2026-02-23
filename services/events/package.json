@@ -49,8 +49,11 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
+    "@iterate-com/services-utils": "workspace:*",
     "@vitejs/plugin-react": "^5.1.2",
+    "@iterate-com/sandbox": "workspace:*",
     "drizzle-kit": "^0.31.6",
+    "pidnap": "workspace:*",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
     "vitest": "^3.0.5"
