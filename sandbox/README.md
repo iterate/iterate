@@ -204,8 +204,8 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
-pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- --timeframe 24h --action stop --prefix dev    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- --timeframe 7d --action delete --prefix stg   # delete machines idle >7d
 ```
 
 ## Testing

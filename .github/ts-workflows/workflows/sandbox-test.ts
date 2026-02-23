@@ -199,7 +199,7 @@ export default workflow({
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm sandbox fly:cleanup -- 0s delete --prefix test-base-image-test --all",
+          run: "doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-base-image-test --all",
         },
       ],
     },
