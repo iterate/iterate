@@ -24,6 +24,8 @@ job "consul" {
           "-client=0.0.0.0",
           "-bind=127.0.0.1",
           "-dns-port=${NOMAD_PORT_dns}",
+          "-recursor=8.8.8.8",
+          "-recursor=1.1.1.1",
           "-datacenter=dc1"
         ]
       }

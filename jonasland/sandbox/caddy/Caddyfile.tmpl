@@ -1,39 +1,3 @@
-job "caddy" {
-  datacenters = ["dc1"]
-  type        = "service"
-
-  group "caddy" {
-    network {
-      port "http" {
-        static = 80
-      }
-
-      port "https" {
-        static = 443
-      }
-
-      port "admin" {
-        static = 2019
-      }
-    }
-
-    task "caddy" {
-      driver = "raw_exec"
-
-      config {
-        command = "sh"
-        args = [
-          "-ec",
-          "/etc/jonasland/scripts/iptables-redirect.sh && exec gosu node caddy run --config local/Caddyfile --adapter caddyfile"
-        ]
-      }
-
-      template {
-        destination   = "local/Caddyfile"
-        change_mode   = "signal"
-        change_signal = "SIGUSR1"
-        splay         = "2s"
-        data          = <<-CADDYFILE
 {
     admin 0.0.0.0:2019
 
@@ -96,26 +60,4 @@ job "caddy" {
 {{ else }}
     respond "egress unavailable" 503
 {{ end }}
-}
-CADDYFILE
-      }
-
-      resources {
-        cpu    = 200
-        memory = 256
-      }
-
-      service {
-        provider = "consul"
-        name     = "caddy"
-        port     = "admin"
-
-        check {
-          type     = "tcp"
-          interval = "5s"
-          timeout  = "2s"
-        }
-      }
-    }
-  }
 }

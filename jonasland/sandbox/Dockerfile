@@ -36,7 +36,7 @@ RUN chmod +x /usr/local/bin/caddy
 RUN mkdir -p /etc/jonasland/nomad/jobs /etc/jonasland/caddy /etc/jonasland/services /etc/jonasland/scripts /var/lib/nomad /var/lib/caddy
 COPY jonasland/sandbox/nomad/base.hcl /etc/jonasland/nomad/base.hcl
 COPY jonasland/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland/nomad/jobs/
-COPY jonasland/sandbox/caddy/Caddyfile /etc/jonasland/caddy/Caddyfile
+COPY jonasland/sandbox/caddy/Caddyfile.tmpl /etc/jonasland/caddy/Caddyfile.tmpl
 COPY jonasland/sandbox/services/ /etc/jonasland/services/
 COPY jonasland/sandbox/scripts/ /etc/jonasland/scripts/
 RUN find /etc/jonasland/scripts -name "*.sh" -exec chmod +x {} \;
