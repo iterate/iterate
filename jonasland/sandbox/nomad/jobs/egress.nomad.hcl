@@ -14,6 +14,7 @@ job "egress" {
 
       env {
         ITERATE_EGRESS_PORT = "${NOMAD_PORT_http}"
+        ITERATE_EXTERNAL_EGRESS_PROXY = ""
       }
 
       config {
@@ -30,6 +31,7 @@ job "egress" {
         provider = "consul"
         name     = "egress"
         port     = "http"
+        tags     = ["egress"]
 
         check {
           type     = "http"

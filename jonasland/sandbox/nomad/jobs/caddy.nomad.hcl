@@ -24,7 +24,7 @@ job "caddy" {
         command = "sh"
         args = [
           "-ec",
-          "/etc/jonasland/scripts/iptables-redirect.sh && exec su-exec caddy caddy-with-consul run --resume --config /etc/jonasland/caddy/bootstrap.caddyfile --adapter caddyfile"
+          "/etc/jonasland/scripts/iptables-redirect.sh && printf '%s\n%s\n' 'nameserver 127.0.0.1' 'options ndots:0' > /etc/resolv.conf && exec gosu node caddy run --config /etc/jonasland/caddy/Caddyfile --adapter caddyfile"
         ]
       }
 
@@ -36,11 +36,10 @@ job "caddy" {
       service {
         provider = "consul"
         name     = "caddy"
-        port     = "http"
+        port     = "admin"
 
         check {
-          type     = "http"
-          path     = "/healthz"
+          type     = "tcp"
           interval = "5s"
           timeout  = "2s"
         }

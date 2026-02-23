@@ -9,7 +9,7 @@ job "consul" {
       }
 
       port "dns" {
-        static = 8600
+        static = 53
       }
     }
 
@@ -23,6 +23,7 @@ job "consul" {
           "-dev",
           "-client=0.0.0.0",
           "-bind=127.0.0.1",
+          "-dns-port=${NOMAD_PORT_dns}",
           "-datacenter=dc1"
         ]
       }
@@ -33,7 +34,7 @@ job "consul" {
       }
 
       service {
-        provider = "consul"
+        provider = "nomad"
         name     = "consul"
         port     = "http"
 
