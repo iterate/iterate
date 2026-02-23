@@ -43,7 +43,6 @@
  * Structurally symmetric with webchat.ts and email.ts — if you change the
  * pattern in one, update the others to match.
  */
-import { homedir } from "node:os";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -123,29 +122,27 @@ const SLACK_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/sla
 // ──────────────────────── System prompt helpers ─────────────────────────────
 
 /**
- * Read SLACK.md from ~/.config/opencode/SLACK.md and return its content.
+ * Read SLACK.md from the repo at sandbox/home-skeleton/.config/opencode/SLACK.md.
  * Cached after first read. Returns empty string if the file doesn't exist.
  */
 let cachedSlackMd: string | null = null;
 
 function readSlackMd(): string {
   if (cachedSlackMd !== null) return cachedSlackMd;
+  const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
+  if (!repoPath) {
+    cachedSlackMd = "";
+    return cachedSlackMd;
+  }
   try {
-    cachedSlackMd = readFileSync(join(homedir(), ".config", "opencode", "SLACK.md"), "utf8");
+    cachedSlackMd = readFileSync(
+      join(repoPath, "sandbox", "home-skeleton", ".config", "opencode", "SLACK.md"),
+      "utf8",
+    );
   } catch {
     cachedSlackMd = "";
   }
   return cachedSlackMd;
-}
-
-/**
- * Build the system prompt for a new Slack agent session.
- * Includes SLACK.md content so the agent knows how to communicate via Slack.
- */
-function buildSlackSystemPrompt(): string {
-  const slackMd = readSlackMd();
-  if (!slackMd) return "";
-  return slackMd;
 }
 
 type PromptEvent = { type: "iterate:agent:prompt-added"; message: string };
@@ -161,9 +158,9 @@ function buildAgentEventsPayload(
   const events: PromptEvent[] = [];
 
   if (wasNewlyCreated) {
-    const systemPrompt = buildSlackSystemPrompt();
-    if (systemPrompt) {
-      events.push({ type: "iterate:agent:prompt-added", message: systemPrompt });
+    const slackMd = readSlackMd();
+    if (slackMd) {
+      events.push({ type: "iterate:agent:prompt-added", message: slackMd });
     }
   }
 

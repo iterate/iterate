@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { createOpencodeClient, type Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { createRouterClient } from "@orpc/server";
-import { PromptAddedEvent, AgentEventsPayload } from "../types/events.ts";
+import { AgentEventsPayload } from "../types/events.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
 import { daemonRouter } from "../orpc/router.ts";
 import { withSpan } from "../utils/otel.ts";
@@ -78,31 +78,22 @@ opencodeRouter.post("/new", async (c) => {
 });
 
 /**
- * Extract prompt messages from the request payload. Accepts either:
- *   - { events: IterateEvent[] } — new format, returns messages from all prompt-added events
- *   - A single PromptAddedEvent — legacy format, returns [message]
- * Returns null if the payload doesn't match either shape.
+ * Extract prompt messages from the request payload.
+ * Expects { events: IterateEvent[] }, returns messages from all prompt-added events.
+ * Returns null if the payload doesn't match or has no prompt-added events.
  */
 function extractPromptMessages(payload: unknown): string[] | null {
-  // Try new { events: [...] } format first.
-  const batch = AgentEventsPayload.safeParse(payload);
-  if (batch.success) {
-    const messages = batch.data.events
-      .filter(
-        (e): e is { type: "iterate:agent:prompt-added"; message: string } =>
-          e.type === "iterate:agent:prompt-added",
-      )
-      .map((e) => e.message);
-    return messages.length > 0 ? messages : null;
-  }
+  const parsed = AgentEventsPayload.safeParse(payload);
+  if (!parsed.success) return null;
 
-  // Fall back to legacy single-event format.
-  const single = PromptAddedEvent.safeParse(payload);
-  if (single.success) {
-    return [single.data.message];
-  }
+  const messages = parsed.data.events
+    .filter(
+      (e): e is { type: "iterate:agent:prompt-added"; message: string } =>
+        e.type === "iterate:agent:prompt-added",
+    )
+    .map((e) => e.message);
 
-  return null;
+  return messages.length > 0 ? messages : null;
 }
 
 opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
@@ -110,7 +101,6 @@ opencodeRouter.post("/sessions/:opencodeSessionId", async (c) => {
   const agentPath = c.req.header("x-iterate-agent-path") ?? undefined;
   const payload = await c.req.json();
 
-  // Accept { events: [...] } (new) or a single PromptAddedEvent (legacy).
   const messages = extractPromptMessages(payload);
   if (!messages || messages.length === 0) {
     return c.json(
