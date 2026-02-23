@@ -100,6 +100,19 @@ async function postDaemonJson<T>(path: string, body: Record<string, unknown>): P
   return (await response.json()) as T;
 }
 
+async function postDaemonOrpc<T>(path: string, input: Record<string, unknown>): Promise<T> {
+  const response = await fetch(new URL(path, DAEMON_BASE_URL).toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ json: input, meta: [] }),
+  });
+  if (!response.ok) {
+    throw new Error(`Daemon request failed ${response.status}: ${await response.text()}`);
+  }
+  const result = (await response.json()) as { json: T; meta: unknown[] };
+  return result.json;
+}
+
 function stripBotMention(text: string, botId: string): string {
   return text.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
 }
@@ -188,8 +201,8 @@ async function resolveConversationThread(
 }
 
 async function ensureAgentSubscription(agentPath: string): Promise<boolean> {
-  const createResult = await postDaemonJson<{ result: { data: { wasNewlyCreated: boolean } } }>(
-    "/api/trpc/daemon.getOrCreateAgent",
+  const createResult = await postDaemonOrpc<{ wasNewlyCreated: boolean }>(
+    "/api/orpc/daemon/getOrCreateAgent",
     {
       agentPath,
       createWithEvents: [],
@@ -198,12 +211,12 @@ async function ensureAgentSubscription(agentPath: string): Promise<boolean> {
 
   console.log("[discord] created agent", createResult);
 
-  await postDaemonJson<unknown>("/api/trpc/daemon.subscribeToAgentChanges", {
+  await postDaemonOrpc<unknown>("/api/orpc/daemon/subscribeToAgentChanges", {
     agentPath,
     callbackUrl: new URL("/state-changed-callback", PUBLIC_BASE_URL).toString(),
   });
 
-  return createResult.result.data.wasNewlyCreated;
+  return createResult.wasNewlyCreated;
 }
 
 async function sendMessageToAgent(params: { agentPath: string; message: string }): Promise<void> {

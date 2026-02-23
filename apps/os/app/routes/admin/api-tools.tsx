@@ -1,15 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/_auth/admin/trpc-tools")({
-  component: TrpcToolsPage,
+export const Route = createFileRoute("/_auth/admin/api-tools")({
+  component: ApiToolsPage,
 });
 
-function TrpcToolsPage() {
+function ApiToolsPage() {
   return (
     <div className="p-8 space-y-4">
-      <h1 className="text-2xl font-bold">tRPC Tools</h1>
+      <h1 className="text-2xl font-bold">API Tools</h1>
       <p className="text-muted-foreground">
-        tRPC tools interface coming soon. Use browser devtools to inspect API calls.
+        API tools interface coming soon. Use browser devtools to inspect API calls.
       </p>
       <div className="space-y-2">
         <div className="text-sm font-medium">Routers</div>

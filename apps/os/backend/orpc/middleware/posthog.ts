@@ -2,7 +2,7 @@
  * Configuration for tracking a specific mutation.
  */
 export type MutationTrackingConfig = {
-  /** Event name to use in PostHog (defaults to "trpc.{procedure_path}") */
+  /** Event name to use in PostHog (defaults to "rpc.{procedure_path}") */
   eventName?: string;
   /**
    * Function to extract properties from the input.

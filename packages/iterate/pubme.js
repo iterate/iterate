@@ -2,23 +2,21 @@ import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { createCli } from "trpc-cli";
-import { initTRPC } from "@trpc/server";
+import { os } from "@orpc/server";
 import { z } from "zod";
 import * as prompts from "@clack/prompts";
 
-const t = initTRPC.create();
-
 const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "package.json"), "utf8"));
 
-const router = t.router({
-  publish: t.procedure
+const router = {
+  publish: os
     .input(
       z.object({
         version: z.string().describe(`Version to publish (current is "${packageJson.version}")`),
         skipCheckClean: z.boolean().describe("Skip checking for clean git status").default(false),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       execSync(`npm whoami`);
       if (input.version !== packageJson.version) {
         execSync(`npm version ${input.version}`);
@@ -41,7 +39,7 @@ const router = t.router({
       execSync(`npm publish --otp=${otp}`);
       return { success: true };
     }),
-});
+};
 
 process.chdir(import.meta.dirname);
 

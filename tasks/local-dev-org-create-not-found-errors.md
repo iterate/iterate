@@ -11,9 +11,9 @@ Observed in `apps/os` local dev on a fresh/empty DB:
 
 - Create organization succeeds
 - App redirects into org flow
-- Immediately logs 4 tRPC NOT_FOUND errors (on initial load/redirect):
-  - `TRPC Error 404 in project.bySlug`
-  - `TRPC Error 404 in machine.list`
+- Immediately logs 4 oRPC NOT_FOUND errors (on initial load/redirect):
+  - `oRPC Error 404 in project.bySlug`
+  - `oRPC Error 404 in machine.list`
   - `Project with slug <org-slug> not found`
 
 Notes:

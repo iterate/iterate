@@ -12,7 +12,7 @@
  *
  *   OS Backend (webhook) -> Integration Router (slack / webchat / email)
  *        |                                                         ^
- *        |  1. tRPC getOrCreateAgent (ensures agent + route exist) |
+ *        |  1. oRPC getOrCreateAgent (ensures agent + route exist) |
  *        |  2. fire-and-forget fetch to /api/agents/:path          |
  *        v                                                         |
  *   AgentsRouter -> OpenCodeRouter -> OpenCode SDK                 |
@@ -21,7 +21,7 @@
  *                  (SDK event stream)      v                        |
  *                              idle/tool events                     |
  *                                         |                        |
- *                         tRPC updateAgent |                        |
+ *                         oRPC updateAgent |                        |
  *                                         v                        |
  *                            AgentChangeCallbacks --(POST)---------+
  *

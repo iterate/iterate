@@ -351,7 +351,20 @@ export class Manager {
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
     }
+
+    // Re-apply env defaults so the restarted process picks up any env file
+    // changes that arrived since it was last started.
+    const processConfig = this.config.processes?.find((p) => p.name === proc.name);
+    if (processConfig) {
+      const updatedDefinition = this.applyDefaults(
+        proc.name,
+        processConfig.definition,
+        processConfig.envOptions,
+      );
+      proc.updateDefinition(updatedDefinition);
+    }
     await proc.restart(force);
+
     return proc;
   }
 
