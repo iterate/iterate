@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter ./sandbox build",
-    "test": "pnpm --filter ./e2e test"
+    "test": "pnpm --filter ./e2e test",
+    "signoz:up": "./signoz/up.sh",
+    "signoz:down": "./signoz/down.sh",
+    "signoz:status": "./signoz/status.sh"
   }
 }

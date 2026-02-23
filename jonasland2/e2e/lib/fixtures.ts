@@ -1,7 +1,8 @@
 import { DockerClient } from "@docker/node-sdk";
 import { setupServer, type SetupServerApi } from "msw/node";
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import { once } from "node:events";
+import { once, setMaxListeners } from "node:events";
 import { PassThrough } from "node:stream";
 import { WebSocketServer } from "ws";
 
@@ -41,10 +42,31 @@ const requestEventNameByPhase: Record<
 };
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
+let mswSharedServer: SetupServerApi | undefined;
+let mswSharedServerStarted = false;
+
+const mswFixtureIdHeader = "x-msw-proxy-fixture-id";
+const mswFixtureRequestIdHeader = "x-msw-proxy-request-id";
 
 async function dockerClient(): Promise<DockerClient> {
   dockerClientPromise ??= DockerClient.fromDockerConfig();
   return await dockerClientPromise;
+}
+
+function getMswSharedServer(): SetupServerApi {
+  mswSharedServer ??= setupServer();
+  (mswSharedServer.events as { maxListeners?: number }).maxListeners = 0;
+  try {
+    setMaxListeners(0, mswSharedServer.events as unknown as NodeJS.EventEmitter);
+  } catch {
+    // best effort; not all emitters are Node EventEmitter instances
+  }
+  if (!mswSharedServerStarted) {
+    // MSW patches global request modules process-wide. Start exactly once.
+    mswSharedServer.listen({ onUnhandledRequest: "bypass" });
+    mswSharedServerStarted = true;
+  }
+  return mswSharedServer;
 }
 
 function toEnvArray(env?: Record<string, string> | string[]): string[] | undefined {
@@ -258,6 +280,7 @@ export async function execInContainer(params: {
 
 export interface MswProxyFixture extends AsyncDisposable {
   proxyUrl: string;
+  hostProxyUrl: string;
   use(...handlers: MswHandler[]): void;
   resetHandlers(...handlers: MswHandler[]): void;
   restoreHandlers(): void;
@@ -385,41 +408,90 @@ export async function mswProxyFixture(params?: {
   upstreamOrigin?: string;
 }): Promise<MswProxyFixture> {
   const upstreamOrigin = params?.upstreamOrigin ?? "https://upstream.iterate.localhost";
-  const server = setupServer(...(params?.handlers ?? []));
+  const server = getMswSharedServer();
+  const fixtureId = randomUUID();
   const requestRecords: MswRequestRecord[] = [];
+  const unhandledRequestIds = new Set<string>();
+  const listeners: Array<{
+    eventName: "request:start" | "request:match" | "request:unhandled" | "request:end";
+    listener: (args: { request: Request; requestId: string }) => void;
+  }> = [];
+
+  let initialHandlers = [...(params?.handlers ?? [])];
+  let runtimeHandlers: MswHandler[] = [];
+
+  function activeHandlers(): MswHandler[] {
+    return [...runtimeHandlers, ...initialHandlers];
+  }
+
+  const inBoundary = <Args extends Array<unknown>, ReturnValue>(
+    callback: (...args: Args) => ReturnValue,
+  ): ((...args: Args) => ReturnValue) => {
+    return server.boundary((...args: Args) => {
+      server.resetHandlers(...activeHandlers());
+      return callback(...args);
+    });
+  };
 
   (Object.keys(requestEventNameByPhase) as MswRequestPhase[]).forEach((phase) => {
     const eventName = requestEventNameByPhase[phase];
-    server.events.on(eventName, ({ request, requestId }) => {
+    const listener = ({ request, requestId }: { request: Request; requestId: string }) => {
+      if (request.headers.get(mswFixtureIdHeader) !== fixtureId) return;
       requestRecords.push(recordFromEvent(phase, requestId, request));
-    });
+      if (phase === "unhandled") {
+        const fixtureRequestId = request.headers.get(mswFixtureRequestIdHeader);
+        if (fixtureRequestId) unhandledRequestIds.add(fixtureRequestId);
+      }
+    };
+    listeners.push({ eventName, listener });
+    server.events.on(eventName, listener);
   });
 
-  server.listen({ onUnhandledRequest: params?.onUnhandledRequest ?? "bypass" });
-
   const proxy = createServer(async (req, res) => {
-    const targetUrl = new URL(req.url || "/", upstreamOrigin);
-    const bodyParts: Buffer[] = [];
-    for await (const chunk of req) {
-      bodyParts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    try {
+      const targetUrl = new URL(req.url || "/", upstreamOrigin);
+      const bodyParts: Buffer[] = [];
+      for await (const chunk of req) {
+        bodyParts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+
+      const fixtureRequestId = randomUUID();
+      const headers = sanitizeHeaders(req.headers);
+      headers[mswFixtureIdHeader] = fixtureId;
+      headers[mswFixtureRequestIdHeader] = fixtureRequestId;
+
+      const init: RequestInit = {
+        method: req.method,
+        headers,
+        redirect: "manual",
+      };
+
+      if (bodyParts.length > 0) {
+        init.body = Buffer.concat(bodyParts);
+      }
+
+      const upstream = await inBoundary(async () => await fetch(targetUrl, init))();
+
+      if (params?.onUnhandledRequest === "error" && unhandledRequestIds.has(fixtureRequestId)) {
+        throw new Error(
+          `MSW request was unhandled: ${String(init.method)} ${targetUrl.toString()}`,
+        );
+      }
+
+      const responseHeaders = sanitizeHeaders(upstream.headers);
+      const responseBody = Buffer.from(await upstream.arrayBuffer());
+
+      res.writeHead(upstream.status, responseHeaders);
+      res.end(responseBody);
+    } catch (error) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "msw_proxy_failed",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
-
-    const init: RequestInit = {
-      method: req.method,
-      headers: sanitizeHeaders(req.headers),
-      redirect: "manual",
-    };
-
-    if (bodyParts.length > 0) {
-      init.body = Buffer.concat(bodyParts);
-    }
-
-    const upstream = await fetch(targetUrl, init);
-    const responseHeaders = sanitizeHeaders(upstream.headers);
-    const responseBody = Buffer.from(await upstream.arrayBuffer());
-
-    res.writeHead(upstream.status, responseHeaders);
-    res.end(responseBody);
   });
 
   proxy.listen(0, "127.0.0.1");
@@ -428,7 +500,9 @@ export async function mswProxyFixture(params?: {
   const address = proxy.address();
   if (!address || typeof address === "string") {
     proxy.close();
-    server.close();
+    for (const { eventName, listener } of listeners) {
+      server.events.removeListener(eventName, listener);
+    }
     throw new Error("proxy address unavailable");
   }
 
@@ -447,6 +521,7 @@ export async function mswProxyFixture(params?: {
     return await new Promise<MswRequestRecord>((resolve, reject) => {
       const eventName = requestEventNameByPhase[phase];
       const listener = ({ request, requestId }: { request: Request; requestId: string }) => {
+        if (request.headers.get(mswFixtureIdHeader) !== fixtureId) return;
         const record = recordFromEvent(phase, requestId, request);
         if (!requestMatches(record, filter)) return;
         clearTimeout(timeout);
@@ -479,19 +554,21 @@ export async function mswProxyFixture(params?: {
 
   return {
     proxyUrl: `http://host.docker.internal:${String(address.port)}`,
+    hostProxyUrl: `http://127.0.0.1:${String(address.port)}`,
     use(...handlers: MswHandler[]) {
-      server.use(...handlers);
+      runtimeHandlers = [...handlers, ...runtimeHandlers];
     },
     resetHandlers(...handlers: MswHandler[]) {
-      server.resetHandlers(...handlers);
+      if (handlers.length > 0) initialHandlers = [...handlers];
+      runtimeHandlers = [];
     },
     restoreHandlers() {
-      server.restoreHandlers();
+      // Fixture handlers are reapplied per request, so one-time handlers are naturally reset.
     },
     boundary<Args extends Array<unknown>, ReturnValue>(
       callback: (...args: Args) => ReturnValue,
     ): (...args: Args) => ReturnValue {
-      return server.boundary(callback);
+      return inBoundary(callback);
     },
     listRequests(phase?: MswRequestPhase) {
       if (!phase) return [...requestRecords];
@@ -514,7 +591,9 @@ export async function mswProxyFixture(params?: {
     async [Symbol.asyncDispose]() {
       proxy.close();
       await once(proxy, "close").catch(() => undefined);
-      server.close();
+      for (const { eventName, listener } of listeners) {
+        server.events.removeListener(eventName, listener);
+      }
     },
   };
 }

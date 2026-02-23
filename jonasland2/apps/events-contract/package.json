@@ -1,0 +1,12 @@
+{
+  "name": "@jonasland2/events-contract",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@orpc/contract": "^1.13.4",
+    "zod": "^4.1.11"
+  }
+}

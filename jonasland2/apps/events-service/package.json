@@ -1,0 +1,22 @@
+{
+  "name": "@jonasland2/events-service",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/router.ts",
+    "./server": "./src/server.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@jonasland2/events-contract": "file:../events-contract",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+    "@opentelemetry/resources": "^2.1.0",
+    "@opentelemetry/sdk-trace-base": "^2.1.0",
+    "@opentelemetry/semantic-conventions": "^1.38.0",
+    "@orpc/openapi": "^1.13.4",
+    "@orpc/server": "^1.13.4",
+    "@orpc/zod": "^1.13.4",
+    "hono": "^4.10.6"
+  }
+}
