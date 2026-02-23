@@ -38,6 +38,8 @@ Minimal local sandbox for routing all HTTP/HTTPS traffic through Caddy + Consul 
 2. Run tests: `pnpm --filter ./jonasland/e2e-tests test`
 3. Inspect runtime with container logs + Nomad/Consul/Caddy APIs.
 
+The image is intentionally minimal (`node:24-alpine`) and installs pinned `nomad` + `consul` binaries plus a custom `caddy-with-consul` binary built with `xcaddy`.
+
 ## Known Limits
 
 - MVP is local-only (no Depot/Fly/Doppler).
