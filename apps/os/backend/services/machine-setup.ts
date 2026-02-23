@@ -156,6 +156,8 @@ export async function resolveMachineSetupData(
   return { envFileContent, repos };
 }
 
+const sentinelPath = "~/.iterate/.setup-done";
+
 /**
  * Check whether setup needs to be pushed by comparing the sentinel file on the
  * machine against the current setup intent fingerprint. Returns the resolved
@@ -178,7 +180,6 @@ export async function getPushMachineSetupInput(
   const client = createDaemonClient(transport);
 
   const setupFingerprint = hashSetupIntent(envFileContent, repos);
-  const sentinelPath = "~/.iterate/.setup-done";
   const existingSentinel = await client.tool.readFile({ path: sentinelPath });
   if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
     logger.set({ machine: { id: machine.id } });
@@ -196,9 +197,8 @@ export async function getPushMachineSetupInput(
 export async function pushSetupToMachine(
   machine: typeof schema.machine.$inferSelect,
   input: NonNullable<Awaited<ReturnType<typeof getPushMachineSetupInput>>>,
-): Promise<void> {
+) {
   const { envFileContent, repos, client, setupFingerprint } = input;
-  const sentinelPath = "~/.iterate/.setup-done";
 
   // Write env file first so pidnap picks up env vars immediately
   logger.set({ machine: { id: machine.id } });
@@ -250,17 +250,14 @@ export async function pushSetupToMachine(
     }
   }
 
-  // Write sentinel file last — marks the full setup as complete.
-  // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
-  await client.tool.writeFile({
-    path: sentinelPath,
-    content: setupFingerprint,
-    mode: 0o600,
-  });
-
   logger.info(
     `[machine-setup] Setup push complete envVarBytes=${envFileContent.length} repoCount=${repos.length}`,
   );
+
+  // Let the caller write sentinel file last — marks the full setup as complete.
+  // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
+  return () =>
+    client.tool.writeFile({ path: sentinelPath, content: setupFingerprint, mode: 0o600 });
 }
 
 /**

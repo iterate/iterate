@@ -146,7 +146,7 @@ export const registerConsumers = () => {
         return `skipped: setup already done for ${machineId}`;
       }
 
-      await pushSetupToMachine(machine, input);
+      const writeSentinel = await pushSetupToMachine(machine, input);
 
       // Emit setup-pushed so the readiness probe can begin
       await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
@@ -154,7 +154,8 @@ export const registerConsumers = () => {
         projectId,
       });
 
-      logger.set({ machine: { id: machineId } });
+      await writeSentinel();
+
       logger.info("[pushMachineSetup] Setup pushed to machine");
       return `setup pushed to ${machineId}`;
     },
