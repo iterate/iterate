@@ -361,14 +361,6 @@ export class Manager {
     this.config.processes = (this.config.processes ?? []).filter((proc) => proc.name !== name);
   }
 
-  private isNameUsed(name: string): boolean {
-    if (this.restartingProcesses.has(name)) return true;
-    for (const proc of this.config.processes ?? []) {
-      if (proc.name === name) return true;
-    }
-    return false;
-  }
-
   private applyDefaults(
     processName: string,
     definition: ProcessDefinition,
@@ -718,77 +710,6 @@ export class Manager {
     const timer = this.envReloadTimers.get(name);
     if (timer) clearTimeout(timer);
     this.envReloadTimers.delete(name);
-  }
-
-  /**
-   * Add a restarting process at runtime
-   */
-  async addProcess(process: {
-    name: string;
-    definition: ProcessDefinition;
-    options?: RestartingProcessOptions;
-    envOptions?: EnvOptions;
-    tags?: string[];
-    persistence?: ProcessPersistence;
-    desiredState?: DesiredProcessState;
-    persist?: boolean;
-  }): Promise<RestartingProcess> {
-    if (this.isNameUsed(process.name)) {
-      throw new Error(`Name "${process.name}" is already in use`);
-    }
-
-    // Register custom env file if provided
-    if (process.envOptions?.envFile) {
-      this.envManager.registerFile(process.name, process.envOptions.envFile);
-    }
-
-    const persistence = process.persistence ?? "durable";
-    const desiredState = process.desiredState ?? "running";
-    const persist = process.persist ?? true;
-
-    const entry: RestartingProcessEntry = {
-      name: process.name,
-      definition: process.definition,
-      options: process.options,
-      envOptions: process.envOptions,
-      tags: process.tags,
-      persistence,
-      desiredState,
-    };
-    this.upsertProcessEntry(entry);
-
-    const processLogger = this.logger.child(process.name, {
-      logFile: this.processLogFile(process.name),
-    });
-    const restartingProcess = new RestartingProcess(
-      process.name,
-      this.applyDefaults(process.name, process.definition, process.envOptions),
-      process.options ?? DEFAULT_RESTART_OPTIONS,
-      processLogger,
-      process.tags,
-    );
-    this.restartingProcesses.set(process.name, restartingProcess);
-    const unsubscribe = restartingProcess.onStateChange((newState) => {
-      this.onProcessStateChange(process.name, newState);
-    });
-    this.stateChangeUnsubscribes.set(process.name, unsubscribe);
-
-    if (desiredState === "running") {
-      restartingProcess.start();
-    }
-
-    // Track env reload config for this process.
-    // Default: 5000ms, but if inheritGlobalEnv is false, default to no reload
-    // (no point restarting for env changes the process won't see).
-    const defaultDelay = process.envOptions?.inheritGlobalEnv === false ? false : 5000;
-    this.envReloadConfig.set(process.name, process.envOptions?.reloadDelay ?? defaultDelay);
-
-    if (persist) {
-      this.writeAutosaveState();
-    }
-
-    this.logger.info(`Added restarting process: ${process.name}`);
-    return restartingProcess;
   }
 
   listManagedProcessEntries(): ReadonlyArray<
