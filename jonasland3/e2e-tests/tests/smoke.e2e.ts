@@ -42,7 +42,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "2019/tcp", "4646/tcp", "8500/tcp"],
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp"],
       capAdd: ["SYS_ADMIN"],
       cgroupnsMode: "host",
       binds: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"],
@@ -73,7 +73,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "2019/tcp", "4646/tcp", "8500/tcp"],
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp"],
       capAdd: ["SYS_ADMIN"],
       cgroupnsMode: "host",
       binds: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"],

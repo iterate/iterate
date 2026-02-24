@@ -24,7 +24,7 @@ No custom Caddy plugins. No Docker socket mount. No sibling containers.
 - `Host: nomad.localhost` routes to `nomad.service.consul` using `dynamic srv` with resolver `127.0.0.1:53`.
 - Caddy admin API listens on loopback `127.0.0.1:2019`.
 - Admin API is API/CLI-only. Browser-style navigations to `/config/` are expected to fail origin checks.
-- If you remap admin to a different host port (for example `32019->2019`), use `curl -H 'Host: 127.0.0.1:2019' http://127.0.0.1:32019/config/`.
+- Admin API is container-internal in this setup (loopback bind); it is intentionally not exposed on a Docker host port.
 
 ## E2E scope
 
