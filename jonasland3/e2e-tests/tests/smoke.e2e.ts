@@ -38,7 +38,7 @@ async function waitForDynamicSrv(containerId: string, timeoutMs = 45_000): Promi
 }
 
 describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
-  test("caddy admin proxy accepts browser-style navigation request", async () => {
+  test("caddy admin is API-only: browser-style navigate is rejected", async () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
@@ -49,21 +49,24 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
-    const caddyAdminPort = await container.publishedPort("2019/tcp");
-
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/`, container);
-
-    const response = await fetch(`http://127.0.0.1:${String(caddyAdminPort)}/config/`, {
-      headers: {
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "sec-fetch-mode": "navigate",
-      },
+    const rejectResult = await execInContainer({
+      containerId: container.containerId,
+      cmd: [
+        "sh",
+        "-ec",
+        "code=$(curl -sS -o /tmp/j3-admin-reject.json -w '%{http_code}' -H 'Sec-Fetch-Mode: navigate' http://127.0.0.1:2019/config/ || true); echo \"$code\"; cat /tmp/j3-admin-reject.json",
+      ],
     });
+    expect(rejectResult.exitCode).toBe(0);
+    expect(rejectResult.output).toContain("403");
+    expect(rejectResult.output).toContain("client is not allowed to access from origin");
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`expected 200 from caddy admin proxy, got ${response.status}: ${body}`);
-    }
+    const apiResult = await execInContainer({
+      containerId: container.containerId,
+      cmd: ["sh", "-ec", "curl -fsS http://127.0.0.1:2019/config/ >/dev/null"],
+    });
+    expect(apiResult.exitCode).toBe(0);
   }, 120_000);
 
   test("nomad + consul + caddy are healthy and dynamic srv routing works", async () => {
