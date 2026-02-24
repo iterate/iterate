@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
+import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
+import react from "@vitejs/plugin-react";
 import { ordersServiceManifest } from "@jonasland5/orders-contract";
 import {
+  createBrowserErrorBridgePlugin,
   createOrpcErrorInterceptor,
   createHealthzHandler,
   createServiceObservabilityHandler,
@@ -21,6 +25,7 @@ import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { RPCHandler } from "@orpc/server/fetch";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getOrdersDbRuntimeConfig, initializeOrdersDb } from "./db.ts";
 import { ordersRouter } from "./router.ts";
@@ -52,6 +57,7 @@ function createBodyParserSafeRequest(
 }
 
 const serviceName = "jonasland5-orders-service";
+const BROWSER_ERROR_EVENT = "orders-service:browser-console-error";
 const env = ordersServiceManifest.envVars.parse(process.env);
 const port = env.ORDERS_SERVICE_PORT;
 
@@ -174,7 +180,19 @@ app.all("/api/*", async (c) => {
   return c.json({ error: "not_found" }, 404);
 });
 
-app.all("*", (c) => c.json({ error: "not_found" }, 404));
+app.use("*", async (c) => {
+  await new Promise<void>((resolve) => {
+    vite.middlewares(c.env.incoming, c.env.outgoing, () => {
+      if (!c.env.outgoing.writableEnded) {
+        c.env.outgoing.writeHead(404, { "content-type": "application/json" });
+        c.env.outgoing.end(JSON.stringify({ error: "not_found" }));
+      }
+      resolve();
+    });
+  });
+
+  return RESPONSE_ALREADY_SENT;
+});
 
 const server = createAdaptorServer({ fetch: app.fetch });
 
@@ -193,6 +211,24 @@ server.on("upgrade", (req, socket, head) => {
 
 await initializeOrdersDb();
 
+const vite: ViteDevServer = await createViteServer({
+  configFile: false,
+  root: fileURLToPath(new URL("./ui", import.meta.url)),
+  cacheDir: "/tmp/vite-orders-service",
+  plugins: [
+    react(),
+    createBrowserErrorBridgePlugin({
+      eventName: BROWSER_ERROR_EVENT,
+      logEventName: "orders-ui.browser-error",
+      logger: serviceLog,
+    }),
+  ],
+  appType: "spa",
+  server: {
+    middlewareMode: true,
+  },
+});
+
 server.listen(port, "0.0.0.0", () => {
   serviceLog.info({
     event: "service.started",
@@ -202,14 +238,18 @@ server.listen(port, "0.0.0.0", () => {
     spec_path: "/api/openapi.json",
     orpc_path: "/orpc",
     orpc_ws_path: "/orpc/ws",
+    ui_path: "/",
     otel: getOtelRuntimeConfig(),
   });
 });
 
 const shutdown = async () => {
-  await new Promise<void>((resolve) => {
-    wss.close(() => resolve());
-  });
+  await Promise.allSettled([
+    vite.close(),
+    new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    }),
+  ]);
 
   server.close(() => process.exit(0));
 };

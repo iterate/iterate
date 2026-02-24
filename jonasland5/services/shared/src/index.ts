@@ -520,9 +520,9 @@ export function extractIncomingTraceContext<TContext>(
   const carrier: Record<string, string> = {};
 
   if (headers instanceof Headers) {
-    for (const [key, value] of headers.entries()) {
+    headers.forEach((value, key) => {
       carrier[key] = value;
-    }
+    });
 
     return extract(carrier);
   }

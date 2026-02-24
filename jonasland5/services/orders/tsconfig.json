@@ -2,9 +2,10 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
-    "lib": ["esnext"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "types": ["node"],
     "strict": true,
+    "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -12,5 +13,5 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
