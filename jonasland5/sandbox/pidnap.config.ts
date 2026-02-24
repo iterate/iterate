@@ -3,6 +3,9 @@ export default {
     host: "0.0.0.0",
     port: 9876,
   },
+  state: {
+    autosaveFile: "/var/log/pidnap/state/autosave.json",
+  },
   logDir: "/var/log/pidnap",
   processes: [
     {

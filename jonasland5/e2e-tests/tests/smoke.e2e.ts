@@ -202,10 +202,10 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
       timeoutMs: 30_000,
     });
 
-    const runtimeProcessName = `e2e-runtime-${randomUUID().slice(0, 8)}`;
+    const runtimeProcessSlug = `e2e-runtime-${randomUUID().slice(0, 8)}`;
     try {
-      await deployment.pidnap.processes.add({
-        name: runtimeProcessName,
+      await deployment.pidnap.processes.updateConfig({
+        processSlug: runtimeProcessSlug,
         definition: {
           command: "sh",
           args: ["-ec", "trap : TERM INT; while :; do sleep 1; done"],
@@ -216,22 +216,22 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
         tags: ["e2e-runtime"],
       });
       await deployment.waitForPidnapProcessRunning({
-        target: runtimeProcessName,
+        target: runtimeProcessSlug,
         timeoutMs: 30_000,
       });
 
       const stopResult = await deployment.pidnap.processes.stop({
-        target: runtimeProcessName,
+        target: runtimeProcessSlug,
       });
       expect(stopResult.state).toBe("stopped");
 
-      await deployment.pidnap.processes.start({ target: runtimeProcessName });
+      await deployment.pidnap.processes.start({ target: runtimeProcessSlug });
       await deployment.waitForPidnapProcessRunning({
-        target: runtimeProcessName,
+        target: runtimeProcessSlug,
         timeoutMs: 30_000,
       });
     } finally {
-      await deployment.pidnap.processes.remove({ target: runtimeProcessName }).catch(() => {});
+      await deployment.pidnap.processes.delete({ processSlug: runtimeProcessSlug }).catch(() => {});
     }
   });
 

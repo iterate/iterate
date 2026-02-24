@@ -173,19 +173,9 @@ app.use("/orpc/*", async (c) => {
   return c.json({ error: "not_found" }, 404);
 });
 
-let vite: ViteDevServer | undefined;
-
 app.use("*", async (c) => {
-  const viteServer = vite;
-
-  if (!viteServer) {
-    c.env.outgoing.writeHead(503, { "content-type": "application/json" });
-    c.env.outgoing.end(JSON.stringify({ error: "ui_not_ready" }));
-    return RESPONSE_ALREADY_SENT;
-  }
-
   await new Promise<void>((resolve) => {
-    viteServer.middlewares(c.env.incoming, c.env.outgoing, () => {
+    vite.middlewares(c.env.incoming, c.env.outgoing, () => {
       if (!c.env.outgoing.writableEnded) {
         c.env.outgoing.writeHead(404, { "content-type": "application/json" });
         c.env.outgoing.end(JSON.stringify({ error: "not_found" }));
@@ -214,7 +204,7 @@ server.on("upgrade", (req, socket, head) => {
 
 await initializeOrdersDb();
 
-vite = await createViteServer({
+const vite: ViteDevServer = await createViteServer({
   configFile: false,
   root: fileURLToPath(new URL("./ui", import.meta.url)),
   cacheDir: "/tmp/vite-orders-service",
@@ -249,7 +239,7 @@ server.listen(port, "0.0.0.0", () => {
 
 const shutdown = async () => {
   await Promise.allSettled([
-    vite?.close() ?? Promise.resolve(),
+    vite.close(),
     new Promise<void>((resolve) => {
       wss.close(() => resolve());
     }),

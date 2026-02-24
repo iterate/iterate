@@ -33,42 +33,45 @@ if (!configuredMainPath && sqliteSpecs.length === 0) {
   throw new Error("No sqlite database configured. Set OUTERBASE_SQLITE_PATHS.");
 }
 
-const mainPath = resolve(configuredMainPath ?? sqliteSpecs[0].path);
-const attachMap = buildAttachMap(sqliteSpecs, mainPath);
+const sqliteTargets = buildSqliteTargets(sqliteSpecs, configuredMainPath);
+if (sqliteTargets.length === 0) {
+  throw new Error("No sqlite database configured. Set OUTERBASE_SQLITE_PATHS.");
+}
 
-await mkdir(dirname(mainPath), { recursive: true });
 await Promise.all(
-  Object.values(attachMap).map(async (filePath) => mkdir(dirname(filePath), { recursive: true })),
+  sqliteTargets.map(async (target) => mkdir(dirname(target.path), { recursive: true })),
 );
 
-const client = createClient({ url: `file:${mainPath}` });
-for (const [alias, filePath] of Object.entries(attachMap)) {
-  await client.execute(
-    `ATTACH DATABASE ${escapeSqlString(filePath)} AS ${escapeSqlIdentifier(alias)}`,
-  );
-}
+const sqliteTargetsByAlias = new Map(sqliteTargets.map((target) => [target.alias, target] as const));
+const defaultMainAlias = resolveDefaultMainAlias(sqliteTargets, configuredMainPath);
+const sqliteSessionByMainAlias = new Map<string, Promise<SqliteSession>>();
 
 const server = createServer(async (req, res) => {
   if (!authorize(req, res)) return;
 
-  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+  const requestUrl = new URL(req.url || "/", "http://localhost");
+  const pathname = requestUrl.pathname;
+  const mainAlias = resolveMainAlias(requestUrl.searchParams.get("main") ?? undefined);
 
   if (req.method === "GET" && pathname === "/healthz") {
     return json(res, 200, { ok: true });
   }
 
   if (req.method === "GET" && pathname === "/api/runtime") {
+    const session = await getSqliteSession(mainAlias);
     return json(res, 200, {
       studioSrc,
-      mainPath,
-      attached: attachMap,
+      selectedMainAlias: mainAlias,
+      databases: sqliteTargets,
+      mainPath: session.main.path,
+      attached: session.attached,
     });
   }
 
   if (req.method === "POST" && pathname === "/query") {
     try {
       const body = await readJsonBody(req);
-      const response = await executeRequest(body);
+      const response = await executeRequest(body, mainAlias);
       return json(res, 200, response);
     } catch (error) {
       return json(res, 400, {
@@ -80,7 +83,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/") {
-    return html(res, 200, buildPageHtml());
+    return html(res, 200, buildPageHtml(mainAlias));
   }
 
   return json(res, 404, { error: "not_found" });
@@ -98,6 +101,17 @@ process.on("SIGTERM", shutdown);
 type SqliteSpec = {
   alias?: string;
   path: string;
+};
+
+type SqliteTarget = {
+  alias: string;
+  path: string;
+};
+
+type SqliteSession = {
+  client: ReturnType<typeof createClient>;
+  main: SqliteTarget;
+  attached: Record<string, string>;
 };
 
 type QueryRequest =
@@ -142,21 +156,99 @@ function parseSqliteSpecs(rawValue: string): SqliteSpec[] {
     });
 }
 
-function buildAttachMap(specs: SqliteSpec[], resolvedMainPath: string): Record<string, string> {
+function buildSqliteTargets(specs: SqliteSpec[], mainPath?: string): SqliteTarget[] {
   const usedAliases = new Set<string>(["main", "temp"]);
-  const attachedPaths = new Set<string>([resolvedMainPath]);
-  const attach: Record<string, string> = {};
+  const seenPaths = new Set<string>();
+  const targets: SqliteTarget[] = [];
 
-  for (const spec of specs) {
+  const entries: SqliteSpec[] = [];
+  if (mainPath) {
+    entries.push({
+      alias: process.env.OUTERBASE_SQLITE_MAIN_ALIAS?.trim(),
+      path: mainPath,
+    });
+  }
+  entries.push(...specs);
+
+  for (const spec of entries) {
     const resolvedPath = resolve(spec.path);
-    if (attachedPaths.has(resolvedPath)) continue;
-    attachedPaths.add(resolvedPath);
+    if (seenPaths.has(resolvedPath)) continue;
+    seenPaths.add(resolvedPath);
+
     const preferredAlias = spec.alias ?? deriveAliasFromPath(resolvedPath);
     const alias = claimAlias(preferredAlias, usedAliases);
-    attach[alias] = resolvedPath;
+    targets.push({
+      alias,
+      path: resolvedPath,
+    });
   }
 
-  return attach;
+  return targets;
+}
+
+function resolveDefaultMainAlias(targets: SqliteTarget[], mainPath?: string): string {
+  if (targets.length === 0) {
+    throw new Error("No sqlite targets configured.");
+  }
+
+  if (mainPath) {
+    const resolvedMainPath = resolve(mainPath);
+    const found = targets.find((target) => target.path === resolvedMainPath);
+    if (found) return found.alias;
+  }
+
+  return targets[0].alias;
+}
+
+function resolveMainAlias(alias: string | undefined): string {
+  if (alias && sqliteTargetsByAlias.has(alias)) return alias;
+  return defaultMainAlias;
+}
+
+function buildAttachedMap(mainAlias: string): Record<string, string> {
+  const attached: Record<string, string> = {};
+
+  for (const target of sqliteTargets) {
+    if (target.alias === mainAlias) continue;
+    attached[target.alias] = target.path;
+  }
+
+  return attached;
+}
+
+async function createSqliteSession(mainAlias: string): Promise<SqliteSession> {
+  const main = sqliteTargetsByAlias.get(mainAlias);
+  if (!main) {
+    throw new Error(`Unknown sqlite main alias: ${mainAlias}`);
+  }
+
+  const attached = buildAttachedMap(mainAlias);
+  const client = createClient({ url: `file:${main.path}` });
+
+  for (const [alias, filePath] of Object.entries(attached)) {
+    await client.execute(
+      `ATTACH DATABASE ${escapeSqlString(filePath)} AS ${escapeSqlIdentifier(alias)}`,
+    );
+  }
+
+  return {
+    client,
+    main,
+    attached,
+  };
+}
+
+function getSqliteSession(mainAlias: string): Promise<SqliteSession> {
+  const cached = sqliteSessionByMainAlias.get(mainAlias);
+  if (cached) return cached;
+
+  const promise = createSqliteSession(mainAlias).catch((error) => {
+    sqliteSessionByMainAlias.delete(mainAlias);
+    throw error;
+  });
+
+  sqliteSessionByMainAlias.set(mainAlias, promise);
+  return promise;
 }
 
 function deriveAliasFromPath(filePath: string): string {
@@ -190,6 +282,26 @@ function escapeSqlString(value: string): string {
 
 function escapeSqlIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function rewriteMainAliasQualifier(statement: string, mainAlias: string): string {
+  if (!mainAlias || mainAlias === "main") return statement;
+
+  const escapedAlias = escapeRegExp(mainAlias);
+  const bareAlias = new RegExp(`\\b${escapedAlias}\\s*\\.`, "g");
+  const quotedAlias = new RegExp(`"${escapedAlias}"\\s*\\.`, "g");
+  const backtickAlias = new RegExp(`\`${escapedAlias}\`\\s*\\.`, "g");
+  const bracketAlias = new RegExp(`\\[${escapedAlias}\\]\\s*\\.`, "g");
+
+  return statement
+    .replaceAll(quotedAlias, "main.")
+    .replaceAll(backtickAlias, "main.")
+    .replaceAll(bracketAlias, "main.")
+    .replaceAll(bareAlias, "main.");
 }
 
 function convertSqliteType(rawType: string | undefined | null): 1 | 2 | 3 | 4 {
@@ -253,11 +365,12 @@ function transformRawResult(raw: ResultSet): QueryResult {
   };
 }
 
-async function executeRequest(value: unknown): Promise<QueryResponse> {
+async function executeRequest(value: unknown, mainAlias: string): Promise<QueryResponse> {
   if (!value || typeof value !== "object") {
     return { type: "query", id: -1, error: "invalid_request" };
   }
 
+  const session = await getSqliteSession(mainAlias);
   const request = value as Partial<QueryRequest>;
   const id = typeof request.id === "number" ? request.id : -1;
   const type = request.type;
@@ -267,7 +380,9 @@ async function executeRequest(value: unknown): Promise<QueryResponse> {
       return { type, id, error: "invalid_statement" };
     }
     try {
-      const result = await client.execute(request.statement);
+      const result = await session.client.execute(
+        rewriteMainAliasQualifier(request.statement, session.main.alias),
+      );
       return { type, id, data: transformRawResult(result) };
     } catch (error) {
       return { type, id, error: String((error as Error).message ?? error) };
@@ -282,7 +397,10 @@ async function executeRequest(value: unknown): Promise<QueryResponse> {
       return { type, id, error: "invalid_statements" };
     }
     try {
-      const results = await client.batch(request.statements, "write");
+      const rewrittenStatements = request.statements.map((statement) =>
+        rewriteMainAliasQualifier(statement, session.main.alias),
+      );
+      const results = await session.client.batch(rewrittenStatements, "write");
       return { type, id, data: results.map(transformRawResult) };
     } catch (error) {
       return { type, id, error: String((error as Error).message ?? error) };
@@ -331,15 +449,23 @@ function authorize(req: IncomingMessage, res: ServerResponse): boolean {
   return true;
 }
 
-function buildPageHtml(): string {
-  const studioSrcJson = JSON.stringify(studioSrc);
+function buildPageHtml(mainAlias: string): string {
+  const selectedMain = sqliteTargetsByAlias.get(mainAlias) ?? sqliteTargetsByAlias.get(defaultMainAlias);
+  if (!selectedMain) {
+    throw new Error("No sqlite main target configured.");
+  }
+
+  const attached = buildAttachedMap(selectedMain.alias);
   const studioOriginJson = JSON.stringify(studioOrigin);
+  const defaultMainAliasJson = JSON.stringify(defaultMainAlias);
   const allowedStudioOriginsJson = JSON.stringify(
     Array.from(new Set([studioOrigin, "https://studio.outerbase.com", "https://libsqlstudio.com"])),
   );
   const summaryJson = JSON.stringify({
-    mainPath,
-    attached: attachMap,
+    mainAlias: selectedMain.alias,
+    mainPath: selectedMain.path,
+    attached,
+    databases: sqliteTargets,
   }).replaceAll("<", "\\u003c");
 
   return `<!doctype html>
@@ -355,52 +481,227 @@ function buildPageHtml(): string {
       }
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100vh;
+        overflow: hidden;
         background: #020617;
         color: #e2e8f0;
       }
-      .frame {
-        border: 0;
-        width: 100vw;
+      .layout {
+        display: flex;
+        flex-direction: column;
         height: 100vh;
       }
-      .meta {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        padding: 6px 10px;
-        font-size: 12px;
-        color: #94a3b8;
-        background: rgba(2, 6, 23, 0.8);
-        border-top: 1px solid rgba(148, 163, 184, 0.15);
-        z-index: 2;
-        backdrop-filter: blur(8px);
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+        background: #0b1220;
       }
-      .meta code {
+      .topbar label {
+        color: #cbd5e1;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .topbar select {
+        color: #e2e8f0;
+        background: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      .topbar .main-picker {
+        min-width: min(52vw, 560px);
+        max-width: min(72vw, 860px);
+      }
+      .topbar button {
+        color: #e2e8f0;
+        background: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .topbar button:hover {
+        background: #162033;
+      }
+      .topbar button .caret {
+        display: inline-block;
+        margin-left: 4px;
+        color: #94a3b8;
+        transition: transform 120ms ease;
+      }
+      .topbar button.is-open .caret {
+        transform: rotate(180deg);
+      }
+      .help-panel code,
+      .help-panel pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .help-panel {
+        display: block;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        background: #0b1325;
+        color: #cbd5e1;
+        font-size: 12px;
+      }
+      .help-panel[hidden] {
+        display: none;
+      }
+      .help-grid {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.5fr);
+        gap: 14px;
+      }
+      .help-section-title {
+        margin: 0 0 8px 0;
+        font-size: 12px;
+        font-weight: 700;
+        color: #e2e8f0;
+      }
+      .help-db-list {
+        margin: 0;
+        padding-left: 16px;
+      }
+      .help-db-list li {
+        margin: 0 0 6px 0;
+        word-break: break-word;
+      }
+      .help-copy {
+        margin: 0;
+        color: #cbd5e1;
+        line-height: 1.4;
+      }
+      .help-panel pre {
+        margin: 8px 0 0 0;
+        padding: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 6px;
+        background: #020617;
+        overflow: auto;
+      }
+      @media (max-width: 780px) {
+        .help-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .frame {
+        border: 0;
+        width: 100%;
+        flex: 1;
+        min-height: 0;
       }
     </style>
   </head>
   <body>
-    <iframe id="editor" class="frame" src=${JSON.stringify(studioSrc)}></iframe>
-    <div class="meta" id="meta"></div>
+    <div class="layout">
+      <div class="topbar">
+        <label for="main-picker">Main DB</label>
+        <select id="main-picker" class="main-picker"></select>
+        <button id="info-toggle" type="button" aria-controls="help-panel" aria-expanded="false">
+          Info<span class="caret" aria-hidden="true">▾</span>
+        </button>
+      </div>
+      <div class="help-panel" id="help-panel" hidden></div>
+      <iframe id="editor" class="frame"></iframe>
+    </div>
     <script>
       const iframe = document.getElementById("editor");
-      const studioSrc = ${studioSrcJson};
+      const mainPicker = document.getElementById("main-picker");
+      const infoToggle = document.getElementById("info-toggle");
+      const helpPanel = document.getElementById("help-panel");
+      const studioSrc = ${JSON.stringify(studioSrc)};
       const studioOrigin = ${studioOriginJson};
+      const defaultMainAlias = ${defaultMainAliasJson};
       const allowedStudioOrigins = ${allowedStudioOriginsJson};
       const summary = ${summaryJson};
+      const queryPath = "/query?main=" + encodeURIComponent(summary.mainAlias);
 
-      const attached = Object.keys(summary.attached);
-      document.getElementById("meta").innerHTML =
-        "main: <code>" + summary.mainPath + "</code>" +
-        (attached.length === 0
-          ? ""
-          : " · attach: <code>" + attached.map((key) => key + "=" + summary.attached[key]).join(", ") + "</code>");
+      for (const database of summary.databases) {
+        const option = document.createElement("option");
+        option.value = database.alias;
+        option.textContent = database.alias + " - " + database.path;
+        mainPicker.appendChild(option);
+      }
+
+      mainPicker.value = summary.mainAlias;
+      mainPicker.addEventListener("change", () => {
+        const nextAlias = mainPicker.value;
+        const url = new URL(window.location.href);
+
+        if (nextAlias === defaultMainAlias) {
+          url.searchParams.delete("main");
+        } else {
+          url.searchParams.set("main", nextAlias);
+        }
+
+        window.location.assign(url.toString());
+      });
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      const connectedDatabases = [{ name: "main", path: summary.mainPath }].concat(
+        summary.databases.map((database) => ({ name: database.alias, path: database.path })),
+      );
+      const connectedRows = connectedDatabases
+        .map((database) => "<li><code>" + escapeHtml(database.name) + "</code> -> <code>" + escapeHtml(database.path) + "</code></li>")
+        .join("");
+      const helpQueryExamples = [
+        "-- 1) Latest orders joined to events",
+        "SELECT o.id AS order_id, o.status, o.sku, e.type AS event_type, o.created_at",
+        "FROM orders_service.orders o",
+        "LEFT JOIN events_service.events e ON e.id = o.event_id",
+        "ORDER BY o.created_at DESC",
+        "LIMIT 20;",
+        "",
+        "-- 2) Count orders by status + event type",
+        "SELECT COALESCE(e.type, '<no_event>') AS event_type, o.status, COUNT(*) AS order_count",
+        "FROM orders_service.orders o",
+        "LEFT JOIN events_service.events e ON e.id = o.event_id",
+        "GROUP BY COALESCE(e.type, '<no_event>'), o.status",
+        "ORDER BY order_count DESC, event_type ASC, o.status ASC",
+        "LIMIT 50;",
+        "",
+        "-- 3) Events with no matching order",
+        "SELECT e.id AS event_id, e.type, e.created_at",
+        "FROM events_service.events e",
+        "LEFT JOIN orders_service.orders o ON o.event_id = e.id",
+        "WHERE o.id IS NULL",
+        "ORDER BY e.created_at DESC",
+        "LIMIT 20;",
+      ].join("\\n");
+      helpPanel.innerHTML =
+        "<div class='help-grid'>" +
+          "<section>" +
+            "<h3 class='help-section-title'>Connected databases</h3>" +
+            "<ul class='help-db-list'>" + connectedRows + "</ul>" +
+          "</section>" +
+          "<section>" +
+            "<h3 class='help-section-title'>How to query</h3>" +
+            "<p class='help-copy'>Copy any query block below. Use explicit aliases <code>events_service</code> and <code>orders_service</code> so it runs no matter which DB is selected as <code>main</code>.</p>" +
+            "<pre>" + helpQueryExamples + "</pre>" +
+          "</section>" +
+        "</div>";
+
+      infoToggle.addEventListener("click", () => {
+        helpPanel.hidden = !helpPanel.hidden;
+        infoToggle.classList.toggle("is-open", !helpPanel.hidden);
+        infoToggle.setAttribute("aria-expanded", String(!helpPanel.hidden));
+      });
 
       async function relay(message, targetOrigin) {
-        const response = await fetch("/query", {
+        const response = await fetch(queryPath, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(message),
@@ -424,6 +725,8 @@ function buildPageHtml(): string {
           );
         });
       });
+
+      iframe.src = studioSrc;
     </script>
   </body>
 </html>`;

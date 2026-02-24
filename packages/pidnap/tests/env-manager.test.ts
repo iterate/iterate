@@ -238,4 +238,41 @@ describe("EnvManager", () => {
     expect(envManager.hasCustomFile("other")).toBe(false);
     envManager.close();
   });
+
+  it("should unregister custom files and fall back to auto-discovered env file", () => {
+    writeFileSync(join(testDir, ".env.app"), "APP=auto_value");
+    writeFileSync(join(testDir, "custom.env"), "APP=custom_value");
+
+    const envManager = new EnvManager(
+      {
+        cwd: testDir,
+        customEnvFiles: {
+          app: "custom.env",
+        },
+      },
+      logger,
+    );
+
+    expect(envManager.getEnvVars("app")).toEqual({ APP: "custom_value" });
+    expect(envManager.hasCustomFile("app")).toBe(true);
+
+    envManager.unregisterCustomFile("app");
+
+    expect(envManager.hasCustomFile("app")).toBe(false);
+    expect(envManager.getEnvVars("app")).toEqual({ APP: "auto_value" });
+    envManager.close();
+  });
+
+  it("should replace existing custom file when registerFile is called repeatedly", () => {
+    writeFileSync(join(testDir, "first.env"), "APP=first_value");
+    writeFileSync(join(testDir, "second.env"), "APP=second_value");
+
+    const envManager = new EnvManager({ cwd: testDir }, logger);
+    envManager.registerFile("app", "first.env");
+    expect(envManager.getEnvVars("app")).toEqual({ APP: "first_value" });
+
+    envManager.registerFile("app", "second.env");
+    expect(envManager.getEnvVars("app")).toEqual({ APP: "second_value" });
+    envManager.close();
+  });
 });
