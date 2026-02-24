@@ -27,7 +27,7 @@ const FLY_ORG_APPS_QUERY = `
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string().optional(),
   FLY_ORG: z.string().default("iterate"),
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]).optional(),
+  SANDBOX_NAME_PREFIX: z.string().optional(),
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;
@@ -191,7 +191,10 @@ async function listAppNamesByPrefix(params: {
 
 const router = {
   cleanup: os
-    .meta({ description: "Stop or delete idle Fly machines for a given prefix", default: true })
+    .meta({
+      description: "Stop or delete idle Fly machines for a given prefix",
+      default: true,
+    })
     .input(
       z.object({
         timeframe: z
@@ -206,8 +209,9 @@ const router = {
           .string()
           .optional()
           .describe(
-            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Arbitrary prefixes must start with 'test-'.",
+            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Arbitrary prefixes must start with 'test-' unless you pass --i-am-totally-sure.",
           ),
+        iAmTotallySure: z.boolean().optional().describe("Bypass prefix restriction"),
         all: z
           .boolean()
           .default(false)
@@ -225,10 +229,10 @@ const router = {
       if (!prefix) {
         throw new Error("Missing --prefix. Pass it explicitly or set SANDBOX_NAME_PREFIX.");
       }
-      if (!ALLOWED_PREFIXES.has(prefix)) {
+      if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
         if (!prefix.startsWith("test-")) {
           throw new Error(
-            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted.`,
+            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted. Use --i-am-totally-sure to bypass this restriction.`,
           );
         }
       }

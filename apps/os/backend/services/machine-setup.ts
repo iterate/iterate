@@ -161,14 +161,19 @@ export async function resolveMachineSetupData(
   return { envFileContent, repos };
 }
 
+const sentinelPath = "~/.iterate/.setup-done";
+
 /**
- * Push setup data (env file + repo clones) to a machine's daemon.
+ * Check whether setup needs to be pushed by comparing the sentinel file on the
+ * machine against the current setup intent fingerprint. Returns the resolved
+ * setup data when setup should proceed, `null` when the sentinel already
+ * matches (no-op).
  */
-export async function pushSetupToMachine(
+export async function getPushMachineSetupInput(
   db: DB,
   env: CloudflareEnv,
   machine: typeof schema.machine.$inferSelect,
-): Promise<void> {
+) {
   const { envFileContent, repos } = await resolveMachineSetupData(
     db,
     env,
@@ -179,16 +184,26 @@ export async function pushSetupToMachine(
   const transport = await buildDaemonTransport(machine, env);
   const client = createDaemonClient(transport);
 
-  // Idempotency: hash the full setup intent (env content + repo list) and write a
-  // sentinel file at the end. On retry, if the sentinel matches, skip everything.
   const setupFingerprint = hashSetupIntent(envFileContent, repos);
-  const sentinelPath = "~/.iterate/.setup-done";
   const existingSentinel = await client.tool.readFile({ path: sentinelPath });
   if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
     logger.set({ machine: { id: machine.id } });
     logger.info("[machine-setup] Setup already completed (sentinel matches), skipping");
-    return;
+    return null;
   }
+
+  return { envFileContent, repos, client, setupFingerprint };
+}
+
+/**
+ * Push setup data (env file + repo clones) to a machine's daemon.
+ * Pass the intent returned by {@link getPushMachineSetupInput}.
+ */
+export async function pushSetupToMachine(
+  machine: typeof schema.machine.$inferSelect,
+  input: NonNullable<Awaited<ReturnType<typeof getPushMachineSetupInput>>>,
+) {
+  const { envFileContent, repos, client, setupFingerprint } = input;
 
   // Write env file first so pidnap picks up env vars immediately
   logger.set({ machine: { id: machine.id } });
@@ -240,17 +255,14 @@ export async function pushSetupToMachine(
     }
   }
 
-  // Write sentinel file last — marks the full setup as complete.
-  // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
-  await client.tool.writeFile({
-    path: sentinelPath,
-    content: setupFingerprint,
-    mode: 0o600,
-  });
-
   logger.info(
     `[machine-setup] Setup push complete envVarBytes=${envFileContent.length} repoCount=${repos.length}`,
   );
+
+  // Let the caller write sentinel file last — marks the full setup as complete.
+  // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
+  return () =>
+    client.tool.writeFile({ path: sentinelPath, content: setupFingerprint, mode: 0o600 });
 }
 
 /**

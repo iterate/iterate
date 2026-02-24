@@ -146,7 +146,7 @@ export default {
       env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,
-        utils.githubScript(import.meta, async function notify_slack_on_failure() {
+        await utils.githubScript(import.meta, async function notify_slack_on_failure() {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
           const needs = JSON.parse(process.env.NEEDS!);

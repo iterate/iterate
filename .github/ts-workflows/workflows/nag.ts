@@ -26,7 +26,7 @@ export default {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
-        utils.githubScript(
+        await utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
           async function doit({ github, context: _context }) {
