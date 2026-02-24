@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -19,18 +17,18 @@ import {
   type AnyContractRouter,
   type ContractRouterClient,
 } from "@orpc/contract";
-import { LoggingHandlerPlugin, getLogger, type LoggerContext } from "@orpc/experimental-pino";
-import { OpenAPIHandler } from "@orpc/openapi/node";
-import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCInstrumentation } from "@orpc/otel";
 import { onError } from "@orpc/server";
-import { RPCHandler } from "@orpc/server/node";
-import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import pino, { type Logger } from "pino";
-import { type Plugin, type ViteDevServer } from "vite";
-import { WebSocketServer } from "ws";
+import {
+  createRequestLogger,
+  initLogger,
+  log as rootLog,
+  type Log,
+  type RequestLogger,
+} from "evlog";
+import { createOTLPDrain } from "evlog/otlp";
+import { type Plugin } from "vite";
 
 type RuntimeGlobal = typeof globalThis & {
   __jonasland2OtelInitialized?: boolean;
@@ -38,17 +36,43 @@ type RuntimeGlobal = typeof globalThis & {
 
 const runtimeGlobal = globalThis as RuntimeGlobal;
 
-export interface ServiceContext extends LoggerContext {
+export type ServiceRequestLogFields = Record<string, unknown>;
+export type ServiceRequestLogger = RequestLogger<ServiceRequestLogFields>;
+
+export interface ServiceContext {
   requestId: string;
   serviceName: string;
+  log: ServiceRequestLogger;
 }
 
-export interface ServiceInitialContext extends LoggerContext {
+export interface ServiceInitialContext {
   requestId?: string;
+  log?: ServiceRequestLogger;
 }
 
 function resolveTraceExporterUrl() {
   return process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? "http://127.0.0.1:4318/v1/traces";
+}
+
+function normalizeBaseEndpoint(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function resolveEvlogDrainEndpoint(): string | undefined {
+  const baseEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
+  if (baseEndpoint) {
+    return normalizeBaseEndpoint(baseEndpoint);
+  }
+
+  const logsEndpoint = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT?.trim();
+  if (!logsEndpoint) return undefined;
+
+  const normalizedLogsEndpoint = logsEndpoint.replace(/\/+$/, "");
+  if (normalizedLogsEndpoint.endsWith("/v1/logs")) {
+    return normalizedLogsEndpoint.slice(0, -"/v1/logs".length);
+  }
+
+  return normalizedLogsEndpoint;
 }
 
 function currentSpanFields() {
@@ -56,10 +80,20 @@ function currentSpanFields() {
   if (!spanContext) return {};
 
   return {
-    trace_id: spanContext.traceId,
-    span_id: spanContext.spanId,
-    trace_flags: spanContext.traceFlags,
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags,
   };
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function errorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  if (!("status" in error)) return undefined;
+  return typeof error.status === "number" ? error.status : undefined;
 }
 
 export function initializeServiceOtel(serviceName: string): void {
@@ -92,45 +126,32 @@ export function initializeServiceOtel(serviceName: string): void {
   process.once("SIGINT", shutdown);
 }
 
-export function createServiceLogger(serviceName: string): Logger {
-  const transport = pino.transport({
-    targets: [
-      {
-        target: "pino/file",
-        options: { destination: 1 },
-      },
-      {
-        target: "pino-opentelemetry-transport",
-        options: {
-          loggerName: serviceName,
-          resourceAttributes: {
-            "service.name": serviceName,
-            "service.version": process.env.npm_package_version || "0.0.0",
-          },
-        },
-      },
-    ],
-  });
+export function initializeServiceEvlog(serviceName: string): void {
+  const drainEndpoint = resolveEvlogDrainEndpoint();
 
-  return pino(
-    {
-      name: serviceName,
-      level: process.env.LOG_LEVEL || "info",
-      mixin() {
-        return currentSpanFields();
-      },
+  initLogger({
+    env: {
+      service: serviceName,
+      environment: process.env.NODE_ENV ?? "development",
+      version: process.env.npm_package_version || "0.0.0",
     },
-    transport,
-  );
+    pretty: process.env.NODE_ENV !== "production",
+    ...(drainEndpoint
+      ? {
+          drain: createOTLPDrain({ endpoint: drainEndpoint }),
+        }
+      : {}),
+  });
 }
 
-export function createHandlerLoggingPlugin(logger: Logger) {
-  return new LoggingHandlerPlugin({
-    logger,
-    generateId: () => randomUUID(),
-    logRequestAbort: true,
-    logRequestResponse: true,
-  });
+export const serviceLog = rootLog;
+
+export function createServiceRequestLogger(options: {
+  method?: string;
+  path?: string;
+  requestId?: string;
+}): ServiceRequestLogger {
+  return createRequestLogger<ServiceRequestLogFields>(options);
 }
 
 export function createServiceContextMiddleware(serviceName: string) {
@@ -141,11 +162,27 @@ export function createServiceContextMiddleware(serviceName: string) {
     context: ServiceInitialContext;
     next: (options: { context: ServiceContext }) => Promise<unknown>;
   }) => {
+    const requestId = context.requestId || randomUUID();
+    const requestLog =
+      context.log ||
+      createServiceRequestLogger({
+        requestId,
+        method: "ORPC",
+        path: "unknown",
+      });
+
+    requestLog.set({
+      requestId,
+      service: serviceName,
+      ...currentSpanFields(),
+    });
+
     return next({
       context: {
         ...context,
-        requestId: context.requestId || randomUUID(),
+        requestId,
         serviceName,
+        log: requestLog,
       },
     });
   };
@@ -158,58 +195,99 @@ export function createServiceContextMiddleware(serviceName: string) {
 }
 
 export function infoFromContext(
-  context: LoggerContext,
+  context: ServiceInitialContext,
   message: string,
   fields: Record<string, unknown>,
 ) {
-  getLogger(context)?.info(fields, message);
+  const payload = {
+    ...fields,
+    ...currentSpanFields(),
+  };
+
+  if (context.log) {
+    context.log.info(message, payload);
+    return;
+  }
+
+  rootLog.info({
+    message,
+    ...payload,
+    ...(context.requestId ? { requestId: context.requestId } : {}),
+  });
+}
+
+export function createOrpcErrorInterceptor() {
+  return onError((error, params) => {
+    const request = "request" in params ? params.request : undefined;
+    const path = "path" in params ? params.path : undefined;
+    const context =
+      "context" in params &&
+      typeof params.context === "object" &&
+      params.context !== null &&
+      "log" in params.context
+        ? (params.context as ServiceInitialContext)
+        : undefined;
+
+    const fields = {
+      event: "orpc.handler.error",
+      request_method: request?.method,
+      request_url: request?.url,
+      procedure_path: Array.isArray(path) ? path.join(".") : path,
+      status: errorStatus(error),
+      ...currentSpanFields(),
+    };
+
+    const resolvedError = toError(error);
+
+    if (context?.log) {
+      context.log.error(resolvedError, fields);
+      return;
+    }
+
+    rootLog.error({
+      ...fields,
+      error: {
+        name: resolvedError.name,
+        message: resolvedError.message,
+        stack: resolvedError.stack,
+      },
+    });
+  });
 }
 
 export function getOtelRuntimeConfig() {
+  const baseEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? null;
+  const logsEndpoint =
+    process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ??
+    (baseEndpoint ? `${normalizeBaseEndpoint(baseEndpoint)}/v1/logs` : null);
+
   return {
     tracesEndpoint: resolveTraceExporterUrl(),
-    logsEndpoint: process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ?? null,
+    logsEndpoint,
+    baseEndpoint,
     propagators: process.env.OTEL_PROPAGATORS ?? null,
   };
 }
 
-export function createOrpcErrorInterceptor(logger: Logger) {
-  return onError((error, params) => {
-    const request = "request" in params ? params.request : undefined;
-    const path = "path" in params ? params.path : undefined;
-    const status =
-      typeof error === "object" &&
-      error !== null &&
-      "status" in error &&
-      typeof (error as { status?: unknown }).status === "number"
-        ? (error as { status: number }).status
-        : undefined;
-
-    logger.error(
-      {
-        event: "orpc.handler.error",
-        request_method: request?.method,
-        request_url: request?.url,
-        procedure_path: Array.isArray(path) ? path.join(".") : path,
-        status,
-        error,
-      },
-      "oRPC handler error",
-    );
-  });
-}
-
-export function getRequestIdHeader(value: string | string[] | undefined) {
+export function getRequestIdHeader(value: string | string[] | null | undefined) {
   if (typeof value === "string") return value;
   if (Array.isArray(value) && value[0]) return value[0];
   return undefined;
 }
 
 export function extractIncomingTraceContext(
-  headers: Record<string, string | string[] | undefined>,
+  headers: Headers | Record<string, string | string[] | undefined>,
   extract: (carrier: Record<string, string>) => unknown,
 ) {
   const carrier: Record<string, string> = {};
+
+  if (headers instanceof Headers) {
+    for (const [key, value] of headers.entries()) {
+      carrier[key] = value;
+    }
+
+    return extract(carrier);
+  }
 
   for (const [key, value] of Object.entries(headers)) {
     if (typeof value === "string") {
@@ -225,7 +303,7 @@ export function extractIncomingTraceContext(
 export function createBrowserErrorBridgePlugin(params: {
   eventName: string;
   logEventName: string;
-  logger: Logger;
+  logger: Pick<Log, "error">;
 }): Plugin {
   return {
     name: `${params.logEventName}-browser-error-bridge`,
@@ -290,100 +368,6 @@ export function createBrowserErrorBridgePlugin(params: {
           `,
         },
       ];
-    },
-  };
-}
-
-export async function handleViteSpaRequest(params: {
-  vite: ViteDevServer | undefined;
-  req: IncomingMessage;
-  res: ServerResponse<IncomingMessage>;
-}) {
-  const viteServer = params.vite;
-  if (!viteServer) {
-    params.res.writeHead(503, { "content-type": "application/json" });
-    params.res.end(JSON.stringify({ error: "ui_not_ready" }));
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    viteServer.middlewares(params.req, params.res, () => {
-      if (!params.res.writableEnded) {
-        params.res.writeHead(404, { "content-type": "application/json" });
-        params.res.end(JSON.stringify({ error: "not_found" }));
-      }
-      resolve();
-    });
-  });
-}
-
-export function createOpenApiHandlerWithDocs(params: {
-  router: unknown;
-  logger: Logger;
-  title: string;
-  version: string;
-  docsPath?: string;
-  specPath?: string;
-  servers?: Array<{ url: string }>;
-}) {
-  return new OpenAPIHandler(params.router, {
-    plugins: [
-      createHandlerLoggingPlugin(params.logger),
-      new OpenAPIReferencePlugin({
-        docsProvider: "scalar",
-        docsPath: params.docsPath ?? "/docs",
-        specPath: params.specPath ?? "/openapi.json",
-        schemaConverters: [new ZodToJsonSchemaConverter()],
-        specGenerateOptions: {
-          info: {
-            title: params.title,
-            version: params.version,
-          },
-          servers: params.servers ?? [{ url: "/api" }],
-        },
-      }),
-    ],
-    interceptors: [createOrpcErrorInterceptor(params.logger)],
-  });
-}
-
-export function createRpcHttpHandler(params: { router: unknown; logger: Logger }) {
-  return new RPCHandler(params.router, {
-    plugins: [createHandlerLoggingPlugin(params.logger)],
-    interceptors: [createOrpcErrorInterceptor(params.logger)],
-  });
-}
-
-export function createRpcWebSocketBridge(params: {
-  router: unknown;
-  upgradePath?: string;
-  logger: Logger;
-}) {
-  const wsHandler = new WebSocketRPCHandler(params.router);
-  const wss = new WebSocketServer({ noServer: true });
-  const upgradePath = params.upgradePath ?? "/orpc/ws";
-
-  wss.on("connection", (ws) => {
-    void wsHandler.upgrade(ws);
-  });
-
-  return {
-    handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
-      const pathname = new URL(req.url || "/", "http://localhost").pathname;
-      if (pathname !== upgradePath && pathname !== `${upgradePath}/`) {
-        return false;
-      }
-
-      params.logger.info({ event: "orpc.ws.upgrade", pathname }, "Accepted oRPC websocket upgrade");
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
-      return true;
-    },
-    close: async () => {
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
     },
   };
 }

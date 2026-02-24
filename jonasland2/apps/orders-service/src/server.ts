@@ -1,21 +1,30 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
+import { RESPONSE_ALREADY_SENT } from "@hono/node-server/utils/response";
 import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
+import { OpenAPIHandler } from "@orpc/openapi/fetch";
+import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
+import { RPCHandler } from "@orpc/server/fetch";
+import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
+import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import react from "@vitejs/plugin-react";
 import { ordersServiceManifest } from "@jonasland2/orders-contract";
 import {
   createBrowserErrorBridgePlugin,
-  createOpenApiHandlerWithDocs,
-  createRpcHttpHandler,
-  createRpcWebSocketBridge,
-  createServiceLogger,
+  createOrpcErrorInterceptor,
+  createServiceRequestLogger,
   extractIncomingTraceContext,
   getOtelRuntimeConfig,
   getRequestIdHeader,
-  handleViteSpaRequest,
+  initializeServiceEvlog,
   initializeServiceOtel,
+  serviceLog,
+  type ServiceRequestLogger,
 } from "@jonasland2/shared";
+import { Hono, type Context } from "hono";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
+import { WebSocketServer } from "ws";
 import { getOrdersDbRuntimeConfig, initializeOrdersDb } from "./db.ts";
 import { ordersRouter } from "./router.ts";
 
@@ -23,106 +32,186 @@ const BROWSER_ERROR_EVENT = "orders-service:browser-console-error";
 const serviceName = "jonasland2-orders-service";
 const env = ordersServiceManifest.envVars.parse(process.env);
 const port = env.ORDERS_SERVICE_PORT;
-const log = createServiceLogger(serviceName);
+
+type AppVariables = {
+  requestId: string;
+  requestLog: ServiceRequestLogger;
+};
+
+const BODY_PARSER_METHODS = new Set(["arrayBuffer", "blob", "formData", "json", "text"] as const);
+type BodyParserMethod = typeof BODY_PARSER_METHODS extends Set<infer T> ? T : never;
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function createBodyParserSafeRequest(
+  c: Context<{ Bindings: HttpBindings; Variables: AppVariables }>,
+): Request {
+  return new Proxy(c.req.raw, {
+    get(target, prop) {
+      if (BODY_PARSER_METHODS.has(prop as BodyParserMethod)) {
+        return () => c.req[prop as BodyParserMethod]();
+      }
+
+      return Reflect.get(target, prop, target);
+    },
+  });
+}
 
 initializeServiceOtel(serviceName);
+initializeServiceEvlog(serviceName);
 
-const openapiHandler = createOpenApiHandlerWithDocs({
-  router: ordersRouter,
-  logger: log,
-  title: "jonasland2 orders-service API",
-  version: "1.0.0",
+const openapiHandler = new OpenAPIHandler(ordersRouter, {
+  plugins: [
+    new OpenAPIReferencePlugin({
+      docsProvider: "scalar",
+      docsPath: "/docs",
+      specPath: "/openapi.json",
+      schemaConverters: [new ZodToJsonSchemaConverter()],
+      specGenerateOptions: {
+        info: {
+          title: "jonasland2 orders-service API",
+          version: "1.0.0",
+        },
+        servers: [{ url: "/api" }],
+      },
+    }),
+  ],
+  interceptors: [createOrpcErrorInterceptor()],
 });
 
-const rpcHandler = createRpcHttpHandler({
-  router: ordersRouter,
-  logger: log,
+const rpcHandler = new RPCHandler(ordersRouter, {
+  interceptors: [createOrpcErrorInterceptor()],
 });
 
-const rpcWebSocketBridge = createRpcWebSocketBridge({
-  router: ordersRouter,
-  logger: log,
-  upgradePath: "/orpc/ws",
+const wsHandler = new WebSocketRPCHandler(ordersRouter);
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on("connection", (ws) => {
+  void wsHandler.upgrade(ws);
+});
+
+const app = new Hono<{ Bindings: HttpBindings; Variables: AppVariables }>();
+
+app.use("*", async (c, next) => {
+  const incomingContext = extractIncomingTraceContext(c.req.raw.headers, (carrier) =>
+    propagation.extract(ROOT_CONTEXT, carrier),
+  );
+
+  return otelContext.with(incomingContext, next);
+});
+
+app.use("*", async (c, next) => {
+  const requestId = getRequestIdHeader(c.req.header("x-request-id")) ?? randomUUID();
+  const requestLog = createServiceRequestLogger({
+    requestId,
+    method: c.req.method,
+    path: c.req.path,
+  });
+  const startedAt = Date.now();
+
+  c.set("requestId", requestId);
+  c.set("requestLog", requestLog);
+
+  let status = 500;
+
+  try {
+    await next();
+    status = c.res.status;
+  } catch (error) {
+    requestLog.error(toError(error));
+    status = 500;
+    throw error;
+  } finally {
+    const outgoingStatus = c.env.outgoing.statusCode;
+    if (typeof outgoingStatus === "number" && outgoingStatus > 0) {
+      status = outgoingStatus;
+    }
+
+    requestLog.emit({
+      status,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+});
+
+app.get("/healthz", (c) => c.text("ok"));
+
+app.get("/api/observability", async (c) => {
+  const sqlite = await getOrdersDbRuntimeConfig();
+  return c.json({ otel: getOtelRuntimeConfig(), sqlite });
+});
+
+app.use("/api/*", async (c) => {
+  const { matched, response } = await openapiHandler.handle(c.req.raw, {
+    prefix: "/api",
+    context: {
+      requestId: c.get("requestId"),
+      log: c.get("requestLog"),
+    },
+  });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  return c.json({ error: "not_found" }, 404);
+});
+
+app.use("/orpc/*", async (c) => {
+  const { matched, response } = await rpcHandler.handle(createBodyParserSafeRequest(c), {
+    prefix: "/orpc",
+    context: {
+      requestId: c.get("requestId"),
+      log: c.get("requestLog"),
+    },
+  });
+
+  if (matched) {
+    return c.newResponse(response.body, response);
+  }
+
+  return c.json({ error: "not_found" }, 404);
 });
 
 let vite: ViteDevServer | undefined;
 
-const server = createServer(async (req, res) => {
-  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+app.use("*", async (c) => {
+  const viteServer = vite;
 
-  if (pathname === "/healthz" && req.method === "GET") {
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("ok");
-    return;
+  if (!viteServer) {
+    c.env.outgoing.writeHead(503, { "content-type": "application/json" });
+    c.env.outgoing.end(JSON.stringify({ error: "ui_not_ready" }));
+    return RESPONSE_ALREADY_SENT;
   }
 
-  if (pathname === "/api/observability" && req.method === "GET") {
-    const sqlite = await getOrdersDbRuntimeConfig();
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ otel: getOtelRuntimeConfig(), sqlite }));
-    return;
-  }
-
-  if (pathname.startsWith("/api")) {
-    const requestId = getRequestIdHeader(req.headers["x-request-id"]);
-    const incomingContext = extractIncomingTraceContext(req.headers, (carrier) =>
-      propagation.extract(ROOT_CONTEXT, carrier),
-    );
-
-    const { matched } = await otelContext.with(incomingContext, () =>
-      openapiHandler.handle(req, res, {
-        prefix: "/api",
-        context: {
-          requestId,
-        },
-      }),
-    );
-
-    if (matched) {
-      return;
-    }
-
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not_found" }));
-    return;
-  }
-
-  if (pathname.startsWith("/orpc")) {
-    const requestId = getRequestIdHeader(req.headers["x-request-id"]);
-    const incomingContext = extractIncomingTraceContext(req.headers, (carrier) =>
-      propagation.extract(ROOT_CONTEXT, carrier),
-    );
-
-    const { matched } = await otelContext.with(incomingContext, () =>
-      rpcHandler.handle(req, res, {
-        prefix: "/orpc",
-        context: {
-          requestId,
-        },
-      }),
-    );
-
-    if (matched) {
-      return;
-    }
-
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not_found" }));
-    return;
-  }
-
-  await handleViteSpaRequest({
-    vite,
-    req,
-    res: res as ServerResponse<IncomingMessage>,
+  await new Promise<void>((resolve) => {
+    viteServer.middlewares(c.env.incoming, c.env.outgoing, () => {
+      if (!c.env.outgoing.writableEnded) {
+        c.env.outgoing.writeHead(404, { "content-type": "application/json" });
+        c.env.outgoing.end(JSON.stringify({ error: "not_found" }));
+      }
+      resolve();
+    });
   });
+
+  return RESPONSE_ALREADY_SENT;
 });
 
+const server = createAdaptorServer({ fetch: app.fetch });
+
 server.on("upgrade", (req, socket, head) => {
-  const upgraded = rpcWebSocketBridge.handleUpgrade(req, socket, head);
-  if (!upgraded) {
+  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+  if (pathname !== "/orpc/ws" && pathname !== "/orpc/ws/") {
     socket.destroy();
+    return;
   }
+
+  serviceLog.info({ event: "orpc.ws.upgrade", pathname });
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
 });
 
 await initializeOrdersDb();
@@ -130,12 +219,13 @@ await initializeOrdersDb();
 vite = await createViteServer({
   configFile: false,
   root: fileURLToPath(new URL("./ui", import.meta.url)),
+  cacheDir: "/tmp/vite-orders-service",
   plugins: [
     react(),
     createBrowserErrorBridgePlugin({
       eventName: BROWSER_ERROR_EVENT,
       logEventName: "orders-ui.browser-error",
-      logger: log,
+      logger: serviceLog,
     }),
   ],
   appType: "spa",
@@ -146,7 +236,7 @@ vite = await createViteServer({
 });
 
 server.listen(port, "0.0.0.0", () => {
-  log.info({
+  serviceLog.info({
     event: "service.started",
     service: serviceName,
     port,
@@ -160,7 +250,13 @@ server.listen(port, "0.0.0.0", () => {
 });
 
 const shutdown = async () => {
-  await Promise.allSettled([vite?.close() ?? Promise.resolve(), rpcWebSocketBridge.close()]);
+  await Promise.allSettled([
+    vite?.close() ?? Promise.resolve(),
+    new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    }),
+  ]);
+
   server.close(() => process.exit(0));
 };
 

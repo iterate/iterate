@@ -1,0 +1,10 @@
+{
+  "name": "@jonasland2/home-service",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.ts"
+  },
+  "dependencies": {}
+}

@@ -5,23 +5,24 @@ Minimal local SOA sandbox for oRPC services:
 - Nomad (orchestration) on `:4646`
 - Consul (service discovery) on `:8500`, DNS on `:53`
 - Caddy edge proxy on `:80/:443` (dynamic SRV discovery via Consul)
-- OTEL collector on `:4317/:4318` (single exporter fan-out)
+- OTEL collector on `:4317/:4318` (fan-out to OpenObserve + SigNoz)
 - OpenObserve in-container on `:5080`
+- SigNoz in-container on `:8080` (backed by ClickHouse + ZooKeeper)
 - `events-service` + `orders-service` via oRPC `OpenAPIHandler` (`/api/*`) + RPC (`/orpc/*`, `/orpc/ws`)
 - `events-service` + `orders-service` are `tsx` apps with embedded Vite + React frontends
 - Drizzle ORM + SQLite per service (`/var/lib/jonasland2/*.sqlite`)
-- Outerbase Studio database viewer (`outerbase.iterate.localhost`)
+- Outerbase Studio embed bridge (`outerbase.iterate.localhost`) with multi-SQLite `ATTACH`
 - egress proxy service behind Caddy fallback route
 
 ## Packages
 
-- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve`)
+- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve + SigNoz stack`)
 - `e2e/`: smoke tests using Docker SDK fixtures + MSW-backed proxy (HTTP + WS)
 - `apps/events-contract/`: oRPC contract package
 - `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
 - `apps/orders-contract/`: oRPC contract package
 - `apps/orders-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
-- `packages/shared/`: shared middleware + OTEL + pino setup + OpenAPI/RPC/WS helpers
+- `packages/shared/`: shared OTEL + evlog setup + oRPC client/context helpers
 - `apps/orpc-shared/`: compatibility re-export for `@jonasland2/shared`
 - `tasks/`: jonasland2-local task backlog
 
@@ -32,9 +33,32 @@ cd jonasland2
 pnpm build
 ```
 
+## Outerbase sqlite attach
+
+`outerbase-studio` now runs a lightweight iframe bridge (`sandbox/outerbase-iframe-service.ts`) instead of building the full `outerbase/studio` app in-image.
+
+Runtime env:
+
+- `OUTERBASE_SERVICE_PORT`: HTTP port (default `19040`)
+- `OUTERBASE_SQLITE_PATHS`: comma/newline-separated list of sqlite paths; first path is primary DB, rest are `ATTACH`ed
+- `OUTERBASE_SQLITE_MAIN_PATH`: optional explicit primary DB path (all paths from `OUTERBASE_SQLITE_PATHS` are then attached)
+- `OUTERBASE_STUDIO_EMBED_URL`: optional embed URL (default `https://studio.outerbase.com/embed/sqlite`)
+- `OUTERBASE_STUDIO_NAME`: optional embed connection name query param
+- `OUTERBASE_BASIC_AUTH_USER`/`OUTERBASE_BASIC_AUTH_PASS`: optional basic auth for bridge routes
+
+Example local launch:
+
+```bash
+cd jonasland2/sandbox
+OUTERBASE_SERVICE_PORT=19040 \
+OUTERBASE_SQLITE_PATHS="/tmp/events.sqlite,/tmp/orders.sqlite,/tmp/audit.sqlite" \
+pnpm exec tsx outerbase-iframe-service.ts
+```
+
 ## Endpoints
 
 OpenObserve runs in-container and is exposed through Caddy on `openobserve.iterate.localhost`.
+SigNoz runs in-container and is exposed through Caddy on `signoz.iterate.localhost`.
 
 Default OpenObserve credentials:
 
@@ -87,3 +111,17 @@ Then hit:
   - `http://outerbase.iterate.localhost/`
 - OpenObserve UI:
   - `http://openobserve.iterate.localhost/web/`
+- SigNoz UI:
+  - `http://signoz.iterate.localhost/` (root auto-login bootstrap page)
+  - fallback login credentials: `root@example.com` / `Complexpass#123`
+
+## SigNoz jobs
+
+Run these Nomad jobs (order matters):
+
+```bash
+nomad job run /etc/jonasland2/nomad/jobs/zookeeper-1.nomad.hcl
+nomad job run /etc/jonasland2/nomad/jobs/clickhouse.nomad.hcl
+nomad job run /etc/jonasland2/nomad/jobs/signoz-otel-collector.nomad.hcl
+nomad job run /etc/jonasland2/nomad/jobs/signoz.nomad.hcl
+```

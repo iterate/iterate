@@ -31,6 +31,7 @@ job "otel-collector" {
         port = "http"
         check {
           type     = "http"
+          port     = "health"
           path     = "/"
           interval = "10s"
           timeout  = "2s"

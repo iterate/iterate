@@ -23,18 +23,33 @@ exporters:
       Authorization: Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM=
       stream-name: orpc_logs
 
+  otlphttp/signoz:
+    endpoint: http://127.0.0.1:14318
+
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
 
 service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: localhost
+                port: 18888
   extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_traces]
+      exporters: [otlphttp/openobserve_traces, otlphttp/signoz]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_logs]
+      exporters: [otlphttp/openobserve_logs, otlphttp/signoz]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/signoz]

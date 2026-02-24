@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SigNoz Auto Login</title>
+    <style>
+      body {
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0b1220;
+        color: #dbeafe;
+      }
+      .card {
+        width: min(640px, 92vw);
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px;
+        background: #0f172a;
+      }
+      .muted {
+        color: #94a3b8;
+      }
+      code {
+        background: #111827;
+        border-radius: 6px;
+        padding: 2px 6px;
+      }
+      a {
+        color: #93c5fd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Signing into SigNoz...</h2>
+      <p class="muted" id="status">Initializing...</p>
+      <p class="muted" id="fallback" style="display: none">
+        Auto login failed. Open <a href="/login">/login</a> and use <code>root@example.com</code> /
+        <code>Complexpass#123</code>.
+      </p>
+    </div>
+
+    <script>
+      const EMAIL = "root@example.com";
+      const PASSWORD = "Complexpass#123";
+      const HOME_PATH = "/home";
+
+      function setStatus(message) {
+        const el = document.getElementById("status");
+        if (el) {
+          el.textContent = message;
+        }
+      }
+
+      function showFallback(message) {
+        setStatus(message);
+        const el = document.getElementById("fallback");
+        if (el) {
+          el.style.display = "block";
+        }
+      }
+
+      async function run() {
+        const access = localStorage.getItem("AUTH_TOKEN");
+        const refresh = localStorage.getItem("REFRESH_AUTH_TOKEN");
+        if (access && refresh) {
+          window.location.replace(HOME_PATH);
+          return;
+        }
+
+        setStatus("Fetching session context...");
+        const contextResponse = await fetch(
+          `/api/v2/sessions/context?email=${encodeURIComponent(EMAIL)}&ref=${encodeURIComponent(window.location.href)}`,
+          { credentials: "same-origin" },
+        );
+
+        if (!contextResponse.ok) {
+          throw new Error(`session context failed (${contextResponse.status})`);
+        }
+
+        const contextPayload = await contextResponse.json();
+        const orgId = contextPayload?.data?.orgs?.[0]?.id;
+        if (!orgId) {
+          throw new Error("no org id returned from session context");
+        }
+
+        setStatus("Creating session...");
+        const loginResponse = await fetch("/api/v2/sessions/email_password", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: EMAIL, password: PASSWORD, orgId }),
+        });
+
+        if (!loginResponse.ok) {
+          throw new Error(`session create failed (${loginResponse.status})`);
+        }
+
+        const loginPayload = await loginResponse.json();
+        const nextAccess = loginPayload?.data?.accessToken;
+        const nextRefresh = loginPayload?.data?.refreshToken;
+        if (!nextAccess || !nextRefresh) {
+          throw new Error("token payload missing");
+        }
+
+        localStorage.setItem("AUTH_TOKEN", nextAccess);
+        localStorage.setItem("REFRESH_AUTH_TOKEN", nextRefresh);
+        localStorage.setItem("IS_LOGGED_IN", "true");
+
+        setStatus("Redirecting...");
+        window.location.replace(HOME_PATH);
+      }
+
+      run().catch((error) => {
+        showFallback(`Auto login failed: ${String(error.message || error)}`);
+      });
+    </script>
+  </body>
+</html>

@@ -4,10 +4,6 @@
 }
 
 :80 {
-    tracing {
-        span "caddy-http"
-    }
-
     @health path /healthz
     respond @health "ok" 200
 
@@ -23,8 +19,41 @@
         }
     }
 
+    @signoz host signoz.iterate.localhost
+    handle @signoz {
+        @signoz_autologin path /
+        handle @signoz_autologin {
+            root * /etc/jonasland2/caddy/static
+            rewrite * /signoz-autologin.html
+            file_server
+        }
+
+        reverse_proxy {
+            dynamic srv {
+                name signoz.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @home host home.iterate.localhost
+    handle @home {
+        reverse_proxy {
+            dynamic srv {
+                name home-service.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
     @events host events.iterate.localhost
     handle @events {
+        tracing {
+            span "caddy-events-http"
+        }
+
         reverse_proxy {
             dynamic srv {
                 name events-service.service.consul
@@ -36,6 +65,10 @@
 
     @orders host orders.iterate.localhost
     handle @orders {
+        tracing {
+            span "caddy-orders-http"
+        }
+
         reverse_proxy {
             dynamic srv {
                 name orders-service.service.consul
@@ -78,10 +111,6 @@
         on_demand
     }
 
-    tracing {
-        span "caddy-https"
-    }
-
     @health path /healthz
     respond @health "ok" 200
 
@@ -97,8 +126,41 @@
         }
     }
 
+    @signoz host signoz.iterate.localhost
+    handle @signoz {
+        @signoz_autologin path /
+        handle @signoz_autologin {
+            root * /etc/jonasland2/caddy/static
+            rewrite * /signoz-autologin.html
+            file_server
+        }
+
+        reverse_proxy {
+            dynamic srv {
+                name signoz.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @home host home.iterate.localhost
+    handle @home {
+        reverse_proxy {
+            dynamic srv {
+                name home-service.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
     @events host events.iterate.localhost
     handle @events {
+        tracing {
+            span "caddy-events-https"
+        }
+
         reverse_proxy {
             dynamic srv {
                 name events-service.service.consul
@@ -110,6 +172,10 @@
 
     @orders host orders.iterate.localhost
     handle @orders {
+        tracing {
+            span "caddy-orders-https"
+        }
+
         reverse_proxy {
             dynamic srv {
                 name orders-service.service.consul

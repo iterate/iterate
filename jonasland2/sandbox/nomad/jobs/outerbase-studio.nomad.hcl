@@ -14,13 +14,13 @@ job "outerbase-studio" {
       user   = "node"
 
       env {
-        PORT     = "${NOMAD_PORT_http}"
-        HOSTNAME = "0.0.0.0"
+        OUTERBASE_SERVICE_PORT = "${NOMAD_PORT_http}"
+        OUTERBASE_SQLITE_PATHS = "/var/lib/jonasland2/events-service.sqlite,/var/lib/jonasland2/orders-service.sqlite"
       }
 
       config {
-        command = "/usr/local/bin/node"
-        args    = ["/opt/outerbase/server.js"]
+        command = "/app/node_modules/.bin/tsx"
+        args    = ["/app/outerbase-iframe-service.ts"]
       }
 
       service {
@@ -29,15 +29,15 @@ job "outerbase-studio" {
         port     = "http"
         check {
           type     = "http"
-          path     = "/"
+          path     = "/healthz"
           interval = "10s"
           timeout  = "3s"
         }
       }
 
       resources {
-        cpu    = 600
-        memory = 512
+        cpu    = 100
+        memory = 128
       }
     }
   }
