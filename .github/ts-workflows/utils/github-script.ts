@@ -106,24 +106,6 @@ export async function githubScript(
 
 const prettyPrint = async (script: string) => {
   const filename = import.meta.dirname + "/script.ts";
-  /*
-  match our prettier config:
-  {
-  "printWidth": 100,
-  "tabWidth": 2,
-  "useTabs": false,
-  "semi": true,
-  "singleQuote": false,
-  "quoteProps": "as-needed",
-  "trailingComma": "all",
-  "bracketSpacing": true,
-  "bracketSameLine": false,
-  "arrowParens": "always",
-  "endOfLine": "lf",
-  "embeddedLanguageFormatting": "auto"
-}
-
-  */
   const result = await format(filename, script, {
     printWidth: 100,
     tabWidth: 2,
@@ -139,29 +121,10 @@ const prettyPrint = async (script: string) => {
     embeddedLanguageFormatting: "auto",
   });
   if (result.errors.length) {
-    throw new Error(result.errors.map((e) => e.message).join("\n"), { cause: result.errors });
-  }
-  if (result.code.match(/\bnag\b/i)) {
-    console.log(result);
+    const message = `Error pretty printing script: ${result.errors.map((e) => e.message).join("\n")}. Script:\n\n${script}`;
+    throw new Error(message, { cause: result.errors });
   }
   return result.code;
-  try {
-    const ast = recast.parse(script, { parser: tsParser });
-    return recast.prettyPrint(ast, {
-      quote: "double",
-      tabWidth: 2,
-      useTabs: false,
-      trailingComma: true,
-      objectCurlySpacing: true,
-      flowObjectCommas: true,
-      arrayBracketSpacing: false,
-      arrowParensAlways: true,
-    }).code;
-  } catch (error) {
-    throw new Error(
-      `Error pretty printing script: ${error instanceof Error ? error.message : String(error)}. Script:\n\n${script}`,
-    );
-  }
 };
 
 /**
