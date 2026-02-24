@@ -8,6 +8,7 @@ packages:
   - jonasland/sandbox
   - jonasland/e2e-tests
   - jonasland2/apps/*
+  - jonasland2/packages/*
   - jonasland2/sandbox
   - jonasland2/e2e
   - jonasland3/sandbox

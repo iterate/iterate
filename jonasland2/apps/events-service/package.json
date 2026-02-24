@@ -10,7 +10,7 @@
   "dependencies": {
     "@libsql/client": "^0.15.15",
     "@jonasland2/events-contract": "file:../events-contract",
-    "@jonasland2/orpc-shared": "file:../orpc-shared",
+    "@jonasland2/shared": "workspace:*",
     "@vitejs/plugin-react": "^5.1.2",
     "drizzle-orm": "^0.45.1",
     "@orpc/openapi": "^1.13.5",

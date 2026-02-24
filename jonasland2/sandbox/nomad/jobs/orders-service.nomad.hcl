@@ -16,7 +16,7 @@ job "orders-service" {
       env {
         ORDERS_SERVICE_PORT                = "${NOMAD_PORT_http}"
         ORDERS_DB_PATH                     = "/var/lib/jonasland2/orders-service.sqlite"
-        EVENTS_SERVICE_BASE_URL            = "http://events-service.service.consul:19010/api"
+        EVENTS_SERVICE_BASE_URL            = "http://events-service.service.consul:19010/orpc"
         OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces"
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT   = "http://127.0.0.1:4318/v1/logs"
         OTEL_EXPORTER_OTLP_PROTOCOL        = "http/protobuf"

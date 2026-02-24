@@ -2,15 +2,15 @@ import { randomUUID } from "node:crypto";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { desc, eq, sql } from "drizzle-orm";
-import type { JsonifiedClient } from "@orpc/openapi-client";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { RPCLink } from "@orpc/client/fetch";
+import { inferRPCMethodFromContractRouter } from "@orpc/contract";
 import { eventsContract } from "@jonasland2/events-contract";
 import { orderSchema, ordersContract, ordersServiceEnvSchema } from "@jonasland2/orders-contract";
 import {
   createServiceContextMiddleware,
   infoFromContext,
   type ServiceInitialContext,
-} from "@jonasland2/orpc-shared";
+} from "@jonasland2/shared";
 import { db, ordersTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 
@@ -29,22 +29,22 @@ interface EventsClientContext {
   requestId: string;
 }
 
-const eventsLink = new OpenAPILink<EventsClientContext>(eventsContract, {
+const eventsLink = new RPCLink<EventsClientContext>({
   url: eventsServiceBaseUrl,
-  headers: ({ context: clientContext }) => {
+  method: inferRPCMethodFromContractRouter(eventsContract),
+  headers: (clientContext) => {
     const headers: Record<string, string> = {};
 
-    if (clientContext?.requestId) {
-      headers["x-request-id"] = clientContext.requestId;
+    if (clientContext.context?.requestId) {
+      headers["x-request-id"] = clientContext.context.requestId;
     }
 
     return headers;
   },
 });
 
-const eventsClient: JsonifiedClient<
-  ContractRouterClient<typeof eventsContract, EventsClientContext>
-> = createORPCClient(eventsLink);
+const eventsClient: ContractRouterClient<typeof eventsContract, EventsClientContext> =
+  createORPCClient(eventsLink);
 
 function toOrderRecord(row: typeof ordersTable.$inferSelect): OrderRecord {
   return {

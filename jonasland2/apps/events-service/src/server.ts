@@ -2,18 +2,21 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { fileURLToPath } from "node:url";
 import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
 import react from "@vitejs/plugin-react";
-import {
-  createHandlerLoggingPlugin,
-  createServiceLogger,
-  getOtelRuntimeConfig,
-  initializeServiceOtel,
-} from "@jonasland2/orpc-shared";
 import { eventsServiceManifest } from "@jonasland2/events-contract";
-import { OpenAPIHandler } from "@orpc/openapi/node";
-import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { createServer as createViteServer, type Plugin, type ViteDevServer } from "vite";
-import { initializeEventsDb } from "./db.ts";
+import {
+  createBrowserErrorBridgePlugin,
+  createOpenApiHandlerWithDocs,
+  createRpcHttpHandler,
+  createRpcWebSocketBridge,
+  createServiceLogger,
+  extractIncomingTraceContext,
+  getOtelRuntimeConfig,
+  getRequestIdHeader,
+  handleViteSpaRequest,
+  initializeServiceOtel,
+} from "@jonasland2/shared";
+import { createServer as createViteServer, type ViteDevServer } from "vite";
+import { getEventsDbRuntimeConfig, initializeEventsDb } from "./db.ts";
 import { eventsRouter } from "./router.ts";
 
 const BROWSER_ERROR_EVENT = "events-service:browser-console-error";
@@ -21,135 +24,28 @@ const serviceName = "jonasland2-events-service";
 const env = eventsServiceManifest.envVars.parse(process.env);
 const port = env.EVENTS_SERVICE_PORT;
 const log = createServiceLogger(serviceName);
-const loggingPlugin = createHandlerLoggingPlugin(log);
 
 initializeServiceOtel(serviceName);
 
-const browserErrorBridgePlugin = (): Plugin => ({
-  name: "events-service-browser-error-bridge",
-  configureServer(server) {
-    server.ws.on(BROWSER_ERROR_EVENT, (payload) => {
-      log.error({
-        event: "events-ui.browser-error",
-        payload,
-      });
-    });
-  },
-  transformIndexHtml() {
-    return [
-      {
-        tag: "script",
-        attrs: { type: "module" },
-        injectTo: "body",
-        children: `
-          if (import.meta.hot) {
-            const normalizeErrorData = (value) => {
-              if (value instanceof Error) {
-                return { name: value.name, message: value.message, stack: value.stack ?? null };
-              }
-              if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
-                return value;
-              }
-              try {
-                return JSON.parse(JSON.stringify(value));
-              } catch {
-                return String(value);
-              }
-            };
-            const send = (kind, data) => {
-              import.meta.hot.send("${BROWSER_ERROR_EVENT}", {
-                kind,
-                data,
-                href: location.href,
-                userAgent: navigator.userAgent,
-                timestamp: new Date().toISOString(),
-              });
-            };
-            const originalConsoleError = console.error.bind(console);
-            console.error = (...args) => {
-              send("console.error", { args: args.map(normalizeErrorData) });
-              originalConsoleError(...args);
-            };
-            window.addEventListener("error", (event) => {
-              send("window.error", {
-                message: event.message,
-                filename: event.filename,
-                lineno: event.lineno,
-                colno: event.colno,
-                error: normalizeErrorData(event.error),
-              });
-            });
-            window.addEventListener("unhandledrejection", (event) => {
-              send("window.unhandledrejection", {
-                reason: normalizeErrorData(event.reason),
-              });
-            });
-          }
-        `,
-      },
-    ];
-  },
+const openapiHandler = createOpenApiHandlerWithDocs({
+  router: eventsRouter,
+  logger: log,
+  title: "jonasland2 events-service API",
+  version: "1.0.0",
 });
 
-const openapiHandler = new OpenAPIHandler(eventsRouter, {
-  plugins: [
-    loggingPlugin,
-    new OpenAPIReferencePlugin({
-      docsProvider: "scalar",
-      docsPath: "/docs",
-      specPath: "/openapi.json",
-      schemaConverters: [new ZodToJsonSchemaConverter()],
-      specGenerateOptions: {
-        info: {
-          title: "jonasland2 events-service API",
-          version: "1.0.0",
-        },
-        servers: [{ url: "/api" }],
-      },
-    }),
-  ],
+const rpcHandler = createRpcHttpHandler({
+  router: eventsRouter,
+  logger: log,
 });
 
-function getRequestIdHeader(value: string | string[] | undefined) {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && value[0]) return value[0];
-  return undefined;
-}
-
-function extractIncomingTraceContext(headers: Record<string, string | string[] | undefined>) {
-  const carrier: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === "string") {
-      carrier[key] = value;
-    } else if (Array.isArray(value) && value[0]) {
-      carrier[key] = value[0];
-    }
-  }
-
-  return propagation.extract(ROOT_CONTEXT, carrier);
-}
+const rpcWebSocketBridge = createRpcWebSocketBridge({
+  router: eventsRouter,
+  logger: log,
+  upgradePath: "/orpc/ws",
+});
 
 let vite: ViteDevServer | undefined;
-
-async function handleViteRequest(req: IncomingMessage, res: ServerResponse<IncomingMessage>) {
-  const viteServer = vite;
-  if (!viteServer) {
-    res.writeHead(503, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "ui_not_ready" }));
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    viteServer.middlewares(req, res, () => {
-      if (!res.writableEnded) {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "not_found" }));
-      }
-      resolve();
-    });
-  });
-}
 
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url || "/", "http://localhost").pathname;
@@ -161,14 +57,18 @@ const server = createServer(async (req, res) => {
   }
 
   if (pathname === "/api/observability" && req.method === "GET") {
+    const sqlite = await getEventsDbRuntimeConfig();
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ otel: getOtelRuntimeConfig() }));
+    res.end(JSON.stringify({ otel: getOtelRuntimeConfig(), sqlite }));
     return;
   }
 
   if (pathname.startsWith("/api")) {
     const requestId = getRequestIdHeader(req.headers["x-request-id"]);
-    const incomingContext = extractIncomingTraceContext(req.headers);
+    const incomingContext = extractIncomingTraceContext(req.headers, (carrier) =>
+      propagation.extract(ROOT_CONTEXT, carrier),
+    );
+
     const { matched } = await otelContext.with(incomingContext, () =>
       openapiHandler.handle(req, res, {
         prefix: "/api",
@@ -187,7 +87,42 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  await handleViteRequest(req, res);
+  if (pathname.startsWith("/orpc")) {
+    const requestId = getRequestIdHeader(req.headers["x-request-id"]);
+    const incomingContext = extractIncomingTraceContext(req.headers, (carrier) =>
+      propagation.extract(ROOT_CONTEXT, carrier),
+    );
+
+    const { matched } = await otelContext.with(incomingContext, () =>
+      rpcHandler.handle(req, res, {
+        prefix: "/orpc",
+        context: {
+          requestId,
+        },
+      }),
+    );
+
+    if (matched) {
+      return;
+    }
+
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not_found" }));
+    return;
+  }
+
+  await handleViteSpaRequest({
+    vite,
+    req,
+    res: res as ServerResponse<IncomingMessage>,
+  });
+});
+
+server.on("upgrade", (req, socket, head) => {
+  const upgraded = rpcWebSocketBridge.handleUpgrade(req, socket, head);
+  if (!upgraded) {
+    socket.destroy();
+  }
 });
 
 await initializeEventsDb();
@@ -195,7 +130,14 @@ await initializeEventsDb();
 vite = await createViteServer({
   configFile: false,
   root: fileURLToPath(new URL("./ui", import.meta.url)),
-  plugins: [react(), browserErrorBridgePlugin()],
+  plugins: [
+    react(),
+    createBrowserErrorBridgePlugin({
+      eventName: BROWSER_ERROR_EVENT,
+      logEventName: "events-ui.browser-error",
+      logger: log,
+    }),
+  ],
   appType: "spa",
   server: {
     middlewareMode: true,
@@ -210,13 +152,15 @@ server.listen(port, "0.0.0.0", () => {
     port,
     docs_path: "/api/docs",
     spec_path: "/api/openapi.json",
+    orpc_path: "/orpc",
+    orpc_ws_path: "/orpc/ws",
     ui_path: "/",
     otel: getOtelRuntimeConfig(),
   });
 });
 
 const shutdown = async () => {
-  await Promise.allSettled([vite?.close() ?? Promise.resolve()]);
+  await Promise.allSettled([vite?.close() ?? Promise.resolve(), rpcWebSocketBridge.close()]);
   server.close(() => process.exit(0));
 };
 

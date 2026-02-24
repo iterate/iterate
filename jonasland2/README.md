@@ -7,7 +7,7 @@ Minimal local SOA sandbox for oRPC services:
 - Caddy edge proxy on `:80/:443` (dynamic SRV discovery via Consul)
 - OTEL collector on `:4317/:4318` (single exporter fan-out)
 - OpenObserve in-container on `:5080`
-- `events-service` + `orders-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
+- `events-service` + `orders-service` via oRPC `OpenAPIHandler` (`/api/*`) + RPC (`/orpc/*`, `/orpc/ws`)
 - `events-service` + `orders-service` are `tsx` apps with embedded Vite + React frontends
 - Drizzle ORM + SQLite per service (`/var/lib/jonasland2/*.sqlite`)
 - Outerbase Studio database viewer (`outerbase.iterate.localhost`)
@@ -21,7 +21,8 @@ Minimal local SOA sandbox for oRPC services:
 - `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
 - `apps/orders-contract/`: oRPC contract package
 - `apps/orders-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
-- `apps/orpc-shared/`: shared middleware + OTEL + pino setup
+- `packages/shared/`: shared middleware + OTEL + pino setup + OpenAPI/RPC/WS helpers
+- `apps/orpc-shared/`: compatibility re-export for `@jonasland2/shared`
 - `tasks/`: jonasland2-local task backlog
 
 ## Run
@@ -67,6 +68,8 @@ Then hit:
   - `http://events.iterate.localhost/api/docs` (Scalar)
   - `http://events.iterate.localhost/api/events` (`GET`, `POST`)
   - `http://events.iterate.localhost/api/events/{id}` (`GET`, `PATCH`, `DELETE`)
+  - `http://events.iterate.localhost/orpc/*` (oRPC over HTTP)
+  - `ws://events.iterate.localhost/orpc/ws` (oRPC over WebSocket)
 - Orders service:
   - `http://orders.iterate.localhost/` (Vite/React UI)
   - `http://orders.iterate.localhost/api/openapi.json`
@@ -74,6 +77,8 @@ Then hit:
   - `http://orders.iterate.localhost/api/orders` (`GET`, `POST`)
   - `http://orders.iterate.localhost/api/orders/{id}` (`GET`, `PATCH`, `DELETE`)
   - `http://orders.iterate.localhost/api/orders/ping`
+  - `http://orders.iterate.localhost/orpc/*` (oRPC over HTTP)
+  - `ws://orders.iterate.localhost/orpc/ws` (oRPC over WebSocket)
 - Consul UI:
   - `http://consul.iterate.localhost/`
 - Nomad UI:

@@ -2,6 +2,7 @@ import { DockerClient } from "@docker/node-sdk";
 import { getLocal } from "mockttp";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { WebSocketServer } from "ws";
 
@@ -279,4 +280,157 @@ export async function waitForHttpOk(url: string, timeoutMs = 10_000): Promise<vo
   }
 
   throw new Error(`timed out waiting for healthy endpoint: ${url}`);
+}
+
+type NomadJob = {
+  ID?: string;
+  TaskGroups?: Array<{
+    Tasks?: Array<{
+      Env?: Record<string, string>;
+    }>;
+  }>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseNomadJob(payload: unknown): NomadJob {
+  if (isRecord(payload) && isRecord(payload.Job)) {
+    return payload.Job as NomadJob;
+  }
+  if (isRecord(payload)) {
+    return payload as NomadJob;
+  }
+  throw new Error("nomad parse returned unexpected payload shape");
+}
+
+function applyTaskEnvOverrides(job: NomadJob, envOverrides?: Record<string, string>) {
+  if (!envOverrides) return;
+  for (const group of job.TaskGroups ?? []) {
+    for (const task of group.Tasks ?? []) {
+      task.Env = {
+        ...(task.Env ?? {}),
+        ...envOverrides,
+      };
+    }
+  }
+}
+
+async function responseErrorDetails(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  return `${response.status} ${response.statusText}${body ? `: ${body}` : ""}`;
+}
+
+export async function waitForNomadLeader(nomadBaseUrl: string, timeoutMs = 60_000): Promise<void> {
+  await waitForHttpOk(`${nomadBaseUrl}/v1/status/leader`, timeoutMs);
+}
+
+export async function nomadRegisterJobFromHcl(params: {
+  nomadBaseUrl: string;
+  jobHcl: string;
+  jobId?: string;
+  taskEnvOverrides?: Record<string, string>;
+}): Promise<{ jobId: string }> {
+  const parseResponse = await fetch(`${params.nomadBaseUrl}/v1/jobs/parse`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      JobHCL: params.jobHcl,
+      Canonicalize: true,
+    }),
+  });
+  if (!parseResponse.ok) {
+    throw new Error(`nomad jobs/parse failed: ${await responseErrorDetails(parseResponse)}`);
+  }
+
+  const parsedPayload = (await parseResponse.json()) as unknown;
+  const parsedJob = parseNomadJob(parsedPayload);
+  applyTaskEnvOverrides(parsedJob, params.taskEnvOverrides);
+
+  const registerResponse = await fetch(`${params.nomadBaseUrl}/v1/jobs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ Job: parsedJob }),
+  });
+  if (!registerResponse.ok) {
+    throw new Error(`nomad jobs register failed: ${await responseErrorDetails(registerResponse)}`);
+  }
+
+  const resolvedJobId = params.jobId || parsedJob.ID;
+  if (!resolvedJobId) {
+    throw new Error("nomad job register succeeded but job id is missing");
+  }
+
+  return { jobId: resolvedJobId };
+}
+
+export async function nomadRegisterJobFromFile(params: {
+  nomadBaseUrl: string;
+  jobFilePath: string | URL;
+  jobId?: string;
+  taskEnvOverrides?: Record<string, string>;
+}): Promise<{ jobId: string }> {
+  const jobHcl = await readFile(params.jobFilePath, "utf-8");
+  return await nomadRegisterJobFromHcl({
+    nomadBaseUrl: params.nomadBaseUrl,
+    jobHcl,
+    jobId: params.jobId,
+    taskEnvOverrides: params.taskEnvOverrides,
+  });
+}
+
+export async function waitForNomadJobRunning(params: {
+  nomadBaseUrl: string;
+  jobId: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 90_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(`${params.nomadBaseUrl}/v1/job/${params.jobId}/summary`);
+      if (response.ok) {
+        const payload = (await response.json()) as {
+          Summary?: Record<
+            string,
+            {
+              Running?: number;
+            }
+          >;
+        };
+        const groups = Object.values(payload.Summary ?? {});
+        if (groups.some((group) => (group.Running ?? 0) > 0)) {
+          return;
+        }
+      }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  throw new Error(`timed out waiting for nomad job to be running: ${params.jobId}`);
+}
+
+export async function nomadRegisterJobFromFileAndWait(params: {
+  nomadBaseUrl: string;
+  jobFilePath: string | URL;
+  jobId?: string;
+  taskEnvOverrides?: Record<string, string>;
+  timeoutMs?: number;
+}): Promise<{ jobId: string }> {
+  const registered = await nomadRegisterJobFromFile({
+    nomadBaseUrl: params.nomadBaseUrl,
+    jobFilePath: params.jobFilePath,
+    jobId: params.jobId,
+    taskEnvOverrides: params.taskEnvOverrides,
+  });
+  await waitForNomadJobRunning({
+    nomadBaseUrl: params.nomadBaseUrl,
+    jobId: registered.jobId,
+    timeoutMs: params.timeoutMs,
+  });
+  return registered;
 }

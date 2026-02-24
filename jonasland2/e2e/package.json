@@ -5,6 +5,12 @@
   "scripts": {
     "test": "vitest run"
   },
+  "dependencies": {
+    "@jonasland2/events-contract": "workspace:*",
+    "@jonasland2/orders-contract": "workspace:*",
+    "@jonasland2/shared": "workspace:*",
+    "@orpc/contract": "^1.13.5"
+  },
   "devDependencies": {
     "@docker/node-sdk": "^0.0.17",
     "mockttp": "^4.2.1",

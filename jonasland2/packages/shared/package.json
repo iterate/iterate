@@ -1,9 +1,11 @@
 {
-  "name": "@iterate-com/jonasland2-sandbox",
+  "name": "@jonasland2/shared",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@libsql/client": "^0.15.15",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
     "@opentelemetry/instrumentation-http": "^0.206.0",
@@ -11,23 +13,21 @@
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-node": "^0.206.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
-    "@orpc/client": "1.13.5",
-    "@orpc/contract": "1.13.5",
-    "@orpc/experimental-pino": "1.13.5",
-    "@orpc/openapi": "1.13.5",
-    "@orpc/openapi-client": "1.13.5",
-    "@orpc/otel": "1.13.5",
-    "@orpc/server": "1.13.5",
-    "@orpc/zod": "1.13.5",
-    "@vitejs/plugin-react": "^5.1.2",
-    "drizzle-orm": "^0.45.1",
-    "http-proxy": "^1.18.1",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/experimental-pino": "^1.13.5",
+    "@orpc/openapi": "^1.13.5",
+    "@orpc/openapi-client": "^1.13.5",
+    "@orpc/otel": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "@orpc/zod": "^1.13.5",
     "pino": "^10.1.0",
     "pino-opentelemetry-transport": "^2.0.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
     "vite": "^7.3.1",
-    "tsx": "^4.20.6",
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
   }
 }

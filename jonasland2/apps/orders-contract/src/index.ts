@@ -133,7 +133,7 @@ export const ordersServiceEnvSchema = z.object({
   ORDERS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19020),
   ORDERS_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland2/orders-service.sqlite"),
   EVENTS_SERVICE_BASE_URL: nonEmptyStringWithTrimDefault(
-    "http://events-service.service.consul:19010/api",
+    "http://events-service.service.consul:19010/orpc",
   ),
 });
 export type OrdersServiceEnv = z.infer<typeof ordersServiceEnvSchema>;

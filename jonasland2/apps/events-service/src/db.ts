@@ -22,8 +22,36 @@ export const eventsTable = sqliteTable("events", {
   updatedAt: text("updated_at").notNull(),
 });
 
+function readPragmaValue(
+  row: Record<string, unknown> | undefined,
+  expectedColumn: string,
+): string | null {
+  if (!row) return null;
+  const value = row[expectedColumn] ?? Object.values(row)[0];
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+export async function getEventsDbJournalMode(): Promise<string> {
+  const result = await client.execute("PRAGMA journal_mode;");
+  const value = readPragmaValue(
+    (result.rows[0] as Record<string, unknown> | undefined) ?? undefined,
+    "journal_mode",
+  );
+  return value?.toLowerCase() ?? "unknown";
+}
+
+export async function getEventsDbRuntimeConfig() {
+  return {
+    path: eventsDbPath,
+    journalMode: await getEventsDbJournalMode(),
+  };
+}
+
 export async function initializeEventsDb() {
   await mkdir(dirname(eventsDbPath), { recursive: true });
+  await client.execute("PRAGMA journal_mode = WAL;");
 
   await db.run(sql`
     CREATE TABLE IF NOT EXISTS events (

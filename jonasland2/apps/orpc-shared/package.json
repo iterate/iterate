@@ -6,16 +6,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
-    "@opentelemetry/instrumentation-http": "^0.206.0",
-    "@opentelemetry/instrumentation-undici": "^0.16.0",
-    "@opentelemetry/resources": "^2.1.0",
-    "@opentelemetry/sdk-node": "^0.206.0",
-    "@opentelemetry/semantic-conventions": "^1.38.0",
-    "@orpc/experimental-pino": "^1.13.5",
-    "@orpc/otel": "^1.13.5",
-    "pino": "^10.1.0",
-    "pino-opentelemetry-transport": "^2.0.0"
+    "@jonasland2/shared": "workspace:*"
   }
 }

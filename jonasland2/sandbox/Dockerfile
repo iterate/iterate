@@ -54,13 +54,15 @@ COPY --from=outerbase_studio /tmp/outerbase/public /opt/outerbase/public
 COPY --from=outerbase_studio /tmp/outerbase/.next/static /opt/outerbase/.next/static
 COPY sandbox/package.json /app/package.json
 COPY apps /app/apps
+COPY packages /app/packages
 RUN npm install --omit=dev --no-audit --no-fund
 RUN mkdir -p /app/node_modules/@jonasland2 && \
     ln -sf /app/apps/events-contract /app/node_modules/@jonasland2/events-contract && \
     ln -sf /app/apps/events-service /app/node_modules/@jonasland2/events-service && \
     ln -sf /app/apps/orders-contract /app/node_modules/@jonasland2/orders-contract && \
     ln -sf /app/apps/orders-service /app/node_modules/@jonasland2/orders-service && \
-    ln -sf /app/apps/orpc-shared /app/node_modules/@jonasland2/orpc-shared
+    ln -sf /app/apps/orpc-shared /app/node_modules/@jonasland2/orpc-shared && \
+    ln -sf /app/packages/shared /app/node_modules/@jonasland2/shared
 COPY sandbox/caddy/Caddyfile /etc/jonasland2/caddy/Caddyfile
 COPY sandbox/nomad/base.hcl /etc/jonasland2/nomad/base.hcl
 COPY sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland2/nomad/jobs/

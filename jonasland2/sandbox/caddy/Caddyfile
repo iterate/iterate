@@ -14,6 +14,7 @@
     @openobserve host openobserve.iterate.localhost
     handle @openobserve {
         reverse_proxy {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
             dynamic srv {
                 name openobserve.service.consul
                 resolvers 127.0.0.1:53
@@ -87,6 +88,7 @@
     @openobserve host openobserve.iterate.localhost
     handle @openobserve {
         reverse_proxy {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
             dynamic srv {
                 name openobserve.service.consul
                 resolvers 127.0.0.1:53

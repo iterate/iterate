@@ -4,7 +4,7 @@ import {
   createServiceContextMiddleware,
   infoFromContext,
   type ServiceInitialContext,
-} from "@jonasland2/orpc-shared";
+} from "@jonasland2/shared";
 import { desc, eq, sql } from "drizzle-orm";
 import { db, eventsTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";

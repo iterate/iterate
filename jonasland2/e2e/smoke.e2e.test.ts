@@ -1,22 +1,32 @@
 import { randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import { eventsServiceManifest } from "@jonasland2/events-contract";
 import { describe, expect, test } from "vitest";
 import {
   dockerContainerFixture,
   dockerPing,
   execInContainer,
   mockttpFixture,
+  nomadRegisterJobFromFileAndWait,
+  waitForNomadLeader,
   waitForHttpOk,
   webSocketEchoServerFixture,
 } from "./lib/fixtures.ts";
+import { startNomadServiceWithTypedClient } from "./lib/service-fixture.ts";
 
 const image = process.env.JONASLAND2_SANDBOX_IMAGE || "jonasland2-sandbox:local";
 const concurrentCaseIds = Array.from({ length: 10 }, (_, index) => `case-${String(index + 1)}`);
+const nomadJobsDir = new URL("../sandbox/nomad/jobs/", import.meta.url);
 
 function headerValue(headers: Record<string, string | string[] | undefined>, name: string) {
   const value = headers[name];
   if (Array.isArray(value)) return value[0];
   return value;
+}
+
+function nomadJobFile(jobFileName: string): URL {
+  return new URL(jobFileName, nomadJobsDir);
 }
 
 async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<string> }) {
@@ -28,6 +38,118 @@ async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<
       `${error instanceof Error ? error.message : String(error)}\ncontainer logs:\n${logs}`,
     );
   }
+}
+
+async function waitForNomadLeaderWithLogs(
+  nomadBaseUrl: string,
+  container: { logs(): Promise<string> },
+) {
+  try {
+    await waitForNomadLeader(nomadBaseUrl, 60_000);
+  } catch (error) {
+    const logs = await container.logs().catch(() => "(container logs unavailable)");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\ncontainer logs:\n${logs}`,
+    );
+  }
+}
+
+async function startNomadJobWithLogs(params: {
+  nomadBaseUrl: string;
+  container: { logs(): Promise<string> };
+  jobFileName: string;
+  jobId?: string;
+  taskEnvOverrides?: Record<string, string>;
+  timeoutMs?: number;
+}) {
+  try {
+    await nomadRegisterJobFromFileAndWait({
+      nomadBaseUrl: params.nomadBaseUrl,
+      jobFilePath: nomadJobFile(params.jobFileName),
+      jobId: params.jobId,
+      taskEnvOverrides: params.taskEnvOverrides,
+      timeoutMs: params.timeoutMs,
+    });
+  } catch (error) {
+    const logs = await params.container.logs().catch(() => "(container logs unavailable)");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\ncontainer logs:\n${logs}`,
+    );
+  }
+}
+
+async function requestViaCaddy(params: {
+  caddyPort: number;
+  host: string;
+  path: string;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+}): Promise<{ statusCode: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port: params.caddyPort,
+        path: params.path,
+        method: params.method ?? "GET",
+        headers: {
+          Host: params.host,
+          ...(params.headers ?? {}),
+        },
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            body,
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (params.body !== undefined) {
+      req.write(params.body);
+    }
+    req.end();
+  });
+}
+
+async function waitForCaddyRouteStatus(params: {
+  caddyPort: number;
+  host: string;
+  path: string;
+  expectedStatus?: number;
+  timeoutMs?: number;
+}) {
+  const expectedStatus = params.expectedStatus ?? 200;
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await requestViaCaddy({
+        caddyPort: params.caddyPort,
+        host: params.host,
+        path: params.path,
+      });
+      if (response.statusCode === expectedStatus) {
+        return response;
+      }
+    } catch {
+      // retry
+    }
+    await delay(150);
+  }
+
+  throw new Error(
+    `timed out waiting for route ${params.host}${params.path} status=${String(expectedStatus)}`,
+  );
 }
 
 describe("mockttp proxy fixture concurrency proof", () => {
@@ -96,17 +218,165 @@ describe("mockttp proxy fixture concurrency proof", () => {
 });
 
 describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
-  test("events service exposes /api endpoints and does not expose /api/orpc", async () => {
+  test("typed nomad service fixture starts events-service and returns typed oRPC client", async () => {
     await using container = await dockerContainerFixture({
       image,
-      name: `jonasland2-e2e-api-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "443/tcp", "2019/tcp"],
+      name: `jonasland2-e2e-typed-fixture-${randomUUID()}`,
+      exposedPorts: ["4646/tcp", "8500/tcp", "19010/tcp"],
+      extraHosts: ["host.docker.internal:host-gateway"],
+      capAdd: ["NET_ADMIN"],
+    });
+
+    const nomadPort = await container.publishedPort("4646/tcp");
+    const consulPort = await container.publishedPort("8500/tcp");
+    const eventsPort = await container.publishedPort("19010/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
+    const consulBaseUrl = `http://127.0.0.1:${String(consulPort)}`;
+
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+
+    const started = await startNomadServiceWithTypedClient({
+      nomadBaseUrl,
+      consulBaseUrl,
+      jobFilePath: nomadJobFile("events-service.nomad.hcl"),
+      jobId: "events-service",
+      serviceName: "events-service",
+      manifest: eventsServiceManifest,
+      clientEnv: {
+        ITERATE_PROJECT_BASE_URL: `http://127.0.0.1:${String(eventsPort)}`,
+      },
+      transport: "rpc-http",
+    });
+
+    expect(started.jobId).toBe("events-service");
+    expect(started.consulEntries.length).toBeGreaterThan(0);
+
+    const created = await started.client.events.create({
+      type: "smoke-typed-fixture",
+      payload: { source: "e2e" },
+    });
+    expect(created.type).toBe("smoke-typed-fixture");
+
+    const listed = await started.client.events.list({
+      limit: 10,
+      offset: 0,
+    });
+    expect(listed.total).toBeGreaterThan(0);
+  }, 120_000);
+
+  test("sqlite databases use WAL mode (verified outside container via caddy)", async () => {
+    await using container = await dockerContainerFixture({
+      image,
+      name: `jonasland2-e2e-sqlite-wal-${randomUUID()}`,
+      exposedPorts: ["80/tcp", "4646/tcp"],
       extraHosts: ["host.docker.internal:host-gateway"],
       capAdd: ["NET_ADMIN"],
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
+    const nomadPort = await container.publishedPort("4646/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
+
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "events-service.nomad.hcl",
+      jobId: "events-service",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "orders-service.nomad.hcl",
+      jobId: "orders-service",
+    });
+
+    await waitForCaddyRouteStatus({
+      caddyPort: caddyHttpPort,
+      host: "events.iterate.localhost",
+      path: "/healthz",
+    });
+    await waitForCaddyRouteStatus({
+      caddyPort: caddyHttpPort,
+      host: "orders.iterate.localhost",
+      path: "/healthz",
+    });
+
+    const createEvent = await requestViaCaddy({
+      caddyPort: caddyHttpPort,
+      host: "events.iterate.localhost",
+      path: "/api/events",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "wal-check",
+        payload: { source: "e2e" },
+      }),
+    });
+    expect(createEvent.statusCode).toBe(200);
+
+    const createOrder = await requestViaCaddy({
+      caddyPort: caddyHttpPort,
+      host: "orders.iterate.localhost",
+      path: "/api/orders",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        sku: "wal-check",
+        quantity: 1,
+      }),
+    });
+    expect(createOrder.statusCode).toBe(200);
+
+    const eventsObservability = await waitForCaddyRouteStatus({
+      caddyPort: caddyHttpPort,
+      host: "events.iterate.localhost",
+      path: "/api/observability",
+    });
+    const ordersObservability = await waitForCaddyRouteStatus({
+      caddyPort: caddyHttpPort,
+      host: "orders.iterate.localhost",
+      path: "/api/observability",
+    });
+
+    const eventsPayload = JSON.parse(eventsObservability.body) as {
+      sqlite?: { journalMode?: string };
+    };
+    const ordersPayload = JSON.parse(ordersObservability.body) as {
+      sqlite?: { journalMode?: string };
+    };
+
+    expect(eventsPayload.sqlite?.journalMode).toBe("wal");
+    expect(ordersPayload.sqlite?.journalMode).toBe("wal");
+  }, 120_000);
+
+  test("events service exposes /api endpoints and does not expose /api/orpc", async () => {
+    await using container = await dockerContainerFixture({
+      image,
+      name: `jonasland2-e2e-api-${randomUUID()}`,
+      exposedPorts: ["80/tcp", "443/tcp", "2019/tcp", "4646/tcp"],
+      extraHosts: ["host.docker.internal:host-gateway"],
+      capAdd: ["NET_ADMIN"],
+    });
+
+    const caddyHttpPort = await container.publishedPort("80/tcp");
+    const nomadPort = await container.publishedPort("4646/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "events-service.nomad.hcl",
+      jobId: "events-service",
+    });
+
     const eventsReadyDeadline = Date.now() + 60_000;
     let eventsReady = false;
     while (Date.now() < eventsReadyDeadline) {
@@ -223,17 +493,26 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland2-e2e-${randomUUID()}`,
-      env: {
-        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
-      },
-      exposedPorts: ["80/tcp", "443/tcp", "2019/tcp"],
+      exposedPorts: ["80/tcp", "443/tcp", "2019/tcp", "4646/tcp"],
       extraHosts: ["host.docker.internal:host-gateway", "upstream.iterate.localhost:203.0.113.10"],
       capAdd: ["NET_ADMIN"],
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
     const caddyAdminPort = await container.publishedPort("2019/tcp");
+    const nomadPort = await container.publishedPort("4646/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "egress.nomad.hcl",
+      jobId: "egress-proxy",
+      taskEnvOverrides: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
+      },
+    });
 
     const curlEndpoint = await proxy.server.forGet("/from-curl").thenCallback((request) => ({
       statusCode: 200,
@@ -327,8 +606,34 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     const caddyAdminPort = await container.publishedPort("2019/tcp");
     const nomadPort = await container.publishedPort("4646/tcp");
     const consulPort = await container.publishedPort("8500/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
 
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "openobserve.nomad.hcl",
+      jobId: "openobserve",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "otel-collector.nomad.hcl",
+      jobId: "otel-collector",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "events-service.nomad.hcl",
+      jobId: "events-service",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "orders-service.nomad.hcl",
+      jobId: "orders-service",
+    });
 
     let caddyAdminReady = false;
     const caddyAdminDeadline = Date.now() + 10_000;
@@ -408,6 +713,31 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     }
     expect(openobserveViaCaddyReady).toBe(true);
 
+    let openobserveApiNoAuthReady = false;
+    const openobserveApiNoAuthDeadline = Date.now() + 30_000;
+    while (Date.now() < openobserveApiNoAuthDeadline) {
+      const openobserveApiStatus = await execInContainer({
+        containerId: container.containerId,
+        cmd: [
+          "curl",
+          "-sS",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "-H",
+          "Host: openobserve.iterate.localhost",
+          "http://127.0.0.1/api/default/default/traces/latest?filter=&start_time=1&end_time=2&from=0&size=1",
+        ],
+      });
+      if (openobserveApiStatus.exitCode === 0 && openobserveApiStatus.output.trim() === "200") {
+        openobserveApiNoAuthReady = true;
+        break;
+      }
+      await delay(200);
+    }
+    expect(openobserveApiNoAuthReady).toBe(true);
+
     const traffic = await execInContainer({
       containerId: container.containerId,
       cmd: [
@@ -434,7 +764,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
         cmd: [
           "node",
           "-e",
-          "const run=async()=>{const start=(Date.now()-20*60*1000)*1000;const end=Date.now()*1000;const q=new URLSearchParams({filter:'',start_time:String(start),end_time:String(end),from:'0',size:'50'});const response=await fetch('http://127.0.0.1:5080/api/default/default/traces/latest?'+q,{headers:{Authorization:'Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM='}});if(!response.ok){throw new Error('openobserve traces query failed: '+response.status);}const payload=await response.json();const hits=Array.isArray(payload.hits)?payload.hits:[];const services=[...new Set(hits.flatMap((hit)=>Array.isArray(hit.service_name)?hit.service_name.map((entry)=>entry?.service_name).filter(Boolean):[]))];console.log(JSON.stringify({total:Number(payload.total??0),hits:hits.length,services}));};run().catch((error)=>{console.error(String(error));process.exit(1);});",
+          "const http=require('node:http');const run=async()=>{const start=(Date.now()-20*60*1000)*1000;const end=Date.now()*1000;const q=new URLSearchParams({filter:'',start_time:String(start),end_time:String(end),from:'0',size:'50'});const payload=await new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:80,path:'/api/default/default/traces/latest?'+q,method:'GET',headers:{Host:'openobserve.iterate.localhost'}},(res)=>{let body='';res.on('data',(chunk)=>{body+=String(chunk);});res.on('end',()=>{if((res.statusCode||0)!==200){reject(new Error('openobserve traces query failed: '+String(res.statusCode||0)));return;}try{resolve(JSON.parse(body));}catch(error){reject(error);}});});req.on('error',reject);req.end();});const hits=Array.isArray(payload.hits)?payload.hits:[];const services=[...new Set(hits.flatMap((hit)=>Array.isArray(hit.service_name)?hit.service_name.map((entry)=>entry?.service_name).filter(Boolean):[]))];console.log(JSON.stringify({total:Number(payload.total??0),hits:hits.length,services}));};run().catch((error)=>{console.error(String(error));process.exit(1);});",
         ],
       });
 
@@ -484,6 +814,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     let caddyHttpPort = await container.publishedPort("80/tcp");
     let nomadPort = await container.publishedPort("4646/tcp");
     let consulPort = await container.publishedPort("8500/tcp");
+    let nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
 
     const waitForCoreServices = async () => {
       const deadline = Date.now() + 90_000;
@@ -550,7 +881,25 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     };
 
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
-    await waitForHttpOk(`http://127.0.0.1:${String(nomadPort)}/v1/status/leader`, 60_000);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "openobserve.nomad.hcl",
+      jobId: "openobserve",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "events-service.nomad.hcl",
+      jobId: "events-service",
+    });
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "orders-service.nomad.hcl",
+      jobId: "orders-service",
+    });
     await waitForCoreServices();
 
     expect(await readNomadDevMode()).toBe(false);
@@ -559,9 +908,10 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     caddyHttpPort = await container.publishedPort("80/tcp");
     nomadPort = await container.publishedPort("4646/tcp");
     consulPort = await container.publishedPort("8500/tcp");
+    nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
 
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
-    await waitForHttpOk(`http://127.0.0.1:${String(nomadPort)}/v1/status/leader`, 90_000);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
     await waitForCoreServices();
 
     expect(await readNomadDevMode()).toBe(false);
@@ -577,16 +927,25 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland2-e2e-ws-${randomUUID()}`,
-      env: {
-        ITERATE_EXTERNAL_EGRESS_PROXY: wsUpstream.url,
-      },
-      exposedPorts: ["80/tcp", "443/tcp"],
+      exposedPorts: ["80/tcp", "443/tcp", "4646/tcp"],
       extraHosts: ["host.docker.internal:host-gateway", "upstream.iterate.localhost:203.0.113.10"],
       capAdd: ["NET_ADMIN"],
     });
 
     const caddyHttpPort = await container.publishedPort("80/tcp");
+    const nomadPort = await container.publishedPort("4646/tcp");
+    const nomadBaseUrl = `http://127.0.0.1:${String(nomadPort)}`;
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForNomadLeaderWithLogs(nomadBaseUrl, container);
+    await startNomadJobWithLogs({
+      nomadBaseUrl,
+      container,
+      jobFileName: "egress.nomad.hcl",
+      jobId: "egress-proxy",
+      taskEnvOverrides: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: wsUpstream.url,
+      },
+    });
 
     const wsClient = await execInContainer({
       containerId: container.containerId,
