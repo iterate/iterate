@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { format } from "node:util";
 import { RPCHandler } from "@orpc/server/node";
 import { onError } from "@orpc/server";
@@ -121,6 +122,15 @@ const cliRouter = os.router({
 
         // Parse and validate the config with Valibot
         const config = v.parse(ManagerConfig, rawConfig);
+        const autosaveFile =
+          config.state?.autosaveFile ?? join(homedir(), ".pidnap", "autosave.json");
+        const configWithState = {
+          ...config,
+          state: {
+            ...config.state,
+            autosaveFile,
+          },
+        };
 
         // Extract HTTP config with defaults
         const host = config.http?.host ?? "127.0.0.1";
@@ -128,9 +138,9 @@ const cliRouter = os.router({
         const authToken = config.http?.authToken;
 
         // Create manager with config
-        const logDir = config.logDir ?? resolve(process.cwd(), "logs");
+        const logDir = configWithState.logDir ?? resolve(process.cwd(), "logs");
         const managerLogger = logger({ name: "pidnap", logFile: resolve(logDir, "pidnap.log") });
-        const manager = new Manager(config, managerLogger);
+        const manager = new Manager(configWithState, managerLogger);
 
         // Setup ORPC server with optional auth token middleware
         const handler = new RPCHandler(router, {

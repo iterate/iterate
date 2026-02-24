@@ -2,7 +2,12 @@ import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import { EnvOptions } from "../manager.ts";
+import {
+  DesiredProcessState,
+  EnvOptions,
+  ProcessDefinitionPatch,
+  ProcessPersistence,
+} from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -28,9 +33,13 @@ export const ProcessDefinitionInfoSchema = v.object({
   args: v.optional(v.array(v.string())),
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
+  inheritProcessEnv: v.optional(v.boolean()),
 });
 
 export type ProcessDefinitionInfo = v.InferOutput<typeof ProcessDefinitionInfoSchema>;
+
+export const ProcessSourceSchema = v.picklist(["config", "overlay"]);
+export type ProcessSource = v.InferOutput<typeof ProcessSourceSchema>;
 
 // API response schemas
 export const RestartingProcessInfoSchema = v.object({
@@ -40,6 +49,9 @@ export const RestartingProcessInfoSchema = v.object({
   restarts: v.number(),
   definition: ProcessDefinitionInfoSchema,
   effectiveEnv: v.optional(v.record(v.string(), v.string())),
+  source: ProcessSourceSchema,
+  persistence: ProcessPersistence,
+  desiredState: DesiredProcessState,
 });
 
 export type RestartingProcessInfo = v.InferOutput<typeof RestartingProcessInfoSchema>;
@@ -73,6 +85,8 @@ export const processes = {
         options: v.optional(RestartingProcessOptions),
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
+        persistence: v.optional(ProcessPersistence),
+        desiredState: v.optional(DesiredProcessState),
       }),
     )
     .output(RestartingProcessInfoSchema),
@@ -88,10 +102,20 @@ export const processes = {
         definition: ProcessDefinition,
         restartImmediately: v.optional(v.boolean()),
         tags: v.optional(v.array(v.string())),
+        persistence: v.optional(ProcessPersistence),
+        desiredState: v.optional(DesiredProcessState),
       }),
     )
     .output(RestartingProcessInfoSchema),
   remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
+  applyPatches: oc
+    .input(
+      v.object({
+        upserts: v.optional(v.record(v.string(), ProcessDefinitionPatch)),
+        deletes: v.optional(v.array(v.string())),
+      }),
+    )
+    .output(v.object({ success: v.boolean() })),
   waitForRunning: oc
     .input(
       v.object({
