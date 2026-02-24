@@ -36,6 +36,29 @@ describe("Manager autosave state", () => {
     ).toThrow(/autosave state/i);
   });
 
+  it("keeps numeric list/get targets consistent when manager is not running", async () => {
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        state: { autosaveFile: autosavePath },
+      },
+      createMockLogger(),
+    );
+
+    await manager.updateProcessConfig({
+      processSlug: "alpha",
+      definition: longRunningProcess,
+    });
+    await manager.updateProcessConfig({
+      processSlug: "beta",
+      definition: longRunningProcess,
+    });
+
+    const listed = manager.listManagedProcessEntries();
+    expect(listed[1]?.name).toBe("beta");
+    expect(manager.getManagedProcessEntry(1)?.name).toBe("beta");
+  });
+
   it("restores durable upserts across manager restarts", async () => {
     const manager = new Manager(
       {

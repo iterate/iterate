@@ -512,8 +512,9 @@ export class Manager {
     if (typeof target === "string") {
       return this.restartingProcesses.get(target);
     }
-    const entries = Array.from(this.restartingProcesses.values());
-    return entries[target];
+    const name = (this.config.processes ?? [])[target]?.name;
+    if (!name) return undefined;
+    return this.restartingProcesses.get(name);
   }
 
   /**
@@ -626,6 +627,7 @@ export class Manager {
       persist?: boolean;
       persistence?: ProcessPersistence;
       desiredState?: DesiredProcessState;
+      skipEntryUpdate?: boolean;
     },
   ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
@@ -654,7 +656,7 @@ export class Manager {
       proc.updateTags(options.tags);
     }
 
-    if (currentEntry) {
+    if (currentEntry && !options?.skipEntryUpdate) {
       const nextEntry: RestartingProcessEntry = {
         ...currentEntry,
         definition: newDefinition,
@@ -801,10 +803,7 @@ export class Manager {
         desiredState: DesiredProcessState;
       })
     | undefined {
-    const name =
-      typeof target === "string"
-        ? target
-        : Array.from(this.restartingProcesses.values())[target]?.name;
+    const name = typeof target === "string" ? target : (this.config.processes ?? [])[target]?.name;
     if (!name) return undefined;
     const entry = this.getProcessEntryByName(name);
     if (!entry) return undefined;
@@ -875,6 +874,7 @@ export class Manager {
           persist: false,
           persistence: nextPersistence,
           desiredState: nextDesiredState,
+          skipEntryUpdate: true,
         });
       }
     }
