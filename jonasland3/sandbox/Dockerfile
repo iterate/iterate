@@ -51,8 +51,12 @@ COPY jonasland3/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland3/nomad/jobs/
 COPY jonasland3/sandbox/caddy/Caddyfile /etc/jonasland3/caddy/Caddyfile
 COPY jonasland3/sandbox/caddymanager/Caddyfile /etc/jonasland3/caddymanager/Caddyfile
 COPY jonasland3/sandbox/scripts/run-caddymanager-backend.sh /etc/jonasland3/scripts/run-caddymanager-backend.sh
+COPY jonasland3/sandbox/scripts/bootstrap-caddymanager.sh /etc/jonasland3/scripts/bootstrap-caddymanager.sh
 COPY jonasland3/sandbox/start.sh /etc/jonasland3/start.sh
-RUN chmod +x /etc/jonasland3/start.sh /etc/jonasland3/scripts/run-caddymanager-backend.sh
+RUN chmod +x \
+    /etc/jonasland3/start.sh \
+    /etc/jonasland3/scripts/run-caddymanager-backend.sh \
+    /etc/jonasland3/scripts/bootstrap-caddymanager.sh
 
 VOLUME ["/nomad-data", "/consul-data", "/caddy-data", "/caddymanager-data"]
 EXPOSE 53 80 443 8500 8501 4646 2019

@@ -37,6 +37,65 @@ async function waitForDynamicSrv(containerId: string, timeoutMs = 45_000): Promi
   throw new Error("timed out waiting for dynamic srv route to nomad");
 }
 
+async function waitForCaddyManagerSeed(
+  caddyManagerPort: number,
+  timeoutMs = 45_000,
+): Promise<{ serversCount: number; configsCount: number; hasLocalCaddy: boolean }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const loginResponse = await fetch(
+        `http://127.0.0.1:${String(caddyManagerPort)}/api/v1/auth/login`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username: "admin", password: "caddyrocks" }),
+        },
+      );
+      if (!loginResponse.ok) {
+        await delay(250);
+        continue;
+      }
+      const loginBody = (await loginResponse.json()) as { token?: string };
+      if (!loginBody.token) {
+        await delay(250);
+        continue;
+      }
+
+      const headers = { authorization: `Bearer ${loginBody.token}` };
+      const serversResponse = await fetch(
+        `http://127.0.0.1:${String(caddyManagerPort)}/api/v1/caddy/servers`,
+        { headers },
+      );
+      const configsResponse = await fetch(
+        `http://127.0.0.1:${String(caddyManagerPort)}/api/v1/caddy/configs`,
+        { headers },
+      );
+      if (!serversResponse.ok || !configsResponse.ok) {
+        await delay(250);
+        continue;
+      }
+
+      const servers = (await serversResponse.json()) as {
+        count?: number;
+        data?: Array<{ name?: string }>;
+      };
+      const configs = (await configsResponse.json()) as { count?: number };
+      const serversCount = servers.count ?? 0;
+      const configsCount = configs.count ?? 0;
+      const hasLocalCaddy = (servers.data ?? []).some((server) => server.name === "local-caddy");
+      if (serversCount > 0 && configsCount > 0 && hasLocalCaddy) {
+        return { serversCount, configsCount, hasLocalCaddy };
+      }
+    } catch {
+      // retry
+    }
+    await delay(250);
+  }
+
+  throw new Error("timed out waiting for caddymanager seed data");
+}
+
 describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
   test("caddy admin is API-only: browser-style navigate is rejected", async () => {
     await using container = await dockerContainerFixture({
@@ -104,6 +163,11 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     expect(caddyManagerConfig.ok).toBe(true);
     const caddyManagerConfigText = await caddyManagerConfig.text();
     expect(caddyManagerConfigText).toContain('"api_base_url": "/api/v1"');
+
+    const seedState = await waitForCaddyManagerSeed(caddyManagerPort);
+    expect(seedState.serversCount > 0).toBe(true);
+    expect(seedState.configsCount > 0).toBe(true);
+    expect(seedState.hasLocalCaddy).toBe(true);
 
     const caddyAdmin = await execInContainer({
       containerId: container.containerId,
