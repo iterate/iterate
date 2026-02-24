@@ -206,8 +206,9 @@ const router = {
           .string()
           .optional()
           .describe(
-            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Arbitrary prefixes must start with 'test-'.",
+            "App name prefix to target. Falls back to SANDBOX_NAME_PREFIX env var. Arbitrary prefixes must start with 'test-' unless you pass --i-am-totally-sure.",
           ),
+        iAmTotallySure: z.boolean().optional().describe("Bypass prefix restriction"),
         all: z
           .boolean()
           .default(false)
@@ -225,10 +226,10 @@ const router = {
       if (!prefix) {
         throw new Error("Missing --prefix. Pass it explicitly or set SANDBOX_NAME_PREFIX.");
       }
-      if (!ALLOWED_PREFIXES.has(prefix)) {
+      if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
         if (!prefix.startsWith("test-")) {
           throw new Error(
-            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted.`,
+            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted. Use --i-am-totally-sure to bypass this restriction.`,
           );
         }
       }
