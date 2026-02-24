@@ -130,7 +130,7 @@ export default {
         },
         {
           if: "steps.check_changes.outputs.commits != '0'",
-          ...utils.githubScript(
+          ...(await utils.githubScript(
             import.meta,
             { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
             async function create_release({ github, context }) {
@@ -146,7 +146,7 @@ export default {
                 ].join("\n"),
               });
             },
-          ),
+          )),
         },
       ],
     },
