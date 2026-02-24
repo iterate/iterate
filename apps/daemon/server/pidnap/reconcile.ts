@@ -60,6 +60,7 @@ export async function reconcilePidnapProcesses(): Promise<void> {
       options: processConfig.options,
       envOptions: processConfig.envOptions,
       tags: processConfig.tags,
+      restartImmediately: false,
     });
     console.log(`[pidnap-reconcile] upserted process: ${processConfig.name}`);
   }
