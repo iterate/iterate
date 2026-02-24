@@ -74,6 +74,77 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  orders:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.12.2)
+      '@jonasland5/events-contract':
+        specifier: workspace:*
+        version: link:../events-contract
+      '@jonasland5/orders-contract':
+        specifier: workspace:*
+        version: link:../orders-contract
+      '@jonasland5/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@libsql/client':
+        specifier: ^0.15.15
+        version: 0.15.15
+      '@orpc/client':
+        specifier: ^1.13.5
+        version: 1.13.5
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5
+      '@orpc/openapi':
+        specifier: ^1.13.5
+        version: 1.13.5(ws@8.19.0)
+      '@orpc/server':
+        specifier: ^1.13.5
+        version: 1.13.5(ws@8.19.0)
+      '@orpc/zod':
+        specifier: ^1.13.5
+        version: 1.13.5(@orpc/contract@1.13.5)(@orpc/server@1.13.5(ws@8.19.0))(ws@8.19.0)(zod@4.3.6)
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@libsql/client@0.15.15)
+      hono:
+        specifier: ^4.11.10
+        version: 4.12.2
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.3.0
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  orders-contract:
+    dependencies:
+      '@jonasland5/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.3.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   services:
     dependencies:
       '@accelerated-software-development/caddy-api-client':

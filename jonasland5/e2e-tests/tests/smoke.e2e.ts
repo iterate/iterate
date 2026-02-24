@@ -90,6 +90,57 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     expect(listed.events.some((event) => event.id === created.id)).toBe(true);
   });
 
+  test("orders service is reachable and emits order_placed events", async () => {
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland5-e2e-orders-${randomUUID()}`,
+    });
+
+    const health = await deployment.exec(
+      "curl -fsS -H 'Host: orders.iterate.localhost' http://127.0.0.1/healthz",
+    );
+    expect(health.exitCode).toBe(0);
+    expect(health.output.trim()).toBe("ok");
+
+    const placeResult = await deployment.exec(
+      "curl -fsS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{\"sku\":\"sku-123\",\"quantity\":2}' http://127.0.0.1/api/orders",
+    );
+    expect(placeResult.exitCode).toBe(0);
+    const placed = JSON.parse(placeResult.output) as {
+      id: string;
+      eventId: string;
+      sku: string;
+      quantity: number;
+      status: string;
+    };
+    expect(placed.id.length).toBeGreaterThan(0);
+    expect(placed.eventId.length).toBeGreaterThan(0);
+    expect(placed.sku).toBe("sku-123");
+    expect(placed.quantity).toBe(2);
+    expect(placed.status).toBe("accepted");
+
+    const findOrderResult = await deployment.exec(
+      `curl -fsS -H 'Host: orders.iterate.localhost' 'http://127.0.0.1/api/orders/${placed.id}'`,
+    );
+    expect(findOrderResult.exitCode).toBe(0);
+    const found = JSON.parse(findOrderResult.output) as { id: string; eventId: string };
+    expect(found.id).toBe(placed.id);
+    expect(found.eventId).toBe(placed.eventId);
+
+    const findEventResult = await deployment.exec(
+      `curl -fsS -H 'Host: events.iterate.localhost' 'http://127.0.0.1/api/events/${placed.eventId}'`,
+    );
+    expect(findEventResult.exitCode).toBe(0);
+    const emitted = JSON.parse(findEventResult.output) as {
+      id: string;
+      type: string;
+      payload: { orderId?: string };
+    };
+    expect(emitted.id).toBe(placed.eventId);
+    expect(emitted.type).toBe("order_placed");
+    expect(emitted.payload.orderId).toBe(placed.id);
+  });
+
   test("services sqlite state persists across container restart", async () => {
     await using deployment = await projectDeployment({
       image,

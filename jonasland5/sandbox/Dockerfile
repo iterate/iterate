@@ -30,6 +30,8 @@ COPY jonasland5/services/pnpm-lock.yaml /opt/jonasland5-services/pnpm-lock.yaml
 COPY jonasland5/services/shared /opt/jonasland5-services/shared
 COPY jonasland5/services/events-contract /opt/jonasland5-services/events-contract
 COPY jonasland5/services/events /opt/jonasland5-services/events
+COPY jonasland5/services/orders-contract /opt/jonasland5-services/orders-contract
+COPY jonasland5/services/orders /opt/jonasland5-services/orders
 COPY jonasland5/services/services-contract /opt/jonasland5-services/services-contract
 COPY jonasland5/services/services /opt/jonasland5-services/services
 RUN pnpm install --prod --frozen-lockfile

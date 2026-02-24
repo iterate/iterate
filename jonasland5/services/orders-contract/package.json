@@ -1,0 +1,21 @@
+{
+  "name": "@jonasland5/orders-contract",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@jonasland5/shared": "workspace:*",
+    "@orpc/contract": "^1.13.5",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}

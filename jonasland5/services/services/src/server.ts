@@ -38,6 +38,7 @@ function buildCaddyLoadPayload(params: {
     buildHostRoute({ host: "pidnap.iterate.localhost", dial: "127.0.0.1:9876" }),
     buildHostRoute({ host: "services.iterate.localhost", dial: "127.0.0.1:8777" }),
     buildHostRoute({ host: "events.iterate.localhost", dial: "127.0.0.1:19010" }),
+    buildHostRoute({ host: "orders.iterate.localhost", dial: "127.0.0.1:19020" }),
     buildHostRoute({ host: "caddy-admin.iterate.localhost", dial: "127.0.0.1:2019" }),
   ];
 

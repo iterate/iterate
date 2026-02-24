@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit",
     "services:start": "tsx ../services/services/src/server.ts",
     "services:example-service": "tsx services/example-ephemeral-service.ts",
-    "events:start": "tsx ../services/events/src/server.ts"
+    "events:start": "tsx ../services/events/src/server.ts",
+    "orders:start": "tsx ../services/orders/src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",

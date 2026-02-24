@@ -45,6 +45,19 @@ export default {
       },
     },
     {
+      name: "orders",
+      definition: {
+        command: "/opt/jonasland5-services/node_modules/.bin/tsx",
+        args: ["/opt/jonasland5-services/orders/src/server.ts"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
       name: "egress-proxy",
       definition: {
         command: "node",

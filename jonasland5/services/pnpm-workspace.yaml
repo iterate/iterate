@@ -2,5 +2,7 @@ packages:
   - shared
   - events-contract
   - events
+  - orders-contract
+  - orders
   - services-contract
   - services
