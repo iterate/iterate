@@ -10,6 +10,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-${randomUUID()}`,
+      processes: ["caddy"],
     });
 
     await deployment.waitForHealthyWithLogs({ url: `${await deployment.ingressUrl()}/` });
@@ -29,6 +30,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-home-outerbase-${randomUUID()}`,
+      processes: ["caddy", "home", "outerbase"],
     });
 
     const home = await deployment.exec(
@@ -49,6 +51,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-${randomUUID()}`,
+      processes: ["caddy", "services"],
     });
 
     await deployment.waitForPidnapHostRoute({});
@@ -82,6 +85,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-events-${randomUUID()}`,
+      processes: ["caddy", "events"],
     });
 
     const health = await deployment.exec(
@@ -114,6 +118,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-orders-${randomUUID()}`,
+      processes: ["caddy", "orders", "events"],
     });
 
     const health = await deployment.exec(
@@ -165,6 +170,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-persist-${randomUUID()}`,
+      processes: ["caddy", "services"],
     });
 
     const routeHost = `persist-${randomUUID().slice(0, 8)}.iterate.localhost`;
@@ -195,6 +201,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-${randomUUID()}`,
+      processes: ["caddy"],
     });
 
     await deployment.waitForPidnapProcessRunning({
@@ -253,6 +260,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
       image,
       name: `jonasland5-e2e-egress-${randomUUID()}`,
       extraHosts: ["host.docker.internal:host-gateway"],
+      processes: ["caddy", "egress-proxy"],
       env: {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
@@ -295,6 +303,7 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
       image,
       name: `jonasland5-e2e-egress-direct-${randomUUID()}`,
       extraHosts: ["host.docker.internal:host-gateway"],
+      processes: ["caddy", "egress-proxy"],
     });
 
     const directTarget = `${proxy.proxyUrl}/direct-target`;

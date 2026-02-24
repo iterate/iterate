@@ -13,6 +13,7 @@ export {
   type MockEgressRecord,
   type MockEgressWaitForHandle,
 } from "./mock-egress-proxy.ts";
+export { mockttpFixture } from "./mockttp-fixture.ts";
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
 
@@ -389,6 +390,50 @@ async function waitForHostRouteViaContainer(params: {
   throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
 }
 
+export const DEFAULT_SANDBOX_PROCESSES = [
+  "caddy",
+  "services",
+  "events",
+  "orders",
+  "home",
+  "outerbase",
+  "egress-proxy",
+] as const;
+
+export type SandboxProcessName = (typeof DEFAULT_SANDBOX_PROCESSES)[number];
+
+function normalizeRequestedProcesses(
+  processes?: readonly SandboxProcessName[],
+): SandboxProcessName[] {
+  const selected =
+    processes && processes.length > 0 ? [...processes] : [...DEFAULT_SANDBOX_PROCESSES];
+  const withCaddy = selected.includes("caddy")
+    ? selected
+    : (["caddy", ...selected] as SandboxProcessName[]);
+  return [...new Set(withCaddy)];
+}
+
+function withProcessSelectionEnv(
+  env: Record<string, string> | string[] | undefined,
+  processes: readonly SandboxProcessName[],
+): Record<string, string> | string[] {
+  const selectedValue = processes.join(",");
+  if (!env) {
+    return {
+      JONASLAND5_ENABLED_PROCESSES: selectedValue,
+    };
+  }
+
+  if (Array.isArray(env)) {
+    return [...env, `JONASLAND5_ENABLED_PROCESSES=${selectedValue}`];
+  }
+
+  return {
+    ...env,
+    JONASLAND5_ENABLED_PROCESSES: selectedValue,
+  };
+}
+
 export interface ProjectDeployment {
   ports: {
     ingress: number;
@@ -473,13 +518,15 @@ export async function projectDeployment(params: {
   extraHosts?: string[];
   capAdd?: string[];
   env?: Record<string, string> | string[];
+  processes?: readonly SandboxProcessName[];
 }): Promise<ProjectDeployment> {
+  const selectedProcesses = normalizeRequestedProcesses(params.processes);
   const exposedPorts = ["80/tcp"];
   const capAdd = params.capAdd ?? ["NET_ADMIN"];
   const container = await dockerContainerFixture({
     image: params.image,
     name: params.name,
-    env: params.env,
+    env: withProcessSelectionEnv(params.env, selectedProcesses),
     exposedPorts,
     extraHosts: params.extraHosts,
     capAdd,
@@ -513,51 +560,38 @@ export async function projectDeployment(params: {
       url: `${ingressBaseUrl}/`,
       timeoutMs: 45_000,
     });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "caddy",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "services",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "events",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "orders",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "home",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "outerbase",
-      timeoutMs: 45_000,
-    });
-    await waitForPidnapProcessRunning({
-      client: pidnap,
-      target: "egress-proxy",
-      timeoutMs: 45_000,
-    });
-    await waitForServicesReady({
-      client: services,
-      timeoutMs: 45_000,
-    });
-    await waitForHostRouteViaContainer({
-      containerId: container.containerId,
-      host: "events.iterate.localhost",
-      path: "/healthz",
-      timeoutMs: 45_000,
-    });
+    for (const processName of selectedProcesses) {
+      await waitForPidnapProcessRunning({
+        client: pidnap,
+        target: processName,
+        timeoutMs: 45_000,
+      });
+    }
+
+    if (selectedProcesses.includes("services")) {
+      await waitForServicesReady({
+        client: services,
+        timeoutMs: 45_000,
+      });
+    }
+
+    const hostRouteChecks: Partial<Record<SandboxProcessName, { host: string; path: string }>> = {
+      events: { host: "events.iterate.localhost", path: "/healthz" },
+      orders: { host: "orders.iterate.localhost", path: "/healthz" },
+      home: { host: "home.iterate.localhost", path: "/" },
+      outerbase: { host: "outerbase.iterate.localhost", path: "/healthz" },
+    };
+
+    for (const processName of selectedProcesses) {
+      const check = hostRouteChecks[processName];
+      if (!check) continue;
+      await waitForHostRouteViaContainer({
+        containerId: container.containerId,
+        host: check.host,
+        path: check.path,
+        timeoutMs: 45_000,
+      });
+    }
   };
 
   await waitForRuntimeReady();

@@ -1420,6 +1420,9 @@ importers:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      mockttp:
+        specifier: ^4.2.1
+        version: 4.2.1(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1475,6 +1478,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/openapi':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -1484,12 +1490,24 @@ importers:
       '@orpc/zod':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.2
+        version: 5.1.2(vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
       hono:
         specifier: ^4.11.10
         version: 4.12.2
+      react:
+        specifier: ^19.2.0
+        version: 19.2.3
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.3(react@19.2.3)
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       ws:
         specifier: ^8.18.3
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -1497,6 +1515,12 @@ importers:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      '@types/react':
+        specifier: ^19.2.3
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19.2.2
+        version: 19.2.3(@types/react@19.2.7)
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -1540,6 +1564,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1555,12 +1582,24 @@ importers:
       '@orpc/zod':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.2
+        version: 5.1.2(vite@7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
       hono:
         specifier: ^4.11.10
         version: 4.12.2
+      react:
+        specifier: ^19.2.0
+        version: 19.2.3
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.3(react@19.2.3)
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       ws:
         specifier: ^8.18.3
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -1568,6 +1607,12 @@ importers:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      '@types/react':
+        specifier: ^19.2.3
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19.2.2
+        version: 19.2.3(@types/react@19.2.7)
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -1649,12 +1694,54 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
+      '@opentelemetry/exporter-trace-otlp-http':
+        specifier: ^0.206.0
+        version: 0.206.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/instrumentation-http':
+        specifier: ^0.206.0
+        version: 0.206.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/instrumentation-undici':
+        specifier: ^0.16.0
+        version: 0.16.2(@opentelemetry/api@1.9.0)
+      '@opentelemetry/resources':
+        specifier: ^2.1.0
+        version: 2.5.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-node':
+        specifier: ^0.206.0
+        version: 0.206.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/semantic-conventions':
+        specifier: ^1.38.0
+        version: 1.38.0
+      '@orpc/client':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
       '@orpc/contract':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
+      '@orpc/openapi-client':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      '@orpc/otel':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)(@opentelemetry/instrumentation@0.206.0(@opentelemetry/api@1.9.0))
       '@orpc/server':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@orpc/zod':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      evlog:
+        specifier: ^1.8.0
+        version: 1.8.0
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod:
         specifier: ^4.1.11
         version: 4.1.13
