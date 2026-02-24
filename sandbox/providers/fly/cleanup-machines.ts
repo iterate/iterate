@@ -27,7 +27,7 @@ const FLY_ORG_APPS_QUERY = `
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string().optional(),
   FLY_ORG: z.string().default("iterate"),
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]).optional(),
+  SANDBOX_NAME_PREFIX: z.string().optional(),
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;
@@ -191,7 +191,10 @@ async function listAppNamesByPrefix(params: {
 
 const router = {
   cleanup: os
-    .meta({ description: "Stop or delete idle Fly machines for a given prefix", default: true })
+    .meta({
+      description: "Stop or delete idle Fly machines for a given prefix",
+      default: true,
+    })
     .input(
       z.object({
         timeframe: z

@@ -33,6 +33,7 @@
     "build": "tsdown",
     "typecheck": "tsgo --noEmit",
     "test": "vitest",
+    "test:docker": "PIDNAP_RUN_DOCKER_TESTS=1 vitest run tests/docker-autosave.test.ts",
     "prepack": "pnpm build",
     "docker:dev": "docker build -t pidnap -f Dockerfile.example . && docker run --rm --name pidnap-dev pidnap",
     "docker:shell": "docker exec -it pidnap-dev bash"
