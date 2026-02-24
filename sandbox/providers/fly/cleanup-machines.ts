@@ -191,7 +191,10 @@ async function listAppNamesByPrefix(params: {
 
 const router = {
   cleanup: os
-    .meta({ description: "Stop or delete idle Fly machines for a given prefix", default: true })
+    .meta({
+      description: "Stop or delete idle Fly machines for a given prefix",
+      default: true,
+    })
     .input(
       z.object({
         timeframe: z
