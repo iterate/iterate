@@ -389,15 +389,24 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     });
     expect(consulViaCaddy.exitCode).toBe(0);
 
-    const openobserveViaCaddy = await execInContainer({
-      containerId: container.containerId,
-      cmd: [
-        "sh",
-        "-lc",
-        "curl -fsSL -H 'Host: openobserve.iterate.localhost' http://127.0.0.1/web/login | grep -qi '<title>OpenObserve'",
-      ],
-    });
-    expect(openobserveViaCaddy.exitCode).toBe(0);
+    let openobserveViaCaddyReady = false;
+    const openobserveViaCaddyDeadline = Date.now() + 30_000;
+    while (Date.now() < openobserveViaCaddyDeadline) {
+      const openobserveViaCaddy = await execInContainer({
+        containerId: container.containerId,
+        cmd: [
+          "sh",
+          "-lc",
+          "curl -fsSL -H 'Host: openobserve.iterate.localhost' http://127.0.0.1/web/login | grep -qi '<title>OpenObserve'",
+        ],
+      });
+      if (openobserveViaCaddy.exitCode === 0) {
+        openobserveViaCaddyReady = true;
+        break;
+      }
+      await delay(200);
+    }
+    expect(openobserveViaCaddyReady).toBe(true);
 
     const traffic = await execInContainer({
       containerId: container.containerId,
@@ -462,6 +471,105 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     expect(traceSummary?.services).toContain("jonasland2-orders-service");
     expect(traceSummary?.services).toContain("jonasland2-events-service");
   }, 180_000);
+
+  test("nomad services recover after container restart (non-dev agent)", async () => {
+    await using container = await dockerContainerFixture({
+      image,
+      name: `jonasland2-e2e-restart-${randomUUID()}`,
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp", "2019/tcp"],
+      extraHosts: ["host.docker.internal:host-gateway"],
+      capAdd: ["NET_ADMIN"],
+    });
+
+    let caddyHttpPort = await container.publishedPort("80/tcp");
+    let nomadPort = await container.publishedPort("4646/tcp");
+    let consulPort = await container.publishedPort("8500/tcp");
+
+    const waitForCoreServices = async () => {
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch(
+            `http://127.0.0.1:${String(consulPort)}/v1/catalog/services`,
+          );
+          if (response.ok) {
+            const services = (await response.json()) as Record<string, unknown>;
+            const required = ["caddy", "events-service", "orders-service", "openobserve"];
+            if (required.every((name) => name in services)) {
+              return services;
+            }
+          }
+        } catch {
+          // retry
+        }
+        await delay(300);
+      }
+
+      throw new Error("timed out waiting for core services in consul catalog");
+    };
+    const readNomadDevMode = async () => {
+      const response = await fetch(`http://127.0.0.1:${String(nomadPort)}/v1/agent/self`);
+      expect(response.ok).toBe(true);
+      const payload = (await response.json()) as {
+        config?: {
+          DevMode?: boolean;
+        };
+      };
+      return payload.config?.DevMode ?? false;
+    };
+    const waitForNomadJobRunning = async (jobId: string) => {
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch(
+            `http://127.0.0.1:${String(nomadPort)}/v1/job/${jobId}/summary`,
+          );
+          if (!response.ok) {
+            await delay(300);
+            continue;
+          }
+          const payload = (await response.json()) as {
+            Summary?: Record<
+              string,
+              {
+                Running?: number;
+              }
+            >;
+          };
+          const groups = Object.values(payload.Summary ?? {});
+          if (groups.some((group) => (group.Running ?? 0) > 0)) {
+            return;
+          }
+        } catch {
+          // retry
+        }
+        await delay(300);
+      }
+
+      throw new Error(`timed out waiting for running nomad job: ${jobId}`);
+    };
+
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForHttpOk(`http://127.0.0.1:${String(nomadPort)}/v1/status/leader`, 60_000);
+    await waitForCoreServices();
+
+    expect(await readNomadDevMode()).toBe(false);
+
+    await container.restart();
+    caddyHttpPort = await container.publishedPort("80/tcp");
+    nomadPort = await container.publishedPort("4646/tcp");
+    consulPort = await container.publishedPort("8500/tcp");
+
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
+    await waitForHttpOk(`http://127.0.0.1:${String(nomadPort)}/v1/status/leader`, 90_000);
+    await waitForCoreServices();
+
+    expect(await readNomadDevMode()).toBe(false);
+
+    await waitForNomadJobRunning("caddy");
+    await waitForNomadJobRunning("events-service");
+    await waitForNomadJobRunning("orders-service");
+  }, 240_000);
 
   test("websockets are proxied via caddy+egress and upstream sees proxy headers", async () => {
     await using wsUpstream = await webSocketEchoServerFixture();

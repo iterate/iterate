@@ -107,6 +107,17 @@ export async function dockerContainerFixture(params: {
 
       return `${stdoutCapture.flush()}${stderrCapture.flush()}`;
     },
+    async restart() {
+      await docker.containerStop(created.Id, { timeout: 10 }).catch(() => {});
+      await docker.containerStart(created.Id);
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const inspect = await docker.containerInspect(created.Id);
+        if (inspect.State?.Running) return;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`container failed to restart: ${created.Id}`);
+    },
     async [Symbol.asyncDispose]() {
       await docker.containerStop(created.Id, { timeout: 3 }).catch(() => {});
       await docker.containerDelete(created.Id, { force: true }).catch(() => {});

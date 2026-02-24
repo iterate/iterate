@@ -95,7 +95,7 @@ wait_for_caddy_egress_route_tls() {
   exit 1
 }
 
-nomad agent -dev -config=/etc/jonasland2/nomad/base.hcl &
+nomad agent -config=/etc/jonasland2/nomad/base.hcl &
 NOMAD_PID="$!"
 
 stop_nomad() {

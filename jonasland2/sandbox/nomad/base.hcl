@@ -8,6 +8,12 @@ addresses {
   serf = "0.0.0.0"
 }
 
+advertise {
+  http = "127.0.0.1:4646"
+  rpc  = "127.0.0.1:4647"
+  serf = "127.0.0.1:4648"
+}
+
 server {
   enabled          = true
   bootstrap_expect = 1
