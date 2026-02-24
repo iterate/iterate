@@ -128,6 +128,10 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH="/usr/local/go/bin:/home/iterate/go/bin:$PATH"
 ENV GOPATH="/home/iterate/go"
 
+# Install flyctl (Fly.io CLI)
+RUN curl -L https://fly.io/install.sh | sh
+ENV PATH="/home/iterate/.fly/bin:$PATH"
+
 # Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
 # Uses mmkal's fork with --access-token support for headless/proxy environments
 RUN mkdir -p /home/iterate/.local/bin && \
