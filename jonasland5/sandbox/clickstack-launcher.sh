@@ -2,6 +2,7 @@
 set -eu
 
 ROOT="/opt/clickstack-root"
+ENTRY_BASE="$ROOT/etc/local/entry.base.sh"
 
 mkdir -p "$ROOT/dev" "$ROOT/proc" "$ROOT/sys"
 
@@ -21,6 +22,12 @@ printf "127.0.0.1 localhost\n127.0.0.1 ch-server\n127.0.0.1 db\n" > "$ROOT/etc/h
 printf "nameserver 127.0.0.1\n" > "$ROOT/etc/resolv.conf"
 
 mkdir -p "$ROOT/etc/clickhouse-server/config.d" "$ROOT/etc/clickhouse-server/users.d"
+
+# Upstream clickstack-local entry exits on first child exit (wait -n), which causes
+# pidnap restart flapping and intermittent 502s on the HyperDX UI route.
+if [ -f "$ENTRY_BASE" ] && grep -q "wait -n" "$ENTRY_BASE"; then
+  sed -i 's/wait -n/wait/' "$ENTRY_BASE"
+fi
 
 cat > "$ROOT/etc/clickhouse-server/config.d/zz-jonasland5-memory.xml" <<'XML'
 <clickhouse>
@@ -57,4 +64,4 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-exec chroot "$ROOT" /bin/sh -lc "cd /app && exec /etc/local/entry.sh"
+chroot "$ROOT" /bin/sh -lc "cd /app && exec /etc/local/entry.sh"
