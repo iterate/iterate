@@ -73,7 +73,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp"],
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp", "8501/tcp"],
       capAdd: ["SYS_ADMIN"],
       cgroupnsMode: "host",
       binds: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"],
@@ -82,6 +82,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     const nomadPort = await container.publishedPort("4646/tcp");
     const consulPort = await container.publishedPort("8500/tcp");
     const caddyHttpPort = await container.publishedPort("80/tcp");
+    const caddyManagerPort = await container.publishedPort("8501/tcp");
 
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/`, container);
     await waitForHealthyWithLogs(
@@ -92,7 +93,17 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
       `http://127.0.0.1:${String(consulPort)}/v1/status/leader`,
       container,
     );
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyManagerPort)}/`, container);
+    await waitForHealthyWithLogs(
+      `http://127.0.0.1:${String(caddyManagerPort)}/api/v1/health`,
+      container,
+    );
     await waitForDynamicSrv(container.containerId);
+
+    const caddyManagerConfig = await fetch(`http://127.0.0.1:${String(caddyManagerPort)}/config`);
+    expect(caddyManagerConfig.ok).toBe(true);
+    const caddyManagerConfigText = await caddyManagerConfig.text();
+    expect(caddyManagerConfigText).toContain('"api_base_url": "/api/v1"');
 
     const caddyAdmin = await execInContainer({
       containerId: container.containerId,
@@ -108,5 +119,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     expect("consul" in services).toBe(true);
     expect("nomad" in services).toBe(true);
     expect("caddy" in services).toBe(true);
+    expect("caddymanager-backend" in services).toBe(true);
+    expect("caddymanager-ui" in services).toBe(true);
   }, 120_000);
 });
