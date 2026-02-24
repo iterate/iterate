@@ -21,6 +21,7 @@ job "clickstack" {
         HYPERDX_APP_PORT = "${NOMAD_PORT_http}"
         HYPERDX_API_PORT = "${NOMAD_PORT_api}"
         HYPERDX_APP_URL  = "http://clickstack.iterate.localhost"
+        NODE_OPTIONS     = "--max-old-space-size=256"
       }
 
       config {
@@ -42,7 +43,7 @@ job "clickstack" {
 
       resources {
         cpu    = 1200
-        memory = 4096
+        memory = 3072
       }
     }
   }

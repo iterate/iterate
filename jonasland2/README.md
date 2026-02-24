@@ -121,3 +121,79 @@ Run this Nomad job:
 ```bash
 nomad job run /etc/jonasland2/nomad/jobs/clickstack.nomad.hcl
 ```
+
+## ClickStack low-memory profile
+
+`sandbox/clickstack-launcher.sh` enforces a low-memory profile at startup by writing:
+
+- `/etc/clickhouse-server/config.d/zz-jonasland2-memory.xml`
+- `/etc/clickhouse-server/users.d/zz-jonasland2-memory.xml`
+
+Applied defaults:
+
+- `max_server_memory_usage=2147483648` (2 GiB server cap)
+- `max_server_memory_usage_to_ram_ratio=0.5`
+- `max_memory_usage=1073741824` (1 GiB/query)
+- `max_memory_usage_for_user=2147483648`
+- `max_memory_usage_for_all_queries=3221225472`
+- `max_bytes_before_external_group_by=268435456` (spill at 256 MiB)
+- `max_bytes_before_external_sort=268435456` (spill at 256 MiB)
+- `max_bytes_in_join=134217728`
+- `max_rows_in_join=1000000`
+- `join_algorithm=auto`
+- `max_threads=4`
+- `max_insert_threads=2`
+- `use_uncompressed_cache=0`
+
+`sandbox/nomad/jobs/clickstack.nomad.hcl` also sets:
+
+- `NODE_OPTIONS=--max-old-space-size=256` for HyperDX node processes
+- Nomad task memory reservation `3072`
+
+Verify active settings:
+
+```bash
+docker exec jonasland2-live sh -lc "
+chroot /opt/clickstack-root clickhouse-client --query \"
+SELECT name, value
+FROM system.server_settings
+WHERE name IN ('max_server_memory_usage','max_server_memory_usage_to_ram_ratio')
+ORDER BY name
+\";
+chroot /opt/clickstack-root clickhouse-client --query \"
+SELECT name, value
+FROM system.settings
+WHERE name IN (
+  'max_memory_usage',
+  'max_memory_usage_for_user',
+  'max_memory_usage_for_all_queries',
+  'max_bytes_before_external_group_by',
+  'max_bytes_before_external_sort',
+  'max_bytes_in_join',
+  'max_rows_in_join',
+  'join_algorithm',
+  'max_threads',
+  'max_insert_threads'
+)
+ORDER BY name
+\"
+"
+```
+
+Find top memory-heavy queries:
+
+```bash
+docker exec jonasland2-live sh -lc "
+chroot /opt/clickstack-root clickhouse-client --query \"
+SELECT
+  event_time,
+  formatReadableSize(memory_usage) AS memory,
+  normalizedQueryHash(query) AS query_hash,
+  query
+FROM system.query_log
+WHERE type = 'QueryFinish'
+ORDER BY memory_usage DESC
+LIMIT 20
+\"
+"
+```
