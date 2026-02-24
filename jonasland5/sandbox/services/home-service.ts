@@ -18,17 +18,10 @@ const platformLinks = [
   { label: "ClickStack", host: "clickstack.iterate.localhost", path: "/" },
 ] as const;
 
-const services = [
+const platformServices = [
   {
     label: "Events Service",
     host: "events.iterate.localhost",
-    frontendPath: "/",
-    apiPath: "/healthz",
-    docsPath: "/api/docs",
-  },
-  {
-    label: "Orders Service",
-    host: "orders.iterate.localhost",
     frontendPath: "/",
     apiPath: "/healthz",
     docsPath: "/api/docs",
@@ -56,8 +49,19 @@ const services = [
   },
 ] as const;
 
+const services = [
+  {
+    label: "Orders Service",
+    host: "orders.iterate.localhost",
+    frontendPath: "/",
+    apiPath: "/healthz",
+    docsPath: "/api/docs",
+  },
+] as const;
+
 function buildHomeHtml(): string {
   const platformLinksJson = JSON.stringify(platformLinks).replaceAll("<", "\\u003c");
+  const platformServicesJson = JSON.stringify(platformServices).replaceAll("<", "\\u003c");
   const servicesJson = JSON.stringify(services).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <html lang="en">
@@ -122,6 +126,14 @@ function buildHomeHtml(): string {
         margin: 0;
         padding: 0;
         list-style: none;
+      }
+      .section-label {
+        margin: 0.9rem 0 0.25rem 0;
+        font-size: 0.72rem;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: #6b7280;
+        font-weight: 700;
       }
       .platform-item,
       .service-item {
@@ -200,6 +212,8 @@ function buildHomeHtml(): string {
         <section class="column">
           <h2>Platform</h2>
           <ul id="platform-links" class="platform-list" aria-label="Platform links"></ul>
+          <p class="section-label">Platform Services</p>
+          <ul id="platform-service-list" class="service-list" aria-label="Platform services"></ul>
         </section>
         <section class="column">
           <h2>Services</h2>
@@ -209,6 +223,7 @@ function buildHomeHtml(): string {
     </main>
     <script>
       const platformLinks = ${platformLinksJson};
+      const platformServices = ${platformServicesJson};
       const services = ${servicesJson};
       const port = window.location.port ? ":" + window.location.port : "";
       const protocol = window.location.protocol || "http:";
@@ -228,14 +243,19 @@ function buildHomeHtml(): string {
         return "<div class=\\\"service-row\\\"><span class=\\\"row-label\\\">" + name + "</span>" + value + "</div>";
       };
 
-      const serviceList = document.getElementById("service-list");
-      serviceList.innerHTML = services.map((service) => {
+      const renderServiceItem = (service) => {
         return "<li class=\\\"service-item\\\"><h3 class=\\\"service-name\\\">" + service.label + "</h3><div class=\\\"service-rows\\\">"
           + renderRow("Frontend", service.host, service.frontendPath, service.frontendHint || "has no frontend")
           + renderRow("API", service.host, service.apiPath, service.apiHint || "has no api")
           + renderRow("Docs", service.host, service.docsPath, service.docsHint || "has no docs")
           + "</div></li>";
-      }).join("");
+      };
+
+      const platformServiceList = document.getElementById("platform-service-list");
+      platformServiceList.innerHTML = platformServices.map(renderServiceItem).join("");
+
+      const serviceList = document.getElementById("service-list");
+      serviceList.innerHTML = services.map(renderServiceItem).join("");
     </script>
   </body>
 </html>`;
