@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and, isNull, inArray } from "drizzle-orm";
+import { eq, ne, and, isNull, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import * as arctic from "arctic";
 import {
@@ -153,11 +153,14 @@ export const projectRouter = {
         ...ProjectInput.shape,
         name: z.string().min(1).max(100).optional(),
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
-        // TODO(custom-domain): Add customDomain to the input schema:
-        //   customDomain: z.string().max(253).nullable().optional(),
-        // Validate: must be a valid hostname (no scheme, port, path, or wildcard).
-        // null clears the custom domain back to default iterate.app.
-        // Also need to check uniqueness across all projects.
+        customDomain: z
+          .string()
+          .max(253)
+          .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/, {
+            message: "Must be a valid hostname (e.g. example.com or sub.example.com)",
+          })
+          .nullable()
+          .optional(),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
@@ -188,14 +191,27 @@ export const projectRouter = {
         }
       }
 
-      // TODO(custom-domain): Include customDomain in the .set() spread below.
-      // Use `input.customDomain !== undefined` (not truthy) since null means "clear".
-      // When setting a custom domain, also trigger CF for SaaS custom hostname creation.
+      // Validate custom domain uniqueness if being set
+      if (input.customDomain !== undefined && input.customDomain !== null) {
+        const existing = await ctx.db.query.project.findFirst({
+          where: and(
+            eq(project.customDomain, input.customDomain),
+            ne(project.id, ctx.project.id),
+          ),
+        });
+        if (existing) {
+          throw new ORPCError("CONFLICT", {
+            message: `Custom domain '${input.customDomain}' is already in use by another project`,
+          });
+        }
+      }
+
       const [updated] = await ctx.db
         .update(project)
         .set({
           ...(input.name && { name: input.name }),
           ...(input.sandboxProvider && { sandboxProvider: input.sandboxProvider }),
+          ...(input.customDomain !== undefined && { customDomain: input.customDomain }),
         })
         .where(eq(project.id, ctx.project.id))
         .returning();

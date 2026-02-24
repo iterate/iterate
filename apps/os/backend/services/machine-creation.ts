@@ -82,6 +82,7 @@ export async function buildMachineEnvVars(params: {
   machineId: string;
   name: string;
   apiKey: string;
+  customDomain?: string | null;
 }): Promise<Record<string, string>> {
   const {
     db,
@@ -93,6 +94,7 @@ export async function buildMachineEnvVars(params: {
     machineId,
     name,
     apiKey,
+    customDomain,
   } = params;
 
   const globalEnvVars = await db.query.projectEnvVar.findMany({
@@ -104,14 +106,12 @@ export async function buildMachineEnvVars(params: {
 
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
-  // TODO(custom-domain): Pass project.customDomain here. When set, buildMachineIngressEnvVars
-  // should use the custom domain for ITERATE_PROJECT_BASE_URL and ITERATE_PROJECT_INGRESS_DOMAIN.
-  // This requires fetching the project record (or accepting customDomain as a param).
   const ingressEnvVars = buildMachineIngressEnvVars({
     projectSlug,
     projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,
     osBaseUrl: env.VITE_PUBLIC_URL,
     scheme: getIngressSchemeFromPublicUrl(env.VITE_PUBLIC_URL),
+    customDomain,
   });
 
   return {

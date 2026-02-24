@@ -32,6 +32,15 @@ const MAX_PORT = 65_535;
 const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
 
+/**
+ * Named service aliases — map friendly subdomain names to port numbers.
+ * e.g. `opencode.templestein.com` → port 4096
+ */
+export const SERVICE_ALIASES: Record<string, number> = {
+  opencode: 4096,
+  terminal: 4096,
+};
+
 // ---------------------------------------------------------------------------
 // 4a. Parse a project ingress hostname into project/machine + port
 // ---------------------------------------------------------------------------
@@ -53,16 +62,6 @@ export type ParsedIngressHostname =
  *
  * If identifier starts with `mach_`, it's a machine target; otherwise it's a project slug.
  */
-// TODO(custom-domain): This function needs a custom-domain-aware overload or sibling.
-// For custom domains, the hostname structure is different:
-//   templestein.com             → project target, port 3000
-//   4096.templestein.com        → project target, port 4096 (dot separator, not __)
-//   opencode.templestein.com    → project target, port from SERVICE_ALIASES map
-//   4096__mach123.templestein.com → machine target, port 4096
-// Consider adding: parseCustomDomainHostname(hostname, customDomain) that extracts
-// the subdomain label and resolves it against the alias map or as a port number.
-// The SERVICE_ALIASES map should live here too:
-//   const SERVICE_ALIASES: Record<string, number> = { opencode: 4096, terminal: 4096 };
 export function parseProjectIngressHostname(hostname: string): ParsedIngressHostname {
   const normalized = hostname.toLowerCase();
   const labels = normalized.split(".").filter(Boolean);
@@ -104,6 +103,108 @@ export function parseProjectIngressHostname(hostname: string): ParsedIngressHost
 }
 
 // ---------------------------------------------------------------------------
+// 4a-bis. Parse a custom domain hostname into target + port
+// ---------------------------------------------------------------------------
+
+export type CustomDomainTarget =
+  | { kind: "project"; targetPort: number }
+  | { kind: "machine"; machineId: string; targetPort: number };
+
+export type ParsedCustomDomainHostname =
+  | { ok: true; target: CustomDomainTarget }
+  | { ok: false; error: "not_custom_domain" | "invalid_subdomain" };
+
+/**
+ * Parse a hostname against a known custom domain.
+ *
+ * Custom domain hostnames:
+ *   `templestein.com`                     → project, port 3000
+ *   `4096.templestein.com`                → project, port 4096
+ *   `opencode.templestein.com`            → project, port from SERVICE_ALIASES
+ *   `4096__mach_abc.templestein.com`      → machine mach_abc, port 4096
+ *   `mach_abc.templestein.com`            → machine mach_abc, port 3000
+ *
+ * Returns `{ ok: false, error: "not_custom_domain" }` if the hostname
+ * is not the custom domain or a subdomain of it.
+ */
+export function parseCustomDomainHostname(
+  hostname: string,
+  customDomain: string,
+): ParsedCustomDomainHostname {
+  const normalizedHostname = hostname.toLowerCase();
+  const normalizedCustomDomain = customDomain.toLowerCase();
+
+  // Exact match — root custom domain, port 3000
+  if (normalizedHostname === normalizedCustomDomain) {
+    return { ok: true, target: { kind: "project", targetPort: DEFAULT_TARGET_PORT } };
+  }
+
+  // Must be a subdomain of the custom domain
+  if (!normalizedHostname.endsWith(`.${normalizedCustomDomain}`)) {
+    return { ok: false, error: "not_custom_domain" };
+  }
+
+  // Extract the subdomain label (everything before the custom domain)
+  const subdomainPart = normalizedHostname.slice(
+    0,
+    normalizedHostname.length - normalizedCustomDomain.length - 1,
+  );
+
+  // Only support single-level subdomains (e.g. "4096" but not "a.b")
+  // Exception: machine-targeting with port (e.g. "4096__mach_abc")
+  if (!subdomainPart || subdomainPart.includes(".")) {
+    return { ok: false, error: "invalid_subdomain" };
+  }
+
+  // Check for machine target with port prefix: `4096__mach_abc`
+  const separatorIndex = subdomainPart.indexOf("__");
+  if (separatorIndex > 0) {
+    const rawPort = subdomainPart.slice(0, separatorIndex);
+    const identifier = subdomainPart.slice(separatorIndex + 2);
+    const port = parsePort(rawPort);
+    if (port && identifier.startsWith("mach_")) {
+      return { ok: true, target: { kind: "machine", machineId: identifier, targetPort: port } };
+    }
+    // Invalid format
+    return { ok: false, error: "invalid_subdomain" };
+  }
+
+  // Check for machine target without port: `mach_abc`
+  if (subdomainPart.startsWith("mach_")) {
+    return {
+      ok: true,
+      target: { kind: "machine", machineId: subdomainPart, targetPort: DEFAULT_TARGET_PORT },
+    };
+  }
+
+  // Check for service alias: `opencode`
+  const aliasPort = SERVICE_ALIASES[subdomainPart];
+  if (aliasPort !== undefined) {
+    return { ok: true, target: { kind: "project", targetPort: aliasPort } };
+  }
+
+  // Check for numeric port: `4096`
+  const port = parsePort(subdomainPart);
+  if (port) {
+    return { ok: true, target: { kind: "project", targetPort: port } };
+  }
+
+  return { ok: false, error: "invalid_subdomain" };
+}
+
+/**
+ * Check if a hostname is a custom domain or subdomain of one.
+ */
+export function isCustomDomainHostname(hostname: string, customDomain: string): boolean {
+  const normalizedHostname = hostname.toLowerCase();
+  const normalizedCustomDomain = customDomain.toLowerCase();
+  return (
+    normalizedHostname === normalizedCustomDomain ||
+    normalizedHostname.endsWith(`.${normalizedCustomDomain}`)
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 4b. Produce env vars for machines
 // ---------------------------------------------------------------------------
 
@@ -114,23 +215,31 @@ export function parseProjectIngressHostname(hostname: string): ParsedIngressHost
  *   - `ITERATE_PROJECT_BASE_URL`        — e.g. `https://my-proj.iterate.app`
  *   - `ITERATE_OS_BASE_URL`             — e.g. `https://os.iterate.com`
  *   - `ITERATE_PROJECT_INGRESS_DOMAIN`  — e.g. `iterate.app`
+ *
+ * When `customDomain` is set, the base URL and ingress domain use the custom
+ * domain instead of `<slug>.<ingressDomain>`.
  */
-// TODO(custom-domain): Add optional `customDomain` param. When set:
-//   ITERATE_PROJECT_BASE_URL = `${scheme}://${customDomain}` (not slug.iterate.app)
-//   ITERATE_PROJECT_INGRESS_DOMAIN = customDomain (not iterate.app)
-// This makes all daemon-side URL builders (observability links, agent debug links,
-// buildProjectPortUrl, etc.) automatically use the custom domain.
 export function buildMachineIngressEnvVars(params: {
   projectSlug: string;
   projectIngressDomain: string;
   osBaseUrl: string;
   scheme: "http" | "https";
+  customDomain?: string | null;
 }): {
   ITERATE_PROJECT_BASE_URL: string;
   ITERATE_OS_BASE_URL: string;
   ITERATE_PROJECT_INGRESS_DOMAIN: string;
 } {
-  const { projectSlug, projectIngressDomain, osBaseUrl, scheme } = params;
+  const { projectSlug, projectIngressDomain, osBaseUrl, scheme, customDomain } = params;
+
+  if (customDomain) {
+    return {
+      ITERATE_PROJECT_BASE_URL: `${scheme}://${customDomain}`,
+      ITERATE_OS_BASE_URL: osBaseUrl,
+      ITERATE_PROJECT_INGRESS_DOMAIN: customDomain,
+    };
+  }
+
   return {
     ITERATE_PROJECT_BASE_URL: `${scheme}://${projectSlug}.${projectIngressDomain}`,
     ITERATE_OS_BASE_URL: osBaseUrl,

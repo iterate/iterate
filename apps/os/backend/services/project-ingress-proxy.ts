@@ -1,11 +1,14 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import {
   isProjectIngressHostname,
+  isCustomDomainHostname,
   parseProjectIngressHostname,
+  parseCustomDomainHostname,
   type IngressTarget,
   type ParsedIngressHostname,
+  type CustomDomainTarget,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { AuthSession } from "../auth/auth.ts";
@@ -67,19 +70,42 @@ export function getProjectIngressRequestHostname(request: Request): string {
 
 /**
  * Check if a hostname should be handled as project ingress.
- * Uses the PROJECT_INGRESS_DOMAIN env var — matches any subdomain of it.
+ * Checks both the standard PROJECT_INGRESS_DOMAIN and any custom domains in the DB.
  */
-// TODO(custom-domain): This is the hot-path gate for every request. Must also check
-// if the hostname matches a known custom domain. Options:
-//   (a) DB query with Cache API (short TTL) — simplest, fine for few custom domains
-//   (b) KV store of custom domains — faster, requires sync on domain change
-//   (c) In-memory Set loaded on worker init — fast but stale until redeploy
-// For MVP, (a) is fine. The check becomes:
-//   return isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN)
-//       || await isCustomDomainHostname(hostname);
-// Note: making this async requires changing the caller in worker.ts.
-export function shouldHandleProjectIngressHostname(hostname: string, env: CloudflareEnv): boolean {
-  return isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN);
+export async function shouldHandleProjectIngressHostname(
+  hostname: string,
+  env: CloudflareEnv,
+): Promise<boolean> {
+  if (isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN)) {
+    return true;
+  }
+  // Check if hostname matches any project's custom domain
+  const customDomainProject = await findProjectByCustomDomainHostname(hostname);
+  return customDomainProject !== null;
+}
+
+/**
+ * Find a project whose custom_domain matches the given hostname (or is a parent of it).
+ * For MVP, this does a simple DB query. Could be cached later.
+ */
+async function findProjectByCustomDomainHostname(
+  hostname: string,
+): Promise<typeof schema.project.$inferSelect | null> {
+  const db = getDb();
+  const normalizedHostname = hostname.toLowerCase();
+
+  // Get all projects with custom domains (should be very few)
+  const projectsWithCustomDomains = await db.query.project.findMany({
+    where: isNotNull(schema.project.customDomain),
+  });
+
+  for (const proj of projectsWithCustomDomains) {
+    if (proj.customDomain && isCustomDomainHostname(normalizedHostname, proj.customDomain)) {
+      return proj;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -344,13 +370,6 @@ function buildParseDetails(params: {
   return details;
 }
 
-// TODO(custom-domain): This function needs a second code path for custom domain hostnames.
-// When the hostname doesn't match PROJECT_INGRESS_DOMAIN but IS a known custom domain:
-//   1. Look up the project by custom_domain column (DB query, cached)
-//   2. Parse the subdomain as a port number, service alias, or machine ID
-//   3. Skip the slug-based project resolution — we already have the project from step 1
-//   4. Canonical redirect should use the custom domain, not iterate.app
-// The auth bridge also needs updating — the redirect target must be the custom domain host.
 export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
@@ -365,9 +384,17 @@ export async function handleProjectIngressRequest(
     return jsonError(500, "ingress_not_configured", { hostname: requestHostname });
   }
 
+  // Check if this is a custom domain request
   if (!isProjectIngressHostname(requestHostname, projectIngressDomain)) {
-    // TODO(custom-domain): Instead of 404 here, check if hostname is/is-subdomain-of a custom domain.
-    // If yes, resolve project by custom_domain, parse subdomain for port/alias, and continue proxy flow.
+    const customDomainResponse = await handleCustomDomainRequest(
+      request,
+      url,
+      requestHostname,
+      env,
+      session,
+    );
+    if (customDomainResponse) return customDomainResponse;
+
     return jsonError(
       404,
       "not_found",
@@ -499,6 +526,109 @@ export async function handleProjectIngressRequest(
         machineState: machine.state,
         machineType: machine.type,
       },
+      proxyError: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Handle a request for a custom domain hostname.
+ * Returns a Response if handled, or null if this hostname isn't a known custom domain.
+ */
+async function handleCustomDomainRequest(
+  request: Request,
+  url: URL,
+  requestHostname: string,
+  env: CloudflareEnv,
+  session: AuthSession,
+): Promise<Response | null> {
+  // Find the project by custom domain
+  const project = await findProjectByCustomDomainHostname(requestHostname);
+  if (!project || !project.customDomain) return null;
+
+  // Parse the custom domain hostname into a target
+  const parsed = parseCustomDomainHostname(requestHostname, project.customDomain);
+  if (!parsed.ok) {
+    return jsonError(400, parsed.error, { hostname: requestHostname });
+  }
+
+  if (isAlwaysControlPlanePath(url.pathname)) {
+    return null;
+  }
+
+  // Auth bridge — redirect to control plane login if no session
+  if (!session) {
+    const controlPlaneBridgeStartUrl = buildControlPlaneProjectIngressProxyBridgeStartUrl({
+      controlPlanePublicUrl: env.VITE_PUBLIC_URL,
+      projectIngressProxyHost: requestHostname,
+      redirectPath: `${url.pathname}${url.search}`,
+    });
+    return Response.redirect(controlPlaneBridgeStartUrl.toString(), 302);
+  }
+
+  const { target } = parsed;
+
+  // Resolve machine based on target type
+  let machine: typeof schema.machine.$inferSelect | null = null;
+
+  if (target.kind === "project") {
+    // Find the active machine for this project
+    const db = getDb();
+    // Verify access
+    const membershipRows = await db
+      .select({ membershipId: schema.organizationUserMembership.id })
+      .from(schema.organizationUserMembership)
+      .where(
+        and(
+          eq(schema.organizationUserMembership.organizationId, project.organizationId),
+          eq(schema.organizationUserMembership.userId, session.user.id),
+        ),
+      )
+      .limit(1);
+
+    if (membershipRows.length === 0 && session.user.role !== "admin") {
+      return jsonError(403, "forbidden", { hostname: requestHostname });
+    }
+
+    machine =
+      (await db.query.machine.findFirst({
+        where: and(eq(schema.machine.projectId, project.id), eq(schema.machine.state, "active")),
+      })) ?? null;
+  } else {
+    // Machine target — resolve directly
+    const resolved = await resolveMachineForIngress(target as unknown as IngressTarget, session.user.id, session.user.role === "admin");
+    machine = resolved.machine;
+    if (resolved.accessDenied) {
+      return jsonError(403, "forbidden", { hostname: requestHostname });
+    }
+  }
+
+  if (!machine) {
+    return jsonError(404, "machine_not_found", { hostname: requestHostname });
+  }
+  if (!machine.externalId) {
+    return jsonError(503, "machine_unavailable", { hostname: requestHostname });
+  }
+
+  try {
+    const runtime = await createMachineStub({
+      type: machine.type,
+      env,
+      externalId: machine.externalId,
+      metadata: (machine.metadata as Record<string, unknown>) ?? {},
+    });
+    const fetcher = await runtime.getFetcher(SANDBOX_INGRESS_PORT);
+    const pathWithQuery = `${url.pathname}${url.search}`;
+    return await proxyWithFetcher(request, pathWithQuery, fetcher, requestHostname);
+  } catch (error) {
+    logger.error("[project-ingress] Failed to proxy custom domain request", error, {
+      host: requestHostname,
+      customDomain: project.customDomain,
+      machine: { id: machine.id },
+      machineType: machine.type,
+    });
+    return jsonError(502, "proxy_error", {
+      hostname: requestHostname,
       proxyError: error instanceof Error ? error.message : String(error),
     });
   }

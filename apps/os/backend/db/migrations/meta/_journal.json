@@ -183,6 +183,13 @@
       "when": 1771799253438,
       "tag": "0025_swift_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1771974134510,
+      "tag": "0026_amusing_chimera",
+      "breakpoints": true
     }
   ]
 }

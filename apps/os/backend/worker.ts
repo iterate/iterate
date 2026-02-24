@@ -214,15 +214,9 @@ app.get("/api/trpc-cli-procedures", (c) => {
   });
 });
 
-// TODO(custom-domain): This middleware is the entry point for all ingress routing.
-// shouldHandleProjectIngressHostname() must also match custom domain hostnames.
-// If making the check async (for DB/cache lookup), change this to await the check.
-// Also: CF for SaaS will route custom domain traffic to this worker automatically,
-// but the worker route patterns in alchemy.run.ts only match *.iterate.app today.
-// With CF for SaaS, custom domains are routed via the fallback origin — no route changes needed.
 app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
-  if (shouldHandleProjectIngressHostname(requestDomain, c.env)) {
+  if (await shouldHandleProjectIngressHostname(requestDomain, c.env)) {
     const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
     if (ingressResponse) return ingressResponse;
   }

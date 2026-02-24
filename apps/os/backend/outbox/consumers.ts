@@ -62,6 +62,7 @@ export const registerConsumers = () => {
         machineId,
         name: machine.name,
         apiKey,
+        customDomain: machine.project.customDomain,
       });
 
       const initialMetadata = stripMachineStateMetadata(

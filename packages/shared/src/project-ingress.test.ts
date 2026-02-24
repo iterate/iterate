@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   parseProjectIngressHostname,
+  parseCustomDomainHostname,
+  isCustomDomainHostname,
   buildMachineIngressEnvVars,
   buildProjectPortUrl,
   buildMachinePortUrl,
   isProjectIngressHostname,
+  SERVICE_ALIASES,
 } from "./project-ingress.ts";
 
 describe("parseProjectIngressHostname", () => {
@@ -220,5 +223,118 @@ describe("isProjectIngressHostname", () => {
 
   it("case insensitive", () => {
     expect(isProjectIngressHostname("My-Proj.Iterate.App", "iterate.app")).toBe(true);
+  });
+});
+
+describe("parseCustomDomainHostname", () => {
+  it("exact match → project, default port", () => {
+    const result = parseCustomDomainHostname("templestein.com", "templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 3000 } });
+  });
+
+  it("numeric subdomain → project, explicit port", () => {
+    const result = parseCustomDomainHostname("4096.templestein.com", "templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
+  });
+
+  it("service alias → project, aliased port", () => {
+    const result = parseCustomDomainHostname("opencode.templestein.com", "templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.opencode } });
+  });
+
+  it("terminal alias → project, aliased port", () => {
+    const result = parseCustomDomainHostname("terminal.templestein.com", "templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.terminal } });
+  });
+
+  it("machine with port → machine target", () => {
+    const result = parseCustomDomainHostname("4096__mach_abc123.templestein.com", "templestein.com");
+    expect(result).toEqual({
+      ok: true,
+      target: { kind: "machine", machineId: "mach_abc123", targetPort: 4096 },
+    });
+  });
+
+  it("machine without port → machine target, default port", () => {
+    const result = parseCustomDomainHostname("mach_abc123.templestein.com", "templestein.com");
+    expect(result).toEqual({
+      ok: true,
+      target: { kind: "machine", machineId: "mach_abc123", targetPort: 3000 },
+    });
+  });
+
+  it("subdomain custom domain — exact match", () => {
+    const result = parseCustomDomainHostname("iterate.templestein.com", "iterate.templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 3000 } });
+  });
+
+  it("subdomain custom domain — port subdomain", () => {
+    const result = parseCustomDomainHostname("4096.iterate.templestein.com", "iterate.templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
+  });
+
+  it("not_custom_domain for unrelated hostname", () => {
+    const result = parseCustomDomainHostname("example.com", "templestein.com");
+    expect(result).toEqual({ ok: false, error: "not_custom_domain" });
+  });
+
+  it("invalid_subdomain for nested subdomains", () => {
+    const result = parseCustomDomainHostname("a.b.templestein.com", "templestein.com");
+    expect(result).toEqual({ ok: false, error: "invalid_subdomain" });
+  });
+
+  it("case insensitive", () => {
+    const result = parseCustomDomainHostname("OpenCode.Templestein.COM", "templestein.com");
+    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.opencode } });
+  });
+});
+
+describe("isCustomDomainHostname", () => {
+  it("matches exact domain", () => {
+    expect(isCustomDomainHostname("templestein.com", "templestein.com")).toBe(true);
+  });
+
+  it("matches subdomain", () => {
+    expect(isCustomDomainHostname("4096.templestein.com", "templestein.com")).toBe(true);
+  });
+
+  it("rejects unrelated domain", () => {
+    expect(isCustomDomainHostname("example.com", "templestein.com")).toBe(false);
+  });
+
+  it("case insensitive", () => {
+    expect(isCustomDomainHostname("Templestein.COM", "templestein.com")).toBe(true);
+  });
+});
+
+describe("buildMachineIngressEnvVars with customDomain", () => {
+  it("uses custom domain when set", () => {
+    const result = buildMachineIngressEnvVars({
+      projectSlug: "my-proj",
+      projectIngressDomain: "iterate.app",
+      osBaseUrl: "https://os.iterate.com",
+      scheme: "https",
+      customDomain: "templestein.com",
+    });
+    expect(result).toEqual({
+      ITERATE_PROJECT_BASE_URL: "https://templestein.com",
+      ITERATE_OS_BASE_URL: "https://os.iterate.com",
+      ITERATE_PROJECT_INGRESS_DOMAIN: "templestein.com",
+    });
+  });
+
+  it("uses default when customDomain is null", () => {
+    const result = buildMachineIngressEnvVars({
+      projectSlug: "my-proj",
+      projectIngressDomain: "iterate.app",
+      osBaseUrl: "https://os.iterate.com",
+      scheme: "https",
+      customDomain: null,
+    });
+    expect(result).toEqual({
+      ITERATE_PROJECT_BASE_URL: "https://my-proj.iterate.app",
+      ITERATE_OS_BASE_URL: "https://os.iterate.com",
+      ITERATE_PROJECT_INGRESS_DOMAIN: "iterate.app",
+    });
   });
 });
