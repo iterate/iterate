@@ -1,0 +1,31 @@
+{
+    admin 127.0.0.1:2020
+    auto_https off
+}
+
+:2019 {
+    reverse_proxy 127.0.0.1:2020 {
+        header_up Host 127.0.0.1:2020
+        header_up -Origin
+        header_up -Sec-Fetch-Mode
+        header_up -Sec-Fetch-Site
+        header_up -Sec-Fetch-Dest
+        header_up -Sec-Fetch-User
+    }
+}
+
+http://nomad.localhost {
+    reverse_proxy {
+        dynamic srv {
+            name nomad.service.consul
+            resolvers 127.0.0.1:53
+            refresh 1s
+        }
+
+        lb_policy round_robin
+    }
+}
+
+:80 {
+    respond "caddy ok" 200
+}
