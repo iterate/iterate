@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=linux/amd64 perteus/caddy-ui:3.1.0 AS cpm
-
 FROM debian:bookworm-slim
 
 ARG NOMAD_VERSION=1.11.2
@@ -32,21 +30,15 @@ RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_
     | tar -xz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy
 
-COPY --from=cpm /app/cpm /usr/local/bin/cpm
-COPY --from=cpm /app/web /opt/cpm/web
-COPY --from=cpm /app/templates /opt/cpm/templates
-
-RUN mkdir -p /etc/jonasland3/nomad/jobs /etc/jonasland3/caddy /etc/jonasland3/cpm-config /etc/jonasland3/cpm-data /nomad-data /consul-data /caddy-data
+RUN mkdir -p /etc/jonasland3/nomad/jobs /etc/jonasland3/caddy /nomad-data /consul-data /caddy-data
 COPY jonasland3/sandbox/nomad/base.hcl /etc/jonasland3/nomad/base.hcl
 COPY jonasland3/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland3/nomad/jobs/
 COPY jonasland3/sandbox/caddy/Caddyfile /etc/jonasland3/caddy/Caddyfile
-COPY jonasland3/sandbox/caddy/Caddyfile /etc/jonasland3/cpm-config/Caddyfile
-COPY jonasland3/sandbox/scripts/run-cpm.sh /usr/local/bin/run-cpm
 COPY jonasland3/sandbox/start.sh /etc/jonasland3/start.sh
-RUN chmod +x /etc/jonasland3/start.sh /usr/local/bin/run-cpm
+RUN chmod +x /etc/jonasland3/start.sh
 
 VOLUME ["/nomad-data", "/consul-data", "/caddy-data"]
-EXPOSE 53 80 443 8500 4646 2019 8501
+EXPOSE 53 80 443 8500 4646 2019
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/etc/jonasland3/start.sh"]

@@ -30,6 +30,4 @@ until curl -fsS http://127.0.0.1:80 >/dev/null 2>&1; do
   sleep 1
 done
 
-nomad job run /etc/jonasland3/nomad/jobs/cpm.nomad.hcl
-
 wait "$NOMAD_PID"
