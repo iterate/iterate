@@ -15,7 +15,12 @@ const links = [
   { label: "Orders Docs", host: "orders.iterate.localhost", path: "/api/docs" },
   { label: "Services API", host: "services.iterate.localhost", path: "/rpc/service/health" },
   { label: "Outerbase", host: "outerbase.iterate.localhost", path: "/" },
-  { label: "OpenObserve", host: "openobserve.iterate.localhost", path: "/" },
+  {
+    label: "OpenObserve",
+    host: "openobserve.iterate.localhost",
+    path: "/",
+    hint: "login: root@example.com / Complexpass#123",
+  },
   { label: "ClickStack", host: "clickstack.iterate.localhost", path: "/" },
   { label: "Caddy Admin", host: "caddy-admin.iterate.localhost", path: "/config/" },
   { label: "Pidnap", host: "pidnap.iterate.localhost", path: "/rpc/processes/list" },
@@ -90,7 +95,8 @@ function buildHomeHtml(): string {
       const list = document.getElementById("links");
       list.innerHTML = links.map((item) => {
         const href = protocol + "//" + item.host + port + item.path;
-        return "<li><a href=\\\"" + href + "\\\"><strong>" + item.label + "</strong><br><code>" + href + "</code></a></li>";
+        const hint = item.hint ? "<br><code>" + item.hint + "</code>" : "";
+        return "<li><a href=\\\"" + href + "\\\"><strong>" + item.label + "</strong>" + hint + "<br><code>" + href + "</code></a></li>";
       }).join("");
     </script>
   </body>
