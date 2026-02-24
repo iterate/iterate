@@ -66,7 +66,11 @@ import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { daemonRouter } from "../orpc/router.ts";
-import { runAgentCommand, type AgentCommandMatch } from "../utils/agent-commands.ts";
+import {
+  runAgentCommand,
+  looksLikeAgentCommand,
+  type AgentCommandMatch,
+} from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -865,19 +869,27 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   }
 
   // ── Self-message guard ──
-  // Always ignore our own bot's messages to prevent feedback loops.
-  if ("user" in event && event.user === botUserId) {
+  // Ignore our own bot's messages to prevent feedback loops, UNLESS the
+  // message looks like an agent command (e.g. "!debug"). Commands from the
+  // bot itself are useful when another agent sends them on its behalf.
+  const isSelfMessage = "user" in event && event.user === botUserId;
+  const selfMessageText =
+    isSelfMessage && "text" in event ? (event.text as string | undefined) : undefined;
+  const isSelfCommand =
+    isSelfMessage && !!selfMessageText && looksLikeAgentCommand(selfMessageText);
+
+  if (isSelfMessage && !isSelfCommand) {
     return { case: "ignored", reason: "Ignored: bot's own message" };
   }
 
   // ── Bot messages ──
   // Ignore bot messages UNLESS they @mention our bot (another bot asking
-  // us to do something).
+  // us to do something) or it's our own command message (already checked above).
   const isBotMessage =
     ("bot_profile" in event && event.bot_profile) ||
     ("subtype" in event && event.subtype === "bot_message");
 
-  if (isBotMessage && !textMentionsUser(event.text, botUserId)) {
+  if (isBotMessage && !isSelfCommand && !textMentionsUser(event.text, botUserId)) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 

@@ -927,6 +927,69 @@ describe("slack router", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
+    it("handles !debug sent by the bot itself (self-message command)", async () => {
+      const threadTs = "5151515151.515151";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getAgentMock.mockResolvedValue({
+        path: agentPath,
+        workingDirectory: "/workspace/repo",
+        metadata: null,
+        activeRoute: {
+          destination: "/opencode/sessions/sess_self",
+          metadata: {
+            agentHarness: "opencode",
+            opencodeSessionId: "sess_self",
+          },
+        },
+      });
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "event_callback",
+          event_id: "evt_debug_self",
+          event: {
+            type: "message",
+            thread_ts: threadTs,
+            ts: "5151515151.616161",
+            text: "!debug",
+            user: botUserId, // bot's own message
+            channel: "C_TEST",
+            bot_profile: { id: "B_BOT", name: "Our Bot" },
+            event_ts: "5151515151.616161",
+            channel_type: "channel",
+          },
+          authorizations: [{ user_id: botUserId, is_bot: true }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.case).toBe("debug_command");
+      expect(body.queued).toBe(false);
+
+      // Should have looked up existing agent (FYI path, not getOrCreate)
+      expect(getAgentMock).toHaveBeenCalledTimes(1);
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      // Should NOT forward prompt to agent
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // Should post debug response
+      expect(chatPostMessageMock).toHaveBeenCalledTimes(1);
+      expect(chatPostMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "C_TEST",
+          thread_ts: threadTs,
+        }),
+      );
+    });
+
     it("waits for pending reactions.add before cleanup remove on !debug intercept", async () => {
       vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
       vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");

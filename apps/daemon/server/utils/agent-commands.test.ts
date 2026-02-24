@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SerializedAgent } from "../routers/agents.ts";
-import { runAgentCommand } from "./agent-commands.ts";
+import { looksLikeAgentCommand, runAgentCommand } from "./agent-commands.ts";
 
 function buildAgent(overrides: Partial<SerializedAgent> = {}): SerializedAgent {
   const base: SerializedAgent = {
@@ -93,5 +93,27 @@ describe("runAgentCommand", () => {
       agent,
     });
     expect(result?.command).toBe("debug");
+  });
+});
+
+describe("looksLikeAgentCommand", () => {
+  it("returns true for !debug", () => {
+    expect(looksLikeAgentCommand("!debug")).toBe(true);
+  });
+
+  it("returns true for /debug", () => {
+    expect(looksLikeAgentCommand("/debug")).toBe(true);
+  });
+
+  it("returns true with @mention prefix", () => {
+    expect(looksLikeAgentCommand("<@U123ABC> !debug")).toBe(true);
+  });
+
+  it("returns false for regular messages", () => {
+    expect(looksLikeAgentCommand("hello world")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(looksLikeAgentCommand("")).toBe(false);
   });
 });

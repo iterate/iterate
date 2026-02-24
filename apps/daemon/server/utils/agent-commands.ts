@@ -112,6 +112,21 @@ export async function runAgentCommand(
   return runMatchedAgentCommand(command, { ...environment, message: sanitizedMessage });
 }
 
+/**
+ * Lightweight check whether raw message text looks like an agent command.
+ * Used by the Slack router to let command-like self-messages through the
+ * feedback-loop guard so the command handler can process them.
+ */
+export function looksLikeAgentCommand(rawText: string): boolean {
+  const sanitized = rawText.replace(/<@[^>]+>/g, " ").trim();
+  if (!sanitized) return false;
+  const [firstToken] = sanitized.split(/\s+/);
+  if (!firstToken) return false;
+  return AGENT_COMMANDS.some((entry) =>
+    entry.aliases.some((alias) => alias === firstToken.toLowerCase()),
+  );
+}
+
 function renderResultAsYamlMarkdown(result: unknown): string {
   const yaml = stringifyYaml(result).trim();
   return ["```yaml", yaml || "{}", "```"].join("\n");
