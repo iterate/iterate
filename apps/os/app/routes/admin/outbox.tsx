@@ -105,7 +105,6 @@ function parseMsDuration(input: string): number | null {
 }
 
 function aggregateStatus(consumers: QueueMessage[]): ConsumerStatus {
-  if (consumers.length === 0) return "pending";
   const statuses = consumers.map((c) => c.message.status ?? "pending");
   if (statuses.every((s) => s === "success")) return "success";
   if (statuses.some((s) => s === "failed")) return "failed";
@@ -197,10 +196,8 @@ function EventCard({ event }: { event: EventWithConsumers }) {
               )}
             </div>
             <div className="text-xs text-muted-foreground">
-              {event.consumers.length > 0
-                ? `Consumers: ${event.consumers.map((c) => c.message.consumer_name).join(", ")}`
-                : "No consumers"}{" "}
-              · {formatAge(event.createdAt)}
+              Consumers: {event.consumers.map((c) => c.message.consumer_name).join(", ") || 0}·{" "}
+              {formatAge(event.createdAt)}
             </div>
           </div>
         </div>
