@@ -30,7 +30,7 @@ No custom Caddy plugins. No Docker socket mount. No sibling containers.
 - CaddyManager UI listens on `:8501`.
 - CaddyManager backend listens on `:3000` and is reverse-proxied by the UI server (`/api/*`).
 - CaddyManager uses SQLite at `/caddymanager-data/caddymanager.sqlite`.
-- On first boot, `start.sh` runs a bootstrap script that logs in with the default admin and auto-adds `local-caddy` (`http://127.0.0.1:2019`) with `pullExistingConfig=true`.
+- On startup, `start.sh` runs an idempotent bootstrap script that ensures `local-caddy` (`http://127.0.0.1:2019`) exists and has at least one stored config; startup fails if this cannot be completed.
 - First-run upstream default credentials are `admin` / `caddyrocks` (change immediately if reused outside local testing).
 - Upstream project is early-stage; this integration is for local admin UX only.
 

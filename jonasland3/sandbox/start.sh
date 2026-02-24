@@ -38,6 +38,6 @@ until curl -fsS http://127.0.0.1:8501/api/v1/health >/dev/null 2>&1; do
   sleep 1
 done
 
-/etc/jonasland3/scripts/bootstrap-caddymanager.sh || true
+/etc/jonasland3/scripts/bootstrap-caddymanager.sh
 
 wait "$NOMAD_PID"
