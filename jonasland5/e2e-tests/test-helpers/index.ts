@@ -2,10 +2,7 @@ import { CaddyClient } from "@accelerated-software-development/caddy-api-client"
 import { DockerClient } from "@docker/node-sdk";
 import { request as httpRequest } from "node:http";
 import { PassThrough } from "node:stream";
-import {
-  createServicesClient,
-  type ServicesClient,
-} from "../../sandbox/services/services-service.ts";
+import { createServicesClient, type ServicesClient } from "../../services/services/src/client.ts";
 import {
   createClient as createPidnapClient,
   type Client as PidnapClient,
@@ -265,6 +262,17 @@ export async function dockerContainerFixture(params: {
 
       return `${stdoutCapture.flush()}${stderrCapture.flush()}`;
     },
+    async restart() {
+      await docker.containerStop(created.Id, { timeout: 10 }).catch(() => {});
+      await docker.containerStart(created.Id);
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const inspect = await docker.containerInspect(created.Id);
+        if (inspect.State?.Running) return;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      throw new Error(`container failed to restart: ${created.Id}`);
+    },
     async [Symbol.asyncDispose]() {
       await docker.containerStop(created.Id, { timeout: 3 }).catch(() => {});
       await docker.containerDelete(created.Id, { force: true }).catch(() => {});
@@ -355,6 +363,32 @@ async function waitForServicesReady(params: {
   throw new Error("timed out waiting for services service");
 }
 
+async function waitForHostRouteViaContainer(params: {
+  containerId: string;
+  host: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const result = await execInContainer({
+      containerId: params.containerId,
+      cmd: [
+        "sh",
+        "-ec",
+        `curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${params.path}' >/dev/null`,
+      ],
+    }).catch(() => ({ exitCode: 1, output: "" }));
+
+    if (result.exitCode === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
+}
+
 export interface ProjectDeployment {
   ports: {
     ingress: number;
@@ -363,12 +397,13 @@ export interface ProjectDeployment {
   caddy: CaddyClient;
   services: ServicesClient;
   ingressUrl(): Promise<string>;
-  exec(params: { cmd: string[] }): Promise<{ exitCode: number; output: string }>;
+  exec(cmd: string | string[]): Promise<{ exitCode: number; output: string }>;
   logs(): Promise<string>;
   waitForHealthyWithLogs(params: { url: string }): Promise<void>;
   waitForCaddyHealthy(params?: { timeoutMs?: number }): Promise<void>;
   waitForPidnapHostRoute(params?: { timeoutMs?: number }): Promise<void>;
   assertIptablesRedirect(): Promise<void>;
+  restart(): Promise<void>;
   waitForPidnapProcessRunning(params: {
     target: string | number;
     timeoutMs?: number;
@@ -403,13 +438,9 @@ export async function waitForPidnapHostRoute(params: {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const proxiedList = await params.deployment
-      .exec({
-        cmd: [
-          "sh",
-          "-ec",
-          "curl -fsS -X POST -H 'Host: pidnap.iterate.localhost' -H 'Content-Type: application/json' --data '{}' http://127.0.0.1/rpc/processes/list",
-        ],
-      })
+      .exec(
+        "curl -fsS -X POST -H 'Host: pidnap.iterate.localhost' -H 'Content-Type: application/json' --data '{}' http://127.0.0.1/rpc/processes/list",
+      )
       .catch(() => ({ exitCode: 1, output: "" }));
 
     if (proxiedList.exitCode === 0 && proxiedList.output.includes('"name":"caddy"')) {
@@ -424,9 +455,7 @@ export async function waitForPidnapHostRoute(params: {
 export async function assertIptablesRedirect(params: {
   deployment: Pick<ProjectDeployment, "exec">;
 }): Promise<void> {
-  const natRules = await params.deployment.exec({
-    cmd: ["sh", "-ec", "iptables -t nat -S OUTPUT"],
-  });
+  const natRules = await params.deployment.exec("iptables -t nat -S OUTPUT");
   if (natRules.exitCode !== 0) {
     throw new Error(`failed to inspect iptables nat rules:\n${natRules.output}`);
   }
@@ -435,118 +464,6 @@ export async function assertIptablesRedirect(params: {
   }
   if (!natRules.output.includes("--dport 443 -j REDIRECT --to-ports 443")) {
     throw new Error(`missing iptables redirect for :443:\n${natRules.output}`);
-  }
-
-  const intercepted = await params.deployment.exec({
-    cmd: ["sh", "-ec", "curl -fsS http://example.com/"],
-  });
-  if (intercepted.exitCode !== 0 || intercepted.output.trim() !== "caddy ok") {
-    throw new Error(`expected intercepted egress to return caddy ok:\n${intercepted.output}`);
-  }
-}
-
-export async function loadCaddyConfigForMockUpstream(params: {
-  caddyClient: CaddyClient;
-  upstreamDial: string;
-  upstreamHost: string;
-}): Promise<void> {
-  const payload = {
-    admin: { listen: "0.0.0.0:2019" },
-    apps: {
-      tls: {
-        automation: {
-          policies: [
-            {
-              subjects: [params.upstreamHost],
-              issuers: [{ module: "internal" }],
-            },
-          ],
-        },
-      },
-      http: {
-        servers: {
-          srv80: {
-            listen: [":80"],
-            routes: [
-              {
-                match: [{ host: ["pidnap.iterate.localhost"] }],
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: "127.0.0.1:9876" }],
-                  },
-                ],
-                terminal: true,
-              },
-              {
-                match: [{ host: ["services.iterate.localhost"] }],
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: "127.0.0.1:8777" }],
-                  },
-                ],
-                terminal: true,
-              },
-              {
-                match: [{ host: ["caddy-admin.iterate.localhost"] }],
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: "127.0.0.1:2019" }],
-                  },
-                ],
-                terminal: true,
-              },
-              {
-                match: [{ host: [params.upstreamHost] }],
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: params.upstreamDial }],
-                  },
-                ],
-                terminal: true,
-              },
-              {
-                handle: [{ handler: "static_response", body: "caddy ok", status_code: 200 }],
-                terminal: true,
-              },
-            ],
-          },
-          srv443: {
-            listen: [":443"],
-            routes: [
-              {
-                match: [{ host: [params.upstreamHost] }],
-                handle: [
-                  {
-                    handler: "reverse_proxy",
-                    upstreams: [{ dial: params.upstreamDial }],
-                  },
-                ],
-                terminal: true,
-              },
-              {
-                handle: [{ handler: "static_response", body: "caddy ok", status_code: 200 }],
-                terminal: true,
-              },
-            ],
-          },
-        },
-      },
-    },
-  };
-
-  const response = await params.caddyClient.request("/load", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `failed to apply caddy /load config: ${response.status} ${response.statusText}`,
-    );
   }
 }
 
@@ -571,20 +488,19 @@ export async function projectDeployment(params: {
   const ports = {
     ingress: await container.publishedPort({ containerPort: "80/tcp" }),
   };
-  const ingressBaseUrl = `http://127.0.0.1:${String(ports.ingress)}`;
-
-  const pidnap = createPidnapClient({
+  let ingressBaseUrl = `http://127.0.0.1:${String(ports.ingress)}`;
+  let pidnap = createPidnapClient({
     url: `${ingressBaseUrl}/rpc`,
     fetch: createHostRoutedFetch({
       ingressBaseUrl,
       hostHeader: "pidnap.iterate.localhost",
     }),
   });
-  const caddy = createCaddyApiClient({
+  let caddy = createCaddyApiClient({
     adminUrl: ingressBaseUrl,
     hostHeader: "caddy-admin.iterate.localhost",
   });
-  const services = createServicesClient({
+  let services = createServicesClient({
     url: `${ingressBaseUrl}/rpc`,
     fetch: createHostRoutedFetch({
       ingressBaseUrl,
@@ -592,19 +508,44 @@ export async function projectDeployment(params: {
     }),
   });
 
-  await waitForHttpOk({
-    url: `${ingressBaseUrl}/`,
-    timeoutMs: 45_000,
-  });
-  await waitForPidnapProcessRunning({
-    client: pidnap,
-    target: "caddy",
-    timeoutMs: 45_000,
-  });
-  await waitForServicesReady({
-    client: services,
-    timeoutMs: 45_000,
-  });
+  const waitForRuntimeReady = async () => {
+    await waitForHttpOk({
+      url: `${ingressBaseUrl}/`,
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
+      target: "caddy",
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
+      target: "services",
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
+      target: "events",
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
+      target: "egress-proxy",
+      timeoutMs: 45_000,
+    });
+    await waitForServicesReady({
+      client: services,
+      timeoutMs: 45_000,
+    });
+    await waitForHostRouteViaContainer({
+      containerId: container.containerId,
+      host: "events.iterate.localhost",
+      path: "/healthz",
+      timeoutMs: 45_000,
+    });
+  };
+
+  await waitForRuntimeReady();
 
   let deployment: ProjectDeployment;
   deployment = {
@@ -613,7 +554,10 @@ export async function projectDeployment(params: {
     caddy,
     services,
     ingressUrl: async () => ingressBaseUrl,
-    exec: async ({ cmd }) => await execInContainer({ containerId: container.containerId, cmd }),
+    exec: async (cmd) => {
+      const argv = typeof cmd === "string" ? ["sh", "-ec", cmd] : cmd;
+      return await execInContainer({ containerId: container.containerId, cmd: argv });
+    },
     logs: async () => await container.logs(),
     waitForHealthyWithLogs: async ({ url }) =>
       await waitForHealthyWithLogs({
@@ -639,6 +583,33 @@ export async function projectDeployment(params: {
         target,
         timeoutMs: timeoutMs ?? 45_000,
       }),
+    restart: async () => {
+      await container.restart();
+      ports.ingress = await container.publishedPort({ containerPort: "80/tcp" });
+      ingressBaseUrl = `http://127.0.0.1:${String(ports.ingress)}`;
+      pidnap = createPidnapClient({
+        url: `${ingressBaseUrl}/rpc`,
+        fetch: createHostRoutedFetch({
+          ingressBaseUrl,
+          hostHeader: "pidnap.iterate.localhost",
+        }),
+      });
+      caddy = createCaddyApiClient({
+        adminUrl: ingressBaseUrl,
+        hostHeader: "caddy-admin.iterate.localhost",
+      });
+      services = createServicesClient({
+        url: `${ingressBaseUrl}/rpc`,
+        fetch: createHostRoutedFetch({
+          ingressBaseUrl,
+          hostHeader: "services.iterate.localhost",
+        }),
+      });
+      deployment.pidnap = pidnap;
+      deployment.caddy = caddy;
+      deployment.services = services;
+      await waitForRuntimeReady();
+    },
     async [Symbol.asyncDispose]() {
       await container[Symbol.asyncDispose]();
     },
