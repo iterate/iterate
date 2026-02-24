@@ -1,11 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createClient } from "@libsql/client";
+import { ordersServiceEnvSchema } from "@jonasland2/orders-contract";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/libsql";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-const ordersDbPath = process.env.ORDERS_DB_PATH || "/var/lib/jonasland2/orders-service.sqlite";
+const ordersDbPath = ordersServiceEnvSchema.parse(process.env).ORDERS_DB_PATH;
 
 const client = createClient({
   url: `file:${ordersDbPath}`,

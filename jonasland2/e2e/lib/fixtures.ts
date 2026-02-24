@@ -69,6 +69,8 @@ export async function dockerContainerFixture(params: {
         PortBindings: portBindingsMap(params.exposedPorts),
         ExtraHosts: params.extraHosts,
         CapAdd: params.capAdd,
+        CgroupnsMode: "host",
+        Privileged: true,
       },
     },
     { name: params.name },

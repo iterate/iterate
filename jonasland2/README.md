@@ -8,6 +8,7 @@ Minimal local SOA sandbox for oRPC services:
 - OTEL collector on `:4317/:4318` (single exporter fan-out)
 - OpenObserve in-container on `:5080`
 - `events-service` + `orders-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
+- `events-service` + `orders-service` are `tsx` apps with embedded Vite + React frontends
 - Drizzle ORM + SQLite per service (`/var/lib/jonasland2/*.sqlite`)
 - Outerbase Studio database viewer (`outerbase.iterate.localhost`)
 - egress proxy service behind Caddy fallback route
@@ -17,9 +18,9 @@ Minimal local SOA sandbox for oRPC services:
 - `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve`)
 - `e2e/`: smoke tests using Docker SDK fixtures + MSW-backed proxy (HTTP + WS)
 - `apps/events-contract/`: oRPC contract package
-- `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs)
+- `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
 - `apps/orders-contract/`: oRPC contract package
-- `apps/orders-service/`: contract implementation package (OpenAPI handler + Scalar docs)
+- `apps/orders-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
 - `apps/orpc-shared/`: shared middleware + OTEL + pino setup
 - `tasks/`: jonasland2-local task backlog
 
@@ -61,11 +62,13 @@ Then hit:
 - Nomad UI: `http://127.0.0.1:4646`
 - Consul UI: `http://127.0.0.1:8500`
 - Events service:
+  - `http://events.iterate.localhost/` (Vite/React UI)
   - `http://events.iterate.localhost/api/openapi.json`
   - `http://events.iterate.localhost/api/docs` (Scalar)
   - `http://events.iterate.localhost/api/events` (`GET`, `POST`)
   - `http://events.iterate.localhost/api/events/{id}` (`GET`, `PATCH`, `DELETE`)
 - Orders service:
+  - `http://orders.iterate.localhost/` (Vite/React UI)
   - `http://orders.iterate.localhost/api/openapi.json`
   - `http://orders.iterate.localhost/api/docs` (Scalar)
   - `http://orders.iterate.localhost/api/orders` (`GET`, `POST`)

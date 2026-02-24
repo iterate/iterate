@@ -1,6 +1,7 @@
 {
   "name": "@jonasland2/events-service",
   "private": true,
+  "version": "0.0.1",
   "type": "module",
   "exports": {
     ".": "./src/router.ts",
@@ -10,9 +11,13 @@
     "@libsql/client": "^0.15.15",
     "@jonasland2/events-contract": "file:../events-contract",
     "@jonasland2/orpc-shared": "file:../orpc-shared",
+    "@vitejs/plugin-react": "^5.1.2",
     "drizzle-orm": "^0.45.1",
     "@orpc/openapi": "^1.13.5",
     "@orpc/server": "^1.13.5",
-    "@orpc/zod": "^1.13.5"
+    "@orpc/zod": "^1.13.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.3.1"
   }
 }

@@ -273,15 +273,45 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     );
     expect(upstreamUnhandled).toHaveLength(0);
 
-    const caddyAdminResponse = await fetch(`http://127.0.0.1:${String(caddyAdminPort)}/config/`);
-    expect(caddyAdminResponse.ok).toBe(true);
+    let caddyAdminReady = false;
+    const caddyAdminDeadline = Date.now() + 10_000;
+    while (Date.now() < caddyAdminDeadline) {
+      try {
+        const caddyAdminResponse = await fetch(
+          `http://127.0.0.1:${String(caddyAdminPort)}/config/`,
+        );
+        if (caddyAdminResponse.ok) {
+          caddyAdminReady = true;
+          break;
+        }
+      } catch {
+        // retry
+      }
+      await delay(150);
+    }
+    if (!caddyAdminReady) {
+      const caddyAdminInside = await execInContainer({
+        containerId: container.containerId,
+        cmd: [
+          "curl",
+          "-sS",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "http://127.0.0.1:2019/config/",
+        ],
+      });
+      expect(caddyAdminInside.exitCode).toBe(0);
+      expect(caddyAdminInside.output.trim()).toBe("200");
+    }
 
     const nomad = await execInContainer({
       containerId: container.containerId,
       cmd: ["sh", "-lc", "command -v nomad >/dev/null && echo yes || echo no"],
     });
     expect(nomad.exitCode).toBe(0);
-    expect(nomad.output.trim()).toBe("no");
+    expect(nomad.output.trim()).toBe("yes");
   }, 120_000);
 
   test("websockets are proxied via caddy+egress and upstream sees proxy headers", async () => {

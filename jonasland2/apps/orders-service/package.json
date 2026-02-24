@@ -1,6 +1,7 @@
 {
   "name": "@jonasland2/orders-service",
   "private": true,
+  "version": "0.0.1",
   "type": "module",
   "exports": {
     ".": "./src/router.ts",
@@ -11,12 +12,16 @@
     "@jonasland2/events-contract": "file:../events-contract",
     "@jonasland2/orpc-shared": "file:../orpc-shared",
     "@jonasland2/orders-contract": "file:../orders-contract",
+    "@vitejs/plugin-react": "^5.1.2",
     "drizzle-orm": "^0.45.1",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
     "@orpc/openapi": "^1.13.5",
     "@orpc/openapi-client": "^1.13.5",
     "@orpc/server": "^1.13.5",
-    "@orpc/zod": "^1.13.5"
+    "@orpc/zod": "^1.13.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.3.1"
   }
 }

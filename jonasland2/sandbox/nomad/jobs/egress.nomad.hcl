@@ -1,3 +1,8 @@
+variable "external_egress_proxy" {
+  type    = string
+  default = ""
+}
+
 job "egress-proxy" {
   datacenters = ["dc1"]
   type        = "service"
@@ -15,6 +20,7 @@ job "egress-proxy" {
 
       env {
         PORT = "${NOMAD_PORT_http}"
+        ITERATE_EXTERNAL_EGRESS_PROXY = var.external_egress_proxy
       }
 
       config {

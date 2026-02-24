@@ -5,7 +5,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import type { JsonifiedClient } from "@orpc/openapi-client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "@jonasland2/events-contract";
-import { orderSchema, ordersContract } from "@jonasland2/orders-contract";
+import { orderSchema, ordersContract, ordersServiceEnvSchema } from "@jonasland2/orders-contract";
 import {
   createServiceContextMiddleware,
   infoFromContext,
@@ -22,8 +22,8 @@ const os = implement(ordersContract).$context<OrdersContext>();
 
 const withSharedMiddlewares = os.use(os.middleware(createServiceContextMiddleware(serviceName)));
 
-const eventsServiceBaseUrl =
-  process.env.EVENTS_SERVICE_BASE_URL || "http://events-service.service.consul:19010/api";
+const env = ordersServiceEnvSchema.parse(process.env);
+const eventsServiceBaseUrl = env.EVENTS_SERVICE_BASE_URL;
 
 interface EventsClientContext {
   requestId: string;

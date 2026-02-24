@@ -1,11 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createClient } from "@libsql/client";
+import { eventsServiceEnvSchema } from "@jonasland2/events-contract";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/libsql";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-const eventsDbPath = process.env.EVENTS_DB_PATH || "/var/lib/jonasland2/events-service.sqlite";
+const eventsDbPath = eventsServiceEnvSchema.parse(process.env).EVENTS_DB_PATH;
 
 const client = createClient({
   url: `file:${eventsDbPath}`,

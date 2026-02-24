@@ -65,13 +65,7 @@
         reverse_proxy 127.0.0.1:8500
     }
 
-    reverse_proxy {
-        dynamic srv {
-            name egress-proxy.service.consul
-            resolvers 127.0.0.1:53
-            refresh 1s
-        }
-
+    reverse_proxy 127.0.0.1:19000 {
         header_up X-Original-Host {http.request.header.Host}
         header_up X-Original-SNI {http.request.tls.server_name}
         header_up X-Original-Proto {http.request.scheme}
@@ -144,13 +138,7 @@
         reverse_proxy 127.0.0.1:8500
     }
 
-    reverse_proxy {
-        dynamic srv {
-            name egress-proxy.service.consul
-            resolvers 127.0.0.1:53
-            refresh 1s
-        }
-
+    reverse_proxy 127.0.0.1:19000 {
         header_up X-Original-Host {http.request.header.Host}
         header_up X-Original-SNI {http.request.tls.server_name}
         header_up X-Original-Proto {http.request.scheme}

@@ -1,5 +1,6 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod/v4";
+import packageJson from "../package.json" with { type: "json" };
 
 export const orderSchema = z.object({
   id: z.string(),
@@ -118,3 +119,30 @@ export const ordersContract = oc.router({
       ),
   },
 });
+
+const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
+  z
+    .preprocess((value) => {
+      if (typeof value !== "string") return value;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    }, z.string().min(1).optional())
+    .default(defaultValue);
+
+export const ordersServiceEnvSchema = z.object({
+  ORDERS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19020),
+  ORDERS_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland2/orders-service.sqlite"),
+  EVENTS_SERVICE_BASE_URL: nonEmptyStringWithTrimDefault(
+    "http://events-service.service.consul:19010/api",
+  ),
+});
+export type OrdersServiceEnv = z.infer<typeof ordersServiceEnvSchema>;
+
+export const ordersServiceManifest = {
+  name: packageJson.name,
+  slug: "orders-service",
+  version: packageJson.version ?? "0.0.0",
+  port: 19020,
+  orpcContract: ordersContract,
+  envVars: ordersServiceEnvSchema,
+} as const;

@@ -1,5 +1,6 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod/v4";
+import packageJson from "../package.json" with { type: "json" };
 
 export const eventSchema = z.object({
   id: z.string(),
@@ -101,3 +102,27 @@ export const eventsContract = oc.router({
       ),
   },
 });
+
+const nonEmptyStringWithTrimDefault = (defaultValue: string) =>
+  z
+    .preprocess((value) => {
+      if (typeof value !== "string") return value;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    }, z.string().min(1).optional())
+    .default(defaultValue);
+
+export const eventsServiceEnvSchema = z.object({
+  EVENTS_SERVICE_PORT: z.coerce.number().int().min(1).max(65535).default(19010),
+  EVENTS_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland2/events-service.sqlite"),
+});
+export type EventsServiceEnv = z.infer<typeof eventsServiceEnvSchema>;
+
+export const eventsServiceManifest = {
+  name: packageJson.name,
+  slug: "events-service",
+  version: packageJson.version ?? "0.0.0",
+  port: 19010,
+  orpcContract: eventsContract,
+  envVars: eventsServiceEnvSchema,
+} as const;
