@@ -625,6 +625,7 @@ export type RpcWebSocket = LinkWebsocketClientOptions["websocket"];
 export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike<TContract>;
+  url?: string;
   headers?: RPCLinkOptions<any>["headers"];
   fetch?: RPCLinkOptions<any>["fetch"];
 }
@@ -632,6 +633,7 @@ export interface CreateOrpcRpcServiceClientOptions<TContract extends AnyContract
 export interface CreateOrpcOpenApiServiceClientOptions<TContract extends AnyContractRouter> {
   env: ServiceClientEnv;
   manifest: ServiceManifestLike<TContract>;
+  url?: string;
   headers?: Record<string, string>;
   fetch?: (request: Request, init?: RequestInit) => Promise<Response>;
 }
@@ -690,7 +692,7 @@ export function createOrpcRpcServiceClient<TContract extends AnyContractRouter>(
   options: CreateOrpcRpcServiceClientOptions<TContract>,
 ): ContractRouterClient<TContract> {
   const link = new RPCLink({
-    url: resolveServiceOrpcUrl(options),
+    url: options.url ?? resolveServiceOrpcUrl(options),
     method: inferRPCMethodFromContractRouter(options.manifest.orpcContract),
     ...(options.headers ? { headers: options.headers } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -703,7 +705,7 @@ export function createOrpcOpenApiServiceClient<TContract extends AnyContractRout
   options: CreateOrpcOpenApiServiceClientOptions<TContract>,
 ): ContractRouterClient<TContract> {
   const link = new OpenAPILink(options.manifest.orpcContract, {
-    url: resolveServiceOpenApiBaseUrl(options),
+    url: options.url ?? resolveServiceOpenApiBaseUrl(options),
     ...(options.headers ? { headers: options.headers } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });

@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import { inferRPCMethodFromContractRouter, type ContractRouterClient } from "@orpc/contract";
 import { desc, eq, sql } from "drizzle-orm";
-import { eventsContract } from "@jonasland5/events-contract";
+import { eventsContract, eventsServiceManifest } from "@jonasland5/events-contract";
 import {
   orderSchema,
   ordersContract,
@@ -11,6 +8,7 @@ import {
   ordersServiceManifest,
 } from "@jonasland5/orders-contract";
 import {
+  createOrpcRpcServiceClient,
   infoFromContext,
   transformLibsqlResultSet,
   type ServiceRequestLogger,
@@ -35,10 +33,11 @@ const serviceName = "jonasland5-orders-service";
 const os = implement(ordersContract).$context<OrdersContext>();
 const env = ordersServiceEnvSchema.parse(process.env);
 
-const eventsLink = new RPCLink<EventsClientContext>({
-  url: env.EVENTS_SERVICE_BASE_URL,
-  method: inferRPCMethodFromContractRouter(eventsContract),
-  headers: (clientContext) => {
+const eventsClient = createOrpcRpcServiceClient<typeof eventsContract>({
+  env: {},
+  manifest: eventsServiceManifest,
+  url: resolveEventsServiceOrpcUrl(env),
+  headers: (clientContext: { context?: EventsClientContext }) => {
     const headers: Record<string, string> = {};
     if (clientContext.context?.requestId) {
       headers["x-request-id"] = clientContext.context.requestId;
@@ -47,8 +46,9 @@ const eventsLink = new RPCLink<EventsClientContext>({
   },
 });
 
-const eventsClient: ContractRouterClient<typeof eventsContract, EventsClientContext> =
-  createORPCClient(eventsLink);
+function resolveEventsServiceOrpcUrl(parsedEnv: { EVENTS_SERVICE_BASE_URL: string }) {
+  return parsedEnv.EVENTS_SERVICE_BASE_URL;
+}
 
 function toOrderRecord(row: typeof schema.ordersTable.$inferSelect): OrderRecord {
   return {
