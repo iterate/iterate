@@ -15,7 +15,7 @@ import {
   createServiceRequestLogger,
   infoFromContext,
   serviceLog,
-  transformLibsqlResultSet,
+  transformSqlResultSet,
   type ServiceRequestLogger,
 } from "@jonasland5/shared";
 import { implement } from "@orpc/server";
@@ -158,7 +158,7 @@ export const servicesRouter = os.router({
     })),
     sql: os.service.sql.handler(async ({ input, context }) => {
       const startedAt = Date.now();
-      const result = transformLibsqlResultSet(await context.store.executeSql(input.statement));
+      const result = transformSqlResultSet(await context.store.executeSql(input.statement));
       infoFromContext(context, "services.service.sql", {
         service: context.serviceName,
         request_id: context.requestId,

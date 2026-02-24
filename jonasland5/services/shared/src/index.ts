@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { ResultSet } from "@libsql/client";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
@@ -85,6 +84,14 @@ export const ServiceSqlResult = z.object({
 export type ServiceSqlInput = z.infer<typeof ServiceSqlInput>;
 export type ServiceSqlResult = z.infer<typeof ServiceSqlResult>;
 
+export interface SqlResultSet {
+  columns: string[];
+  columnTypes: Array<string | null>;
+  rows: unknown[][];
+  rowsAffected?: number;
+  lastInsertRowid?: number | bigint | null;
+}
+
 export function createServiceSubRouterContract(options?: {
   tag?: string;
   healthSummary?: string;
@@ -144,7 +151,7 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
       name: string;
       version: string;
     };
-    executeSql: (statement: string) => Promise<ResultSet>;
+    executeSql: (statement: string) => Promise<SqlResultSet>;
     logPrefix?: string;
   },
 ) {
@@ -165,7 +172,7 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
 
   const sql = builder.service.sql.handler(async ({ input, context }) => {
     const startedAt = Date.now();
-    const result = transformLibsqlResultSet(await options.executeSql(input.statement));
+    const result = transformSqlResultSet(await options.executeSql(input.statement));
 
     infoFromContext(context, `${logPrefix}.sql`, {
       service: options.manifest.name,
@@ -424,7 +431,7 @@ function convertSqliteType(rawType: string | undefined | null): 1 | 2 | 3 | 4 {
   return 1;
 }
 
-export function transformLibsqlResultSet(raw: ResultSet): ServiceSqlResult {
+export function transformSqlResultSet(raw: SqlResultSet): ServiceSqlResult {
   const usedHeaders = new Set<string>();
 
   const headers = raw.columns.map((displayName, index) => {
@@ -474,6 +481,8 @@ export function transformLibsqlResultSet(raw: ResultSet): ServiceSqlResult {
         : Number(raw.lastInsertRowid),
   };
 }
+
+export const transformLibsqlResultSet = transformSqlResultSet;
 
 export function createHealthzHandler() {
   return (c: { text: (body: string) => Response }) => c.text("ok");

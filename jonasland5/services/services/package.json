@@ -15,10 +15,11 @@
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@jonasland5/services-contract": "workspace:*",
     "@jonasland5/shared": "workspace:*",
-    "@libsql/client": "^0.15.15",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
-    "@orpc/server": "^1.13.5"
+    "@orpc/server": "^1.13.5",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.1"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",

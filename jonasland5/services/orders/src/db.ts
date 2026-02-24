@@ -1,18 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { createClient } from "@libsql/client";
 import { ordersServiceEnvSchema } from "@jonasland5/orders-contract";
+import type { SqlResultSet } from "@jonasland5/shared";
 import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/libsql";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 const ordersDbPath = ordersServiceEnvSchema.parse(process.env).ORDERS_DB_PATH;
 
-const client = createClient({
-  url: `file:${ordersDbPath}`,
-});
-
-export const db = drizzle(client);
+const dbConnection = drizzle(ordersDbPath);
+const client = dbConnection.$client;
+export const db = dbConnection;
 
 export const ordersTable = sqliteTable("orders", {
   id: text("id").primaryKey(),
@@ -24,23 +22,14 @@ export const ordersTable = sqliteTable("orders", {
   updatedAt: text("updated_at").notNull(),
 });
 
-function readPragmaValue(
-  row: Record<string, unknown> | undefined,
-  expectedColumn: string,
-): string | null {
-  if (!row) return null;
-  const value = row[expectedColumn] ?? Object.values(row)[0];
+function readPragmaValue(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (value === undefined || value === null) return null;
   return String(value);
 }
 
 export async function getOrdersDbJournalMode(): Promise<string> {
-  const result = await client.execute("PRAGMA journal_mode;");
-  const value = readPragmaValue(
-    (result.rows[0] as Record<string, unknown> | undefined) ?? undefined,
-    "journal_mode",
-  );
+  const value = readPragmaValue(client.pragma("journal_mode", { simple: true }));
   return value?.toLowerCase() ?? "unknown";
 }
 
@@ -52,14 +41,33 @@ export async function getOrdersDbRuntimeConfig() {
 }
 
 export async function executeOrdersSql(statement: string) {
-  return client.execute(statement);
+  const prepared = client.prepare(statement);
+  if (prepared.reader) {
+    const headers = prepared.columns();
+    const rows = prepared.raw().all() as unknown[][];
+    return {
+      columns: headers.map((header) => header.name),
+      columnTypes: headers.map((header) => header.type ?? null),
+      rows,
+      rowsAffected: rows.length,
+    } satisfies SqlResultSet;
+  }
+
+  const runResult = prepared.run();
+  return {
+    columns: [],
+    columnTypes: [],
+    rows: [],
+    rowsAffected: runResult.changes,
+    lastInsertRowid: runResult.lastInsertRowid,
+  } satisfies SqlResultSet;
 }
 
 export async function initializeOrdersDb() {
   await mkdir(dirname(ordersDbPath), { recursive: true });
-  await client.execute("PRAGMA journal_mode = WAL;");
+  client.pragma("journal_mode = WAL");
 
-  await db.run(sql`
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY NOT NULL,
       sku TEXT NOT NULL,
@@ -71,7 +79,7 @@ export async function initializeOrdersDb() {
     )
   `);
 
-  await db.run(sql`
+  db.run(sql`
     CREATE INDEX IF NOT EXISTS idx_orders_created_at
     ON orders (created_at)
   `);

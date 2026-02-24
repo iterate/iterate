@@ -10,7 +10,7 @@ import {
 import {
   createOrpcRpcServiceClient,
   infoFromContext,
-  transformLibsqlResultSet,
+  transformSqlResultSet,
   type ServiceRequestLogger,
 } from "@jonasland5/shared";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
@@ -104,7 +104,7 @@ const serviceHealth = os.service.health.handler(async ({ context }) => ({
 
 const serviceSql = os.service.sql.handler(async ({ input, context }) => {
   const startedAt = Date.now();
-  const result = transformLibsqlResultSet(await schema.executeOrdersSql(input.statement));
+  const result = transformSqlResultSet(await schema.executeOrdersSql(input.statement));
 
   infoFromContext(context, "orders.service.sql", {
     service: context.serviceName,

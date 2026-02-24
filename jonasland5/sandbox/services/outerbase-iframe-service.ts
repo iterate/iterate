@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, dirname, extname, resolve } from "node:path";
 import { URL } from "node:url";
-import { createClient, type ResultSet } from "@libsql/client";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 
 const DEFAULT_SQLITE_PATHS = [
   "/var/lib/jonasland5/events-service.sqlite",
@@ -111,9 +111,17 @@ type SqliteTarget = {
 };
 
 type SqliteSession = {
-  client: ReturnType<typeof createClient>;
+  client: ReturnType<typeof drizzle>["$client"];
   main: SqliteTarget;
   attached: Record<string, string>;
+};
+
+type SqlResultSet = {
+  columns: string[];
+  columnTypes: Array<string | null>;
+  rows: unknown[][];
+  rowsAffected?: number;
+  lastInsertRowid?: number | bigint | null;
 };
 
 type QueryRequest =
@@ -225,12 +233,12 @@ async function createSqliteSession(mainAlias: string): Promise<SqliteSession> {
   }
 
   const attached = buildAttachedMap(mainAlias);
-  const client = createClient({ url: `file:${main.path}` });
+  const client = drizzle(main.path).$client;
+  client.pragma("journal_mode = WAL");
 
   for (const [alias, filePath] of Object.entries(attached)) {
-    await client.execute(
-      `ATTACH DATABASE ${escapeSqlString(filePath)} AS ${escapeSqlIdentifier(alias)}`,
-    );
+    client.exec(`ATTACH DATABASE ${escapeSqlString(filePath)} AS ${escapeSqlIdentifier(alias)}`);
+    client.exec(`PRAGMA ${alias}.journal_mode = WAL`);
   }
 
   return {
@@ -322,7 +330,33 @@ function convertSqliteType(rawType: string | undefined | null): 1 | 2 | 3 | 4 {
   return 1;
 }
 
-function transformRawResult(raw: ResultSet): QueryResult {
+function executeSqlStatement(
+  client: ReturnType<typeof drizzle>["$client"],
+  statement: string,
+): SqlResultSet {
+  const prepared = client.prepare(statement);
+  if (prepared.reader) {
+    const headers = prepared.columns();
+    const rows = prepared.raw().all() as unknown[][];
+    return {
+      columns: headers.map((header) => header.name),
+      columnTypes: headers.map((header) => header.type ?? null),
+      rows,
+      rowsAffected: rows.length,
+    };
+  }
+
+  const runResult = prepared.run();
+  return {
+    columns: [],
+    columnTypes: [],
+    rows: [],
+    rowsAffected: runResult.changes,
+    lastInsertRowid: runResult.lastInsertRowid,
+  };
+}
+
+function transformRawResult(raw: SqlResultSet): QueryResult {
   const headerNames = new Set<string>();
   const headers = raw.columns.map((displayName: string, index: number) => {
     const originalType = raw.columnTypes[index];
@@ -382,7 +416,8 @@ async function executeRequest(value: unknown, mainAlias: string): Promise<QueryR
       return { type, id, error: "invalid_statement" };
     }
     try {
-      const result = await session.client.execute(
+      const result = executeSqlStatement(
+        session.client,
         rewriteMainAliasQualifier(request.statement, session.main.alias),
       );
       return { type, id, data: transformRawResult(result) };
@@ -402,7 +437,10 @@ async function executeRequest(value: unknown, mainAlias: string): Promise<QueryR
       const rewrittenStatements = request.statements.map((statement) =>
         rewriteMainAliasQualifier(statement, session.main.alias),
       );
-      const results = await session.client.batch(rewrittenStatements, "write");
+      const executeTransaction = session.client.transaction((statements: string[]) =>
+        statements.map((statement) => executeSqlStatement(session.client, statement)),
+      );
+      const results = executeTransaction(rewrittenStatements);
       return { type, id, data: results.map(transformRawResult) };
     } catch (error) {
       return { type, id, error: String((error as Error).message ?? error) };

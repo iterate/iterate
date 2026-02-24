@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eventSchema, eventsContract, eventsServiceManifest } from "@jonasland5/events-contract";
 import {
   infoFromContext,
-  transformLibsqlResultSet,
+  transformSqlResultSet,
   type ServiceRequestLogger,
 } from "@jonasland5/shared";
 import { desc, eq, sql } from "drizzle-orm";
@@ -59,7 +59,7 @@ const serviceHealth = os.service.health.handler(async ({ context }) => ({
 
 const serviceSql = os.service.sql.handler(async ({ input, context }) => {
   const startedAt = Date.now();
-  const result = transformLibsqlResultSet(await schema.executeEventsSql(input.statement));
+  const result = transformSqlResultSet(await schema.executeEventsSql(input.statement));
 
   infoFromContext(context, "events.service.sql", {
     service: context.serviceName,
