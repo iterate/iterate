@@ -42,7 +42,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp"],
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp", "8501/tcp"],
       capAdd: ["SYS_ADMIN"],
       cgroupnsMode: "host",
       binds: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"],
@@ -73,7 +73,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     await using container = await dockerContainerFixture({
       image,
       name: `jonasland3-e2e-${randomUUID()}`,
-      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp"],
+      exposedPorts: ["80/tcp", "4646/tcp", "8500/tcp", "8501/tcp"],
       capAdd: ["SYS_ADMIN"],
       cgroupnsMode: "host",
       binds: ["/sys/fs/cgroup:/sys/fs/cgroup:rw"],
@@ -82,6 +82,7 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
     const nomadPort = await container.publishedPort("4646/tcp");
     const consulPort = await container.publishedPort("8500/tcp");
     const caddyHttpPort = await container.publishedPort("80/tcp");
+    const cpmPort = await container.publishedPort("8501/tcp");
 
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/`, container);
     await waitForHealthyWithLogs(
@@ -92,7 +93,13 @@ describe.runIf(RUN_E2E && (await dockerPing()))("jonasland3 smoke", () => {
       `http://127.0.0.1:${String(consulPort)}/v1/status/leader`,
       container,
     );
+    await waitForHealthyWithLogs(`http://127.0.0.1:${String(cpmPort)}/`, container);
     await waitForDynamicSrv(container.containerId);
+
+    const cpmUiResponse = await fetch(`http://127.0.0.1:${String(cpmPort)}/`);
+    expect(cpmUiResponse.ok).toBe(true);
+    const cpmUiBody = await cpmUiResponse.text();
+    expect(cpmUiBody.length).toBeGreaterThan(200);
 
     const caddyAdmin = await execInContainer({
       containerId: container.containerId,
