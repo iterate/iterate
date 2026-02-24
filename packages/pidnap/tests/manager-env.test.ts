@@ -140,6 +140,50 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
+  it("should unregister custom envFile when updateProcessConfig removes envFile", async () => {
+    writeFileSync(join(testDir, "custom.env"), "CUSTOM_VAR=custom_value");
+    writeFileSync(join(testDir, ".env.app"), "APP_VAR=app_value");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "app",
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+            envOptions: { envFile: "custom.env" },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    await manager.updateProcessConfig({
+      processSlug: "app",
+      definition: {
+        command: "echo",
+        args: ["test-2"],
+      },
+      envOptions: {},
+    });
+
+    const proc = manager.getRestartingProcess("app");
+    const definition = proc!.lazyProcess.definition;
+    expect(definition.env).toEqual({
+      APP_VAR: "app_value",
+    });
+    // @ts-expect-error - accessing private member for testing
+    expect(manager.envManager.hasCustomFile("app")).toBe(false);
+
+    await manager.stop();
+  });
+
   it("should work without any env files", async () => {
     const testLogger = logger({ name: "test" });
     const manager = new Manager(

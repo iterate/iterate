@@ -776,6 +776,7 @@ export class Manager {
 
     const defaultDelay = nextEntry.envOptions?.inheritGlobalEnv === false ? false : 5000;
     this.envReloadConfig.set(processSlug, nextEntry.envOptions?.reloadDelay ?? defaultDelay);
+    this.envManager.unregisterCustomFile(processSlug);
     if (nextEntry.envOptions?.envFile) {
       this.envManager.registerFile(processSlug, nextEntry.envOptions.envFile);
     }
@@ -951,6 +952,11 @@ export class Manager {
     const proc = this.restartingProcesses.get(name);
     if (!proc) {
       this.logger.error(`Scheduled process ${name} not found`);
+      return;
+    }
+    const entry = this.getProcessEntryByName(name);
+    if ((entry?.desiredState ?? "running") === "stopped") {
+      this.logger.info(`Skipping scheduled process ${name}: desiredState=stopped`);
       return;
     }
 
