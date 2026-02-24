@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
+import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
 import { ordersServiceManifest } from "@jonasland5/orders-contract";
 import {
+  createOrpcErrorInterceptor,
   createHealthzHandler,
   createServiceObservabilityHandler,
   createServiceRequestLogger,
+  extractIncomingTraceContext,
+  getOtelRuntimeConfig,
   getRequestIdHeader,
   initializeServiceEvlog,
   initializeServiceOtel,
@@ -70,9 +74,12 @@ const openAPIHandler = new OpenAPIHandler(ordersRouter, {
       },
     }),
   ],
+  interceptors: [createOrpcErrorInterceptor()],
 });
 
-const rpcHandler = new RPCHandler(ordersRouter);
+const rpcHandler = new RPCHandler(ordersRouter, {
+  interceptors: [createOrpcErrorInterceptor()],
+});
 
 const wsHandler = new WebSocketRPCHandler(ordersRouter);
 const wss = new WebSocketServer({ noServer: true });
@@ -93,6 +100,14 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 const app = new Hono<{ Bindings: HttpBindings; Variables: AppVariables }>();
+
+app.use("*", async (c, next) => {
+  const incomingContext = extractIncomingTraceContext(c.req.raw.headers, (carrier) =>
+    propagation.extract(ROOT_CONTEXT, carrier),
+  );
+
+  return otelContext.with(incomingContext, next);
+});
 
 app.use("*", async (c, next) => {
   const requestId = getRequestIdHeader(c.req.header("x-request-id")) ?? randomUUID();
@@ -187,6 +202,7 @@ server.listen(port, "0.0.0.0", () => {
     spec_path: "/api/openapi.json",
     orpc_path: "/orpc",
     orpc_ws_path: "/orpc/ws",
+    otel: getOtelRuntimeConfig(),
   });
 });
 

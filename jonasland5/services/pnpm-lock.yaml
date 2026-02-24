@@ -26,6 +26,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/openapi':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(ws@8.19.0)
@@ -91,6 +94,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@orpc/client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)

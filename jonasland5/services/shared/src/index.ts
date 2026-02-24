@@ -347,57 +347,64 @@ export function infoFromContext(
   });
 }
 
-export function createOrpcErrorInterceptor() {
-  return onError((error, params) => {
-    const request = "request" in params ? params.request : undefined;
-    const requestMethod =
-      typeof request === "object" &&
-      request !== null &&
-      "method" in request &&
-      typeof request.method === "string"
-        ? request.method
-        : undefined;
-    const requestUrl =
-      typeof request === "object" &&
-      request !== null &&
-      "url" in request &&
-      typeof request.url === "string"
-        ? request.url
-        : undefined;
-    const path = "path" in params ? params.path : undefined;
-    const context =
-      "context" in params &&
-      typeof params.context === "object" &&
-      params.context !== null &&
-      "log" in params.context
-        ? (params.context as ServiceInitialContext)
-        : undefined;
+export function createOrpcErrorInterceptor<
+  TOptions extends {
+    next(): unknown;
+  },
+  TRest extends unknown[] = [],
+>() {
+  return onError<Promise<Awaited<ReturnType<TOptions["next"]>>>, TOptions, TRest>(
+    (error, params, ..._rest) => {
+      const request = "request" in params ? params.request : undefined;
+      const requestMethod =
+        typeof request === "object" &&
+        request !== null &&
+        "method" in request &&
+        typeof request.method === "string"
+          ? request.method
+          : undefined;
+      const requestUrl =
+        typeof request === "object" &&
+        request !== null &&
+        "url" in request &&
+        typeof request.url === "string"
+          ? request.url
+          : undefined;
+      const path = "path" in params ? params.path : undefined;
+      const context =
+        "context" in params &&
+        typeof params.context === "object" &&
+        params.context !== null &&
+        "log" in params.context
+          ? (params.context as ServiceInitialContext)
+          : undefined;
 
-    const fields = {
-      event: "orpc.handler.error",
-      request_method: requestMethod,
-      request_url: requestUrl,
-      procedure_path: Array.isArray(path) ? path.join(".") : path,
-      status: errorStatus(error),
-      ...currentSpanFields(),
-    };
+      const fields = {
+        event: "orpc.handler.error",
+        request_method: requestMethod,
+        request_url: requestUrl,
+        procedure_path: Array.isArray(path) ? path.join(".") : path,
+        status: errorStatus(error),
+        ...currentSpanFields(),
+      };
 
-    const resolvedError = toError(error);
+      const resolvedError = toError(error);
 
-    if (context?.log) {
-      context.log.error(resolvedError, fields);
-      return;
-    }
+      if (context?.log) {
+        context.log.error(resolvedError, fields);
+        return;
+      }
 
-    rootLog.error({
-      ...fields,
-      error: {
-        name: resolvedError.name,
-        message: resolvedError.message,
-        stack: resolvedError.stack,
-      },
-    });
-  });
+      rootLog.error({
+        ...fields,
+        error: {
+          name: resolvedError.name,
+          message: resolvedError.message,
+          stack: resolvedError.stack,
+        },
+      });
+    },
+  );
 }
 
 function convertSqliteType(rawType: string | undefined | null): 1 | 2 | 3 | 4 {
@@ -502,10 +509,14 @@ export function getRequestIdHeader(value: string | string[] | null | undefined) 
   return undefined;
 }
 
-export function extractIncomingTraceContext(
+export function extractIncomingTraceContext<TContext>(
   headers: Headers | Record<string, string | string[] | undefined>,
-  extract: (carrier: Record<string, string>) => unknown,
-) {
+  extract: (carrier: Record<string, string>) => TContext,
+): TContext;
+export function extractIncomingTraceContext<TContext>(
+  headers: Headers | Record<string, string | string[] | undefined>,
+  extract: (carrier: Record<string, string>) => TContext,
+): TContext {
   const carrier: Record<string, string> = {};
 
   if (headers instanceof Headers) {

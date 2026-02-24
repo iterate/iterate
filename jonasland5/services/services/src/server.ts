@@ -8,8 +8,13 @@ import {
   servicesServiceManifest,
 } from "@jonasland5/services-contract";
 import {
+  createOrpcErrorInterceptor,
+  getOtelRuntimeConfig,
+  initializeServiceEvlog,
+  initializeServiceOtel,
   createServiceRequestLogger,
   infoFromContext,
+  serviceLog,
   transformLibsqlResultSet,
   type ServiceRequestLogger,
 } from "@jonasland5/shared";
@@ -98,6 +103,8 @@ async function ensureStore(): Promise<ServicesStore> {
 
 const serviceName = "jonasland5-services-service";
 const os = implement(servicesContract).$context<ServicesContext>();
+initializeServiceOtel(serviceName);
+initializeServiceEvlog(serviceName);
 
 async function handleCaddyLoadInvocation(params: {
   input: {
@@ -234,7 +241,9 @@ export async function startServicesService(options?: {
   const port = options?.port ?? env.SERVICES_SERVICE_PORT;
   const store = await ensureStore();
 
-  const handler = new RPCHandler(servicesRouter);
+  const handler = new RPCHandler(servicesRouter, {
+    interceptors: [createOrpcErrorInterceptor()],
+  });
 
   const server = createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -263,6 +272,15 @@ export async function startServicesService(options?: {
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
+  });
+
+  serviceLog.info({
+    event: "service.started",
+    service: serviceName,
+    host,
+    port,
+    rpc_path: "/rpc",
+    otel: getOtelRuntimeConfig(),
   });
 
   return {
