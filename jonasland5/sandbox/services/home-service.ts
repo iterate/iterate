@@ -15,6 +15,8 @@ const links = [
   { label: "Orders Docs", host: "orders.iterate.localhost", path: "/api/docs" },
   { label: "Services API", host: "services.iterate.localhost", path: "/rpc/service/health" },
   { label: "Outerbase", host: "outerbase.iterate.localhost", path: "/" },
+  { label: "OpenObserve", host: "openobserve.iterate.localhost", path: "/" },
+  { label: "ClickStack", host: "clickstack.iterate.localhost", path: "/" },
   { label: "Caddy Admin", host: "caddy-admin.iterate.localhost", path: "/config/" },
   { label: "Pidnap", host: "pidnap.iterate.localhost", path: "/rpc/processes/list" },
 ] as const;

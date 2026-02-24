@@ -390,6 +390,19 @@ async function waitForHostRouteViaContainer(params: {
   throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
 }
 
+export const ALL_SANDBOX_PROCESSES = [
+  "caddy",
+  "services",
+  "events",
+  "orders",
+  "home",
+  "outerbase",
+  "egress-proxy",
+  "openobserve",
+  "clickstack",
+  "otel-collector",
+] as const;
+
 export const DEFAULT_SANDBOX_PROCESSES = [
   "caddy",
   "services",
@@ -400,7 +413,7 @@ export const DEFAULT_SANDBOX_PROCESSES = [
   "egress-proxy",
 ] as const;
 
-export type SandboxProcessName = (typeof DEFAULT_SANDBOX_PROCESSES)[number];
+export type SandboxProcessName = (typeof ALL_SANDBOX_PROCESSES)[number];
 
 function normalizeRequestedProcesses(
   processes?: readonly SandboxProcessName[],

@@ -15,10 +15,18 @@ http://services.iterate.localhost {
 }
 
 http://events.iterate.localhost {
+    tracing {
+        span "caddy-events-http"
+    }
+
     reverse_proxy 127.0.0.1:19010
 }
 
 http://orders.iterate.localhost {
+    tracing {
+        span "caddy-orders-http"
+    }
+
     reverse_proxy 127.0.0.1:19020
 }
 
@@ -32,6 +40,16 @@ http://outerbase.iterate.localhost {
 
 http://caddy-admin.iterate.localhost {
     reverse_proxy 127.0.0.1:2019
+}
+
+http://openobserve.iterate.localhost {
+    reverse_proxy 127.0.0.1:5080 {
+        header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+    }
+}
+
+http://clickstack.iterate.localhost {
+    reverse_proxy 127.0.0.1:4318
 }
 
 :80 {
@@ -53,6 +71,36 @@ http://caddy-admin.iterate.localhost {
 :443 {
     tls internal {
         on_demand
+    }
+
+    @events host events.iterate.localhost
+    handle @events {
+        tracing {
+            span "caddy-events-https"
+        }
+
+        reverse_proxy 127.0.0.1:19010
+    }
+
+    @orders host orders.iterate.localhost
+    handle @orders {
+        tracing {
+            span "caddy-orders-https"
+        }
+
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @openobserve host openobserve.iterate.localhost
+    handle @openobserve {
+        reverse_proxy 127.0.0.1:5080 {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        }
+    }
+
+    @clickstack host clickstack.iterate.localhost
+    handle @clickstack {
+        reverse_proxy 127.0.0.1:4318
     }
 
     reverse_proxy 127.0.0.1:19000 {
