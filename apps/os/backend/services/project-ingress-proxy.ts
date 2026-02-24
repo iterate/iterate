@@ -596,7 +596,11 @@ async function handleCustomDomainRequest(
       })) ?? null;
   } else {
     // Machine target — resolve directly
-    const resolved = await resolveMachineForIngress(target as unknown as IngressTarget, session.user.id, session.user.role === "admin");
+    const resolved = await resolveMachineForIngress(
+      target as unknown as IngressTarget,
+      session.user.id,
+      session.user.role === "admin",
+    );
     machine = resolved.machine;
     if (resolved.accessDenied) {
       return jsonError(403, "forbidden", { hostname: requestHostname });

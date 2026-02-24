@@ -194,10 +194,7 @@ export const projectRouter = {
       // Validate custom domain uniqueness if being set
       if (input.customDomain !== undefined && input.customDomain !== null) {
         const existing = await ctx.db.query.project.findFirst({
-          where: and(
-            eq(project.customDomain, input.customDomain),
-            ne(project.id, ctx.project.id),
-          ),
+          where: and(eq(project.customDomain, input.customDomain), ne(project.id, ctx.project.id)),
         });
         if (existing) {
           throw new ORPCError("CONFLICT", {

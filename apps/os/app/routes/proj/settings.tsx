@@ -119,9 +119,7 @@ function ProjectSettingsPage() {
     updateProject.mutate({
       ...(hasNameChange ? { name: name.trim() } : {}),
       ...(hasProviderChange ? { sandboxProvider } : {}),
-      ...(hasCustomDomainChange
-        ? { customDomain: customDomain.trim().toLowerCase() || null }
-        : {}),
+      ...(hasCustomDomainChange ? { customDomain: customDomain.trim().toLowerCase() || null } : {}),
     });
   };
 
@@ -170,13 +168,9 @@ function ProjectSettingsPage() {
                   <>
                     Add these DNS records:
                     <br />
-                    <code className="text-xs">
-                      * CNAME → cname.iterate.app
-                    </code>
+                    <code className="text-xs">* CNAME → cname.iterate.app</code>
                     <br />
-                    <code className="text-xs">
-                      @ CNAME → cname.iterate.app
-                    </code>
+                    <code className="text-xs">@ CNAME → cname.iterate.app</code>
                   </>
                 ) : (
                   <>

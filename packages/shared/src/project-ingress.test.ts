@@ -239,16 +239,25 @@ describe("parseCustomDomainHostname", () => {
 
   it("service alias → project, aliased port", () => {
     const result = parseCustomDomainHostname("opencode.templestein.com", "templestein.com");
-    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.opencode } });
+    expect(result).toEqual({
+      ok: true,
+      target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+    });
   });
 
   it("terminal alias → project, aliased port", () => {
     const result = parseCustomDomainHostname("terminal.templestein.com", "templestein.com");
-    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.terminal } });
+    expect(result).toEqual({
+      ok: true,
+      target: { kind: "project", targetPort: SERVICE_ALIASES.terminal },
+    });
   });
 
   it("machine with port → machine target", () => {
-    const result = parseCustomDomainHostname("4096__mach_abc123.templestein.com", "templestein.com");
+    const result = parseCustomDomainHostname(
+      "4096__mach_abc123.templestein.com",
+      "templestein.com",
+    );
     expect(result).toEqual({
       ok: true,
       target: { kind: "machine", machineId: "mach_abc123", targetPort: 4096 },
@@ -269,7 +278,10 @@ describe("parseCustomDomainHostname", () => {
   });
 
   it("subdomain custom domain — port subdomain", () => {
-    const result = parseCustomDomainHostname("4096.iterate.templestein.com", "iterate.templestein.com");
+    const result = parseCustomDomainHostname(
+      "4096.iterate.templestein.com",
+      "iterate.templestein.com",
+    );
     expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
   });
 
@@ -285,7 +297,10 @@ describe("parseCustomDomainHostname", () => {
 
   it("case insensitive", () => {
     const result = parseCustomDomainHostname("OpenCode.Templestein.COM", "templestein.com");
-    expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: SERVICE_ALIASES.opencode } });
+    expect(result).toEqual({
+      ok: true,
+      target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+    });
   });
 });
 
