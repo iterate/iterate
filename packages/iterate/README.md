@@ -117,7 +117,7 @@ From repo root:
 
 ```bash
 pnpm --filter ./packages/iterate typecheck
-pnpm eslint packages/iterate/bin/iterate.js
-pnpm prettier --check packages/iterate
+pnpm oxlint packages/iterate/bin/iterate.js
+pnpm oxfmt --check packages/iterate
 pnpm --filter ./packages/iterate publish --access public
 ```
