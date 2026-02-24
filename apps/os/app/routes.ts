@@ -2,6 +2,7 @@ import { rootRoute, route, layout, index } from "@tanstack/virtual-file-routes";
 
 export const routes = rootRoute("root.tsx", [
   // Public routes
+  route("/device", "device.tsx"),
   route("/login", "login.tsx"),
   route("/logout", "logout.tsx"),
 
@@ -43,7 +44,7 @@ export const routes = rootRoute("root.tsx", [
     // Admin routes
     route("/admin", "admin/layout.tsx", [
       index("admin/index.tsx"),
-      route("/trpc-tools", "admin/trpc-tools.tsx"),
+      route("/api-tools", "admin/api-tools.tsx"),
       route("/session-info", "admin/session-info.tsx"),
       route("/outbox", "admin/outbox.tsx"),
     ]),

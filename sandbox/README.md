@@ -88,7 +88,7 @@ Actual image used for sandbox creation
 | Docker   | `DOCKER_DEFAULT_IMAGE` | `registry.depot.dev/{depotProjectId}:sha-abc1234` |
 | Fly      | `FLY_DEFAULT_IMAGE`    | `registry.fly.io/iterate-sandbox:sha-abc1234`     |
 
-The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` tRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
+The create-machine UI fetches current defaults via `machine.getDefaultSnapshots` oRPC endpoint and pre-fills them. Leave blank to use the Doppler default, or enter a fully-qualified tag to override.
 
 ## Build
 
@@ -204,8 +204,8 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
-pnpm sandbox fly:cleanup -- 24h stop dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- 7d delete stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- --timeframe 24h --action stop --prefix dev    # stop machines idle >24h
+pnpm sandbox fly:cleanup -- --timeframe 7d --action delete --prefix stg   # delete machines idle >7d
 ```
 
 ## Testing

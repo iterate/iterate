@@ -124,10 +124,16 @@ When a machine shows `status=error` in the dashboard:
 2. Check daemon logs: `docker logs <container-name> 2>&1 | tail -100`
 3. Common causes:
    - **Readiness probe failed** — the platform sends "1+2=?" via webchat and polls for "3". Check for `500` or OpenCode session errors in logs. Probe code: `apps/os/backend/services/machine-readiness-probe.ts`
-   - **Daemon bootstrap failed** — daemon couldn't fetch env/config from control plane. Look for `[bootstrap] Fatal error` in logs
+   - **Daemon bootstrap failed** — daemon couldn't report status to control plane. Look for `[bootstrap] Fatal error` in logs
    - **OpenCode not ready** — race between daemon accepting HTTP and OpenCode server starting. Look for `Failed to create OpenCode session`
 4. Key log patterns: `webchat/webhook`, `readiness-probe`, `opencode`, `bootstrap`
-5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (probe + activation), `apps/os/backend/services/machine-creation.ts`
+5. Machine lifecycle code: `apps/os/backend/outbox/consumers.ts` (setup + probe + activation), `apps/os/backend/services/machine-creation.ts`, `apps/os/backend/services/machine-setup.ts`
+
+### Debugging machine lifecycle (dev)
+
+- Query the local dev DB (`machine`, `outbox_event` tables) to find recent machines, check state and event history. The postgres port is docker-mapped — use `docker port` to find it. DB name is `os`.
+- For fly machines, `doppler run --config dev -- fly logs -a <external_id> --no-tail` shows daemon/pidnap logs. The `external_id` column on the machine row is the fly app name.
+- The `pgmq.q_consumer_job_queue` and `pgmq.a_consumer_job_queue` tables show pending/archived outbox jobs.
 
 ### Getting logs from Daytona machines (production)
 
@@ -160,13 +166,12 @@ The `os` worker handles all oRPC calls from daemons. To debug 500s from the cont
 
 ### Querying the production database
 
-Get the prod DB connection string from the `db:studio:prd` script:
+Get the prod DB connection string from the `db:studio:prd` script. Run from `apps/os/`:
 
 ```bash
-DB_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_POSTGRES_URL)
-npx tsx -e "
+doppler run --config prd -- npx tsx -e "
 import postgres from 'postgres';
-const sql = postgres('$DB_URL', { prepare: false, ssl: 'require' });
+const sql = postgres(process.env.PLANETSCALE_PROD_POSTGRES_URL!, { prepare: false, ssl: 'require' });
 async function main() {
   // your queries here
   await sql.end();
@@ -176,6 +181,40 @@ main();
 ```
 
 Needs `ssl: 'require'` (PlanetScale). Wrap in `async function main()` — top-level await doesn't work with tsx eval.
+
+**Column naming:** The DB uses `snake_case` columns (e.g. `external_id`, `project_id`, `created_at`), not camelCase. Use `SELECT *` first if unsure of column names.
+
+### Looking up machine info (production)
+
+To find the active machine for a project, its Fly app name, and Fly machine ID:
+
+```bash
+# 1. Find active machine in DB (from apps/os/)
+doppler run --config prd -- npx tsx -e "
+import postgres from 'postgres';
+const sql = postgres(process.env.PLANETSCALE_PROD_POSTGRES_URL!, { prepare: false, ssl: 'require' });
+async function main() {
+  const machines = await sql\`SELECT id, name, state, external_id, created_at FROM machine WHERE project_id = '<PROJECT_ID>' ORDER BY created_at DESC LIMIT 5\`;
+  console.log(JSON.stringify(machines, null, 2));
+  await sql.end();
+}
+main();
+"
+# external_id = Fly app name (e.g. prd-iterate-mach-01kj3...)
+
+# 2. Get Fly machine ID
+doppler run --config prd -- fly machines list -a <external_id>
+
+# 3. Get logs
+doppler run --config prd -- fly logs -a <external_id> --no-tail
+
+# 4. Search logs for specific patterns
+doppler run --config prd -- fly logs -a <external_id> --no-tail 2>&1 | grep -i 'slack\|error\|ERR'
+```
+
+Key project IDs: Iterate = `prj_01kh7ct9jke49vjq43j4wy3vyw`, team = `T0675PSN873`.
+
+**Fly log limitations:** `fly logs --no-tail` only returns recent logs (last ~30min). Bootstrap/startup logs may not be visible if the machine started hours ago.
 
 ### Outbox queue operations
 
@@ -189,7 +228,7 @@ FROM pgmq.q_consumer_job_queue
 WHERE msg_id IN (...);
 ```
 
-Queue only processes when triggered via `waitUntil` after an event is enqueued — there is no cron. If messages are stuck, use the admin "Process Queue" button or call `admin.outbox.processQueue` tRPC endpoint.
+Queue only processes when triggered via `waitUntil` after an event is enqueued — there is no cron. If messages are stuck, use the admin "Process Queue" button or call `admin.outbox.processQueue` oRPC endpoint.
 
 ### Deployment checklist — migrations
 
@@ -205,6 +244,7 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - **Readiness probe pipeline** — machine activation uses a staged event pipeline: `daemon-ready` → `probe-sent` → `probe-succeeded` → `activated`. Each stage is a separate consumer. The `reportStatus` handler emits `machine:daemon-ready` only when daemon reports ready AND `externalId` exists AND `daemonStatus !== "probing"`. If `externalId` is missing (provisioning still running), `machine-creation.ts` emits the deferred `daemon-ready` after provisioning completes. See `apps/os/backend/outbox/consumers.ts` for the full pipeline.
 - **oRPC errors were silent** — prior to adding the `onError` interceptor on `RPCHandler` in `worker.ts`, unhandled errors in oRPC handlers were swallowed into generic 500s with no logging. The `cf-ray` response header can be used to correlate daemon-side errors with CF Worker dashboard logs.
 - **Queue head-of-line blocking** — `processQueue` reads 2 messages at a time by VT order. A stale probe poll (120s timeout) blocks all messages behind it. Archive stale messages via pgmq to unblock.
+- **Pidnap env lifecycle** — pidnap spawns child processes with env vars merged from the config `env`, the global `envFile`, and `process.env`. If a process has `reloadDelay: false`, it never restarts on env file changes, so env vars written after process start are invisible. Use `pidnap process reload <name> -d '<definition-json>' -r true` to force a restart with fresh env. Plain `pidnap process restart` re-applies env defaults too (reload under the hood). The env watcher still tracks file contents even when reload is disabled.
 
 ## Pointers
 

@@ -8,7 +8,7 @@ Runs as a thin bootstrapper that:
 
 1. Resolves an `iterate/iterate` checkout.
 2. Clones/install deps when needed.
-3. Loads `apps/os/backend/trpc/root.ts` from that checkout.
+3. Loads `apps/os/backend/orpc/root.ts` from that checkout.
 4. Exposes commands like `iterate os ...` and `iterate whoami`.
 
 ## Requirements
@@ -64,48 +64,37 @@ Config shape:
 
 ```json
 {
-  "global": {
-    "repoPath": "~/.local/share/iterate/repo",
-    "repoRef": "main",
-    "repoUrl": "https://github.com/iterate/iterate.git",
-    "autoInstall": true
-  },
-  "workspaces": {
-    "/absolute/workspace/path": {
+  "configs": {
+    "default": {
+      "osBaseUrl": "https://os.iterate.com",
+      "daemonBaseUrl": "http://localhost:3000",
+      "auth": {
+        "strategy": "device"
+      }
+    },
+    "dev": {
       "osBaseUrl": "https://dev-yourname-os.dev.iterate.com",
       "daemonBaseUrl": "http://localhost:3001",
-      "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
-      "userEmail": "dev-yourname@iterate.com"
+      "auth": {
+        "strategy": "superadmin",
+        "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
+        "userEmail": "dev-yourname@iterate.com"
+      }
     }
+  },
+  "default": "default",
+  "workspaces": {
+    "/absolute/workspace/path": "dev"
   }
 }
 ```
 
-Merge precedence is shallow:
+Config resolution priority: `--config` flag > workspace match (walk up from cwd) > `default` key > single-config auto-select.
 
-`global` -> `workspaces[process.cwd()]`
+Auth strategies:
 
-## Repo checkout resolution
-
-`repoPath` resolution order:
-
-1. `ITERATE_REPO_DIR`
-2. `workspaces[process.cwd()].repoPath`
-3. `global.repoPath`
-4. nearest parent directory containing `.git`, `pnpm-workspace.yaml`, and `apps/os/backend/trpc/root.ts`
-5. default managed checkout path `${XDG_DATA_HOME:-~/.local/share}/iterate/repo`
-
-`repoPath` shortcuts in `setup`:
-
-- `local` - nearest local iterate checkout
-- `managed` - default managed checkout path
-
-Environment overrides:
-
-- `ITERATE_REPO_DIR`
-- `ITERATE_REPO_REF`
-- `ITERATE_REPO_URL`
-- `ITERATE_AUTO_INSTALL` (`1/true` or `0/false`)
+- `device` — interactive browser-based login (RFC 8628 device flow). Run `iterate login`.
+- `superadmin` — CI/automation impersonation via admin password env var.
 
 ## Local iterate dev
 
@@ -128,7 +117,7 @@ From repo root:
 
 ```bash
 pnpm --filter ./packages/iterate typecheck
-pnpm eslint packages/iterate/bin/iterate.js
-pnpm prettier --check packages/iterate
+pnpm oxlint packages/iterate/bin/iterate.js
+pnpm oxfmt --check packages/iterate
 pnpm --filter ./packages/iterate publish --access public
 ```

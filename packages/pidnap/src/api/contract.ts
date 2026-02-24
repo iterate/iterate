@@ -28,6 +28,7 @@ export const ProcessDefinitionInfoSchema = v.object({
   args: v.optional(v.array(v.string())),
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
+  inheritProcessEnv: v.optional(v.boolean()),
 });
 
 export type ProcessDefinitionInfo = v.InferOutput<typeof ProcessDefinitionInfoSchema>;
@@ -65,14 +66,15 @@ export const processes = {
     .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
   list: oc.output(v.array(RestartingProcessInfoSchema)),
-  add: oc
+  updateConfig: oc
     .input(
       v.object({
-        name: v.string(),
+        processSlug: v.string(),
         definition: ProcessDefinition,
         options: v.optional(RestartingProcessOptions),
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
+        restartImmediately: v.optional(v.boolean()),
       }),
     )
     .output(RestartingProcessInfoSchema),
@@ -81,17 +83,9 @@ export const processes = {
   restart: oc
     .input(v.object({ target: ResourceTarget, force: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
-  reload: oc
-    .input(
-      v.object({
-        target: ResourceTarget,
-        definition: ProcessDefinition,
-        restartImmediately: v.optional(v.boolean()),
-        tags: v.optional(v.array(v.string())),
-      }),
-    )
-    .output(RestartingProcessInfoSchema),
-  remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
+  delete: oc
+    .input(v.object({ processSlug: v.string() }))
+    .output(v.object({ success: v.boolean() })),
   waitForRunning: oc
     .input(
       v.object({

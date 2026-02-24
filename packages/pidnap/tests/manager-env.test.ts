@@ -140,6 +140,50 @@ describe("Manager with EnvManager integration", () => {
     await manager.stop();
   });
 
+  it("should unregister custom envFile when updateProcessConfig removes envFile", async () => {
+    writeFileSync(join(testDir, "custom.env"), "CUSTOM_VAR=custom_value");
+    writeFileSync(join(testDir, ".env.app"), "APP_VAR=app_value");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "app",
+            definition: {
+              command: "echo",
+              args: ["test"],
+            },
+            envOptions: { envFile: "custom.env" },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    await manager.updateProcessConfig({
+      processSlug: "app",
+      definition: {
+        command: "echo",
+        args: ["test-2"],
+      },
+      envOptions: {},
+    });
+
+    const proc = manager.getRestartingProcess("app");
+    const definition = proc!.lazyProcess.definition;
+    expect(definition.env).toEqual({
+      APP_VAR: "app_value",
+    });
+    // @ts-expect-error - accessing private member for testing
+    expect(manager.envManager.hasCustomFile("app")).toBe(false);
+
+    await manager.stop();
+  });
+
   it("should work without any env files", async () => {
     const testLogger = logger({ name: "test" });
     const manager = new Manager(
@@ -194,8 +238,8 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess({
-      name: "dynamic",
+    await manager.updateProcessConfig({
+      processSlug: "dynamic",
       definition: {
         command: "echo",
         args: ["dynamic"],
@@ -204,6 +248,7 @@ describe("Manager with EnvManager integration", () => {
         },
       },
     });
+    const proc = manager.getRestartingProcess("dynamic");
 
     const definition = proc!.lazyProcess.definition;
 
@@ -386,8 +431,8 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess({
-      name: "dynamic-proc",
+    await manager.updateProcessConfig({
+      processSlug: "dynamic-proc",
       definition: {
         command: "echo",
         args: ["proc"],
@@ -395,6 +440,7 @@ describe("Manager with EnvManager integration", () => {
       },
       envOptions: { inheritGlobalEnv: false, inheritProcessEnv: false },
     });
+    const proc = manager.getRestartingProcess("dynamic-proc");
 
     const definition = proc!.lazyProcess.definition;
 
@@ -418,15 +464,20 @@ describe("Manager with EnvManager integration", () => {
 
     await manager.start();
 
-    const proc = await manager.addProcess({
-      name: "tagged-dynamic",
+    await manager.updateProcessConfig({
+      processSlug: "tagged-dynamic",
       definition: {
         command: "echo",
         args: ["proc"],
       },
       tags: ["queue", "critical"],
     });
+    const proc = manager.getRestartingProcess("tagged-dynamic");
 
+    expect(proc).toBeDefined();
+    if (!proc) {
+      throw new Error("expected tagged-dynamic process to exist");
+    }
     expect(proc.tags).toEqual(["queue", "critical"]);
 
     await manager.stop();

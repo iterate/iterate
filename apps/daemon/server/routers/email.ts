@@ -16,9 +16,10 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { daemonRouter } from "../orpc/router.ts";
 
 const logger = console;
 const DAEMON_PORT = process.env.PORT || "3001";
@@ -99,7 +100,7 @@ emailRouter.post("/webhook", async (c) => {
     const emailBody = payload._iterate?.emailBody;
 
     // Get or create the agent — wasNewlyCreated tells us if this is a new thread or a reply.
-    const caller = trpcRouter.createCaller({});
+    const caller = createRouterClient(daemonRouter, { context: {} });
     const { wasNewlyCreated } = await caller.getOrCreateAgent({
       agentPath,
       createWithEvents: [],
@@ -129,7 +130,9 @@ emailRouter.post("/webhook", async (c) => {
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+      body: JSON.stringify({
+        events: [{ type: "iterate:agent:prompt-added", message }],
+      }),
     }).catch((error) => {
       logger.error(`[email] failed to post prompt for ${agentPath}`, error);
     });
@@ -264,7 +267,7 @@ function formatNewEmailMessage(
 
   return [
     `[Agent Path: ${agentPath}] New email thread started.`,
-    `Refer to EMAIL.md for how to respond via \`iterate tool exec-js\`.`,
+    `Refer to EMAIL.md for how to respond via \`iterate tool exec-ts\`.`,
     "",
     `From: ${senderName} <${senderEmail}>`,
     `To: ${emailData.to.join(", ")}`,

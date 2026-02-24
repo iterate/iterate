@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { implement, ORPCError } from "@orpc/server";
 import type { Manager } from "../manager.ts";
-import type { RestartingProcess } from "../restarting-process.ts";
 import {
   api,
   type RestartingProcessInfo,
@@ -27,20 +26,27 @@ function computeEffectiveEnv(definitionEnv?: Record<string, string>): Record<str
 
 // Helper to serialize a RestartingProcess to API response
 function serializeProcess(
-  proc: RestartingProcess,
+  manager: Manager,
+  target: string | number,
   options?: { includeEffectiveEnv?: boolean },
 ): RestartingProcessInfo {
-  const def = proc.lazyProcess.definition;
+  const entry = manager.getManagedProcessEntry(target);
+  if (!entry) {
+    throw new ORPCError("NOT_FOUND", { message: `Process not found: ${target}` });
+  }
+  const proc = manager.getProcessByTarget(entry.name);
+  const def = proc?.lazyProcess.definition ?? entry.definition;
   const result: RestartingProcessInfo = {
-    name: proc.name,
-    tags: proc.tags,
-    state: proc.state,
-    restarts: proc.restarts,
+    name: entry.name,
+    tags: proc?.tags ?? entry.tags ?? [],
+    state: proc?.state ?? "idle",
+    restarts: proc?.restarts ?? 0,
     definition: {
       command: def.command,
       args: def.args,
       cwd: def.cwd,
       env: def.env,
+      inheritProcessEnv: def.inheritProcessEnv,
     },
   };
 
@@ -79,49 +85,38 @@ async function waitForManagerReady(
 const getProcess = os.processes.get.handler(async ({ input, context }) => {
   // Wait for manager to finish initialization before checking process existence
   await waitForManagerReady(context.manager);
-
-  const proc = context.manager.getProcessByTarget(input.target);
-  if (!proc) {
-    throw new ORPCError("NOT_FOUND", { message: `Process not found: ${input.target}` });
-  }
-  return serializeProcess(proc, { includeEffectiveEnv: input.includeEffectiveEnv });
+  return serializeProcess(context.manager, input.target, {
+    includeEffectiveEnv: input.includeEffectiveEnv,
+  });
 });
 
 const listProcesses = os.processes.list.handler(async ({ context }) => {
-  const processes = Array.from(context.manager.getRestartingProcesses().values());
-  return processes.map((proc) => serializeProcess(proc));
+  const processes = context.manager.listManagedProcessEntries();
+  return processes.map((proc) => serializeProcess(context.manager, proc.name));
 });
 
-const addProcess = os.processes.add.handler(async ({ input, context }) => {
-  const proc = await context.manager.addProcess(input);
-  return serializeProcess(proc);
+const updateConfig = os.processes.updateConfig.handler(async ({ input, context }) => {
+  await context.manager.updateProcessConfig(input);
+  return serializeProcess(context.manager, input.processSlug);
 });
 
 const startProcess = os.processes.start.handler(async ({ input, context }) => {
   const proc = await context.manager.startProcessByTarget(input.target);
-  return serializeProcess(proc);
+  return serializeProcess(context.manager, proc.name);
 });
 
 const stopProcess = os.processes.stop.handler(async ({ input, context }) => {
   const proc = await context.manager.stopProcessByTarget(input.target);
-  return serializeProcess(proc);
+  return serializeProcess(context.manager, proc.name);
 });
 
 const restartProcess = os.processes.restart.handler(async ({ input, context }) => {
   const proc = await context.manager.restartProcessByTarget(input.target, input.force);
-  return serializeProcess(proc);
+  return serializeProcess(context.manager, proc.name);
 });
 
-const reloadProcess = os.processes.reload.handler(async ({ input, context }) => {
-  const proc = await context.manager.reloadProcessByTarget(input.target, input.definition, {
-    restartImmediately: input.restartImmediately,
-    tags: input.tags,
-  });
-  return serializeProcess(proc);
-});
-
-const removeProcess = os.processes.remove.handler(async ({ input, context }) => {
-  await context.manager.removeProcessByTarget(input.target);
+const deleteProcess = os.processes.delete.handler(async ({ input, context }) => {
+  await context.manager.deleteProcessBySlug(input.processSlug);
   return { success: true };
 });
 
@@ -233,14 +228,13 @@ export const router = os.router({
     status: managerStatus,
   },
   processes: {
-    add: addProcess,
+    updateConfig: updateConfig,
     get: getProcess,
     list: listProcesses,
     start: startProcess,
     stop: stopProcess,
     restart: restartProcess,
-    reload: reloadProcess,
-    remove: removeProcess,
+    delete: deleteProcess,
     waitForRunning: waitForRunning,
   },
 });

@@ -176,6 +176,13 @@
       "when": 1771528801344,
       "tag": "0024_remove_daytona_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1771799253438,
+      "tag": "0025_swift_tarantula",
+      "breakpoints": true
     }
   ]
 }

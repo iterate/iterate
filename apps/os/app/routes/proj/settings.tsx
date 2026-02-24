@@ -2,13 +2,31 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.tsx";
+
+type ProjectSandboxProvider = "daytona" | "docker" | "fly";
+
+const SANDBOX_PROVIDER_LABELS: Record<ProjectSandboxProvider, string> = {
+  daytona: "Daytona (Cloud)",
+  docker: "Docker",
+  fly: "Fly.io",
+};
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/settings")({
   component: ProjectSettingsPage,
+  loader: ({ context }) => {
+    context.queryClient.prefetchQuery(orpc.project.getAvailableSandboxProviders.queryOptions());
+  },
 });
 
 function ProjectSettingsPage() {
@@ -17,21 +35,44 @@ function ProjectSettingsPage() {
   });
   const navigate = useNavigate({ from: Route.fullPath });
 
-  // bySlug returns project with organization
   const { data: projectWithOrg } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
+  const { data: sandboxProviders } = useSuspenseQuery(
+    orpc.project.getAvailableSandboxProviders.queryOptions(),
+  );
+
+  const { data: machines } = useSuspenseQuery(
+    orpc.machine.list.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
+    }),
+  );
+
+  const enabledSandboxProviders = sandboxProviders.providers.filter(
+    (provider) => !provider.disabledReason,
+  );
+
+  const hasRunningMachines = machines.some((m) => m.state === "active" || m.state === "starting");
+
   const project = projectWithOrg;
   const [name, setName] = useState(project.name);
+  const [sandboxProvider, setSandboxProvider] = useState<ProjectSandboxProvider>(
+    project.sandboxProvider as ProjectSandboxProvider,
+  );
 
   const updateProject = useMutation({
-    mutationFn: async (nextName: string) => {
-      return trpcClient.project.update.mutate({
+    mutationFn: async (input: { name?: string; sandboxProvider?: ProjectSandboxProvider }) => {
+      return orpcClient.project.update({
         projectSlug: params.projectSlug,
-        name: nextName,
+        ...input,
       });
     },
     onSuccess: () => {
@@ -44,13 +85,12 @@ function ProjectSettingsPage() {
 
   const deleteProject = useMutation({
     mutationFn: async () => {
-      return trpcClient.project.delete.mutate({
+      return orpcClient.project.delete({
         projectSlug: params.projectSlug,
       });
     },
     onSuccess: () => {
       toast.success("Project deleted");
-      // Navigate to org page after deletion
       navigate({
         to: "/orgs/$organizationSlug",
         params: { organizationSlug: projectWithOrg.organization.slug },
@@ -61,11 +101,18 @@ function ProjectSettingsPage() {
     },
   });
 
+  const hasNameChange = name.trim() && name !== project.name;
+  const hasProviderChange = sandboxProvider !== project.sandboxProvider;
+  const hasChanges = hasNameChange || hasProviderChange;
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (name.trim() && name !== project.name) {
-      updateProject.mutate(name.trim());
-    }
+    if (!hasChanges) return;
+
+    updateProject.mutate({
+      ...(hasNameChange ? { name: name.trim() } : {}),
+      ...(hasProviderChange ? { sandboxProvider } : {}),
+    });
   };
 
   const handleDelete = () => {
@@ -77,6 +124,8 @@ function ProjectSettingsPage() {
       deleteProject.mutate();
     }
   };
+
+  const canChangeProvider = enabledSandboxProviders.length >= 2 && !hasRunningMachines;
 
   return (
     <div className="p-4 space-y-8">
@@ -99,14 +148,41 @@ function ProjectSettingsPage() {
             </Field>
             <Field>
               <FieldLabel htmlFor="project-sandbox-provider">Sandbox provider</FieldLabel>
-              <Input id="project-sandbox-provider" value={project.sandboxProvider} disabled />
+              {canChangeProvider ? (
+                <Select
+                  value={sandboxProvider}
+                  onValueChange={(value) => setSandboxProvider(value as ProjectSandboxProvider)}
+                  disabled={updateProject.isPending}
+                >
+                  <SelectTrigger id="project-sandbox-provider">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {enabledSandboxProviders.map((provider) => (
+                      <SelectItem key={provider.type} value={provider.type}>
+                        {provider.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <>
+                  <Input
+                    id="project-sandbox-provider"
+                    value={SANDBOX_PROVIDER_LABELS[sandboxProvider] ?? sandboxProvider}
+                    disabled
+                  />
+                  {hasRunningMachines && enabledSandboxProviders.length >= 2 && (
+                    <p className="text-xs text-muted-foreground">
+                      Archive all machines to change the sandbox provider.
+                    </p>
+                  )}
+                </>
+              )}
             </Field>
           </FieldSet>
           <Field orientation="horizontal">
-            <Button
-              type="submit"
-              disabled={!name.trim() || name === project.name || updateProject.isPending}
-            >
+            <Button type="submit" disabled={!hasChanges || updateProject.isPending}>
               {updateProject.isPending ? "Saving..." : "Save"}
             </Button>
           </Field>

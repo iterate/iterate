@@ -89,7 +89,7 @@ ORDER BY me.id
 
 The `context.causedBy` fields let the UI draw edges in the causal graph.
 
-### 4. Admin tRPC endpoint
+### 4. Admin oRPC endpoint
 
 ```ts
 admin.outbox.relatedEvents
@@ -115,7 +115,7 @@ Replace `getLatestMachineEvents()` + `getMachinePendingConsumers()` with single 
 1. Migration (add `context` column)
 2. ALS wiring in `pgmq-lib.ts` (processQueue + enqueue)
 3. `getEventsRelatedTo` helper in `machine-metadata.ts` or new file
-4. Admin tRPC endpoint
+4. Admin oRPC endpoint
 5. Admin UI timeline panel
 6. Machine router integration (replace two helpers)
 

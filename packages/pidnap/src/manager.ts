@@ -1,6 +1,17 @@
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { cwd as getCwd } from "node:process";
-import { mkdirSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import * as v from "valibot";
 import { Cron } from "croner";
 import { ProcessDefinition } from "./lazy-process.ts";
@@ -61,6 +72,12 @@ export const ScheduleConfig = v.object({
 });
 export type ScheduleConfig = v.InferOutput<typeof ScheduleConfig>;
 
+export const ProcessPersistence = v.picklist(["durable", "ephemeral"]);
+export type ProcessPersistence = v.InferOutput<typeof ProcessPersistence>;
+
+export const DesiredProcessState = v.picklist(["running", "stopped"]);
+export type DesiredProcessState = v.InferOutput<typeof DesiredProcessState>;
+
 export const RestartingProcessEntry = v.object({
   name: v.string(),
   tags: v.optional(v.array(v.string())),
@@ -70,8 +87,17 @@ export const RestartingProcessEntry = v.object({
   dependsOn: v.optional(v.array(ProcessDependency)),
   /** Schedule for cron-like execution. When triggered: starts if stopped, restarts if running. */
   schedule: v.optional(ScheduleConfig),
+  /** Whether this process should be written to autosave state. */
+  persistence: v.optional(ProcessPersistence),
+  /** Desired runtime state restored across restarts. */
+  desiredState: v.optional(DesiredProcessState),
 });
 export type RestartingProcessEntry = v.InferOutput<typeof RestartingProcessEntry>;
+
+export const ManagerStateStorageConfig = v.object({
+  autosaveFile: v.optional(v.string()),
+});
+export type ManagerStateStorageConfig = v.InferOutput<typeof ManagerStateStorageConfig>;
 
 export const ManagerConfig = v.object({
   http: v.optional(HttpServerConfig),
@@ -80,8 +106,28 @@ export const ManagerConfig = v.object({
   env: v.optional(v.record(v.string(), v.string())),
   envFile: v.optional(v.string()),
   processes: v.optional(v.array(RestartingProcessEntry)),
+  state: v.optional(ManagerStateStorageConfig),
 });
 export type ManagerConfig = v.InferOutput<typeof ManagerConfig>;
+
+const AutosaveProcessEntry = v.object({
+  name: v.string(),
+  definition: ProcessDefinition,
+  options: v.optional(RestartingProcessOptions),
+  envOptions: v.optional(EnvOptions),
+  tags: v.optional(v.array(v.string())),
+  persistence: ProcessPersistence,
+  desiredState: DesiredProcessState,
+});
+type AutosaveProcessEntry = v.InferOutput<typeof AutosaveProcessEntry>;
+
+const AutosaveState = v.object({
+  version: v.literal(1),
+  revision: v.optional(v.number()),
+  deleted: v.optional(v.array(v.string())),
+  processes: v.optional(v.record(v.string(), AutosaveProcessEntry)),
+});
+type AutosaveState = v.InferOutput<typeof AutosaveState>;
 
 const DEFAULT_RESTART_OPTIONS = {
   restartPolicy: "always" as const,
@@ -99,6 +145,9 @@ export class Manager {
   private config: ManagerConfig;
   private logger: Logger;
   private envManager: EnvManager;
+  private autosavePath: string;
+  private autosaveEnabled: boolean;
+  private autosaveRevision = 0;
 
   private _state: ManagerState = "idle";
   private restartingProcesses: Map<string, RestartingProcess> = new Map();
@@ -126,12 +175,21 @@ export class Manager {
     this.config = config;
     this.logger = logger;
     this.logDir = config.logDir ?? join(cwd, "logs");
+    this.autosaveEnabled = config.state !== undefined;
+    this.autosavePath = this.resolveAutosavePath(cwd, config.state?.autosaveFile);
     this.ensureLogDirs();
 
-    this.validateConfigNames();
+    this.validateConfigNames(config.processes ?? []);
+
+    const mergedProcesses = this.buildMergedProcessList(config.processes ?? []);
+    this.config = {
+      ...config,
+      cwd,
+      processes: mergedProcesses,
+    };
 
     const customEnvFiles: Record<string, string> = {};
-    for (const proc of config.processes ?? []) {
+    for (const proc of this.config.processes ?? []) {
       if (proc.envOptions?.envFile) customEnvFiles[proc.name] = proc.envOptions.envFile;
     }
 
@@ -153,9 +211,15 @@ export class Manager {
     }
   }
 
-  private validateConfigNames(): void {
+  private resolveAutosavePath(cwd: string, configuredPath?: string): string {
+    const defaultPath = join(homedir(), ".iterate", "pidnap-autosave.json");
+    if (!configuredPath) return defaultPath;
+    return isAbsolute(configuredPath) ? configuredPath : resolvePath(cwd, configuredPath);
+  }
+
+  private validateConfigNames(processes: RestartingProcessEntry[]): void {
     const seen = new Set<string>();
-    for (const proc of this.config.processes ?? []) {
+    for (const proc of processes) {
       if (seen.has(proc.name)) {
         throw new Error(`Duplicate process name "${proc.name}"`);
       }
@@ -163,12 +227,152 @@ export class Manager {
     }
   }
 
-  private isNameUsed(name: string): boolean {
-    if (this.restartingProcesses.has(name)) return true;
-    for (const proc of this.config.processes ?? []) {
-      if (proc.name === name) return true;
+  private normalizeProcessEntry(entry: RestartingProcessEntry): RestartingProcessEntry & {
+    persistence: ProcessPersistence;
+    desiredState: DesiredProcessState;
+  } {
+    return {
+      ...entry,
+      persistence: entry.persistence ?? "durable",
+      desiredState: entry.desiredState ?? "running",
+    };
+  }
+
+  private readAutosaveState(): AutosaveState | null {
+    if (!this.autosaveEnabled) return null;
+    if (!existsSync(this.autosavePath)) return null;
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(this.autosavePath, "utf-8"));
+    } catch (error) {
+      throw new Error(`Failed to parse autosave state at ${this.autosavePath}: ${String(error)}`);
     }
-    return false;
+
+    try {
+      return v.parse(AutosaveState, raw);
+    } catch (error) {
+      throw new Error(`Invalid autosave state at ${this.autosavePath}: ${String(error)}`);
+    }
+  }
+
+  private buildMergedProcessList(base: RestartingProcessEntry[]): RestartingProcessEntry[] {
+    const merged = new Map<string, RestartingProcessEntry>();
+
+    for (const entry of base) {
+      const normalized = this.normalizeProcessEntry(entry);
+      merged.set(entry.name, normalized);
+    }
+
+    const autosave = this.readAutosaveState();
+    if (!autosave) {
+      return Array.from(merged.values());
+    }
+
+    this.autosaveRevision = autosave.revision ?? 0;
+
+    for (const [slug, entry] of Object.entries(autosave.processes ?? {})) {
+      if (entry.name !== slug) {
+        throw new Error(
+          `Invalid autosave state at ${this.autosavePath}: key "${slug}" does not match entry name "${entry.name}"`,
+        );
+      }
+      const baseEntry = merged.get(slug);
+      const normalized = this.normalizeProcessEntry({
+        name: slug,
+        definition: entry.definition,
+        options: entry.options ?? baseEntry?.options,
+        envOptions: entry.envOptions ?? baseEntry?.envOptions,
+        tags: entry.tags ?? baseEntry?.tags,
+        dependsOn: baseEntry?.dependsOn,
+        schedule: baseEntry?.schedule,
+        persistence: entry.persistence ?? baseEntry?.persistence,
+        desiredState: entry.desiredState ?? baseEntry?.desiredState,
+      });
+      merged.set(slug, normalized);
+    }
+
+    return Array.from(merged.values());
+  }
+
+  private buildAutosavePayload(): AutosaveState {
+    const processes: Record<string, AutosaveProcessEntry> = {};
+
+    for (const entry of this.config.processes ?? []) {
+      const normalized = this.normalizeProcessEntry(entry);
+      if (normalized.persistence !== "durable") continue;
+
+      processes[entry.name] = {
+        name: entry.name,
+        definition: entry.definition,
+        options: entry.options,
+        envOptions: entry.envOptions,
+        tags: entry.tags,
+        persistence: normalized.persistence,
+        desiredState: normalized.desiredState,
+      };
+    }
+
+    return {
+      version: 1,
+      revision: this.autosaveRevision,
+      processes,
+    };
+  }
+
+  private writeAutosaveState(): void {
+    if (!this.autosaveEnabled) return;
+    this.autosaveRevision += 1;
+    const payload = this.buildAutosavePayload();
+    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+    const dir = dirname(this.autosavePath);
+    mkdirSync(dir, { recursive: true });
+
+    const tempPath = `${this.autosavePath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      writeFileSync(tempPath, serialized, "utf-8");
+      const fileHandle = openSync(tempPath, "r");
+      try {
+        fsyncSync(fileHandle);
+      } finally {
+        closeSync(fileHandle);
+      }
+      renameSync(tempPath, this.autosavePath);
+
+      try {
+        const dirHandle = openSync(dir, "r");
+        try {
+          fsyncSync(dirHandle);
+        } finally {
+          closeSync(dirHandle);
+        }
+      } catch {
+        // best-effort on platforms/filesystems that don't support fsync on dirs
+      }
+    } catch (error) {
+      rmSync(tempPath, { force: true });
+      throw error;
+    }
+  }
+
+  private getProcessEntryByName(name: string): RestartingProcessEntry | undefined {
+    return this.config.processes?.find((proc) => proc.name === name);
+  }
+
+  private upsertProcessEntry(entry: RestartingProcessEntry): void {
+    const current = this.config.processes ?? [];
+    const index = current.findIndex((proc) => proc.name === entry.name);
+    if (index === -1) {
+      this.config.processes = [...current, entry];
+      return;
+    }
+    const next = [...current];
+    next[index] = entry;
+    this.config.processes = next;
+  }
+
+  private removeProcessEntryByName(name: string): void {
+    this.config.processes = (this.config.processes ?? []).filter((proc) => proc.name !== name);
   }
 
   private applyDefaults(
@@ -314,17 +518,30 @@ export class Manager {
     if (typeof target === "string") {
       return this.restartingProcesses.get(target);
     }
-    const entries = Array.from(this.restartingProcesses.values());
-    return entries[target];
+    const name = (this.config.processes ?? [])[target]?.name;
+    if (!name) return undefined;
+    return this.restartingProcesses.get(name);
   }
 
   /**
    * Start a restarting process by target
    */
-  async startProcessByTarget(target: string | number): Promise<RestartingProcess> {
+  async startProcessByTarget(target: string | number, persist = true): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
+    }
+
+    const entry = this.getProcessEntryByName(proc.name);
+    if (entry) {
+      this.upsertProcessEntry({
+        ...entry,
+        desiredState: "running",
+        persistence: entry.persistence ?? "durable",
+      });
+      if (persist) {
+        this.writeAutosaveState();
+      }
     }
 
     proc.start();
@@ -334,11 +551,28 @@ export class Manager {
   /**
    * Stop a restarting process by target
    */
-  async stopProcessByTarget(target: string | number, timeout?: number): Promise<RestartingProcess> {
+  async stopProcessByTarget(
+    target: string | number,
+    timeout?: number,
+    persist = true,
+  ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
     }
+
+    const entry = this.getProcessEntryByName(proc.name);
+    if (entry) {
+      this.upsertProcessEntry({
+        ...entry,
+        desiredState: "stopped",
+        persistence: entry.persistence ?? "durable",
+      });
+      if (persist) {
+        this.writeAutosaveState();
+      }
+    }
+
     await proc.stop(timeout);
     return proc;
   }
@@ -346,12 +580,42 @@ export class Manager {
   /**
    * Restart a restarting process by target
    */
-  async restartProcessByTarget(target: string | number, force = false): Promise<RestartingProcess> {
+  async restartProcessByTarget(
+    target: string | number,
+    force = false,
+    persist = true,
+  ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
     }
+
+    // Re-apply env defaults so the restarted process picks up any env file
+    // changes that arrived since it was last started.
+    const processConfig = this.config.processes?.find((p) => p.name === proc.name);
+    if (processConfig) {
+      const updatedDefinition = this.applyDefaults(
+        proc.name,
+        processConfig.definition,
+        processConfig.envOptions,
+      );
+      proc.updateDefinition(updatedDefinition);
+    }
+
+    const entry = this.getProcessEntryByName(proc.name);
+    if (entry) {
+      this.upsertProcessEntry({
+        ...entry,
+        desiredState: "running",
+        persistence: entry.persistence ?? "durable",
+      });
+      if (persist) {
+        this.writeAutosaveState();
+      }
+    }
+
     await proc.restart(force);
+
     return proc;
   }
 
@@ -366,12 +630,21 @@ export class Manager {
       updateOptions?: Partial<RestartingProcessOptions>;
       envOptions?: EnvOptions;
       tags?: string[];
+      persist?: boolean;
+      persistence?: ProcessPersistence;
+      desiredState?: DesiredProcessState;
+      skipEntryUpdate?: boolean;
     },
   ): Promise<RestartingProcess> {
     const proc = this.getProcessByTarget(target);
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
     }
+
+    const persist = options?.persist ?? true;
+    const currentEntry = this.getProcessEntryByName(proc.name);
+    const nextDesiredState = options?.desiredState ?? currentEntry?.desiredState ?? "running";
+    const nextPersistence = options?.persistence ?? currentEntry?.persistence ?? "durable";
 
     // Apply global defaults to new definition
     const definitionWithDefaults = this.applyDefaults(
@@ -389,8 +662,29 @@ export class Manager {
       proc.updateTags(options.tags);
     }
 
+    if (currentEntry && !options?.skipEntryUpdate) {
+      const nextEntry: RestartingProcessEntry = {
+        ...currentEntry,
+        definition: newDefinition,
+        options: options?.updateOptions
+          ? { ...(currentEntry.options ?? DEFAULT_RESTART_OPTIONS), ...options.updateOptions }
+          : currentEntry.options,
+        envOptions: options?.envOptions ?? currentEntry.envOptions,
+        tags: options?.tags ?? currentEntry.tags,
+        persistence: nextPersistence,
+        desiredState: nextDesiredState,
+      };
+      this.upsertProcessEntry(nextEntry);
+    }
+
     // Reload with new definition
     await proc.reload(definitionWithDefaults, options?.restartImmediately ?? true);
+    if (nextDesiredState === "stopped") {
+      await proc.stop();
+    }
+    if (persist) {
+      this.writeAutosaveState();
+    }
     this.logger.info(`Reloaded process: ${proc.name}`);
     return proc;
   }
@@ -398,7 +692,11 @@ export class Manager {
   /**
    * Remove a restarting process by target
    */
-  async removeProcessByTarget(target: string | number, timeout?: number): Promise<void> {
+  async removeProcessByTarget(
+    target: string | number,
+    timeout?: number,
+    persist = true,
+  ): Promise<void> {
     const proc = this.getProcessByTarget(target);
     if (!proc) {
       throw new Error(`Process not found: ${target}`);
@@ -407,6 +705,12 @@ export class Manager {
     await proc.stop(timeout);
     this.cleanupProcessResources(proc.name);
     this.restartingProcesses.delete(proc.name);
+    this.removeProcessEntryByName(proc.name);
+
+    if (persist) {
+      this.writeAutosaveState();
+    }
+
     this.logger.info(`Removed process: ${proc.name}`);
   }
 
@@ -416,53 +720,136 @@ export class Manager {
     this.stateChangeUnsubscribes.delete(name);
     this.schedulers.get(name)?.stop();
     this.schedulers.delete(name);
+    this.envManager.unregisterCustomFile(name);
     this.envReloadConfig.delete(name);
     const timer = this.envReloadTimers.get(name);
     if (timer) clearTimeout(timer);
     this.envReloadTimers.delete(name);
   }
 
-  /**
-   * Add a restarting process at runtime
-   */
-  async addProcess(process: {
-    name: string;
+  listManagedProcessEntries(): ReadonlyArray<
+    RestartingProcessEntry & { persistence: ProcessPersistence; desiredState: DesiredProcessState }
+  > {
+    return (this.config.processes ?? []).map((entry) => this.normalizeProcessEntry(entry));
+  }
+
+  getManagedProcessEntry(target: string | number):
+    | (RestartingProcessEntry & {
+        persistence: ProcessPersistence;
+        desiredState: DesiredProcessState;
+      })
+    | undefined {
+    const name = typeof target === "string" ? target : (this.config.processes ?? [])[target]?.name;
+    if (!name) return undefined;
+    const entry = this.getProcessEntryByName(name);
+    if (!entry) return undefined;
+    return this.normalizeProcessEntry(entry);
+  }
+
+  async updateProcessConfig(input: {
+    processSlug: string;
     definition: ProcessDefinition;
     options?: RestartingProcessOptions;
     envOptions?: EnvOptions;
     tags?: string[];
-  }): Promise<RestartingProcess> {
-    if (this.isNameUsed(process.name)) {
-      throw new Error(`Name "${process.name}" is already in use`);
+    persistence?: ProcessPersistence;
+    desiredState?: DesiredProcessState;
+    restartImmediately?: boolean;
+  }): Promise<void> {
+    const processSlug = input.processSlug;
+    const currentEntry = this.getProcessEntryByName(processSlug);
+    const nextPersistence = input.persistence ?? currentEntry?.persistence ?? "durable";
+    const nextDesiredState = input.desiredState ?? currentEntry?.desiredState ?? "running";
+
+    const nextEntry: RestartingProcessEntry = {
+      name: processSlug,
+      definition: input.definition,
+      options: input.options ?? currentEntry?.options,
+      envOptions: input.envOptions ?? currentEntry?.envOptions,
+      tags: input.tags ?? currentEntry?.tags,
+      dependsOn: currentEntry?.dependsOn,
+      schedule: currentEntry?.schedule,
+      persistence: nextPersistence,
+      desiredState: nextDesiredState,
+    };
+    this.upsertProcessEntry(nextEntry);
+
+    const defaultDelay = nextEntry.envOptions?.inheritGlobalEnv === false ? false : 5000;
+    this.envReloadConfig.set(processSlug, nextEntry.envOptions?.reloadDelay ?? defaultDelay);
+    this.envManager.unregisterCustomFile(processSlug);
+    if (nextEntry.envOptions?.envFile) {
+      this.envManager.registerFile(processSlug, nextEntry.envOptions.envFile);
     }
 
-    // Register custom env file if provided
-    if (process.envOptions?.envFile) {
-      this.envManager.registerFile(process.name, process.envOptions.envFile);
+    if (this._state === "running") {
+      const runningProc = this.restartingProcesses.get(processSlug);
+      if (!runningProc) {
+        const processLogger = this.logger.child(processSlug, {
+          logFile: this.processLogFile(processSlug),
+        });
+        const restartingProcess = new RestartingProcess(
+          processSlug,
+          this.applyDefaults(processSlug, nextEntry.definition, nextEntry.envOptions),
+          nextEntry.options ?? DEFAULT_RESTART_OPTIONS,
+          processLogger,
+          nextEntry.tags,
+        );
+        this.restartingProcesses.set(processSlug, restartingProcess);
+        const unsubscribe = restartingProcess.onStateChange((newState) => {
+          this.onProcessStateChange(processSlug, newState);
+        });
+        this.stateChangeUnsubscribes.set(processSlug, unsubscribe);
+
+        try {
+          const entries = this.config.processes ?? [];
+          this.dependencyResolver.buildGraph(entries, this.restartingProcesses);
+          this.dependencyResolver.validateDependenciesExist();
+          this.dependencyResolver.validateNoCycles();
+        } catch (error) {
+          this.cleanupProcessResources(processSlug);
+          this.restartingProcesses.delete(processSlug);
+          this.removeProcessEntryByName(processSlug);
+          throw error;
+        }
+
+        if (
+          nextDesiredState === "running" &&
+          this.dependencyResolver.areDependenciesMet(processSlug)
+        ) {
+          restartingProcess.start();
+        } else if (nextDesiredState === "running") {
+          this.logger.info(`Process ${processSlug} waiting for dependencies before start`);
+        }
+      } else {
+        await this.reloadProcessByTarget(processSlug, nextEntry.definition, {
+          restartImmediately: input.restartImmediately ?? nextDesiredState !== "stopped",
+          updateOptions: nextEntry.options,
+          envOptions: nextEntry.envOptions,
+          tags: nextEntry.tags,
+          persist: false,
+          persistence: nextPersistence,
+          desiredState: nextDesiredState,
+          skipEntryUpdate: true,
+        });
+      }
     }
 
-    const processLogger = this.logger.child(process.name, {
-      logFile: this.processLogFile(process.name),
-    });
-    const restartingProcess = new RestartingProcess(
-      process.name,
-      this.applyDefaults(process.name, process.definition, process.envOptions),
-      process.options ?? DEFAULT_RESTART_OPTIONS,
-      processLogger,
-      process.tags,
-    );
-    this.restartingProcesses.set(process.name, restartingProcess);
+    this.writeAutosaveState();
+  }
 
-    restartingProcess.start();
+  async deleteProcessBySlug(processSlug: string): Promise<void> {
+    const existing = this.getProcessEntryByName(processSlug);
+    if (!existing) return;
 
-    // Track env reload config for this process.
-    // Default: 5000ms, but if inheritGlobalEnv is false, default to no reload
-    // (no point restarting for env changes the process won't see).
-    const defaultDelay = process.envOptions?.inheritGlobalEnv === false ? false : 5000;
-    this.envReloadConfig.set(process.name, process.envOptions?.reloadDelay ?? defaultDelay);
+    const runningProc = this.restartingProcesses.get(processSlug);
+    if (runningProc) {
+      await this.removeProcessByTarget(processSlug, undefined, false);
+    } else {
+      this.removeProcessEntryByName(processSlug);
+      this.cleanupProcessResources(processSlug);
+    }
 
-    this.logger.info(`Added and started restarting process: ${process.name}`);
-    return restartingProcess;
+    this.writeAutosaveState();
   }
 
   /**
@@ -523,6 +910,10 @@ export class Manager {
     for (const entry of entries) {
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
         const proc = this.restartingProcesses.get(entry.name)!;
+        if ((entry.desiredState ?? "running") === "stopped") {
+          this.logger.info(`Process ${entry.name} desiredState=stopped, skipping auto-start`);
+          continue;
+        }
         if (entry.schedule && !entry.schedule.runOnStart) {
           this.logger.info(`Process ${entry.name} has schedule, waiting for first trigger`);
           continue;
@@ -563,6 +954,11 @@ export class Manager {
       this.logger.error(`Scheduled process ${name} not found`);
       return;
     }
+    const entry = this.getProcessEntryByName(name);
+    if ((entry?.desiredState ?? "running") === "stopped") {
+      this.logger.info(`Skipping scheduled process ${name}: desiredState=stopped`);
+      return;
+    }
 
     const state = proc.state;
     this.logger.info(`Schedule triggered for ${name} (current state: ${state})`);
@@ -594,6 +990,7 @@ export class Manager {
     for (const entry of this.config.processes ?? []) {
       const proc = this.restartingProcesses.get(entry.name);
       if (!proc || proc.state !== "idle") continue;
+      if ((entry.desiredState ?? "running") === "stopped") continue;
 
       if (this.dependencyResolver.areDependenciesMet(entry.name)) {
         proc.start();
@@ -651,6 +1048,12 @@ export class Manager {
     // Stop all processes in parallel
     const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop(timeout));
     await Promise.all(stopPromises);
+
+    try {
+      this.writeAutosaveState();
+    } catch (error) {
+      this.logger.error("Failed to persist autosave state during shutdown:", error);
+    }
 
     this._state = "stopped";
     this.logger.info(`Manager stopped`);

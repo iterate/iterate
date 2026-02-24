@@ -1,46 +1,31 @@
 import { Buffer } from "node:buffer";
+import { buildProjectPortUrl } from "@iterate-com/shared/project-ingress";
 
 type SessionLinkEnv = {
-  osBaseUrl: string;
-  organizationSlug: string;
-  projectSlug: string;
-  machineId: string;
+  projectBaseUrl: string;
   customerRepoPath: string;
 };
 
 function getSessionLinkEnv(): SessionLinkEnv | null {
-  const osBaseUrl = process.env.ITERATE_OS_BASE_URL;
-  const organizationSlug = process.env.ITERATE_ORG_SLUG;
-  const projectSlug = process.env.ITERATE_PROJECT_SLUG;
-  const machineId = process.env.ITERATE_MACHINE_ID;
+  const projectBaseUrl = process.env.ITERATE_PROJECT_BASE_URL;
   const customerRepoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
 
-  if (!osBaseUrl || !organizationSlug || !projectSlug || !machineId || !customerRepoPath) {
+  if (!projectBaseUrl || !customerRepoPath) {
     return null;
   }
 
-  return {
-    osBaseUrl,
-    organizationSlug,
-    projectSlug,
-    machineId,
-    customerRepoPath,
-  };
+  return { projectBaseUrl, customerRepoPath };
 }
 
 function escapeSingleQuotes(value: string): string {
   return value.replaceAll("'", "'\\''");
 }
 
-function buildMachineProxyBase(env: SessionLinkEnv, port: number): string {
-  return `${env.osBaseUrl}/org/${env.organizationSlug}/proj/${env.projectSlug}/${env.machineId}/proxy/${port}`;
-}
-
 function buildTerminalUrl(command: string): string | undefined {
   const env = getSessionLinkEnv();
   if (!env) return undefined;
-  const proxyUrl = buildMachineProxyBase(env, 3000);
-  return `${proxyUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
+  const baseUrl = buildProjectPortUrl({ projectBaseUrl: env.projectBaseUrl, port: 3000 });
+  return `${baseUrl}terminal?${new URLSearchParams({ command, autorun: "true" })}`;
 }
 
 export function buildOpencodeAttachUrl(params: {
@@ -62,8 +47,8 @@ export function buildOpencodeWebSessionUrl(params: {
   if (!env) return undefined;
   const directory = params.workingDirectory || env.customerRepoPath;
   const encodedDirectory = Buffer.from(directory, "utf8").toString("base64url");
-  const opencodeProxyBase = buildMachineProxyBase(env, 4096);
-  return `${opencodeProxyBase}/${encodedDirectory}/session/${params.sessionId}`;
+  const opencodeBase = buildProjectPortUrl({ projectBaseUrl: env.projectBaseUrl, port: 4096 });
+  return `${opencodeBase}${encodedDirectory}/session/${params.sessionId}`;
 }
 
 export function buildLogsSearchUrl(query: string): string | undefined {
@@ -77,6 +62,6 @@ export function buildLogsSearchUrl(query: string): string | undefined {
 export function buildJaegerTraceUrl(traceId: string): string | undefined {
   const env = getSessionLinkEnv();
   if (!env) return undefined;
-  const jaegerBase = buildMachineProxyBase(env, 16686);
-  return `${jaegerBase}/trace/${traceId}`;
+  const jaegerBase = buildProjectPortUrl({ projectBaseUrl: env.projectBaseUrl, port: 16686 });
+  return `${jaegerBase}trace/${traceId}`;
 }

@@ -1,5 +1,4 @@
 import { useState, useRef, type FormEvent } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
@@ -8,7 +7,7 @@ import { InputOTP } from "./ui/input-otp.tsx";
 
 const EMAIL_OTP_ENABLED = import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true";
 
-function GoogleSignInButton() {
+function GoogleSignInButton({ redirectUrl }: { redirectUrl: string }) {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleClick = async () => {
@@ -16,7 +15,7 @@ function GoogleSignInButton() {
     try {
       await signIn.social({
         provider: "google",
-        callbackURL: "/",
+        callbackURL: redirectUrl,
       });
     } catch (err) {
       console.error("Google sign in failed:", err);
@@ -63,8 +62,7 @@ function OrDivider() {
   );
 }
 
-function EmailOtpSignIn() {
-  const navigate = useNavigate();
+function EmailOtpSignIn({ redirectUrl }: { redirectUrl: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<"email" | "otp">("email");
   const [email, setEmail] = useState("");
@@ -105,7 +103,7 @@ function EmailOtpSignIn() {
         return;
       }
       toast.success("Signed in successfully");
-      navigate({ to: "/" });
+      window.location.assign(redirectUrl);
     } catch (err) {
       console.error("Failed to verify OTP:", err);
       setError("Invalid verification code");
@@ -216,16 +214,16 @@ function EmailOtpSignIn() {
   );
 }
 
-export function LoginCard() {
+export function LoginCard({ redirectUrl }: { redirectUrl: string }) {
   return (
     <div className="w-full max-w-md space-y-6">
       {EMAIL_OTP_ENABLED && (
         <>
-          <EmailOtpSignIn />
+          <EmailOtpSignIn redirectUrl={redirectUrl} />
           <OrDivider />
         </>
       )}
-      <GoogleSignInButton />
+      <GoogleSignInButton redirectUrl={redirectUrl} />
     </div>
   );
 }

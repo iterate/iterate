@@ -6,15 +6,17 @@ const getOrCreateAgentMock = vi.fn();
 const getAgentMock = vi.fn();
 const subscribeToAgentChangesMock = vi.fn();
 
-vi.mock("../trpc/router.ts", () => ({
-  trpcRouter: {
-    createCaller: vi.fn(() => ({
+vi.mock("@orpc/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@orpc/server")>();
+  return {
+    ...actual,
+    createRouterClient: vi.fn(() => ({
       getOrCreateAgent: getOrCreateAgentMock,
       getAgent: getAgentMock,
       subscribeToAgentChanges: subscribeToAgentChangesMock,
     })),
-  },
-}));
+  };
+});
 
 vi.mock("../db/index.ts", () => ({
   db: {
@@ -36,13 +38,14 @@ const reactionsRemoveMock = vi.fn().mockResolvedValue({ ok: true });
 const apiCallMock = vi.fn().mockResolvedValue({ ok: true });
 const chatPostMessageMock = vi.fn().mockResolvedValue({ ok: true });
 
-vi.mock("@slack/web-api", () => ({
-  WebClient: vi.fn(() => ({
-    reactions: { add: reactionsAddMock, remove: reactionsRemoveMock },
-    apiCall: apiCallMock,
-    chat: { postMessage: chatPostMessageMock },
-  })),
-}));
+vi.mock("@slack/web-api", () => {
+  class MockWebClient {
+    reactions = { add: reactionsAddMock, remove: reactionsRemoveMock };
+    apiCall = apiCallMock;
+    chat = { postMessage: chatPostMessageMock };
+  }
+  return { WebClient: MockWebClient };
+});
 
 // SLACK_BOT_TOKEN needed for getSlackClient()
 vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test-token");
@@ -367,7 +370,7 @@ describe("slack router", () => {
   });
 
   describe("ignored messages", () => {
-    it("ignores bot messages (with bot_profile)", async () => {
+    it("ignores bot messages that don't mention our bot (with bot_profile)", async () => {
       const ts = "6666666666.666666";
       const botUserId = "U_BOT";
 
@@ -380,9 +383,9 @@ describe("slack router", () => {
           type: "message",
           ts,
           channel: "C_TEST",
-          user: botUserId,
+          user: "U_OTHER_BOT", // different from botUserId to avoid self-message guard
           text: "bot response",
-          bot_profile: { id: "B_BOT", name: "Test Bot" },
+          bot_profile: { id: "B_OTHER", name: "Another Bot" },
           event_ts: ts,
           channel_type: "channel",
         },
@@ -398,6 +401,84 @@ describe("slack router", () => {
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.message).toContain("bot message");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("processes bot messages that @mention our bot", async () => {
+      const ts = "6666666666.777777";
+      const botUserId = "U_BOT";
+      const otherBotUser = "U_OTHER_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: `/slack/ts-${ts.replace(".", "-")}` }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_bot_mention",
+        event: {
+          type: "message",
+          ts,
+          channel: "C_TEST",
+          user: otherBotUser,
+          text: `<@${botUserId}> please review this PR`,
+          bot_profile: { id: "B_OTHER", name: "Another Bot" },
+          event_ts: ts,
+          channel_type: "channel",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("new_thread_mention");
+      expect(body.created).toBe(true);
+      expect(getOrCreateAgentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores our own bot's messages even if they contain a self-mention", async () => {
+      const ts = "6666666666.888888";
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_self_mention",
+        event: {
+          type: "message",
+          ts,
+          channel: "C_TEST",
+          user: botUserId, // our own bot
+          text: `Quoting <@${botUserId}>: hello world`,
+          bot_profile: { id: "B_BOT", name: "Our Bot" },
+          event_ts: ts,
+          channel_type: "channel",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("bot's own message");
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -460,6 +541,232 @@ describe("slack router", () => {
       const body = await response.json();
       expect(body.message).toContain("no thread timestamp");
     });
+
+    it("ignores hidden message_changed events (Slack internal metadata updates)", async () => {
+      const botUserId = "U_BOT";
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+
+      // This replicates the real Slack event shape when Slack updates the thread
+      // root to add assistant_app_thread metadata. It has subtype "message_changed",
+      // hidden: true, no user on outer event, and a unique ts with no thread_ts.
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_hidden_1",
+        event: {
+          type: "message",
+          subtype: "message_changed",
+          hidden: true,
+          channel: "D_DM_CHANNEL",
+          channel_type: "im",
+          ts: "1771829258.000200",
+          event_ts: "1771829258.000200",
+          message: {
+            user: botUserId,
+            type: "message",
+            ts: "1771829254.437449",
+          },
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.message).toContain("hidden event");
+      // Must NOT create a new agent
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("assistant_thread_started (DMs)", () => {
+    it("creates agent on assistant_thread_started without sending a prompt", async () => {
+      const threadTs = "1111111111.111111";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_ast_1",
+        event: {
+          type: "assistant_thread_started",
+          assistant_thread: {
+            user_id: "U_USER",
+            channel_id: "D_DM_CHANNEL",
+            thread_ts: threadTs,
+            context: { force_search: false },
+          },
+          event_ts: "1111111111.222222",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      expect(body.case).toBe("assistant_thread_started");
+      expect(body.created).toBe(true);
+      expect(body.queued).toBe(false); // no prompt sent
+      expect(getOrCreateAgentMock).toHaveBeenCalledTimes(1);
+      expect(subscribeToAgentChangesMock).toHaveBeenCalledTimes(1);
+      // No prompt should be fired
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // No eyes emoji for assistant_thread_started
+      expect(reactionsAddMock).not.toHaveBeenCalled();
+    });
+
+    it("treats the first DM message as an implicit mention (channel_type im, no thread_ts)", async () => {
+      const ts = "1111111111.444444";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${ts.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: true,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      subscribeToAgentChangesMock.mockResolvedValue({});
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_first",
+        event: {
+          type: "message",
+          ts,
+          text: "Hey can you look at my PR?",
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // First DM message is treated as a new thread mention
+      expect(body.case).toBe("new_thread_mention");
+      expect(body.queued).toBe(true);
+      expect(body.created).toBe(true);
+    });
+
+    it("treats DM follow-up messages as FYI (no eyes emoji)", async () => {
+      const threadTs = "1111111111.111111";
+      const ts = "1111111111.333333";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      // Agent was previously created by assistant_thread_started
+      getAgentMock.mockResolvedValue(buildAgent({ path: agentPath }));
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_1",
+        event: {
+          type: "message",
+          thread_ts: threadTs,
+          ts,
+          text: "Hey can you look at my PR?",
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // DM follow-up messages are FYI, not mentions — no eyes emoji
+      expect(body.case).toBe("fyi_message");
+      expect(body.queued).toBe(true);
+      // Should use getAgent (not getOrCreateAgent) since it's FYI
+      expect(getAgentMock).toHaveBeenCalledTimes(1);
+      expect(getOrCreateAgentMock).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats DM follow-up with explicit @mention as mid_thread_mention", async () => {
+      const threadTs = "1111111111.111111";
+      const ts = "1111111111.555555";
+      const botUserId = "U_BOT";
+      const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
+
+      selectLimitQueue.push([]); // storeEvent dedup check
+      getOrCreateAgentMock.mockResolvedValue({
+        wasNewlyCreated: false,
+        route: null,
+        agent: buildAgent({ path: agentPath }),
+      });
+      fetchSpy.mockResolvedValue(new Response("{}", { status: 200 }));
+
+      const payload = {
+        type: "event_callback",
+        event_id: "evt_dm_explicit",
+        event: {
+          type: "message",
+          thread_ts: threadTs,
+          ts,
+          text: `<@${botUserId}> actually can you also check the tests?`,
+          user: "U_USER",
+          channel: "D_DM_CHANNEL",
+          event_ts: ts,
+          channel_type: "im",
+        },
+        authorizations: [{ user_id: botUserId, is_bot: true }],
+      };
+
+      const response = await slackRouter.request("/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.success).toBe(true);
+      // Explicit @mention in DM thread is still treated as mid_thread_mention
+      expect(body.case).toBe("mid_thread_mention");
+      expect(body.queued).toBe(true);
+    });
   });
 
   describe("event deduplication", () => {
@@ -502,10 +809,7 @@ describe("slack router", () => {
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;
 
-      vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
-      vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
-      vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
-      vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
       vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
 
       selectLimitQueue.push([]); // storeEvent dedup check
@@ -559,10 +863,29 @@ describe("slack router", () => {
           thread_ts: threadTs,
         }),
       );
-      const postMessageText = String(chatPostMessageMock.mock.calls[0]?.[0]?.text ?? "");
+      const postMessageArg = chatPostMessageMock.mock.calls[0]?.[0] ?? {};
+      const postMessageText = String(postMessageArg.text ?? "");
       expect(postMessageText).toContain("sess_abc123");
-      expect(postMessageText).toContain("Harness Web UI (direct proxy)");
-      expect(postMessageText).toContain("terminal?command=");
+
+      // Should include Slack blocks with buttons
+      const blocks = postMessageArg.blocks as unknown[];
+      expect(blocks).toBeDefined();
+      expect(blocks.length).toBeGreaterThanOrEqual(1);
+
+      // Should have an actions block with buttons for web UI and terminal
+      const actionsBlock = blocks.find(
+        (b: unknown) => (b as { type: string }).type === "actions",
+      ) as { elements: { type: string; text: { text: string }; url: string }[] } | undefined;
+      expect(actionsBlock).toBeDefined();
+      const buttonTexts = actionsBlock!.elements.map((e) => e.text.text);
+      expect(buttonTexts).toContain("Open Web UI");
+      expect(buttonTexts).toContain("Open Terminal");
+
+      // Verify URLs use canonical ingress host
+      const webButton = actionsBlock!.elements.find((e) => e.text.text === "Open Web UI");
+      const termButton = actionsBlock!.elements.find((e) => e.text.text === "Open Terminal");
+      expect(webButton?.url).toMatch(/4096__my-proj\.iterate\.app/);
+      expect(termButton?.url).toMatch(/my-proj\.iterate\.app/);
 
       expect(reactionsRemoveMock).not.toHaveBeenCalled();
     });
@@ -605,6 +928,9 @@ describe("slack router", () => {
     });
 
     it("waits for pending reactions.add before cleanup remove on !debug intercept", async () => {
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+
       const threadTs = "4141414141.414141";
       const botUserId = "U_BOT";
       const agentPath = `/slack/ts-${threadTs.replace(".", "-")}`;

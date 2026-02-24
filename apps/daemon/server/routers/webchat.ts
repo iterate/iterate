@@ -12,7 +12,7 @@
  *
  *   OS Backend (webhook) -> Integration Router (slack / webchat / email)
  *        |                                                         ^
- *        |  1. tRPC getOrCreateAgent (ensures agent + route exist) |
+ *        |  1. oRPC getOrCreateAgent (ensures agent + route exist) |
  *        |  2. fire-and-forget fetch to /api/agents/:path          |
  *        v                                                         |
  *   AgentsRouter -> OpenCodeRouter -> OpenCode SDK                 |
@@ -21,7 +21,7 @@
  *                  (SDK event stream)      v                        |
  *                              idle/tool events                     |
  *                                         |                        |
- *                         tRPC updateAgent |                        |
+ *                         oRPC updateAgent |                        |
  *                                         v                        |
  *                            AgentChangeCallbacks --(POST)---------+
  *
@@ -34,9 +34,10 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq, and, inArray, asc } from "drizzle-orm";
 import { z } from "zod/v4";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
+import { daemonRouter } from "../orpc/router.ts";
 import { runAgentCommand } from "../utils/agent-commands.ts";
 
 const logger = console;
@@ -148,7 +149,7 @@ webchatRouter.post("/webhook", async (c) => {
   }
 
   const agentPath = getAgentPathForThread(webchatThreadId);
-  const caller = trpcRouter.createCaller({});
+  const caller = createRouterClient(daemonRouter, { context: {} });
   const { agent, wasNewlyCreated } = await caller.getOrCreateAgent({
     agentPath,
     createWithEvents: [],
@@ -222,7 +223,9 @@ webchatRouter.post("/webhook", async (c) => {
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: formattedMessage }),
+    body: JSON.stringify({
+      events: [{ type: "iterate:agent:prompt-added", message: formattedMessage }],
+    }),
   }).catch((error) => {
     logger.error(
       `[webchat] failed to post prompt event for ${webchatThreadId}/${messageId}`,
@@ -471,7 +474,7 @@ function formatIncomingMessage(params: {
 
   return [
     intro,
-    "Refer to WEBCHAT.md for how to respond via `iterate tool exec-js`. Do not use the assistant message to respond to the end-user, they will not see it.",
+    "Refer to WEBCHAT.md for how to respond via `iterate tool exec-ts`. Do not use the assistant message to respond to the end-user, they will not see it.",
     "",
     `From: ${sender}`,
     ...(payload.text ? [`Message: ${payload.text}`] : []),

@@ -34,14 +34,14 @@ describe("Sandbox.getFetcher", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     const fetcher = await sandbox.getFetcher({ port: 3003 });
-    await fetcher("/api/trpc?batch=1", {
+    await fetcher("/api/orpc?batch=1", {
       headers: { "x-test": "yes" },
     });
 
     expect(sandbox.requestedPorts).toEqual([8080]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
-      "http://sandbox.local:8080/api/trpc?batch=1",
+      "http://sandbox.local:8080/api/orpc?batch=1",
       expect.objectContaining({
         headers: expect.any(Headers),
       }),
@@ -62,14 +62,14 @@ describe("Sandbox.getFetcher", () => {
     const fetcher = await sandbox.getFetcher({ port: 3003 });
     await fetcher("/api/webhook", {
       headers: {
-        "x-iterate-proxy-target-host": "hello.iterate.town",
+        "x-iterate-proxy-target-host": "hello.iterate.app",
       },
     });
 
     const init = fetchSpy.mock.calls[0]?.[1];
     if (!init) throw new Error("expected fetch init");
     const headers = new Headers(init.headers);
-    expect(headers.get("x-iterate-proxy-target-host")).toBe("hello.iterate.town");
+    expect(headers.get("x-iterate-proxy-target-host")).toBe("hello.iterate.app");
   });
 
   it("rewrites absolute urls to ingress origin while preserving path/query", async () => {

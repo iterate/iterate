@@ -194,7 +194,7 @@ export async function getUnifiedEnvVars(
       try {
         return await decryptWithSecret(encryptedValue, encryptionSecret);
       } catch (err) {
-        logger.error("Failed to decrypt secret in raw mode", { secretKey, err });
+        logger.error("Failed to decrypt secret in raw mode", err, { secretKey });
         throw new Error(
           `Failed to decrypt secret '${secretKey}' in raw mode: ${err instanceof Error ? err.message : String(err)}`,
         );

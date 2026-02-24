@@ -43,6 +43,8 @@
  * Structurally symmetric with webchat.ts and email.ts — if you change the
  * pattern in one, update the others to match.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
@@ -54,11 +56,17 @@ import type {
   BotMessageEvent,
   ReactionAddedEvent,
   ReactionRemovedEvent,
+  KnownBlock,
+  SectionBlock,
+  ActionsBlock,
+  Button,
+  RichTextBlock,
 } from "@slack/types";
+import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
-import { trpcRouter } from "../trpc/router.ts";
-import { runAgentCommand } from "../utils/agent-commands.ts";
+import { daemonRouter } from "../orpc/router.ts";
+import { runAgentCommand, type AgentCommandMatch } from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -111,6 +119,55 @@ const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const SLACK_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/slack/agent-change-callback`;
 
+// ──────────────────────── System prompt helpers ─────────────────────────────
+
+/**
+ * Read SLACK.md from the repo at sandbox/home-skeleton/.config/opencode/SLACK.md.
+ * Cached after first read. Returns empty string if the file doesn't exist.
+ */
+let cachedSlackMd: string | null = null;
+
+function readSlackMd(): string {
+  if (cachedSlackMd !== null) return cachedSlackMd;
+  const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
+  if (!repoPath) {
+    cachedSlackMd = "";
+    return cachedSlackMd;
+  }
+  try {
+    cachedSlackMd = readFileSync(
+      join(repoPath, "sandbox", "home-skeleton", ".config", "opencode", "SLACK.md"),
+      "utf8",
+    );
+  } catch {
+    cachedSlackMd = "";
+  }
+  return cachedSlackMd;
+}
+
+type PromptEvent = { type: "iterate:agent:prompt-added"; message: string };
+
+/**
+ * Build the { events: [...] } payload for the agent router.
+ * On first message (wasNewlyCreated), prepends a system prompt event with SLACK.md.
+ */
+function buildAgentEventsPayload(
+  message: string,
+  wasNewlyCreated: boolean,
+): { events: PromptEvent[] } {
+  const events: PromptEvent[] = [];
+
+  if (wasNewlyCreated) {
+    const slackMd = readSlackMd();
+    if (slackMd) {
+      events.push({ type: "iterate:agent:prompt-added", message: slackMd });
+    }
+  }
+
+  events.push({ type: "iterate:agent:prompt-added", message });
+  return { events };
+}
+
 /**
  * We consume `iterate:agent-updated` events delivered to the callback URL.
  * This is currently the only event type. In the future, other iterate-level
@@ -128,6 +185,17 @@ const AgentUpdatedEvent = z.object({
     .passthrough(),
 });
 
+interface AssistantThreadStartedEvent {
+  type: "assistant_thread_started";
+  assistant_thread: {
+    user_id: string;
+    channel_id: string;
+    thread_ts: string;
+    context?: Record<string, unknown>;
+  };
+  event_ts: string;
+}
+
 interface SlackWebhookPayload {
   token?: string;
   team_id?: string;
@@ -140,7 +208,8 @@ interface SlackWebhookPayload {
     | GenericMessageEvent
     | BotMessageEvent
     | ReactionAddedEvent
-    | ReactionRemovedEvent;
+    | ReactionRemovedEvent
+    | AssistantThreadStartedEvent;
   authorizations?: Array<{
     enterprise_id: string | null;
     team_id: string;
@@ -150,17 +219,16 @@ interface SlackWebhookPayload {
   }>;
 }
 
-type MessageCase =
-  | "new_thread_mention"
-  | "mid_thread_mention"
-  | "fyi_message"
-  | "reaction_added"
-  | "reaction_removed"
-  | "ignored";
-
 interface ParsedMessage {
-  case: Exclude<MessageCase, "ignored" | "reaction_added" | "reaction_removed">;
+  case: "new_thread_mention" | "mid_thread_mention" | "fyi_message";
   event: AppMentionEvent | GenericMessageEvent;
+  threadTs: string;
+}
+
+interface ParsedAssistantThread {
+  case: "assistant_thread_started";
+  userId: string;
+  channel: string;
   threadTs: string;
 }
 
@@ -171,8 +239,22 @@ interface ParsedReaction {
   channel: string;
 }
 
-function isParsedReaction(parsed: ParsedMessage | ParsedReaction): parsed is ParsedReaction {
+type ParsedEvent =
+  | ParsedMessage
+  | ParsedAssistantThread
+  | ParsedReaction
+  | { case: "ignored"; reason: string };
+
+function isParsedReaction(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedReaction {
   return parsed.case === "reaction_added" || parsed.case === "reaction_removed";
+}
+
+function isParsedAssistantThread(
+  parsed: ParsedMessage | ParsedAssistantThread | ParsedReaction,
+): parsed is ParsedAssistantThread {
+  return parsed.case === "assistant_thread_started";
 }
 
 slackRouter.use("*", async (c, next) => {
@@ -212,7 +294,7 @@ slackRouter.post("/webhook", async (c) => {
     return c.json({ success: true, message: parsed.reason, eventId, requestId });
   }
 
-  const caller = trpcRouter.createCaller({});
+  const caller = createRouterClient(daemonRouter, { context: {} });
 
   // ── Reaction events ──
   // Reactions never create agents; they only forward to an existing one.
@@ -240,11 +322,11 @@ slackRouter.post("/webhook", async (c) => {
 
     const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
 
-    // Fire-and-forget prompt to the agent.
+    // Fire-and-forget prompt to the agent. Reactions never create agents, so wasNewlyCreated=false.
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+      body: JSON.stringify(buildAgentEventsPayload(message, false)),
     }).catch((error) => {
       logger.error(`[slack] failed to post reaction prompt for thread_ts=${threadTs}`, error);
     });
@@ -254,6 +336,30 @@ slackRouter.post("/webhook", async (c) => {
       queued: true,
       created: false,
       case: parsed.case,
+      eventId,
+      requestId,
+    });
+  }
+
+  // ── assistant_thread_started (DM opened) ──
+  // Create the agent so the user's first actual message can be forwarded.
+  // No prompt is sent — there's no user message yet.
+  if (isParsedAssistantThread(parsed)) {
+    const agentPath = getAgentPath(parsed.threadTs);
+    const result = await caller.getOrCreateAgent({ agentPath, createWithEvents: [] });
+
+    if (result.wasNewlyCreated) {
+      void caller.subscribeToAgentChanges({
+        agentPath,
+        callbackUrl: SLACK_AGENT_CHANGE_CALLBACK_URL,
+      });
+    }
+
+    return c.json({
+      success: true,
+      queued: false,
+      created: result.wasNewlyCreated,
+      case: "assistant_thread_started",
       eventId,
       requestId,
     });
@@ -349,11 +455,14 @@ slackRouter.post("/webhook", async (c) => {
       });
     }
 
-    await postSlackThreadMessage({
+    const blocks =
+      commandResult.command === "debug" ? buildDebugCommandBlocks(commandResult) : undefined;
+
+    await getSlackClient().chat.postMessage({
       channel,
-      threadTs,
+      thread_ts: threadTs,
       text: commandResult.resultMarkdown,
-      requestId,
+      ...(blocks ? { blocks } : {}),
     });
 
     return c.json({
@@ -389,10 +498,11 @@ slackRouter.post("/webhook", async (c) => {
     parsed.case === "new_thread_mention" && !wasNewlyCreated ? "mid_thread_mention" : parsed.case;
 
   // Fire-and-forget prompt to the agent, just like webchat.ts.
+  // On first message (wasNewlyCreated), prepends SLACK.md as a system prompt event.
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+    body: JSON.stringify(buildAgentEventsPayload(message, wasNewlyCreated)),
   }).catch((error) => {
     logger.error(`[slack] failed to post prompt for thread_ts=${threadTs}`, error);
   });
@@ -635,41 +745,106 @@ async function setThreadStatus(context: SlackThreadContext, rawStatus: string): 
   }
 }
 
-async function postSlackThreadMessage(params: {
-  channel: string;
-  threadTs: string;
-  text: string;
-  requestId?: string;
-}): Promise<void> {
-  try {
-    await getSlackClient().chat.postMessage({
-      channel: params.channel,
-      thread_ts: params.threadTs,
-      text: params.text,
+// ──────────────────────── Slack block builders ──────────────────────────────
+
+function buildDebugCommandBlocks(commandResult: AgentCommandMatch): KnownBlock[] {
+  const r = commandResult.result as {
+    agentPath: string;
+    agentHarness: string | null;
+    sessionSource: string | null;
+    terminalUrl: string;
+    webUrl: string;
+  };
+
+  const fields = [
+    `*Agent path*\n\`${r.agentPath}\``,
+    ...(r.agentHarness ? [`*Harness*\n${r.agentHarness}`] : []),
+    ...(r.sessionSource ? [`*Session source*\n${r.sessionSource}`] : []),
+  ];
+
+  const blocks: KnownBlock[] = [
+    {
+      type: "section",
+      fields: fields.map((text) => ({ type: "mrkdwn" as const, text })),
+    } satisfies SectionBlock,
+  ];
+
+  const buttons: Button[] = [];
+
+  if (r.webUrl) {
+    buttons.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open Web UI" },
+      url: r.webUrl,
+      style: "primary",
     });
-    logger.log("[slack] postSlackThreadMessage ok", {
-      requestId: params.requestId,
-      channel: params.channel,
-      threadTs: params.threadTs,
-    });
-  } catch (error) {
-    logger.error("[slack] postSlackThreadMessage failed", {
-      requestId: params.requestId,
-      channel: params.channel,
-      threadTs: params.threadTs,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
   }
+
+  if (r.terminalUrl) {
+    buttons.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open Terminal" },
+      url: r.terminalUrl,
+    });
+  }
+
+  if (buttons.length > 0) {
+    blocks.push({
+      type: "actions",
+      elements: buttons,
+    } satisfies ActionsBlock);
+  }
+
+  // Full agent metadata as a collapsible-style code block
+  const agentJson = JSON.stringify(commandResult.result, null, 2);
+  blocks.push({
+    type: "rich_text",
+    elements: [
+      {
+        type: "rich_text_section",
+        elements: [{ type: "text", text: "Full agent metadata", style: { bold: true } }],
+      },
+      {
+        type: "rich_text_preformatted",
+        elements: [{ type: "text", text: agentJson }],
+      },
+    ],
+  } satisfies RichTextBlock);
+
+  return blocks;
 }
 // ──────────────────────────── Parsing / routing ─────────────────────────────
 
-function parseWebhookPayload(
-  payload: SlackWebhookPayload,
-): ParsedMessage | ParsedReaction | { case: "ignored"; reason: string } {
+/**
+ * Check if message text contains a mention of the given user ID.
+ * Slack mentions can appear as `<@UID>` or `<@UID|displayname>`.
+ */
+function textMentionsUser(text: string | undefined, userId: string): boolean {
+  if (!text) return false;
+  return new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
+}
+
+function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   const event = payload.event;
   const botUserId = payload.authorizations?.find((a) => a.is_bot)?.user_id;
 
+  // ── assistant_thread_started (DMs via Slack's assistant UI) ──
+  // Slack sends this instead of a regular message when a user opens a DM
+  // thread with a bot that has the assistant:write scope.
+  if (event.type === "assistant_thread_started") {
+    if (!botUserId) {
+      return { case: "ignored", reason: "Ignored: no bot user recipient" };
+    }
+    const thread = (event as AssistantThreadStartedEvent).assistant_thread;
+    return {
+      case: "assistant_thread_started",
+      userId: thread.user_id,
+      channel: thread.channel_id,
+      threadTs: thread.thread_ts,
+    };
+  }
+
+  // ── Reactions ──
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
     if (event.item.type !== "message") {
       return { case: "ignored", reason: "Ignored: reaction not on message" };
@@ -685,15 +860,34 @@ function parseWebhookPayload(
     };
   }
 
-  if ("bot_profile" in event && event.bot_profile) {
-    return { case: "ignored", reason: "Ignored: bot message" };
+  if (!botUserId) {
+    return { case: "ignored", reason: "Ignored: no bot user recipient" };
   }
-  if ("subtype" in event && event.subtype === "bot_message") {
+
+  // ── Self-message guard ──
+  // Always ignore our own bot's messages to prevent feedback loops.
+  if ("user" in event && event.user === botUserId) {
+    return { case: "ignored", reason: "Ignored: bot's own message" };
+  }
+
+  // ── Bot messages ──
+  // Ignore bot messages UNLESS they @mention our bot (another bot asking
+  // us to do something).
+  const isBotMessage =
+    ("bot_profile" in event && event.bot_profile) ||
+    ("subtype" in event && event.subtype === "bot_message");
+
+  if (isBotMessage && !textMentionsUser(event.text, botUserId)) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
-  if (!botUserId) {
-    return { case: "ignored", reason: "Ignored: no bot user recipient" };
+  // ── Hidden / message_changed events ──
+  // Slack sends hidden message_changed events when it updates internal metadata
+  // (e.g. adding assistant_app_thread to the thread root). These have no user
+  // field on the outer event, a unique ts, and no thread_ts — so they'd be
+  // incorrectly classified as new_thread_mention and create duplicate agents.
+  if ("hidden" in event && event.hidden) {
+    return { case: "ignored", reason: "Ignored: hidden event" };
   }
 
   const threadTs = event.thread_ts || event.ts;
@@ -702,14 +896,21 @@ function parseWebhookPayload(
   }
 
   const isNewThread = !event.thread_ts;
-  const isMention = event.type === "app_mention" || event.text?.includes(`<@${botUserId}>`);
+  // In DMs (channel_type "im"), the first message is implicitly directed at the
+  // bot (treated as a mention). Follow-up messages in the same DM thread are
+  // treated as FYI to avoid adding eyes emoji on every reply.
+  const isDM = "channel_type" in event && event.channel_type === "im";
+  const isExplicitMention = event.type === "app_mention" || textMentionsUser(event.text, botUserId);
+  const isMention = isExplicitMention || (isDM && isNewThread);
 
-  let messageCase: Exclude<MessageCase, "reaction_added" | "reaction_removed">;
+  let messageCase: ParsedMessage["case"];
   if (isMention && isNewThread) {
     messageCase = "new_thread_mention";
   } else if (isMention && !isNewThread) {
     messageCase = "mid_thread_mention";
   } else {
+    // Covers: DM follow-ups (isDM && !isNewThread && !isExplicitMention),
+    // and channel messages without @mention.
     messageCase = "fyi_message";
   }
 
@@ -796,7 +997,7 @@ function formatNewThreadMentionMessage(
 
   return [
     `[Agent Path: ${agentPath}] New Slack thread started.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
@@ -819,7 +1020,7 @@ function formatMidThreadMentionMessage(
 
   const lines = [
     `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { format } from "node:util";
 import { RPCHandler } from "@orpc/server/node";
 import { onError } from "@orpc/server";
@@ -121,6 +122,15 @@ const cliRouter = os.router({
 
         // Parse and validate the config with Valibot
         const config = v.parse(ManagerConfig, rawConfig);
+        const autosaveFile =
+          config.state?.autosaveFile ?? join(homedir(), ".iterate", "pidnap-autosave.json");
+        const configWithState = {
+          ...config,
+          state: {
+            ...config.state,
+            autosaveFile,
+          },
+        };
 
         // Extract HTTP config with defaults
         const host = config.http?.host ?? "127.0.0.1";
@@ -128,9 +138,9 @@ const cliRouter = os.router({
         const authToken = config.http?.authToken;
 
         // Create manager with config
-        const logDir = config.logDir ?? resolve(process.cwd(), "logs");
+        const logDir = configWithState.logDir ?? resolve(process.cwd(), "logs");
         const managerLogger = logger({ name: "pidnap", logFile: resolve(logDir, "pidnap.log") });
-        const manager = new Manager(config, managerLogger);
+        const manager = new Manager(configWithState, managerLogger);
 
         // Setup ORPC server with optional auth token middleware
         const handler = new RPCHandler(router, {
@@ -240,8 +250,8 @@ const cliRouter = os.router({
         }),
       )
       .handler(async ({ input, context: { client } }) => {
-        const proc = await client.processes.add({
-          name: input.name,
+        const proc = await client.processes.updateConfig({
+          processSlug: input.name,
           definition: input.definition,
           tags: input.tags,
         });
@@ -297,8 +307,10 @@ const cliRouter = os.router({
       )
       .handler(async ({ input, context: { client } }) => {
         const [target, options] = input;
-        const proc = await client.processes.reload({
-          target,
+        const resolved =
+          typeof target === "string" ? target : (await client.processes.get({ target })).name;
+        const proc = await client.processes.updateConfig({
+          processSlug: resolved,
           definition: options.definition,
           restartImmediately: options.restartImmediately,
         });
@@ -308,7 +320,10 @@ const cliRouter = os.router({
       .meta({ description: "Remove a restarting process" })
       .input(v.tuple([v.pipe(ResourceTarget, v.description("Process name or index"))]))
       .handler(async ({ input, context: { client } }) => {
-        await client.processes.remove({ target: input[0] });
+        const target = input[0];
+        const resolved =
+          typeof target === "string" ? target : (await client.processes.get({ target })).name;
+        await client.processes.delete({ processSlug: resolved });
         console.log("Process removed");
       }),
   }),

@@ -21,7 +21,7 @@ test.describe("realtime pusher", () => {
 
     const triggerResult = () =>
       page.evaluate(async () => {
-        const res = await fetch("/api/trpc/testing.triggerInvalidation", {
+        const res = await fetch("/api/orpc/testing/triggerInvalidation", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({}),
@@ -59,7 +59,7 @@ test.describe("realtime pusher", () => {
       .toEqual(expect.arrayContaining([expect.stringContaining("CONNECTED")]));
 
     await page1.evaluate(async () => {
-      await fetch("/api/trpc/testing.triggerInvalidation", {
+      await fetch("/api/orpc/testing/triggerInvalidation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),

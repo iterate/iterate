@@ -15,7 +15,7 @@ export default {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupRepo,
-        utils.githubScript(import.meta, async function notify_slack_on_merge({ context }) {
+        await utils.githubScript(import.meta, async function notify_slack_on_merge({ context }) {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
           const pr = context.payload.pull_request;

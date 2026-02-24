@@ -17,7 +17,7 @@ export default iterateConfig({
         name: "discord-service",
         definition: {
           command: "pnpm",
-          args: ["--filter", "@iterate-com/discord", "start"],
+          args: ["--filter", "@iterate-com/discord", "discord:start"],
           cwd: process.env.ITERATE_REPO ?? join(homedir(), "src/github.com/iterate/iterate"),
           env: {
             PORT: "11001",

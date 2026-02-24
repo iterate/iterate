@@ -1,234 +1,41 @@
-// @ts-check
-import js from "@eslint/js";
-import typescript from "@typescript-eslint/eslint-plugin";
-import typescriptParser from "@typescript-eslint/parser";
-import eslintComments from "eslint-plugin-eslint-comments";
-import importPlugin from "eslint-plugin-import";
-import jsxA11y from "eslint-plugin-jsx-a11y";
-import reactHooks from "eslint-plugin-react-hooks";
-import reactRefresh from "eslint-plugin-react-refresh";
-import { defineConfig, globalIgnores } from "eslint/config";
-import eslintRisky from "eslint/use-at-your-own-risk";
-import globals from "globals";
-import eslintPluginUnicorn from "eslint-plugin-unicorn";
-import codegen from "eslint-plugin-codegen";
-import pluginRouter from "@tanstack/eslint-plugin-router";
+// TODO: rename this file to something like `oxlint-plugin-iterate.js` once this PR is merged
+// (keeping the name `eslint.config.js` for now so git treats this as a rename+edit rather than delete+create)
 import esquery from "esquery";
 
 /** @param {string} name */
-const getBuiltinRule = (name) => {
-  const rule = eslintRisky.builtinRules.get(name);
-  if (!rule) throw new Error(`Builtin rule ${name} not found`);
-  return rule;
+const getExpectedName = (name) => {
+  const acronyms = ["API", "HTML", "JSON", "ORPC", "MCP"];
+  const acronymStart = acronyms.find(
+    (a) => name.toLowerCase().startsWith(a.toLowerCase()) && name[a.length]?.match(/[A-Z]/),
+  );
+  const capitaliseLetters = acronymStart ? acronymStart.length : 1;
+  return (
+    name.slice(0, capitaliseLetters).toUpperCase() +
+    name.slice(capitaliseLetters).replace(/Schema$/, "")
+  );
 };
 
-export default defineConfig([
-  {
-    languageOptions: {
-      globals: {
-        ...globals.node,
-      },
-    },
-  },
-  globalIgnores([
-    "**/.cache/",
-    "**/.corepack/",
-    "**/.turbo/",
-    "**/.claude/",
-    "**/.cursor/",
-    "**/.alchemy/",
-    "**/.husky/",
-    "**/components/ui/",
-    "**/components/ai-elements/",
-    "**/logs.json",
-    "**/worker-configuration.d.ts",
-    "**/routeTree.gen.ts",
-    "**/db/migrations/",
-    "**/*.d.ts",
-    "**/node_modules/",
-    "**/dist/",
-    "**/build/",
-    "pnpm-lock.yaml",
-    "opensrc/**",
-    "test-results/**",
-  ]),
-  js.configs.recommended,
-  // TypeScript/JavaScript files
-  {
-    files: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs"],
-    languageOptions: {
-      parser: typescriptParser,
-      parserOptions: {
-        ecmaVersion: "latest",
-        sourceType: "module",
-        ecmaFeatures: {
-          jsx: true,
-        },
-      },
-    },
-    plugins: {
-      /** @type {{}} */
-      "@typescript-eslint": typescript,
-      "react-hooks": reactHooks,
-      "react-refresh": reactRefresh,
-      /** @type {{}} */
-      "jsx-a11y": jsxA11y,
-      import: importPlugin,
-      "eslint-comments": eslintComments,
-      // @ts-expect-error codegen is a plugin i swear
-      codegen,
-    },
-    rules: {
-      // Core JavaScript rules
-      "no-unused-vars": "off",
-      "no-console": "off",
-      "no-empty": "off", // `try {url = new URL(...)} catch {}` is fine
-      "no-debugger": "error",
-      "prefer-const": "off", // we're going to override this to be less annoying in IDEs
-      "no-var": "error",
-      "no-redeclare": "off",
-      "no-undef": "off",
-      "no-param-reassign": "off",
+/** @param {import("estree").MemberExpression | import("estree").Identifier | import("estree").CallExpression} callee */
+const getCalleeName = (callee) => {
+  if (callee.type === "Identifier") return callee.name;
+  if (callee.type !== "MemberExpression") return null;
+  if (callee.property.type === "Identifier") return callee.property.name;
+  if (callee.property.type === "Literal" && typeof callee.property.value === "string") {
+    return callee.property.value;
+  }
+  return null;
+};
 
-      // TypeScript rules (mapping from biome)
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          args: "all",
-          argsIgnorePattern: "^_",
-          caughtErrors: "all",
-          caughtErrorsIgnorePattern: "^_",
-          destructuredArrayIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-          ignoreRestSiblings: true,
+// custom iterate-internal rules
+// oxlint jsPlugins requires a specific nesting structure for the default export
+/** @type {{one: {two: {three: import("eslint").ESLint.Plugin}}}} */
+const plugin = {
+  one: {
+    two: {
+      three: {
+        meta: {
+          name: "iterate",
         },
-      ],
-      "@typescript-eslint/no-non-null-assertion": "off",
-      "@typescript-eslint/prefer-literal-enum-member": "error",
-      "@typescript-eslint/prefer-as-const": "error",
-      "@typescript-eslint/prefer-enum-initializers": "error",
-      "@typescript-eslint/no-inferrable-types": "error",
-      "@typescript-eslint/no-redeclare": "off",
-      "@typescript-eslint/consistent-type-imports": "off", // requires type info
-      "@typescript-eslint/consistent-type-exports": "off", // requires type info
-      "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/ban-types": "off",
-      "@typescript-eslint/no-confusing-void-expression": "off",
-
-      // Style rules (mapping from biome style rules)
-      "prefer-exponentiation-operator": "error",
-      "default-param-last": "error",
-      "no-else-return": "off",
-      "prefer-arrow-callback": "off",
-      curly: "off",
-
-      // Import rules
-      "import/extensions": ["error", "ignorePackages"],
-      "import/no-unresolved": "off", // TypeScript handles this
-      "import/no-restricted-paths": "off",
-      "import/order": "warn",
-
-      // ESLint comments rules
-      "eslint-comments/require-description": "error",
-
-      // Complexity rules (mapping from biome complexity rules)
-      "no-sequences": "error",
-      "no-implied-eval": "error",
-      radix: "off",
-      "prefer-numeric-literals": "error",
-      "no-new-func": "error",
-
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
-      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-
-      // A11y rules (mapping from biome a11y rules)
-      "jsx-a11y/click-events-have-key-events": "off",
-      "jsx-a11y/no-noninteractive-element-to-interactive-role": "off",
-
-      "codegen/codegen": "error",
-    },
-  },
-  // Override for test files (mapping from biome overrides)
-  {
-    files: [
-      "startups/**",
-      "**/test/**",
-      "**/*.test.ts",
-      "**/*.e2e.ts",
-      "**/*.test.tsx",
-      "**/test-setup.ts",
-      "**/test-utils.ts",
-    ],
-    rules: {
-      "no-console": "off",
-    },
-  },
-  {
-    name: "playwright-rules",
-    files: ["spec/**/*"],
-    rules: {
-      "react-hooks/rules-of-hooks": "off",
-      "no-console": "off",
-      "no-restricted-imports": [
-        "error",
-        {
-          name: "@playwright/test",
-          importNames: ["test"],
-          message:
-            "Use import { test } from './test-helpers.ts' instead. It has some opinionated conventions like adding a spinner waiter to the waitFor/click etc..",
-        },
-      ],
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "CallExpression[callee.name='expect']",
-          message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,
-        },
-        {
-          selector:
-            "CallExpression[callee.property.name='toBe'][callee][arguments.0.value=true],CallExpression[callee.property.name='toBe'][callee][arguments.0.value=false]",
-          message: `Don't use toBe(true) or toBe(false), this is an indicator of an assertion that will fail unhelpfully. Examples: use \`await expect.poll(() => realtimeMessages).toMatchObject(expect.arrayContaining([expect.stringContaining("CONNECTED")]));\` instead of \`await expect.poll(() => realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);\`.`,
-        },
-        {
-          selector: `CallExpression[callee.property.name='goto'][arguments.0] TemplateLiteral Identifier[name='baseURL']`,
-          message: `Don't use baseURL in goto, it's added as a prefix automatically. e.g. instead of \`await page.goto(\`\${baseURL}/foo/bar}\`)\`, use \`await page.goto("/foo/bar")\``,
-        },
-        {
-          selector: `CallExpression[callee.property.name=waitForURL]`,
-          message: `Don't use waitForURL, use a locator with .waitFor() instead, this accounts for loading UI. If necessary, you can add "data-*" attributes to the product code so you have a concrete, reliable locator.`,
-        },
-      ],
-    },
-  },
-  { plugins: { unicorn: eslintPluginUnicorn } },
-  {
-    rules: {
-      "unicorn/template-indent": "warn",
-      "unicorn/isolated-functions": [
-        "error",
-        {
-          functions: ["githubScript"],
-          selectors: [`CallExpression[callee.property.name='githubScript'] FunctionExpression`],
-        },
-      ],
-    },
-  },
-  { ignores: ["**/evalite-export/**"] },
-  { ignores: [".tmp-ci-build*"] },
-  // Override for React Router route files
-  {
-    files: ["**/routes/**", "**/app/root.tsx"],
-    rules: {
-      "react-refresh/only-export-components": "off",
-    },
-  },
-  ...pluginRouter.configs["flat/recommended"],
-  // custom iterate-internal rules
-  {
-    name: "iterate-plugin",
-    plugins: {
-      iterate: {
         rules: {
           "no-public-procedure": {
             meta: {
@@ -262,20 +69,6 @@ export default defineConfig([
               fixable: "code",
             },
             create: (context) => {
-              const acronyms = ["API", "HTML", "JSON", "TRPC", "MCP"];
-              /** @param {string} actualName */
-              function getExpectedName(actualName) {
-                const acronymStart = acronyms.find(
-                  (a) =>
-                    actualName.toLowerCase().startsWith(a.toLowerCase()) &&
-                    actualName[a.length]?.match(/[A-Z]/),
-                );
-                const capitaliseLetters = acronymStart ? acronymStart.length : 1;
-                return (
-                  actualName.slice(0, capitaliseLetters).toUpperCase() +
-                  actualName.slice(capitaliseLetters).replace(/Schema$/, "")
-                );
-              }
               return {
                 "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
                   if (init.callee.property.name === "toJSONSchema") return;
@@ -318,10 +111,53 @@ export default defineConfig([
               };
             },
           },
-          "prefer-const": fixToSuggestionInIDE(
-            getBuiltinRule("prefer-const"),
-            "Change to const, if you're finished tinkering",
-          ),
+          // oxlint doesn't have fixToSuggestionInIDE, so we reimplement prefer-const as a suggestion-only rule.
+          // this means `--fix` won't auto-convert let to const (you need `--fix-suggestions` for that).
+          "prefer-const": {
+            meta: {
+              type: "suggestion",
+              hasSuggestions: true,
+              docs: {
+                description:
+                  "Require `const` declarations for variables that are never reassigned after declared. Reported as a suggestion (not auto-fix) so it doesn't aggressively rewrite `let` while you're still writing code.",
+              },
+            },
+            create: (context) => {
+              return {
+                VariableDeclaration: (node) => {
+                  if (node.kind !== "let") return;
+                  const scope = context.sourceCode.getScope(node);
+                  for (const declarator of node.declarations) {
+                    if (!declarator.id || declarator.id.type !== "Identifier") continue;
+                    if (!declarator.init) continue; // `let x;` without init is fine
+                    const variable = scope.variables.find((v) => v.name === declarator.id.name);
+                    if (!variable) continue;
+                    const isReassigned = variable.references.some(
+                      (ref) => ref.isWrite() && ref.identifier !== declarator.id,
+                    );
+                    if (isReassigned) continue;
+                    context.report({
+                      node: declarator.id,
+                      message: `'${declarator.id.name}' is never reassigned. Use \`const\` instead.`,
+                      suggest: [
+                        {
+                          desc: "Change to const, if you're finished tinkering",
+                          fix: (fixer) => {
+                            // Only fix if this is the only declarator — otherwise
+                            // changing `let a = 1, b = 2` where only `a` is const is complex
+                            if (node.declarations.length > 1) return null;
+                            const letToken = context.sourceCode.getFirstToken(node);
+                            if (!letToken || letToken.value !== "let") return null;
+                            return fixer.replaceText(letToken, "const");
+                          },
+                        },
+                      ],
+                    });
+                  }
+                },
+              };
+            },
+          },
           "import-rules": {
             meta: {
               fixable: "code",
@@ -474,61 +310,111 @@ export default defineConfig([
               };
             },
           },
+          "spec-restricted-syntax": {
+            meta: {
+              type: "problem",
+            },
+            create: (context) => {
+              return {
+                CallExpression: (node) => {
+                  if (node.callee.type === "Identifier" && node.callee.name === "expect") {
+                    context.report({
+                      node,
+                      message: `Use locators, not expect. Locators are configured to wait for loading UI to complete, so allow for faster failures and more reliable assertions. For example: page.getByText("...").waitFor() instead of expect(page.getByText("...")).toBeVisible(). If you can't use a locator and must use polling, expect.poll is acceptable.`,
+                    });
+                    return;
+                  }
+
+                  if (
+                    node.callee.type === "MemberExpression" &&
+                    node.callee.property.type === "Identifier" &&
+                    node.callee.property.name === "toBe"
+                  ) {
+                    const firstArg = node.arguments[0];
+                    if (
+                      firstArg &&
+                      firstArg.type === "Literal" &&
+                      (firstArg.value === true || firstArg.value === false)
+                    ) {
+                      context.report({
+                        node,
+                        message: `Don't use toBe(true) or toBe(false), this is an indicator of an assertion that will fail unhelpfully. Examples: use \`await expect.poll(() => realtimeMessages).toMatchObject(expect.arrayContaining([expect.stringContaining("CONNECTED")]));\` instead of \`await expect.poll(() => realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);\`.`,
+                      });
+                      return;
+                    }
+                  }
+
+                  const calleeName = getCalleeName(node.callee);
+                  if (calleeName === "waitForURL") {
+                    context.report({
+                      node,
+                      message: `Don't use waitForURL, use a locator with .waitFor() instead, this accounts for loading UI. If necessary, you can add "data-*" attributes to the product code so you have a concrete, reliable locator.`,
+                    });
+                    return;
+                  }
+
+                  if (calleeName !== "goto") {
+                    return;
+                  }
+                  const firstArg = node.arguments[0];
+                  if (firstArg?.type !== "TemplateLiteral") {
+                    return;
+                  }
+                  const usesBaseUrl = firstArg.expressions.some(
+                    (expression) =>
+                      expression.type === "Identifier" && expression.name === "baseURL",
+                  );
+                  if (!usesBaseUrl) {
+                    return;
+                  }
+                  context.report({
+                    node,
+                    message: `Don't use baseURL in goto, it's added as a prefix automatically. e.g. instead of \`await page.goto(\`\${baseURL}/foo/bar}\`)\`, use \`await page.goto("/foo/bar")\``,
+                  });
+                },
+              };
+            },
+          },
+          "no-implied-eval": {
+            meta: {
+              type: "problem",
+            },
+            create: (context) => {
+              return {
+                CallExpression: (node) => {
+                  const calleeName = getCalleeName(node.callee);
+                  if (
+                    calleeName !== "setTimeout" &&
+                    calleeName !== "setInterval" &&
+                    calleeName !== "execScript"
+                  ) {
+                    return;
+                  }
+
+                  const firstArg = node.arguments[0];
+                  if (!firstArg) {
+                    return;
+                  }
+
+                  const isStringLiteral =
+                    firstArg.type === "Literal" && typeof firstArg.value === "string";
+                  const isTemplateLiteral = firstArg.type === "TemplateLiteral";
+                  if (!isStringLiteral && !isTemplateLiteral) {
+                    return;
+                  }
+
+                  context.report({
+                    node: firstArg,
+                    message: "Implied eval. Pass a function instead of a string.",
+                  });
+                },
+              };
+            },
+          },
         },
       },
     },
   },
-  { name: "ad-hoc ignorables", ignores: ["**/*ignoreme*"] },
-  {
-    name: "iterate-config",
-    rules: {
-      "iterate/prefer-const": "error",
-      "iterate/import-rules": "warn",
-      "iterate/zod-schema-naming": "error",
-      "iterate/drizzle-conventions": "error",
-    },
-  },
-  {
-    name: "iterate-no-direct-waituntil",
-    files: ["apps/os/**/*.ts", "apps/os/**/*.tsx"],
-    rules: {
-      "iterate/no-direct-waituntil-import": "error",
-    },
-  },
-  {
-    name: "backend-no-console",
-    files: ["apps/*/backend/**/*.ts"],
-    ignores: ["**/*test*/**", "**/*test*", "spec/**/*"],
-    rules: {
-      "no-console": "error",
-    },
-  },
-]);
+};
 
-/** @param {import("eslint").Rule.RuleModule} builtinRule */
-function fixToSuggestionInIDE(builtinRule, desc = "Apply default fix") {
-  /** @type {import("eslint").Rule.RuleModule} */
-  const overridenRule = {
-    ...builtinRule,
-    meta: { ...builtinRule.meta, hasSuggestions: true },
-    create: (context) => {
-      if (!process.env.VSCODE_CWD) {
-        return builtinRule.create(context); // use rule as-is outside of IDE
-      }
-      const proxyContext = new Proxy(new Object(), {
-        get: (_target, prop) => {
-          if (prop === "report") {
-            /** @param {Parameters<typeof context.report>[0]} params */
-            return ({ fix, ...params }) => {
-              return context.report({ ...params, suggest: [{ desc, fix }] });
-            };
-          }
-          return context[prop];
-        },
-      });
-      // @ts-expect-error we're pretending this proxy context is the real context. We need to proxy because `context` sets its props as readonly so it's hard to shim
-      return builtinRule.create(proxyContext);
-    },
-  };
-  return overridenRule;
-}
+export default plugin.one.two.three;
