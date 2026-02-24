@@ -36,6 +36,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
+    libfuse2 \
     libgbm1 \
     libgtk-3-0 \
     libnspr4 \

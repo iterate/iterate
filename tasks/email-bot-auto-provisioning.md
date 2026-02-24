@@ -82,21 +82,21 @@ Resend webhook (unknown sender)
 
 ## Env vars
 
-### Doppler (manual)
+### Doppler (manual, shared across devs)
 
-| Var              | Purpose                                  |
-| ---------------- | ---------------------------------------- |
-| `ARCHIL_API_KEY` | Archil control plane API key (`key-...`) |
-| `ARCHIL_REGION`  | Archil region, default `us-east-1`       |
+| Var                           | Purpose                                  |
+| ----------------------------- | ---------------------------------------- |
+| `ARCHIL_API_KEY`              | Archil control plane API key (`key-...`) |
+| `ARCHIL_REGION`               | Archil region, default `us-east-1`       |
+| `ARCHIL_R2_ACCESS_KEY_ID`     | R2 API token access key (Object R&W)     |
+| `ARCHIL_R2_SECRET_ACCESS_KEY` | R2 API token secret key                  |
 
-### Alchemy-managed (auto-provisioned)
+### Alchemy-managed (auto-provisioned per stage)
 
-| Binding                       | Source                       |
-| ----------------------------- | ---------------------------- |
-| `ARCHIL_R2_BUCKET_NAME`       | `R2Bucket("archil-data")`    |
-| `ARCHIL_R2_ENDPOINT`          | CF account R2 S3 endpoint    |
-| `ARCHIL_R2_ACCESS_KEY_ID`     | `AccountApiToken` access key |
-| `ARCHIL_R2_SECRET_ACCESS_KEY` | `AccountApiToken` secret key |
+| Binding                 | Source                    |
+| ----------------------- | ------------------------- |
+| `ARCHIL_R2_BUCKET_NAME` | `R2Bucket("archil-data")` |
+| `ARCHIL_R2_ENDPOINT`    | CF account R2 S3 endpoint |
 
 ## Idempotency
 
