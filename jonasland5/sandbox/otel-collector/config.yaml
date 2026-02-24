@@ -23,8 +23,12 @@ exporters:
       Authorization: Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM=
       stream-name: orpc_logs
 
-  otlphttp/clickstack:
-    endpoint: http://127.0.0.1:4318
+  clickhouse/clickstack:
+    endpoint: tcp://127.0.0.1:9000?dial_timeout=10s
+    database: default
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    timeout: 10s
 
 extensions:
   health_check:
@@ -36,12 +40,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_traces, otlphttp/clickstack]
+      exporters: [otlphttp/openobserve_traces, clickhouse/clickstack]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_logs, otlphttp/clickstack]
+      exporters: [otlphttp/openobserve_logs, clickhouse/clickstack]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/clickstack]
+      exporters: [clickhouse/clickstack]
