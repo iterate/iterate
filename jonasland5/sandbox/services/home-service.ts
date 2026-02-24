@@ -68,114 +68,126 @@ function buildHomeHtml(): string {
     <style>
       :root {
         color-scheme: light;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family:
+          "SF Pro Display",
+          "Segoe UI",
+          "Inter",
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          sans-serif;
       }
       body {
         margin: 0;
         min-height: 100vh;
-        background: #f8fafc;
-        color: #0f172a;
+        background: #f7f8fb;
+        color: #111827;
       }
       main {
         margin: 0 auto;
-        max-width: 72rem;
-        padding: 1.5rem;
+        max-width: 76rem;
+        padding: 2rem 1.25rem;
       }
       h1 {
-        margin: 0 0 0.5rem 0;
-        font-size: 1.25rem;
+        margin: 0;
+        font-size: 1.875rem;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
       }
       p {
-        margin: 0 0 1rem 0;
-        color: #475569;
-      }
-      h2 {
-        margin: 0 0 0.75rem 0;
+        margin: 0.4rem 0 1.25rem 0;
+        color: #4b5563;
         font-size: 1rem;
       }
       .columns {
         display: grid;
-        gap: 1rem;
+        gap: 1.25rem;
       }
       .column {
-        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
         border-radius: 0.75rem;
-        background: white;
-        padding: 1rem;
+        padding: 1rem 1rem 1.1rem 1rem;
       }
-      .platform-list {
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 0.5rem;
-        list-style: none;
+      .column h2 {
+        margin: 0 0 0.75rem 0;
+        font-size: 0.78rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6b7280;
+        font-weight: 700;
       }
-      .platform-link {
-        display: block;
-        border: 1px solid #cbd5e1;
-        border-radius: 0.5rem;
-        background: white;
-        padding: 0.625rem 0.75rem;
-        color: inherit;
-        text-decoration: none;
-      }
-      .platform-link:hover {
-        background: #f1f5f9;
-      }
-      .platform-link strong {
-        display: block;
-      }
+      .platform-list,
       .service-list {
         margin: 0;
         padding: 0;
-        display: grid;
-        gap: 0.75rem;
+        list-style: none;
       }
-      .service-card {
-        border: 1px solid #cbd5e1;
-        border-radius: 0.5rem;
-        padding: 0.75rem;
-        background: #ffffff;
+      .platform-item,
+      .service-item {
+        padding: 0.7rem 0;
+        border-top: 1px solid #eef0f4;
+      }
+      .platform-item:first-child,
+      .service-item:first-child {
+        border-top: 0;
+        padding-top: 0.2rem;
+      }
+      .platform-label {
+        display: block;
+        margin-bottom: 0.2rem;
+        font-size: 1rem;
+        font-weight: 650;
+      }
+      .platform-hint {
+        margin-bottom: 0.25rem;
+        font-size: 0.83rem;
+        color: #374151;
       }
       .service-name {
-        margin: 0 0 0.5rem 0;
-        font-size: 0.95rem;
+        margin: 0 0 0.45rem 0;
+        font-size: 1.02rem;
+        font-weight: 650;
       }
-      .slots {
+      .service-rows {
         display: grid;
-        gap: 0.5rem;
+        gap: 0.35rem;
       }
-      .slot {
-        border: 1px solid #e2e8f0;
-        border-radius: 0.5rem;
-        padding: 0.5rem;
+      .service-row {
+        display: grid;
+        grid-template-columns: 6rem minmax(0, 1fr);
+        gap: 0.6rem;
+        align-items: center;
       }
-      .slot-name {
-        font-size: 0.75rem;
+      .row-label {
+        font-size: 0.74rem;
+        letter-spacing: 0.07em;
         text-transform: uppercase;
-        color: #64748b;
-        margin-bottom: 0.25rem;
+        color: #6b7280;
+        font-weight: 700;
       }
-      .slot a {
-        color: #0f172a;
+      .url-line {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.94rem;
+        color: #111827;
         text-decoration: none;
       }
-      .slot a:hover {
+      a.url-line:hover {
         text-decoration: underline;
       }
-      .slot-empty {
-        color: #64748b;
+      .row-empty {
+        color: #6b7280;
+        font-size: 0.94rem;
       }
-      code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      }
-      @media (min-width: 960px) {
+      @media (min-width: 980px) {
         .columns {
-          grid-template-columns: 1fr 2fr;
+          grid-template-columns: 0.95fr 2.05fr;
           align-items: start;
-        }
-        .slots {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
         }
       }
     </style>
@@ -187,11 +199,11 @@ function buildHomeHtml(): string {
       <div class="columns">
         <section class="column">
           <h2>Platform</h2>
-          <ul id="platform-links" class="platform-list"></ul>
+          <ul id="platform-links" class="platform-list" aria-label="Platform links"></ul>
         </section>
         <section class="column">
           <h2>Services</h2>
-          <div id="service-list" class="service-list"></div>
+          <ul id="service-list" class="service-list" aria-label="Service links"></ul>
         </section>
       </div>
     </main>
@@ -205,24 +217,24 @@ function buildHomeHtml(): string {
       const platformList = document.getElementById("platform-links");
       platformList.innerHTML = platformLinks.map((item) => {
         const href = hrefFor(item.host, item.path);
-        const hint = item.hint ? "<code>" + item.hint + "</code><br>" : "";
-        return "<li><a class=\\\"platform-link\\\" href=\\\"" + href + "\\\"><strong>" + item.label + "</strong>" + hint + "<code>" + href + "</code></a></li>";
+        const hint = item.hint ? "<div class=\\\"platform-hint\\\">" + item.hint + "</div>" : "";
+        return "<li class=\\\"platform-item\\\"><span class=\\\"platform-label\\\">" + item.label + "</span>" + hint + "<a class=\\\"url-line\\\" href=\\\"" + href + "\\\" title=\\\"" + href + "\\\">" + href + "</a></li>";
       }).join("");
 
-      const renderSlot = (name, host, path, emptyText) => {
+      const renderRow = (name, host, path, emptyText) => {
         const value = path
-          ? "<a href=\\\"" + hrefFor(host, path) + "\\\"><code>" + hrefFor(host, path) + "</code></a>"
-          : "<span class=\\\"slot-empty\\\">" + (emptyText || "n/a") + "</span>";
-        return "<div class=\\\"slot\\\"><div class=\\\"slot-name\\\">" + name + "</div>" + value + "</div>";
+          ? "<a class=\\\"url-line\\\" href=\\\"" + hrefFor(host, path) + "\\\" title=\\\"" + hrefFor(host, path) + "\\\">" + hrefFor(host, path) + "</a>"
+          : "<span class=\\\"row-empty\\\">" + (emptyText || "n/a") + "</span>";
+        return "<div class=\\\"service-row\\\"><span class=\\\"row-label\\\">" + name + "</span>" + value + "</div>";
       };
 
       const serviceList = document.getElementById("service-list");
       serviceList.innerHTML = services.map((service) => {
-        return "<article class=\\\"service-card\\\"><h3 class=\\\"service-name\\\">" + service.label + "</h3><div class=\\\"slots\\\">"
-          + renderSlot("Frontend", service.host, service.frontendPath, service.frontendHint || "has no frontend")
-          + renderSlot("API", service.host, service.apiPath, service.apiHint || "has no api")
-          + renderSlot("Docs", service.host, service.docsPath, service.docsHint || "has no docs")
-          + "</div></article>";
+        return "<li class=\\\"service-item\\\"><h3 class=\\\"service-name\\\">" + service.label + "</h3><div class=\\\"service-rows\\\">"
+          + renderRow("Frontend", service.host, service.frontendPath, service.frontendHint || "has no frontend")
+          + renderRow("API", service.host, service.apiPath, service.apiHint || "has no api")
+          + renderRow("Docs", service.host, service.docsPath, service.docsHint || "has no docs")
+          + "</div></li>";
       }).join("");
     </script>
   </body>
