@@ -38,12 +38,13 @@ wait_for_url() {
 
 wait_for_consul_service() {
   service_name="$1"
-  max_attempts="${2:-120}"
+  max_attempts="${2:-480}"
 
   i=1
   while [ "$i" -le "$max_attempts" ]; do
-    if curl -fsS "http://127.0.0.1:8500/v1/health/service/${service_name}?passing=1" \
-      | grep -q "\"ServiceName\":\"${service_name}\""; then
+    response="$(curl -fsS "http://127.0.0.1:8500/v1/health/service/${service_name}?passing=1" || true)"
+    if printf '%s' "$response" \
+      | grep -Eq "\"ServiceName\"[[:space:]]*:[[:space:]]*\"${service_name}\""; then
       return 0
     fi
     sleep 0.25
@@ -51,6 +52,8 @@ wait_for_consul_service() {
   done
 
   echo "consul service failed health check: ${service_name}"
+  curl -fsS "http://127.0.0.1:8500/v1/health/service/${service_name}" || true
+  nomad status "${service_name}" || true
   exit 1
 }
 
