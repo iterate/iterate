@@ -166,12 +166,21 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     expect(emitted.payload.orderId).toBe(placed.id);
   });
 
-  test("services sqlite state persists across container restart", async () => {
+  test("services sqlite WAL mode and state persist across container restart", async () => {
     await using deployment = await projectDeployment({
       image,
       name: `jonasland5-e2e-persist-${randomUUID()}`,
       processes: ["caddy", "services"],
     });
+
+    const readJournalMode = async () => {
+      const result = await deployment.services.service.sql({
+        statement: "PRAGMA journal_mode;",
+      });
+      const firstRow = result.rows[0] ?? {};
+      const value = Object.values(firstRow)[0];
+      return String(value ?? "").toLowerCase();
+    };
 
     const routeHost = `persist-${randomUUID().slice(0, 8)}.iterate.localhost`;
     await deployment.services.routes.upsert({
@@ -185,7 +194,18 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
       value: "http://127.0.0.1:2019",
     });
 
+    const modeBeforeRestart = await readJournalMode();
+    expect(modeBeforeRestart).toBe("wal");
+
+    const sidecarsBeforeRestart = await deployment.exec(
+      "test -f /var/lib/jonasland5/services.sqlite-wal && test -f /var/lib/jonasland5/services.sqlite-shm",
+    );
+    expect(sidecarsBeforeRestart.exitCode).toBe(0);
+
     await deployment.restart();
+
+    const modeAfterRestart = await readJournalMode();
+    expect(modeAfterRestart).toBe("wal");
 
     const routes = await deployment.services.routes.list({});
     expect(routes.routes.some((route) => route.host === routeHost)).toBe(true);
@@ -195,6 +215,11 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     });
     expect(config.found).toBe(true);
     expect(config.entry?.value).toBe("http://127.0.0.1:2019");
+
+    const sidecarsAfterRestart = await deployment.exec(
+      "test -f /var/lib/jonasland5/services.sqlite-wal && test -f /var/lib/jonasland5/services.sqlite-shm",
+    );
+    expect(sidecarsAfterRestart.exitCode).toBe(0);
   });
 
   test("pidnap can imperatively add and control a process", async () => {

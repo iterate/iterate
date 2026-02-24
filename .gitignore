@@ -40,6 +40,12 @@ playwright-report/
 
 *.db
 *.sqlite
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 .output
 
 # opensrc - source code for packages
