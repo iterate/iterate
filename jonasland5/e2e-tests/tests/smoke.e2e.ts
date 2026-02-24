@@ -255,4 +255,41 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);
   });
+
+  test("egress supports x-target-url direct mode", async () => {
+    await using proxy = await mockEgressProxy();
+    proxy.fetch = async (request) => {
+      if (new URL(request.url).pathname === "/direct-target") {
+        return Response.json({
+          ok: true,
+          path: new URL(request.url).pathname,
+          mode: "direct-target",
+        });
+      }
+      return new Response("unmatched", { status: 599 });
+    };
+
+    const matched = proxy.waitFor((request) => new URL(request.url).pathname === "/direct-target");
+
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland5-e2e-egress-direct-${randomUUID()}`,
+      extraHosts: ["host.docker.internal:host-gateway"],
+    });
+
+    const directTarget = `${proxy.proxyUrl}/direct-target`;
+    const curl = await deployment.exec(
+      `curl -4 -k -sS -i -H 'x-target-url: ${directTarget}' -H 'x-from-container: yes' https://example.com/ignore-this-path`,
+    );
+
+    expect(curl.exitCode).toBe(0);
+    expect(curl.output).toMatch(/HTTP\/\d(?:\.\d)? 200/);
+    expect(curl.output).toContain('{"ok":true,"path":"/direct-target","mode":"direct-target"}');
+    expect(curl.output.toLowerCase()).toContain("x-egress-mode: direct");
+    expect(curl.output.toLowerCase()).toContain("x-egress-proxy-seen: 1");
+
+    const matchedRecord = await matched;
+    expect(matchedRecord.response.status).toBe(200);
+    expect(matchedRecord.request.headers.get("x-from-container")).toBe("yes");
+  });
 });

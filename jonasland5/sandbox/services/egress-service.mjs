@@ -58,6 +58,11 @@ function resolveTarget(req, protocolKind) {
     };
   }
 
+  const directUrl = req.headers["x-target-url"];
+  if (directUrl && !Array.isArray(directUrl)) {
+    return { mode: "direct", url: directUrl };
+  }
+
   const transparentUrl = buildTransparentTarget(req, protocolKind);
   if (!transparentUrl) return null;
   return { mode: "transparent", url: transparentUrl };
