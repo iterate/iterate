@@ -1,23 +1,9 @@
 import { DockerClient } from "@docker/node-sdk";
-import { getLocal, type CompletedRequest, type Mockttp } from "mockttp";
+import { getLocal } from "mockttp";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { WebSocketServer } from "ws";
-
-type MockttpOnUnhandledRequest = "bypass" | "warn" | "error";
-
-export interface ProxyRequestFilter {
-  method?: string;
-  url?: string | RegExp | ((url: URL) => boolean);
-  pathname?: string | RegExp;
-  predicate?: (request: CompletedRequest) => boolean;
-}
-
-export interface WaitForRequestOptions {
-  timeoutMs?: number;
-  source?: "all" | "unhandled";
-}
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
 async function dockerClient(): Promise<DockerClient> {
@@ -55,39 +41,6 @@ function captureOutput(stream: PassThrough): { flush: () => string } {
   };
 }
 
-function urlMatches(
-  actual: URL,
-  expected: string | RegExp | ((url: URL) => boolean) | undefined,
-): boolean {
-  if (!expected) return true;
-  if (typeof expected === "string") return actual.toString() === expected;
-  if (expected instanceof RegExp) return expected.test(actual.toString());
-  return expected(actual);
-}
-
-function pathnameMatches(actual: URL, expected: string | RegExp | undefined): boolean {
-  if (!expected) return true;
-  if (typeof expected === "string") return actual.pathname === expected;
-  return expected.test(actual.pathname);
-}
-
-function requestUrl(request: CompletedRequest): URL {
-  return new URL(request.url);
-}
-
-function requestMatches(request: CompletedRequest, filter: ProxyRequestFilter): boolean {
-  if (filter.method && request.method.toUpperCase() !== filter.method.toUpperCase()) return false;
-  const url = requestUrl(request);
-  if (!urlMatches(url, filter.url)) return false;
-  if (!pathnameMatches(url, filter.pathname)) return false;
-  if (filter.predicate && !filter.predicate(request)) return false;
-  return true;
-}
-
-function summarizeRequests(requests: CompletedRequest[]): string {
-  return requests.map((request) => `${request.method.toUpperCase()} ${request.url}`).join("\n");
-}
-
 export async function dockerPing(): Promise<boolean> {
   try {
     const docker = await dockerClient();
@@ -98,12 +51,6 @@ export async function dockerPing(): Promise<boolean> {
   }
 }
 
-export interface DockerContainerFixture extends AsyncDisposable {
-  containerId: string;
-  publishedPort(containerPort: string): Promise<number>;
-  logs(): Promise<string>;
-}
-
 export async function dockerContainerFixture(params: {
   image: string;
   name?: string;
@@ -111,7 +58,7 @@ export async function dockerContainerFixture(params: {
   exposedPorts?: string[];
   extraHosts?: string[];
   capAdd?: string[];
-}): Promise<DockerContainerFixture> {
+}) {
   const docker = await dockerClient();
   const created = await docker.containerCreate(
     {
@@ -193,38 +140,12 @@ export async function execInContainer(params: {
   };
 }
 
-export interface MockttpProxyFixture extends AsyncDisposable {
-  proxyUrl: string;
-  hostProxyUrl: string;
-  server: Mockttp;
-  listRequests(): CompletedRequest[];
-  listUnhandledRequests(): CompletedRequest[];
-  waitForRequest(
-    filter: ProxyRequestFilter,
-    options?: WaitForRequestOptions,
-  ): Promise<CompletedRequest>;
-  expectRequest(
-    filter: ProxyRequestFilter,
-    options?: WaitForRequestOptions,
-  ): Promise<CompletedRequest>;
-  expectNoUnhandledRequests(filter?: ProxyRequestFilter): void;
-}
-
-export interface WebSocketHandshakeRecord {
+type WebSocketHandshakeRecord = {
   pathname: string;
   headers: IncomingHttpHeaders;
-}
+};
 
-export interface WebSocketEchoServerFixture extends AsyncDisposable {
-  url: string;
-  waitForHandshake(options?: {
-    pathname?: string;
-    timeoutMs?: number;
-    predicate?: (record: WebSocketHandshakeRecord) => boolean;
-  }): Promise<WebSocketHandshakeRecord>;
-}
-
-export async function webSocketEchoServerFixture(): Promise<WebSocketEchoServerFixture> {
+export async function webSocketEchoServerFixture() {
   const httpServer = createServer();
   const wsServer = new WebSocketServer({ server: httpServer });
   const handshakes: WebSocketHandshakeRecord[] = [];
@@ -313,25 +234,14 @@ export async function webSocketEchoServerFixture(): Promise<WebSocketEchoServerF
   };
 }
 
-export async function mockttpProxyFixture(params?: {
-  onUnhandledRequest?: MockttpOnUnhandledRequest;
-}): Promise<MockttpProxyFixture> {
+export async function mockttpProxyFixture(params?: { onUnhandledRequest?: "bypass" | "error" }) {
   const onUnhandledRequest = params?.onUnhandledRequest ?? "bypass";
   const server = getLocal();
   await server.start();
-
-  const seenRequests: CompletedRequest[] = [];
-  const unhandledRequests: CompletedRequest[] = [];
-
-  await server.on("request", (request) => {
-    seenRequests.push(request);
-  });
-
-  await server
+  const unmatchedRequests = await server
     .forUnmatchedRequest()
     .always()
     .thenCallback((request) => {
-      unhandledRequests.push(request);
       const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
       if (onUnhandledRequest === "error") {
         return {
@@ -343,68 +253,17 @@ export async function mockttpProxyFixture(params?: {
       return {
         statusCode: 404,
         json: {
-          error: onUnhandledRequest === "warn" ? "mock_unhandled_request" : "mock_not_found",
+          error: "mock_not_found",
           message,
         },
       };
     });
 
-  async function waitForRequest(
-    filter: ProxyRequestFilter,
-    options?: WaitForRequestOptions,
-  ): Promise<CompletedRequest> {
-    const timeoutMs = options?.timeoutMs ?? 7_500;
-    const source = options?.source ?? "all";
-
-    const getPool = () => (source === "unhandled" ? unhandledRequests : seenRequests);
-    const firstMatch = getPool().find((request) => requestMatches(request, filter));
-    if (firstMatch) return firstMatch;
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-      const match = getPool().find((request) => requestMatches(request, filter));
-      if (match) return match;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-
-    throw new Error(
-      `Timed out waiting for ${source} request.\nFilter=${JSON.stringify(
-        {
-          method: filter.method,
-          url: typeof filter.url === "string" ? filter.url : String(filter.url),
-          pathname: filter.pathname,
-          predicate: Boolean(filter.predicate),
-        },
-        null,
-        2,
-      )}\nSeen:\n${summarizeRequests(getPool()) || "(none)"}`,
-    );
-  }
-
   return {
     proxyUrl: `http://host.docker.internal:${String(server.port)}`,
     hostProxyUrl: `http://127.0.0.1:${String(server.port)}`,
     server,
-    listRequests() {
-      return [...seenRequests];
-    },
-    listUnhandledRequests() {
-      return [...unhandledRequests];
-    },
-    async waitForRequest(filter: ProxyRequestFilter, options?: WaitForRequestOptions) {
-      return await waitForRequest(filter, options);
-    },
-    async expectRequest(filter: ProxyRequestFilter, options?: WaitForRequestOptions) {
-      return await waitForRequest(filter, options);
-    },
-    expectNoUnhandledRequests(filter?: ProxyRequestFilter) {
-      const unmatched = unhandledRequests.filter((request) =>
-        filter ? requestMatches(request, filter) : true,
-      );
-      if (unmatched.length > 0) {
-        throw new Error(`Mockttp captured unmatched requests:\n${summarizeRequests(unmatched)}`);
-      }
-    },
+    unmatchedRequests,
     async [Symbol.asyncDispose]() {
       await server.stop();
     },

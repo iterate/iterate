@@ -51,7 +51,7 @@ describe("mockttp proxy fixture concurrency proof", () => {
   for (const caseId of concurrentCaseIds) {
     test.concurrent(`isolates handlers on shared route (${caseId})`, async () => {
       await using proxy = await mockttpProxyFixture({ onUnhandledRequest: "error" });
-      await proxy.server.forGet("/shared").thenCallback((request) => ({
+      const sharedEndpoint = await proxy.server.forGet("/shared").thenCallback((request) => ({
         statusCode: 200,
         json: {
           caseId,
@@ -70,13 +70,11 @@ describe("mockttp proxy fixture concurrency proof", () => {
         seenHeader: caseId,
       });
 
-      const seen = await proxy.expectRequest({
-        method: "GET",
-        pathname: "/shared",
-      });
-      expect(headerValue(seen.headers, "x-test-case")).toBe(caseId);
-      expect(proxy.listRequests()).toHaveLength(1);
-      proxy.expectNoUnhandledRequests();
+      const seen = await sharedEndpoint.getSeenRequests();
+      expect(seen).toHaveLength(1);
+      expect(headerValue(seen[0].headers, "x-test-case")).toBe(caseId);
+      const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+      expect(unhandled).toHaveLength(0);
     });
   }
 
@@ -91,7 +89,8 @@ describe("mockttp proxy fixture concurrency proof", () => {
       const response = await fetch(`${proxy.hostProxyUrl}${path}`);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ caseId });
-      proxy.expectNoUnhandledRequests();
+      const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+      expect(unhandled).toHaveLength(0);
     });
   }
 });
@@ -225,7 +224,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     const caddyAdminPort = await container.publishedPort("2019/tcp");
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
 
-    await proxy.server.forGet("/from-curl").thenCallback((request) => ({
+    const curlEndpoint = await proxy.server.forGet("/from-curl").thenCallback((request) => ({
       statusCode: 200,
       json: {
         ok: true,
@@ -252,15 +251,16 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     expect(curl.output.toLowerCase()).toContain("x-egress-proxy-seen: 1");
     expect(curl.output).toContain('{"ok":true,"path":"/from-curl"}');
 
-    const request = await proxy.expectRequest({
-      method: "GET",
-      pathname: "/from-curl",
-    });
+    const seen = await curlEndpoint.getSeenRequests();
+    expect(seen).toHaveLength(1);
+    const request = seen[0];
     expect(headerValue(request.headers, "x-from-container")).toBe("yes");
     expect(headerValue(request.headers, "x-egress-proxy-seen")).toBe("1");
-    proxy.expectNoUnhandledRequests({
-      url: (url) => url.hostname === "upstream.iterate.localhost",
-    });
+    const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+    const upstreamUnhandled = unhandled.filter(
+      (entry) => new URL(entry.url).hostname === "upstream.iterate.localhost",
+    );
+    expect(upstreamUnhandled).toHaveLength(0);
 
     const caddyAdminResponse = await fetch(`http://127.0.0.1:${String(caddyAdminPort)}/config/`);
     expect(caddyAdminResponse.ok).toBe(true);

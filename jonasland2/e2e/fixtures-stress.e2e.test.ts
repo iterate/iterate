@@ -18,9 +18,9 @@ describe("fixtures stress", () => {
     );
 
     try {
-      await Promise.all(
+      const burstEndpoints = await Promise.all(
         fixtureIds.map(async (fixtureId, index) => {
-          await fixtures[index].server.forGet("/burst").thenCallback((request) => ({
+          return await fixtures[index].server.forGet("/burst").thenCallback((request) => ({
             statusCode: 200,
             json: {
               fixtureId,
@@ -55,9 +55,10 @@ describe("fixtures stress", () => {
             });
           }
 
-          expect(fixture.listRequests()).toHaveLength(requestCount);
-          expect(fixture.listUnhandledRequests()).toHaveLength(0);
-          fixture.expectNoUnhandledRequests();
+          const seen = await burstEndpoints[index].getSeenRequests();
+          expect(seen).toHaveLength(requestCount);
+          const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+          expect(unhandled).toHaveLength(0);
         }),
       );
     } finally {
@@ -104,13 +105,9 @@ describe("fixtures stress", () => {
     expect(body.message).toContain("Unhandled request: GET");
     expect(body.message).toContain("/no-match-error");
 
-    const unhandled = await fixture.waitForRequest(
-      { pathname: "/no-match-error" },
-      { source: "unhandled" },
-    );
-    expect(new URL(unhandled.url).pathname).toBe("/no-match-error");
-    expect(() => fixture.expectNoUnhandledRequests()).toThrow(
-      /Mockttp captured unmatched requests/,
+    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    expect(unhandled.some((request) => new URL(request.url).pathname === "/no-match-error")).toBe(
+      true,
     );
   });
 
@@ -123,23 +120,24 @@ describe("fixtures stress", () => {
     expect(body.message).toContain("Unhandled request: GET");
     expect(body.message).toContain("/no-match-bypass");
 
-    const unhandled = await fixture.expectRequest(
-      { pathname: "/no-match-bypass" },
-      { source: "unhandled" },
+    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    expect(unhandled.some((request) => new URL(request.url).pathname === "/no-match-bypass")).toBe(
+      true,
     );
-    expect(new URL(unhandled.url).pathname).toBe("/no-match-bypass");
   });
 
-  test.concurrent("waitForRequest timeout includes filter and seen output", async () => {
+  test.concurrent("mockttp seen request APIs stay minimal and explicit", async () => {
     await using fixture = await mockttpProxyFixture({ onUnhandledRequest: "bypass" });
-    await fixture.server.forGet("/hit").thenJson(200, { ok: true });
+    const endpoint = await fixture.server.forGet("/hit").thenJson(200, { ok: true });
 
     const hit = await fetch(`${fixture.hostProxyUrl}/hit`);
     expect(hit.status).toBe(200);
 
-    await expect(
-      fixture.waitForRequest({ pathname: "/never" }, { timeoutMs: 120 }),
-    ).rejects.toThrow(/Timed out waiting for all request/);
+    const seen = await endpoint.getSeenRequests();
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0].url).pathname).toBe("/hit");
+    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    expect(unhandled).toHaveLength(0);
   });
 
   test.concurrent("proxy urls share same dynamic port and disposer closes listener", async () => {
