@@ -1,0 +1,6 @@
+packages:
+  - shared
+  - events-contract
+  - events
+  - services-contract
+  - services

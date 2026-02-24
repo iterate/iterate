@@ -1,0 +1,30 @@
+{
+  "name": "@jonasland5/events",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/router.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "@jonasland5/events-contract": "workspace:*",
+    "@jonasland5/shared": "workspace:*",
+    "@libsql/client": "^0.15.15",
+    "@orpc/openapi": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "@orpc/zod": "^1.13.5",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.11.10",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}

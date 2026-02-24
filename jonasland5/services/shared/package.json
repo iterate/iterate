@@ -1,0 +1,22 @@
+{
+  "name": "@jonasland5/shared",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.15",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}

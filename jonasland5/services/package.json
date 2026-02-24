@@ -1,0 +1,11 @@
+{
+  "name": "@iterate-com/jonasland5-services-workspace",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "tsx": "^4.20.6"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck"
+  }
+}

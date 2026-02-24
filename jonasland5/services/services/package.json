@@ -1,0 +1,27 @@
+{
+  "name": "@jonasland5/services",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@jonasland5/services-contract": "workspace:*",
+    "@jonasland5/shared": "workspace:*",
+    "@libsql/client": "^0.15.15",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/server": "^1.13.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}
