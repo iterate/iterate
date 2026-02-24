@@ -3,7 +3,17 @@ import httpProxy from "http-proxy";
 
 const port = Number(process.env.PORT || "19000");
 const externalProxy = process.env.ITERATE_EXTERNAL_EGRESS_PROXY || "";
-const egressSeenHeader = "x-egress-proxy-seen";
+const iterateOriginalHostHeader = "x-iterate-original-host";
+const iterateOriginalProtoHeader = "x-iterate-original-proto";
+const iterateTargetUrlHeader = "x-iterate-target-url";
+const iterateEgressModeHeader = "x-iterate-egress-mode";
+const iterateEgressSeenHeader = "x-iterate-egress-proxy-seen";
+
+// Backward-compatible read aliases while migrating callers.
+const legacyOriginalHostHeader = "x-original-host";
+const legacyOriginalProtoHeader = "x-original-proto";
+const legacyTargetUrlHeader = "x-target-url";
+const legacyEgressModeHeader = "x-egress-mode";
 
 const proxy = httpProxy.createProxyServer({
   ws: true,
@@ -14,6 +24,14 @@ const proxy = httpProxy.createProxyServer({
 function firstHeaderValue(value) {
   if (Array.isArray(value)) return value[0] || "";
   return value || "";
+}
+
+function preferredHeader(req, preferredName, legacyName) {
+  return firstHeaderValue(req.headers[preferredName]) || firstHeaderValue(req.headers[legacyName]);
+}
+
+function currentEgressMode(req) {
+  return String(preferredHeader(req, iterateEgressModeHeader, legacyEgressModeHeader) || "unknown");
 }
 
 function normalizeProxyProtocol(url, protocolKind) {
@@ -35,10 +53,13 @@ function buildTransparentTarget(req, protocolKind) {
   }
 
   const host =
-    firstHeaderValue(req.headers["x-original-host"]) || firstHeaderValue(req.headers.host);
+    preferredHeader(req, iterateOriginalHostHeader, legacyOriginalHostHeader) ||
+    firstHeaderValue(req.headers.host);
   if (!host) return null;
 
-  const proto = String(firstHeaderValue(req.headers["x-original-proto"])).toLowerCase();
+  const proto = String(
+    preferredHeader(req, iterateOriginalProtoHeader, legacyOriginalProtoHeader),
+  ).toLowerCase();
   let scheme = "http";
   if (protocolKind === "ws") {
     scheme = proto === "https" || proto === "wss" ? "wss" : "ws";
@@ -58,8 +79,9 @@ function resolveTarget(req, protocolKind) {
     };
   }
 
-  const directUrl = req.headers["x-target-url"];
-  if (directUrl && !Array.isArray(directUrl)) {
+  const directUrl =
+    preferredHeader(req, iterateTargetUrlHeader, legacyTargetUrlHeader) || undefined;
+  if (directUrl) {
     return { mode: "direct", url: directUrl };
   }
 
@@ -81,16 +103,16 @@ function resolveProxyRequest(req, protocolKind) {
 }
 
 proxy.on("proxyRes", (proxyRes, req) => {
-  proxyRes.headers[egressSeenHeader] = "1";
-  proxyRes.headers["x-egress-mode"] = String(req.headers["x-egress-mode"] || "unknown");
+  proxyRes.headers[iterateEgressSeenHeader] = "1";
+  proxyRes.headers[iterateEgressModeHeader] = currentEgressMode(req);
 });
 
 proxy.on("error", (error, req, res) => {
   if (!res || typeof res.writeHead !== "function" || res.headersSent) return;
   res.writeHead(502, {
     "content-type": "application/json",
-    [egressSeenHeader]: "1",
-    "x-egress-mode": String(req?.headers?.["x-egress-mode"] || "unknown"),
+    [iterateEgressSeenHeader]: "1",
+    [iterateEgressModeHeader]: currentEgressMode(req),
   });
   res.end(
     JSON.stringify({
@@ -116,8 +138,8 @@ const server = createServer((req, res) => {
 
   req.url = resolved.pathWithQuery;
   req.headers.host = new URL(resolved.targetOrigin).host;
-  req.headers[egressSeenHeader] = "1";
-  req.headers["x-egress-mode"] = resolved.mode;
+  req.headers[iterateEgressSeenHeader] = "1";
+  req.headers[iterateEgressModeHeader] = resolved.mode;
 
   proxy.web(req, res, {
     target: resolved.targetOrigin,
@@ -137,8 +159,8 @@ server.on("upgrade", (req, socket, head) => {
 
   req.url = resolved.pathWithQuery;
   req.headers.host = new URL(resolved.targetOrigin).host;
-  req.headers[egressSeenHeader] = "1";
-  req.headers["x-egress-mode"] = resolved.mode;
+  req.headers[iterateEgressSeenHeader] = "1";
+  req.headers[iterateEgressModeHeader] = resolved.mode;
 
   proxy.ws(req, socket, head, {
     target: resolved.targetOrigin,

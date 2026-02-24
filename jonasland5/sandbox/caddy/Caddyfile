@@ -44,9 +44,9 @@ http://caddy-admin.iterate.localhost {
     }
 
     reverse_proxy 127.0.0.1:19000 {
-        header_up X-Original-Host {http.request.header.Host}
-        header_up X-Original-SNI {http.request.tls.server_name}
-        header_up X-Original-Proto {http.request.scheme}
+        header_up X-Iterate-Original-Host {http.request.header.Host}
+        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
+        header_up X-Iterate-Original-Proto {http.request.scheme}
     }
 }
 
@@ -56,8 +56,8 @@ http://caddy-admin.iterate.localhost {
     }
 
     reverse_proxy 127.0.0.1:19000 {
-        header_up X-Original-Host {http.request.header.Host}
-        header_up X-Original-SNI {http.request.tls.server_name}
-        header_up X-Original-Proto {http.request.scheme}
+        header_up X-Iterate-Original-Host {http.request.header.Host}
+        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
+        header_up X-Iterate-Original-Proto {http.request.scheme}
     }
 }

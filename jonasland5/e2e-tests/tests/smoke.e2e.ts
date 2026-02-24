@@ -259,24 +259,24 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     });
 
     const curl = await deployment.exec(
-      "curl -4 -k -sS -i -H 'x-from-container: yes' https://api.openai.com/v1/models",
+      "curl -4 -k -sS -i -H 'x-iterate-from-container: yes' https://api.openai.com/v1/models",
     );
 
     expect(curl.exitCode).toBe(0);
     expect(curl.output).toMatch(/HTTP\/\d(?:\.\d)? 200/);
     expect(curl.output).toContain('{"ok":true,"path":"/v1/models"}');
-    expect(curl.output.toLowerCase()).toContain("x-egress-proxy-seen: 1");
-    expect(curl.output.toLowerCase()).toContain("x-egress-mode: external-proxy");
+    expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
+    expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
 
     const matchedRecord = await matched;
     expect(matchedRecord.response.status).toBe(200);
-    expect(matchedRecord.request.headers.get("x-from-container")).toBe("yes");
+    expect(matchedRecord.request.headers.get("x-iterate-from-container")).toBe("yes");
 
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);
   });
 
-  test("egress supports x-target-url direct mode", async () => {
+  test("egress supports x-iterate-target-url direct mode", async () => {
     await using proxy = await mockEgressProxy();
     proxy.fetch = async (request) => {
       if (new URL(request.url).pathname === "/direct-target") {
@@ -299,17 +299,17 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
 
     const directTarget = `${proxy.proxyUrl}/direct-target`;
     const curl = await deployment.exec(
-      `curl -4 -k -sS -i -H 'x-target-url: ${directTarget}' -H 'x-from-container: yes' https://example.com/ignore-this-path`,
+      `curl -4 -k -sS -i -H 'x-iterate-target-url: ${directTarget}' -H 'x-iterate-from-container: yes' https://example.com/ignore-this-path`,
     );
 
     expect(curl.exitCode).toBe(0);
     expect(curl.output).toMatch(/HTTP\/\d(?:\.\d)? 200/);
     expect(curl.output).toContain('{"ok":true,"path":"/direct-target","mode":"direct-target"}');
-    expect(curl.output.toLowerCase()).toContain("x-egress-mode: direct");
-    expect(curl.output.toLowerCase()).toContain("x-egress-proxy-seen: 1");
+    expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: direct");
+    expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
 
     const matchedRecord = await matched;
     expect(matchedRecord.response.status).toBe(200);
-    expect(matchedRecord.request.headers.get("x-from-container")).toBe("yes");
+    expect(matchedRecord.request.headers.get("x-iterate-from-container")).toBe("yes");
   });
 });
