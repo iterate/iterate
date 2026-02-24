@@ -2,6 +2,16 @@
 
 FROM public.ecr.aws/zinclabs/openobserve:latest AS openobserve
 FROM otel/opentelemetry-collector-contrib:latest AS otelcol
+FROM node:24-trixie-slim AS outerbase_studio
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates git && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/outerbase
+RUN git clone --depth 1 https://github.com/outerbase/studio .
+RUN npm ci --no-audit --no-fund
+RUN npm run build
 
 FROM node:24-trixie-slim
 
@@ -39,6 +49,9 @@ RUN set -eux; \
 WORKDIR /app
 COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
+COPY --from=outerbase_studio /tmp/outerbase/.next/standalone /opt/outerbase
+COPY --from=outerbase_studio /tmp/outerbase/public /opt/outerbase/public
+COPY --from=outerbase_studio /tmp/outerbase/.next/static /opt/outerbase/.next/static
 COPY sandbox/package.json /app/package.json
 COPY apps /app/apps
 RUN npm install --omit=dev --no-audit --no-fund
@@ -55,9 +68,9 @@ COPY sandbox/otel-collector/config.yaml /etc/jonasland2/otel-collector/config.ya
 COPY sandbox/egress-server.mjs /app/egress-server.mjs
 COPY sandbox/start.sh /etc/jonasland2/start.sh
 RUN chmod +x /etc/jonasland2/start.sh && \
-    mkdir -p /nomad-data /consul-data /caddy-data /var/lib/openobserve /otel-collector-data && \
-    chown -R node:node /caddy-data /var/lib/openobserve
+    mkdir -p /nomad-data /consul-data /caddy-data /var/lib/openobserve /var/lib/jonasland2 /otel-collector-data && \
+    chown -R node:node /caddy-data /var/lib/openobserve /var/lib/jonasland2
 
-EXPOSE 53 80 443 8500 4646 2019 4317 4318 5080 13133 19000 19010 19020
+EXPOSE 53 80 443 8500 4646 2019 4317 4318 5080 13133 19000 19010 19020 19040
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/etc/jonasland2/start.sh"]

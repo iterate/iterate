@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
 import {
   createHandlerLoggingPlugin,
   createServiceLogger,
@@ -8,6 +9,7 @@ import {
 import { OpenAPIHandler } from "@orpc/openapi/node";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { initializeOrdersDb } from "./db.ts";
 import { ordersRouter } from "./router.ts";
 
 const serviceName = "jonasland2-orders-service";
@@ -36,10 +38,26 @@ const openapiHandler = new OpenAPIHandler(ordersRouter, {
   ],
 });
 
+await initializeOrdersDb();
+
 function getRequestIdHeader(value: string | string[] | undefined) {
   if (typeof value === "string") return value;
   if (Array.isArray(value) && value[0]) return value[0];
   return undefined;
+}
+
+function extractIncomingTraceContext(headers: Record<string, string | string[] | undefined>) {
+  const carrier: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === "string") {
+      carrier[key] = value;
+    } else if (Array.isArray(value) && value[0]) {
+      carrier[key] = value[0];
+    }
+  }
+
+  return propagation.extract(ROOT_CONTEXT, carrier);
 }
 
 const server = createServer(async (req, res) => {
@@ -57,12 +75,15 @@ const server = createServer(async (req, res) => {
 
   if ((req.url || "").startsWith("/api")) {
     const requestId = getRequestIdHeader(req.headers["x-request-id"]);
-    const { matched } = await openapiHandler.handle(req, res, {
-      prefix: "/api",
-      context: {
-        requestId,
-      },
-    });
+    const incomingContext = extractIncomingTraceContext(req.headers);
+    const { matched } = await otelContext.with(incomingContext, () =>
+      openapiHandler.handle(req, res, {
+        prefix: "/api",
+        context: {
+          requestId,
+        },
+      }),
+    );
 
     if (matched) return;
   }

@@ -44,6 +44,17 @@
         }
     }
 
+    @outerbase host outerbase.iterate.localhost
+    handle @outerbase {
+        reverse_proxy {
+            dynamic srv {
+                name outerbase-studio.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
     @nomad host nomad.iterate.localhost
     handle @nomad {
         reverse_proxy 127.0.0.1:4646
@@ -106,6 +117,17 @@
         reverse_proxy {
             dynamic srv {
                 name orders-service.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @outerbase host outerbase.iterate.localhost
+    handle @outerbase {
+        reverse_proxy {
+            dynamic srv {
+                name outerbase-studio.service.consul
                 resolvers 127.0.0.1:53
                 refresh 1s
             }

@@ -8,6 +8,8 @@ Minimal local SOA sandbox for oRPC services:
 - OTEL collector on `:4317/:4318` (single exporter fan-out)
 - OpenObserve in-container on `:5080`
 - `events-service` + `orders-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
+- Drizzle ORM + SQLite per service (`/var/lib/jonasland2/*.sqlite`)
+- Outerbase Studio database viewer (`outerbase.iterate.localhost`)
 - egress proxy service behind Caddy fallback route
 
 ## Packages
@@ -61,14 +63,19 @@ Then hit:
 - Events service:
   - `http://events.iterate.localhost/api/openapi.json`
   - `http://events.iterate.localhost/api/docs` (Scalar)
-  - `http://events.iterate.localhost/api/events`
+  - `http://events.iterate.localhost/api/events` (`GET`, `POST`)
+  - `http://events.iterate.localhost/api/events/{id}` (`GET`, `PATCH`, `DELETE`)
 - Orders service:
   - `http://orders.iterate.localhost/api/openapi.json`
   - `http://orders.iterate.localhost/api/docs` (Scalar)
+  - `http://orders.iterate.localhost/api/orders` (`GET`, `POST`)
+  - `http://orders.iterate.localhost/api/orders/{id}` (`GET`, `PATCH`, `DELETE`)
   - `http://orders.iterate.localhost/api/orders/ping`
 - Consul UI:
   - `http://consul.iterate.localhost/`
 - Nomad UI:
   - `http://nomad.iterate.localhost/`
+- Outerbase Studio:
+  - `http://outerbase.iterate.localhost/`
 - OpenObserve UI:
   - `http://openobserve.iterate.localhost/web/`

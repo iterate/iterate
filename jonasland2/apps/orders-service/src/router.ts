@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
+import { desc, eq, sql } from "drizzle-orm";
 import type { JsonifiedClient } from "@orpc/openapi-client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "@jonasland2/events-contract";
@@ -10,6 +11,7 @@ import {
   infoFromContext,
   type ServiceInitialContext,
 } from "@jonasland2/orpc-shared";
+import { db, ordersTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 
 type OrderRecord = InferSchemaOutput<typeof orderSchema>;
@@ -22,7 +24,6 @@ const withSharedMiddlewares = os.use(os.middleware(createServiceContextMiddlewar
 
 const eventsServiceBaseUrl =
   process.env.EVENTS_SERVICE_BASE_URL || "http://events-service.service.consul:19010/api";
-const orders: OrderRecord[] = [];
 
 interface EventsClientContext {
   requestId: string;
@@ -44,6 +45,23 @@ const eventsLink = new OpenAPILink<EventsClientContext>(eventsContract, {
 const eventsClient: JsonifiedClient<
   ContractRouterClient<typeof eventsContract, EventsClientContext>
 > = createORPCClient(eventsLink);
+
+function toOrderRecord(row: typeof ordersTable.$inferSelect): OrderRecord {
+  return {
+    id: row.id,
+    sku: row.sku,
+    quantity: row.quantity,
+    status: row.status as "accepted",
+    eventId: row.eventId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+async function getOrderRowById(id: string) {
+  const [row] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
+  return row ?? null;
+}
 
 async function createEventForOrder(order: OrderRecord, requestId: string) {
   try {
@@ -71,20 +89,30 @@ async function createEventForOrder(order: OrderRecord, requestId: string) {
 }
 
 const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, input }) => {
+  const now = new Date().toISOString();
+
   const order: OrderRecord = {
     id: randomUUID(),
     sku: input.sku,
     quantity: input.quantity,
     status: "accepted",
     eventId: "",
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
   };
 
   const createdEvent = await createEventForOrder(order, context.requestId);
   order.eventId = createdEvent.id;
 
-  orders.unshift(order);
-  if (orders.length > 500) orders.length = 500;
+  await db.insert(ordersTable).values({
+    id: order.id,
+    sku: order.sku,
+    quantity: order.quantity,
+    status: order.status,
+    eventId: order.eventId,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+  });
 
   infoFromContext(context, "orders.placed", {
     service: context.serviceName,
@@ -96,6 +124,107 @@ const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, 
   });
 
   return order;
+});
+
+const listOrders = withSharedMiddlewares.orders.list.handler(async ({ input, context }) => {
+  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(ordersTable);
+
+  const rows = await db
+    .select()
+    .from(ordersTable)
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(input.limit)
+    .offset(input.offset);
+
+  infoFromContext(context, "orders.list", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    limit: input.limit,
+    offset: input.offset,
+    total: totalRow?.value ?? 0,
+  });
+
+  return {
+    orders: rows.map(toOrderRecord),
+    total: totalRow?.value ?? 0,
+  };
+});
+
+const findOrder = withSharedMiddlewares.orders.find.handler(async ({ input, context }) => {
+  const row = await getOrderRowById(input.id);
+  if (!row) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Order ${input.id} not found`,
+    });
+  }
+
+  infoFromContext(context, "orders.found", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    order_id: row.id,
+  });
+
+  return toOrderRecord(row);
+});
+
+const updateOrder = withSharedMiddlewares.orders.update.handler(async ({ input, context }) => {
+  const existing = await getOrderRowById(input.id);
+  if (!existing) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Order ${input.id} not found`,
+    });
+  }
+
+  const updatedAt = new Date().toISOString();
+  const nextSku = input.sku ?? existing.sku;
+  const nextQuantity = input.quantity ?? existing.quantity;
+
+  await db
+    .update(ordersTable)
+    .set({
+      sku: nextSku,
+      quantity: nextQuantity,
+      updatedAt,
+    })
+    .where(eq(ordersTable.id, input.id));
+
+  const updated = toOrderRecord({
+    ...existing,
+    sku: nextSku,
+    quantity: nextQuantity,
+    updatedAt,
+  });
+
+  infoFromContext(context, "orders.updated", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    order_id: updated.id,
+    sku: updated.sku,
+    quantity: updated.quantity,
+  });
+
+  return updated;
+});
+
+const removeOrder = withSharedMiddlewares.orders.remove.handler(async ({ input, context }) => {
+  const existing = await getOrderRowById(input.id);
+
+  if (existing) {
+    await db.delete(ordersTable).where(eq(ordersTable.id, input.id));
+  }
+
+  infoFromContext(context, "orders.removed", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    order_id: input.id,
+    deleted: existing !== null,
+  });
+
+  return {
+    ok: true as const,
+    id: input.id,
+    deleted: existing !== null,
+  };
 });
 
 const ping = withSharedMiddlewares.orders.ping.handler(async ({ context }) => {
@@ -113,6 +242,10 @@ const ping = withSharedMiddlewares.orders.ping.handler(async ({ context }) => {
 export const ordersRouter = withSharedMiddlewares.router({
   orders: {
     place: placeOrder,
+    list: listOrders,
+    find: findOrder,
+    update: updateOrder,
+    remove: removeOrder,
     ping,
   },
 });

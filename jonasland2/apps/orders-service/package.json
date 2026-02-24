@@ -7,9 +7,11 @@
     "./server": "./src/server.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.15.15",
     "@jonasland2/events-contract": "file:../events-contract",
     "@jonasland2/orpc-shared": "file:../orpc-shared",
     "@jonasland2/orders-contract": "file:../orders-contract",
+    "drizzle-orm": "^0.45.1",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
     "@orpc/openapi": "^1.13.5",

@@ -5,6 +5,8 @@ import {
   infoFromContext,
   type ServiceInitialContext,
 } from "@jonasland2/orpc-shared";
+import { desc, eq, sql } from "drizzle-orm";
+import { db, eventsTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 
 type EventRecord = InferSchemaOutput<typeof eventSchema>;
@@ -15,32 +17,75 @@ const os = implement(eventsContract).$context<EventsContext>();
 
 const withSharedMiddlewares = os.use(os.middleware(createServiceContextMiddleware(serviceName)));
 
-const events: EventRecord[] = [];
+function parsePayload(payload: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(payload);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+
+  return {};
+}
+
+function toEventRecord(row: typeof eventsTable.$inferSelect): EventRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    payload: parsePayload(row.payload),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+async function getEventRowById(id: string) {
+  const [row] = await db.select().from(eventsTable).where(eq(eventsTable.id, id)).limit(1);
+  return row ?? null;
+}
 
 const listEvents = withSharedMiddlewares.events.list.handler(async ({ input, context }) => {
+  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(eventsTable);
+
+  const rows = await db
+    .select()
+    .from(eventsTable)
+    .orderBy(desc(eventsTable.createdAt))
+    .limit(input.limit)
+    .offset(input.offset);
+
   infoFromContext(context, "events.list", {
     service: context.serviceName,
     request_id: context.requestId,
     limit: input.limit,
-    total: events.length,
+    offset: input.offset,
+    total: totalRow?.value ?? 0,
   });
 
   return {
-    events: events.slice(0, input.limit),
-    total: events.length,
+    events: rows.map(toEventRecord),
+    total: totalRow?.value ?? 0,
   };
 });
 
 const createEvent = withSharedMiddlewares.events.create.handler(async ({ input, context }) => {
-  const event: EventRecord = {
-    id: randomUUID(),
-    type: input.type,
-    payload: input.payload,
-    createdAt: new Date().toISOString(),
-  };
+  const now = new Date().toISOString();
+  const id = randomUUID();
 
-  events.unshift(event);
-  if (events.length > 500) events.length = 500;
+  await db.insert(eventsTable).values({
+    id,
+    type: input.type,
+    payload: JSON.stringify(input.payload ?? {}),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const event = toEventRecord({
+    id,
+    type: input.type,
+    payload: JSON.stringify(input.payload ?? {}),
+    createdAt: now,
+    updatedAt: now,
+  });
 
   infoFromContext(context, "events.created", {
     service: context.serviceName,
@@ -53,8 +98,8 @@ const createEvent = withSharedMiddlewares.events.create.handler(async ({ input, 
 });
 
 const findEvent = withSharedMiddlewares.events.find.handler(async ({ input, context }) => {
-  const event = events.find((item) => item.id === input.id);
-  if (!event) {
+  const row = await getEventRowById(input.id);
+  if (!row) {
     throw new ORPCError("NOT_FOUND", {
       message: `Event ${input.id} not found`,
     });
@@ -63,10 +108,70 @@ const findEvent = withSharedMiddlewares.events.find.handler(async ({ input, cont
   infoFromContext(context, "events.found", {
     service: context.serviceName,
     request_id: context.requestId,
-    event_id: event.id,
+    event_id: row.id,
   });
 
-  return event;
+  return toEventRecord(row);
+});
+
+const updateEvent = withSharedMiddlewares.events.update.handler(async ({ input, context }) => {
+  const existing = await getEventRowById(input.id);
+  if (!existing) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Event ${input.id} not found`,
+    });
+  }
+
+  const updatedAt = new Date().toISOString();
+  const nextType = input.type ?? existing.type;
+  const nextPayload =
+    input.payload !== undefined ? JSON.stringify(input.payload) : existing.payload;
+
+  await db
+    .update(eventsTable)
+    .set({
+      type: nextType,
+      payload: nextPayload,
+      updatedAt,
+    })
+    .where(eq(eventsTable.id, input.id));
+
+  const updated = toEventRecord({
+    ...existing,
+    type: nextType,
+    payload: nextPayload,
+    updatedAt,
+  });
+
+  infoFromContext(context, "events.updated", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    event_id: updated.id,
+    event_type: updated.type,
+  });
+
+  return updated;
+});
+
+const removeEvent = withSharedMiddlewares.events.remove.handler(async ({ input, context }) => {
+  const existing = await getEventRowById(input.id);
+
+  if (existing) {
+    await db.delete(eventsTable).where(eq(eventsTable.id, input.id));
+  }
+
+  infoFromContext(context, "events.removed", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    event_id: input.id,
+    deleted: existing !== null,
+  });
+
+  return {
+    ok: true as const,
+    id: input.id,
+    deleted: existing !== null,
+  };
 });
 
 export const eventsRouter = withSharedMiddlewares.router({
@@ -74,5 +179,7 @@ export const eventsRouter = withSharedMiddlewares.router({
     list: listEvents,
     create: createEvent,
     find: findEvent,
+    update: updateEvent,
+    remove: removeEvent,
   },
 });

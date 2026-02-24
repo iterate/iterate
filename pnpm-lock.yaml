@@ -1101,6 +1101,9 @@ importers:
       '@jonasland2/orpc-shared':
         specifier: file:../orpc-shared
         version: link:../orpc-shared
+      '@libsql/client':
+        specifier: ^0.15.15
+        version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       '@orpc/openapi':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -1110,6 +1113,9 @@ importers:
       '@orpc/zod':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
 
   jonasland2/apps/orders-contract:
     dependencies:
@@ -1131,6 +1137,9 @@ importers:
       '@jonasland2/orpc-shared':
         specifier: file:../orpc-shared
         version: link:../orpc-shared
+      '@libsql/client':
+        specifier: ^0.15.15
+        version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       '@orpc/client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1149,6 +1158,9 @@ importers:
       '@orpc/zod':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
 
   jonasland2/apps/orpc-shared:
     dependencies:
@@ -1203,6 +1215,9 @@ importers:
 
   jonasland2/sandbox:
     dependencies:
+      '@libsql/client':
+        specifier: ^0.15.15
+        version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1248,6 +1263,9 @@ importers:
       '@orpc/zod':
         specifier: 1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.5(@opentelemetry/api@1.9.0))(@orpc/server@1.13.5(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@cloudflare/workers-types@4.20260207.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.6.0)(kysely@0.28.8)(pg@8.17.1)(postgres@3.4.7)
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
@@ -15713,7 +15731,6 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
-    optional: true
 
   '@libsql/client@0.17.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
     dependencies:
@@ -15731,7 +15748,6 @@ snapshots:
   '@libsql/core@0.15.15':
     dependencies:
       js-base64: 3.7.8
-    optional: true
 
   '@libsql/core@0.17.0':
     dependencies:
@@ -15753,7 +15769,6 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
-    optional: true
 
   '@libsql/hrana-client@0.9.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
     dependencies:
@@ -15767,8 +15782,7 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  '@libsql/isomorphic-fetch@0.3.1':
-    optional: true
+  '@libsql/isomorphic-fetch@0.3.1': {}
 
   '@libsql/isomorphic-ws@0.1.5(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
     dependencies:
@@ -15777,7 +15791,6 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
-    optional: true
 
   '@libsql/linux-arm-gnueabihf@0.5.22':
     optional: true
@@ -16038,8 +16051,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.1
     optional: true
 
-  '@neon-rs/load@0.0.4':
-    optional: true
+  '@neon-rs/load@0.0.4': {}
 
   '@neondatabase/serverless@1.0.2':
     dependencies:
@@ -21091,8 +21103,7 @@ snapshots:
 
   detect-libc@1.0.3: {}
 
-  detect-libc@2.0.2:
-    optional: true
+  detect-libc@2.0.2: {}
 
   detect-libc@2.1.2: {}
 
@@ -22975,7 +22986,6 @@ snapshots:
       '@libsql/linux-x64-gnu': 0.5.22
       '@libsql/linux-x64-musl': 0.5.22
       '@libsql/win32-x64-msvc': 0.5.22
-    optional: true
 
   lie@3.3.0:
     dependencies:
@@ -24434,8 +24444,7 @@ snapshots:
 
   promise-inflight@1.0.1: {}
 
-  promise-limit@2.7.0:
-    optional: true
+  promise-limit@2.7.0: {}
 
   promise-retry@2.0.1:
     dependencies:

@@ -9,6 +9,7 @@ import {
 import { OpenAPIHandler } from "@orpc/openapi/node";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
+import { initializeEventsDb } from "./db.ts";
 import { eventsRouter } from "./router.ts";
 
 const serviceName = "jonasland2-events-service";
@@ -36,6 +37,8 @@ const openapiHandler = new OpenAPIHandler(eventsRouter, {
     }),
   ],
 });
+
+await initializeEventsDb();
 
 function getRequestIdHeader(value: string | string[] | undefined) {
   if (typeof value === "string") return value;
