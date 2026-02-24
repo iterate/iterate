@@ -82,6 +82,7 @@ export const processes = {
         tags: v.optional(v.array(v.string())),
         persistence: v.optional(ProcessPersistence),
         desiredState: v.optional(DesiredProcessState),
+        restartImmediately: v.optional(v.boolean()),
       }),
     )
     .output(RestartingProcessInfoSchema),

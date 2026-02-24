@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Manager } from "../src/manager.ts";
-import { createMockLogger, longRunningProcess } from "./test-utils.ts";
+import { createMockLogger, longRunningProcess, successProcess, wait } from "./test-utils.ts";
 
 describe("Manager autosave state", () => {
   const testDir = join(import.meta.dirname, ".temp/manager-autosave");
@@ -113,5 +113,36 @@ describe("Manager autosave state", () => {
     expect(managerAfterRestart.getProcessByTarget("daemon-backend")).toBeDefined();
 
     await managerAfterRestart.stop();
+  });
+
+  it("updates definition without changing desired state when restartImmediately=false", async () => {
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        state: { autosaveFile: autosavePath },
+        processes: [
+          {
+            name: "daemon-backend",
+            definition: longRunningProcess,
+          },
+        ],
+      },
+      createMockLogger(),
+    );
+    await manager.start();
+    await wait(100);
+
+    await manager.updateProcessConfig({
+      processSlug: "daemon-backend",
+      definition: successProcess,
+      restartImmediately: false,
+    });
+
+    const proc = manager.getProcessByTarget("daemon-backend");
+    const entry = manager.getManagedProcessEntry("daemon-backend");
+    expect(proc?.state).toBe("running");
+    expect(entry?.desiredState).toBe("running");
+
+    await manager.stop();
   });
 });

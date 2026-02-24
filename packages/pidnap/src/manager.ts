@@ -894,6 +894,7 @@ export class Manager {
     tags?: string[];
     persistence?: ProcessPersistence;
     desiredState?: DesiredProcessState;
+    restartImmediately?: boolean;
   }): Promise<void> {
     const processSlug = input.processSlug;
     const currentEntry = this.getProcessEntryByName(processSlug);
@@ -948,7 +949,7 @@ export class Manager {
         }
       } else {
         await this.reloadProcessByTarget(processSlug, nextEntry.definition, {
-          restartImmediately: nextDesiredState !== "stopped",
+          restartImmediately: input.restartImmediately ?? nextDesiredState !== "stopped",
           updateOptions: nextEntry.options,
           envOptions: nextEntry.envOptions,
           tags: nextEntry.tags,

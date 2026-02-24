@@ -27,7 +27,7 @@ const FLY_ORG_APPS_QUERY = `
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string().optional(),
   FLY_ORG: z.string().default("iterate"),
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]).optional(),
+  SANDBOX_NAME_PREFIX: z.string().optional(),
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;

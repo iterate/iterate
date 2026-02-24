@@ -54,22 +54,13 @@ export async function reconcilePidnapProcesses(): Promise<void> {
   const client = createClient(process.env.PIDNAP_RPC_URL ?? "http://127.0.0.1:9876/rpc");
 
   for (const processConfig of desired) {
-    try {
-      await client.processes.updateConfig({
-        processSlug: processConfig.name,
-        definition: processConfig.definition,
-        options: processConfig.options,
-        envOptions: processConfig.envOptions,
-        tags: processConfig.tags,
-      });
-      console.log(`[pidnap-reconcile] added process: ${processConfig.name}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("already in use")) {
-        console.log(`[pidnap-reconcile] process already exists: ${processConfig.name}`);
-        continue;
-      }
-      throw error;
-    }
+    await client.processes.updateConfig({
+      processSlug: processConfig.name,
+      definition: processConfig.definition,
+      options: processConfig.options,
+      envOptions: processConfig.envOptions,
+      tags: processConfig.tags,
+    });
+    console.log(`[pidnap-reconcile] upserted process: ${processConfig.name}`);
   }
 }

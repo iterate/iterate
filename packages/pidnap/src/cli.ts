@@ -312,10 +312,8 @@ const cliRouter = os.router({
         const proc = await client.processes.updateConfig({
           processSlug: resolved,
           definition: options.definition,
+          restartImmediately: options.restartImmediately,
         });
-        if (options.restartImmediately === false) {
-          await client.processes.stop({ target: resolved });
-        }
         printProcessTable(proc);
       }),
     remove: os
