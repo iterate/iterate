@@ -49,8 +49,6 @@ describe("Manager autosave state", () => {
     await manager.updateProcessConfig({
       processSlug: "opencode",
       definition: longRunningProcess,
-      persistence: "durable",
-      desiredState: "running",
     });
 
     await manager.stop();
@@ -65,7 +63,6 @@ describe("Manager autosave state", () => {
     await managerAfterRestart.start();
 
     const restored = managerAfterRestart.getManagedProcessEntry("opencode");
-    expect(restored?.source).toBe("overlay");
     expect(restored?.persistence).toBe("durable");
     expect(restored?.desiredState).toBe("running");
     expect(managerAfterRestart.getProcessByTarget("opencode")).toBeDefined();
@@ -109,7 +106,6 @@ describe("Manager autosave state", () => {
 
     const restored = managerAfterRestart.getManagedProcessEntry("daemon-backend");
     expect(restored).toBeDefined();
-    expect(restored?.source).toBe("config");
     expect(managerAfterRestart.getProcessByTarget("daemon-backend")).toBeDefined();
 
     await managerAfterRestart.stop();

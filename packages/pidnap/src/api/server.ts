@@ -48,9 +48,6 @@ function serializeProcess(
       env: def.env,
       inheritProcessEnv: def.inheritProcessEnv,
     },
-    source: entry.source,
-    persistence: entry.persistence,
-    desiredState: entry.desiredState,
   };
 
   if (options?.includeEffectiveEnv) {

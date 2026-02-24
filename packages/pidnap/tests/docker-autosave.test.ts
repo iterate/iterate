@@ -105,8 +105,6 @@ describeDocker("pidnap docker autosave", () => {
           command: "node",
           args: ["-e", "setInterval(() => {}, 1000)"],
         },
-        persistence: "durable",
-        desiredState: "running",
       });
 
       const started = await firstClient.processes.waitForRunning({
@@ -128,7 +126,7 @@ describeDocker("pidnap docker autosave", () => {
       const secondClient = createClient(second.rpcUrl);
 
       const restored = await secondClient.processes.get({ target: processSlug });
-      expect(restored.source).toBe("overlay");
+      expect(restored.name).toBe(processSlug);
 
       await secondClient.processes.delete({ processSlug });
       await expect(secondClient.processes.get({ target: processSlug })).rejects.toThrow(

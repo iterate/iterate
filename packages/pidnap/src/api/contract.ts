@@ -2,7 +2,7 @@ import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import { DesiredProcessState, EnvOptions, ProcessPersistence } from "../manager.ts";
+import { EnvOptions } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -33,9 +33,6 @@ export const ProcessDefinitionInfoSchema = v.object({
 
 export type ProcessDefinitionInfo = v.InferOutput<typeof ProcessDefinitionInfoSchema>;
 
-export const ProcessSourceSchema = v.picklist(["config", "overlay"]);
-export type ProcessSource = v.InferOutput<typeof ProcessSourceSchema>;
-
 // API response schemas
 export const RestartingProcessInfoSchema = v.object({
   name: v.string(),
@@ -44,9 +41,6 @@ export const RestartingProcessInfoSchema = v.object({
   restarts: v.number(),
   definition: ProcessDefinitionInfoSchema,
   effectiveEnv: v.optional(v.record(v.string(), v.string())),
-  source: ProcessSourceSchema,
-  persistence: ProcessPersistence,
-  desiredState: DesiredProcessState,
 });
 
 export type RestartingProcessInfo = v.InferOutput<typeof RestartingProcessInfoSchema>;
@@ -80,8 +74,6 @@ export const processes = {
         options: v.optional(RestartingProcessOptions),
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
-        persistence: v.optional(ProcessPersistence),
-        desiredState: v.optional(DesiredProcessState),
         restartImmediately: v.optional(v.boolean()),
       }),
     )
