@@ -46,14 +46,11 @@ describe("Manager autosave state", () => {
     );
     await manager.start();
 
-    await manager.applyProcessPatches({
-      upserts: {
-        opencode: {
-          definition: longRunningProcess,
-          persistence: "durable",
-          desiredState: "running",
-        },
-      },
+    await manager.updateProcessConfig({
+      processSlug: "opencode",
+      definition: longRunningProcess,
+      persistence: "durable",
+      desiredState: "running",
     });
 
     await manager.stop();
@@ -76,7 +73,7 @@ describe("Manager autosave state", () => {
     await managerAfterRestart.stop();
   });
 
-  it("persists tombstones for deleted config processes", async () => {
+  it("does not persist deletions of config-defined processes", async () => {
     const manager = new Manager(
       {
         cwd: testDir,
@@ -92,9 +89,7 @@ describe("Manager autosave state", () => {
     );
     await manager.start();
 
-    await manager.applyProcessPatches({
-      deletes: ["daemon-backend"],
-    });
+    await manager.deleteProcessBySlug("daemon-backend");
     await manager.stop();
 
     const managerAfterRestart = new Manager(
@@ -112,8 +107,10 @@ describe("Manager autosave state", () => {
     );
     await managerAfterRestart.start();
 
-    expect(managerAfterRestart.getManagedProcessEntry("daemon-backend")).toBeUndefined();
-    expect(managerAfterRestart.getProcessByTarget("daemon-backend")).toBeUndefined();
+    const restored = managerAfterRestart.getManagedProcessEntry("daemon-backend");
+    expect(restored).toBeDefined();
+    expect(restored?.source).toBe("config");
+    expect(managerAfterRestart.getProcessByTarget("daemon-backend")).toBeDefined();
 
     await managerAfterRestart.stop();
   });

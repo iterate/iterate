@@ -45,9 +45,9 @@ const envOptionsSchema = z.object({
   reloadDelay: z.union([z.number(), z.boolean(), z.literal("immediately")]).optional(),
 });
 
-const processPatchSchema = z
+const processConfigSchema = z
   .object({
-    definition: processDefinitionSchema.optional(),
+    definition: processDefinitionSchema,
     options: restartOptionsSchema.optional(),
     envOptions: envOptionsSchema.optional(),
     tags: z.array(z.string()).optional(),
@@ -99,16 +99,33 @@ export const pidnapRouter = {
       }
     }),
 
-  applyProcessPatches: publicProcedure
+  updateConfig: publicProcedure
     .input(
       z.object({
-        upserts: z.record(z.string(), processPatchSchema).optional(),
-        deletes: z.array(z.string()).optional(),
+        processSlug: z.string(),
+        config: processConfigSchema,
       }),
     )
     .handler(async ({ input }) => {
       try {
-        return await getPidnapClient().processes.applyPatches(input);
+        return await getPidnapClient().processes.updateConfig({
+          processSlug: input.processSlug,
+          ...input.config,
+        });
+      } catch (error) {
+        throwPidnapError(error);
+      }
+    }),
+
+  delete: publicProcedure
+    .input(
+      z.object({
+        processSlug: z.string(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      try {
+        return await getPidnapClient().processes.delete(input);
       } catch (error) {
         throwPidnapError(error);
       }

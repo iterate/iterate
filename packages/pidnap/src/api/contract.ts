@@ -2,12 +2,7 @@ import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import {
-  DesiredProcessState,
-  EnvOptions,
-  ProcessDefinitionPatch,
-  ProcessPersistence,
-} from "../manager.ts";
+import { DesiredProcessState, EnvOptions, ProcessPersistence } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -77,10 +72,10 @@ export const processes = {
     .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
   list: oc.output(v.array(RestartingProcessInfoSchema)),
-  add: oc
+  updateConfig: oc
     .input(
       v.object({
-        name: v.string(),
+        processSlug: v.string(),
         definition: ProcessDefinition,
         options: v.optional(RestartingProcessOptions),
         envOptions: v.optional(EnvOptions),
@@ -95,26 +90,8 @@ export const processes = {
   restart: oc
     .input(v.object({ target: ResourceTarget, force: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
-  reload: oc
-    .input(
-      v.object({
-        target: ResourceTarget,
-        definition: ProcessDefinition,
-        restartImmediately: v.optional(v.boolean()),
-        tags: v.optional(v.array(v.string())),
-        persistence: v.optional(ProcessPersistence),
-        desiredState: v.optional(DesiredProcessState),
-      }),
-    )
-    .output(RestartingProcessInfoSchema),
-  remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
-  applyPatches: oc
-    .input(
-      v.object({
-        upserts: v.optional(v.record(v.string(), ProcessDefinitionPatch)),
-        deletes: v.optional(v.array(v.string())),
-      }),
-    )
+  delete: oc
+    .input(v.object({ processSlug: v.string() }))
     .output(v.object({ success: v.boolean() })),
   waitForRunning: oc
     .input(

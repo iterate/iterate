@@ -123,7 +123,7 @@ const cliRouter = os.router({
         // Parse and validate the config with Valibot
         const config = v.parse(ManagerConfig, rawConfig);
         const autosaveFile =
-          config.state?.autosaveFile ?? join(homedir(), ".pidnap", "autosave.json");
+          config.state?.autosaveFile ?? join(homedir(), ".iterate", "pidnap-autosave.json");
         const configWithState = {
           ...config,
           state: {
@@ -250,8 +250,8 @@ const cliRouter = os.router({
         }),
       )
       .handler(async ({ input, context: { client } }) => {
-        const proc = await client.processes.add({
-          name: input.name,
+        const proc = await client.processes.updateConfig({
+          processSlug: input.name,
           definition: input.definition,
           tags: input.tags,
         });
@@ -307,18 +307,25 @@ const cliRouter = os.router({
       )
       .handler(async ({ input, context: { client } }) => {
         const [target, options] = input;
-        const proc = await client.processes.reload({
-          target,
+        const resolved =
+          typeof target === "string" ? target : (await client.processes.get({ target })).name;
+        const proc = await client.processes.updateConfig({
+          processSlug: resolved,
           definition: options.definition,
-          restartImmediately: options.restartImmediately,
         });
+        if (options.restartImmediately === false) {
+          await client.processes.stop({ target: resolved });
+        }
         printProcessTable(proc);
       }),
     remove: os
       .meta({ description: "Remove a restarting process" })
       .input(v.tuple([v.pipe(ResourceTarget, v.description("Process name or index"))]))
       .handler(async ({ input, context: { client } }) => {
-        await client.processes.remove({ target: input[0] });
+        const target = input[0];
+        const resolved =
+          typeof target === "string" ? target : (await client.processes.get({ target })).name;
+        await client.processes.delete({ processSlug: resolved });
         console.log("Process removed");
       }),
   }),

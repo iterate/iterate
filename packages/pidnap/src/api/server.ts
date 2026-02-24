@@ -98,9 +98,9 @@ const listProcesses = os.processes.list.handler(async ({ context }) => {
   return processes.map((proc) => serializeProcess(context.manager, proc.name));
 });
 
-const addProcess = os.processes.add.handler(async ({ input, context }) => {
-  const proc = await context.manager.addProcess(input);
-  return serializeProcess(context.manager, proc.name);
+const updateConfig = os.processes.updateConfig.handler(async ({ input, context }) => {
+  await context.manager.updateProcessConfig(input);
+  return serializeProcess(context.manager, input.processSlug);
 });
 
 const startProcess = os.processes.start.handler(async ({ input, context }) => {
@@ -118,23 +118,8 @@ const restartProcess = os.processes.restart.handler(async ({ input, context }) =
   return serializeProcess(context.manager, proc.name);
 });
 
-const reloadProcess = os.processes.reload.handler(async ({ input, context }) => {
-  const proc = await context.manager.reloadProcessByTarget(input.target, input.definition, {
-    restartImmediately: input.restartImmediately,
-    tags: input.tags,
-    persistence: input.persistence,
-    desiredState: input.desiredState,
-  });
-  return serializeProcess(context.manager, proc.name);
-});
-
-const removeProcess = os.processes.remove.handler(async ({ input, context }) => {
-  await context.manager.removeProcessByTarget(input.target);
-  return { success: true };
-});
-
-const applyPatches = os.processes.applyPatches.handler(async ({ input, context }) => {
-  await context.manager.applyProcessPatches(input);
+const deleteProcess = os.processes.delete.handler(async ({ input, context }) => {
+  await context.manager.deleteProcessBySlug(input.processSlug);
   return { success: true };
 });
 
@@ -246,15 +231,13 @@ export const router = os.router({
     status: managerStatus,
   },
   processes: {
-    add: addProcess,
+    updateConfig: updateConfig,
     get: getProcess,
     list: listProcesses,
     start: startProcess,
     stop: stopProcess,
     restart: restartProcess,
-    reload: reloadProcess,
-    remove: removeProcess,
-    applyPatches: applyPatches,
+    delete: deleteProcess,
     waitForRunning: waitForRunning,
   },
 });

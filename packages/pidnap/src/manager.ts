@@ -132,18 +132,6 @@ const AutosaveState = v.object({
 });
 type AutosaveState = v.InferOutput<typeof AutosaveState>;
 
-export const ProcessDefinitionPatch = v.partial(
-  v.object({
-    definition: ProcessDefinition,
-    options: RestartingProcessOptions,
-    envOptions: EnvOptions,
-    tags: v.array(v.string()),
-    persistence: ProcessPersistence,
-    desiredState: DesiredProcessState,
-  }),
-);
-export type ProcessDefinitionPatch = v.InferOutput<typeof ProcessDefinitionPatch>;
-
 const DEFAULT_RESTART_OPTIONS = {
   restartPolicy: "always" as const,
 };
@@ -167,12 +155,10 @@ export class Manager {
   private _state: ManagerState = "idle";
   private restartingProcesses: Map<string, RestartingProcess> = new Map();
   private logDir: string;
-  private baseConfigProcesses: Map<string, RestartingProcessEntry> = new Map();
   private processMetadata: Map<
     string,
     { source: ProcessSource; persistence: ProcessPersistence; desiredState: DesiredProcessState }
   > = new Map();
-  private deletedConfigProcesses: Set<string> = new Set();
 
   // Dependency resolution
   private dependencyResolver = new DependencyResolver();
@@ -201,10 +187,6 @@ export class Manager {
     this.ensureLogDirs();
 
     this.validateConfigNames(config.processes ?? []);
-
-    for (const proc of config.processes ?? []) {
-      this.baseConfigProcesses.set(proc.name, proc);
-    }
 
     const mergedProcesses = this.buildMergedProcessList(config.processes ?? []);
     this.config = {
@@ -237,7 +219,7 @@ export class Manager {
   }
 
   private resolveAutosavePath(cwd: string, configuredPath?: string): string {
-    const defaultPath = join(homedir(), ".pidnap", "autosave.json");
+    const defaultPath = join(homedir(), ".iterate", "pidnap-autosave.json");
     if (!configuredPath) return defaultPath;
     return isAbsolute(configuredPath) ? configuredPath : resolvePath(cwd, configuredPath);
   }
@@ -294,14 +276,6 @@ export class Manager {
 
     this.autosaveRevision = autosave.revision ?? 0;
 
-    for (const slug of autosave.deleted ?? []) {
-      if (this.baseConfigProcesses.has(slug)) {
-        this.deletedConfigProcesses.add(slug);
-        merged.delete(slug);
-        this.processMetadata.delete(slug);
-      }
-    }
-
     for (const [slug, entry] of Object.entries(autosave.processes ?? {})) {
       if (entry.name !== slug) {
         throw new Error(
@@ -320,7 +294,6 @@ export class Manager {
         persistence: normalized.persistence ?? "durable",
         desiredState: normalized.desiredState ?? "running",
       });
-      this.deletedConfigProcesses.delete(slug);
     }
 
     return Array.from(merged.values());
@@ -349,7 +322,6 @@ export class Manager {
     return {
       version: 1,
       revision: this.autosaveRevision,
-      deleted: Array.from(this.deletedConfigProcesses).sort(),
       processes,
     };
   }
@@ -775,19 +747,11 @@ export class Manager {
       throw new Error(`Process not found: ${target}`);
     }
 
-    const shouldTombstone = this.baseConfigProcesses.has(proc.name);
-
     await proc.stop(timeout);
     this.cleanupProcessResources(proc.name);
     this.restartingProcesses.delete(proc.name);
     this.removeProcessEntryByName(proc.name);
     this.processMetadata.delete(proc.name);
-
-    if (shouldTombstone) {
-      this.deletedConfigProcesses.add(proc.name);
-    } else {
-      this.deletedConfigProcesses.delete(proc.name);
-    }
 
     if (persist) {
       this.writeAutosaveState();
@@ -847,7 +811,6 @@ export class Manager {
     };
     this.upsertProcessEntry(entry);
     this.setProcessMetadata(process.name, { source, persistence, desiredState });
-    this.deletedConfigProcesses.delete(process.name);
 
     const processLogger = this.logger.child(process.name, {
       logFile: this.processLogFile(process.name),
@@ -924,113 +887,93 @@ export class Manager {
     };
   }
 
-  async applyProcessPatches(input: {
-    upserts?: Record<string, ProcessDefinitionPatch>;
-    deletes?: string[];
+  async updateProcessConfig(input: {
+    processSlug: string;
+    definition: ProcessDefinition;
+    options?: RestartingProcessOptions;
+    envOptions?: EnvOptions;
+    tags?: string[];
+    persistence?: ProcessPersistence;
+    desiredState?: DesiredProcessState;
   }): Promise<void> {
-    for (const slug of input.deletes ?? []) {
-      const existing = this.getProcessEntryByName(slug);
-      if (!existing) continue;
+    const processSlug = input.processSlug;
+    const currentEntry = this.getProcessEntryByName(processSlug);
+    const currentMeta = this.processMetadata.get(processSlug);
+    const nextPersistence = input.persistence ?? currentMeta?.persistence ?? "durable";
+    const nextDesiredState = input.desiredState ?? currentMeta?.desiredState ?? "running";
 
-      const runningProc = this.restartingProcesses.get(slug);
-      if (runningProc) {
-        await this.removeProcessByTarget(slug, undefined, false);
-      } else {
-        this.removeProcessEntryByName(slug);
-        this.processMetadata.delete(slug);
-        this.cleanupProcessResources(slug);
-      }
+    const nextEntry: RestartingProcessEntry = {
+      name: processSlug,
+      definition: input.definition,
+      options: input.options ?? currentEntry?.options,
+      envOptions: input.envOptions ?? currentEntry?.envOptions,
+      tags: input.tags ?? currentEntry?.tags,
+      dependsOn: currentEntry?.dependsOn,
+      schedule: currentEntry?.schedule,
+      persistence: nextPersistence,
+      desiredState: nextDesiredState,
+    };
+    this.upsertProcessEntry(nextEntry);
+    this.setProcessMetadata(processSlug, {
+      source: "overlay",
+      persistence: nextPersistence,
+      desiredState: nextDesiredState,
+    });
 
-      if (this.baseConfigProcesses.has(slug)) {
-        this.deletedConfigProcesses.add(slug);
+    const defaultDelay = nextEntry.envOptions?.inheritGlobalEnv === false ? false : 5000;
+    this.envReloadConfig.set(processSlug, nextEntry.envOptions?.reloadDelay ?? defaultDelay);
+    if (nextEntry.envOptions?.envFile) {
+      this.envManager.registerFile(processSlug, nextEntry.envOptions.envFile);
+    }
+
+    if (this._state === "running") {
+      const runningProc = this.restartingProcesses.get(processSlug);
+      if (!runningProc) {
+        const processLogger = this.logger.child(processSlug, {
+          logFile: this.processLogFile(processSlug),
+        });
+        const restartingProcess = new RestartingProcess(
+          processSlug,
+          this.applyDefaults(processSlug, nextEntry.definition, nextEntry.envOptions),
+          nextEntry.options ?? DEFAULT_RESTART_OPTIONS,
+          processLogger,
+          nextEntry.tags,
+        );
+        this.restartingProcesses.set(processSlug, restartingProcess);
+        const unsubscribe = restartingProcess.onStateChange((newState) => {
+          this.onProcessStateChange(processSlug, newState);
+        });
+        this.stateChangeUnsubscribes.set(processSlug, unsubscribe);
+        if (nextDesiredState === "running") {
+          restartingProcess.start();
+        }
       } else {
-        this.deletedConfigProcesses.delete(slug);
+        await this.reloadProcessByTarget(processSlug, nextEntry.definition, {
+          restartImmediately: nextDesiredState !== "stopped",
+          updateOptions: nextEntry.options,
+          envOptions: nextEntry.envOptions,
+          tags: nextEntry.tags,
+          persist: false,
+          persistence: nextPersistence,
+          desiredState: nextDesiredState,
+        });
       }
     }
 
-    for (const [slug, patch] of Object.entries(input.upserts ?? {})) {
-      const existing = this.getProcessEntryByName(slug);
-      const baseEntry = this.baseConfigProcesses.get(slug);
-      if (!existing && !baseEntry && !patch.definition) {
-        throw new Error(`Cannot create process "${slug}" without definition`);
-      }
+    this.writeAutosaveState();
+  }
 
-      const template = existing ?? baseEntry;
-      const merged: RestartingProcessEntry = {
-        name: slug,
-        definition: patch.definition ?? template!.definition,
-        options: patch.options ?? template?.options,
-        envOptions: patch.envOptions ?? template?.envOptions,
-        tags: patch.tags ?? template?.tags,
-        dependsOn: template?.dependsOn,
-        schedule: template?.schedule,
-        persistence:
-          patch.persistence ??
-          this.processMetadata.get(slug)?.persistence ??
-          template?.persistence ??
-          "durable",
-        desiredState:
-          patch.desiredState ??
-          this.processMetadata.get(slug)?.desiredState ??
-          template?.desiredState ??
-          "running",
-      };
+  async deleteProcessBySlug(processSlug: string): Promise<void> {
+    const existing = this.getProcessEntryByName(processSlug);
+    if (!existing) return;
 
-      this.deletedConfigProcesses.delete(slug);
-      this.upsertProcessEntry(merged);
-      this.setProcessMetadata(slug, {
-        source: "overlay",
-        persistence: merged.persistence ?? "durable",
-        desiredState: merged.desiredState ?? "running",
-      });
-
-      const proc = this.restartingProcesses.get(slug);
-      const defaultDelay = merged.envOptions?.inheritGlobalEnv === false ? false : 5000;
-      this.envReloadConfig.set(slug, merged.envOptions?.reloadDelay ?? defaultDelay);
-      if (merged.envOptions?.envFile) {
-        this.envManager.registerFile(slug, merged.envOptions.envFile);
-      }
-
-      if (!proc) {
-        if (this._state !== "running") continue;
-
-        const processLogger = this.logger.child(slug, {
-          logFile: this.processLogFile(slug),
-        });
-        const restartingProcess = new RestartingProcess(
-          slug,
-          this.applyDefaults(slug, merged.definition, merged.envOptions),
-          merged.options ?? DEFAULT_RESTART_OPTIONS,
-          processLogger,
-          merged.tags,
-        );
-        this.restartingProcesses.set(slug, restartingProcess);
-        const unsubscribe = restartingProcess.onStateChange((newState) => {
-          this.onProcessStateChange(slug, newState);
-        });
-        this.stateChangeUnsubscribes.set(slug, unsubscribe);
-        if (merged.schedule) {
-          this.setupScheduler(merged);
-        }
-        if (merged.desiredState === "running") {
-          restartingProcess.start();
-        }
-        continue;
-      }
-
-      await this.reloadProcessByTarget(slug, merged.definition, {
-        restartImmediately: merged.desiredState !== "stopped",
-        updateOptions: merged.options,
-        envOptions: merged.envOptions,
-        tags: merged.tags,
-        persist: false,
-        persistence: merged.persistence,
-        desiredState: merged.desiredState,
-      });
-
-      if (merged.desiredState === "stopped") {
-        await proc.stop();
-      }
+    const runningProc = this.restartingProcesses.get(processSlug);
+    if (runningProc) {
+      await this.removeProcessByTarget(processSlug, undefined, false);
+    } else {
+      this.removeProcessEntryByName(processSlug);
+      this.processMetadata.delete(processSlug);
+      this.cleanupProcessResources(processSlug);
     }
 
     this.writeAutosaveState();

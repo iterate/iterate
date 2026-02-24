@@ -55,7 +55,13 @@ export async function reconcilePidnapProcesses(): Promise<void> {
 
   for (const processConfig of desired) {
     try {
-      await client.processes.add(processConfig);
+      await client.processes.updateConfig({
+        processSlug: processConfig.name,
+        definition: processConfig.definition,
+        options: processConfig.options,
+        envOptions: processConfig.envOptions,
+        tags: processConfig.tags,
+      });
       console.log(`[pidnap-reconcile] added process: ${processConfig.name}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
