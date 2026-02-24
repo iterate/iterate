@@ -1,0 +1,20 @@
+{
+    admin 127.0.0.1:2019
+    auto_https off
+}
+
+http://nomad.localhost {
+    reverse_proxy {
+        dynamic srv {
+            name nomad.service.consul
+            resolvers 127.0.0.1:53
+            refresh 1s
+        }
+
+        lb_policy round_robin
+    }
+}
+
+:80 {
+    respond "caddy ok" 200
+}

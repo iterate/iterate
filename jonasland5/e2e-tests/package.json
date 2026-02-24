@@ -1,0 +1,16 @@
+{
+  "name": "@iterate-com/jonasland5-e2e-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "doppler run -- vitest run",
+    "test:e2e": "RUN_JONASLAND_E2E=true doppler run -- vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@docker/node-sdk": "^0.0.17",
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
