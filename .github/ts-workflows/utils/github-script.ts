@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import * as recast from "recast";
-import tsParser from "recast/parsers/typescript.js";
+import { format } from "oxfmt";
 import { findUpSync } from "find-up";
 import type { Step } from "@jlarky/gha-ts/workflow-types";
 
@@ -27,12 +26,12 @@ type GithubScriptOptions = {
 
 export type GithubScriptHandler = (variables: GitHubScriptVariables) => unknown;
 
-export function githubScript(meta: GithubScriptMeta, handler: GithubScriptHandler): Step;
+export function githubScript(meta: GithubScriptMeta, handler: GithubScriptHandler): Promise<Step>;
 export function githubScript(
   meta: GithubScriptMeta,
   options: GithubScriptOptions,
   handler: GithubScriptHandler,
-): Step;
+): Promise<Step>;
 /**
  * Allows defining a strongly-typed function using the various helpers provided by
  * [github-script](https://github.com/actions/github-script). The function will be serialized
@@ -46,11 +45,11 @@ export function githubScript(
  * github.log = {...console, debug: (message, value) => console.log(message, value.headers)}
  * ```
  */
-export function githubScript(
+export async function githubScript(
   /** pass `import.meta` here so we know where the original file is, and can ensure any relative imports work */
   meta: GithubScriptMeta,
   ...args: [GithubScriptHandler] | [GithubScriptOptions, GithubScriptHandler]
-): Step {
+): Promise<Step> {
   const [handler, options]: [GithubScriptHandler, GithubScriptOptions] =
     typeof args[0] === "function" ? [args[0], {}] : [args[1]!, args[0]];
 
@@ -89,7 +88,7 @@ export function githubScript(
     "const __handler = " + fnString, // create a temp function that contextual vars will be passed into
     "return __handler(vars)", // call the temp function
   ].filter(Boolean);
-  const script = prettyPrint(uglyScript.join(";\n"));
+  const script = await prettyPrint(uglyScript.join(";\n"));
   const step = {
     ...(handler.name && { name: handler.name, id: handler.name }),
     uses: "actions/github-script@v7",
@@ -105,9 +104,48 @@ export function githubScript(
   return step;
 }
 
-const prettyPrint = (script: string) => {
+const prettyPrint = async (script: string) => {
+  const filename = import.meta.dirname + "/script.ts";
+  /*
+  match our prettier config:
+  {
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "bracketSameLine": false,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "embeddedLanguageFormatting": "auto"
+}
+
+  */
+  const result = await format(filename, script, {
+    printWidth: 100,
+    tabWidth: 2,
+    useTabs: false,
+    semi: true,
+    singleQuote: false,
+    quoteProps: "as-needed",
+    trailingComma: "all",
+    bracketSpacing: true,
+    bracketSameLine: false,
+    arrowParens: "always",
+    endOfLine: "lf",
+    embeddedLanguageFormatting: "auto",
+  });
+  if (result.errors.length) {
+    throw new Error(result.errors.map((e) => e.message).join("\n"), { cause: result.errors });
+  }
+  if (result.code.match(/\bnag\b/i)) {
+    console.log(result);
+  }
+  return result.code;
   try {
-    // use recast instead of prettier because it's synchronous and we don't really care all that much about how it looks as long as it's readable
     const ast = recast.parse(script, { parser: tsParser });
     return recast.prettyPrint(ast, {
       quote: "double",
