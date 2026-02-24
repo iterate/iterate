@@ -22,7 +22,7 @@ job "caddy" {
 
       env {
         OTEL_SERVICE_NAME            = "jonasland2-caddy"
-        OTEL_EXPORTER_OTLP_ENDPOINT  = "http://127.0.0.1:4317"
+        OTEL_EXPORTER_OTLP_ENDPOINT  = "http://127.0.0.1:15317"
         OTEL_EXPORTER_OTLP_PROTOCOL  = "grpc"
         OTEL_EXPORTER_OTLP_INSECURE  = "true"
         OTEL_PROPAGATORS             = "tracecontext,baggage"

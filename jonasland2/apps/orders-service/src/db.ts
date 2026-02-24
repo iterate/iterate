@@ -51,6 +51,10 @@ export async function getOrdersDbRuntimeConfig() {
   };
 }
 
+export async function executeOrdersSql(statement: string) {
+  return client.execute(statement);
+}
+
 export async function initializeOrdersDb() {
   await mkdir(dirname(ordersDbPath), { recursive: true });
   await client.execute("PRAGMA journal_mode = WAL;");

@@ -18,7 +18,7 @@ const links = [
   { label: "Outerbase", host: "outerbase.iterate.localhost", path: "/" },
   { label: "Nomad", host: "nomad.iterate.localhost", path: "/" },
   { label: "Consul", host: "consul.iterate.localhost", path: "/" },
-  { label: "SigNoz", host: "signoz.iterate.localhost", path: "/" },
+  { label: "ClickStack", host: "clickstack.iterate.localhost", path: "/" },
 ] as const;
 
 function buildHomeHtml(): string {

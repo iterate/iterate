@@ -12,7 +12,9 @@ import react from "@vitejs/plugin-react";
 import { ordersServiceManifest } from "@jonasland2/orders-contract";
 import {
   createBrowserErrorBridgePlugin,
+  createHealthzHandler,
   createOrpcErrorInterceptor,
+  createServiceObservabilityHandler,
   createServiceRequestLogger,
   extractIncomingTraceContext,
   getOtelRuntimeConfig,
@@ -136,12 +138,8 @@ app.use("*", async (c, next) => {
   }
 });
 
-app.get("/healthz", (c) => c.text("ok"));
-
-app.get("/api/observability", async (c) => {
-  const sqlite = await getOrdersDbRuntimeConfig();
-  return c.json({ otel: getOtelRuntimeConfig(), sqlite });
-});
+app.get("/healthz", createHealthzHandler());
+app.get("/api/observability", createServiceObservabilityHandler(getOrdersDbRuntimeConfig));
 
 app.use("/api/*", async (c) => {
   const { matched, response } = await openapiHandler.handle(c.req.raw, {

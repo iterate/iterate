@@ -16,8 +16,8 @@ job "events-service" {
       env {
         EVENTS_SERVICE_PORT                 = "${NOMAD_PORT_http}"
         EVENTS_DB_PATH                      = "/var/lib/jonasland2/events-service.sqlite"
-        OTEL_EXPORTER_OTLP_ENDPOINT        = "http://127.0.0.1:4318"
-        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces"
+        OTEL_EXPORTER_OTLP_ENDPOINT         = "http://127.0.0.1:15318"
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  = "http://127.0.0.1:15318/v1/traces"
         OTEL_EXPORTER_OTLP_PROTOCOL        = "http/protobuf"
         OTEL_EXPORTER_OTLP_LOGS_PROTOCOL   = "http/protobuf"
         OTEL_PROPAGATORS                   = "tracecontext,baggage"

@@ -5,9 +5,9 @@ Minimal local SOA sandbox for oRPC services:
 - Nomad (orchestration) on `:4646`
 - Consul (service discovery) on `:8500`, DNS on `:53`
 - Caddy edge proxy on `:80/:443` (dynamic SRV discovery via Consul)
-- OTEL collector on `:4317/:4318` (fan-out to OpenObserve + SigNoz)
+- OTEL collector on `:15317/:15318` (fan-out to OpenObserve + ClickStack)
 - OpenObserve in-container on `:5080`
-- SigNoz in-container on `:8080` (backed by ClickHouse + ZooKeeper)
+- ClickStack in-container (`clickstack-local`) on `:19050/:19051`
 - `events-service` + `orders-service` via oRPC `OpenAPIHandler` (`/api/*`) + RPC (`/orpc/*`, `/orpc/ws`)
 - `events-service` + `orders-service` are `tsx` apps with embedded Vite + React frontends
 - Drizzle ORM + SQLite per service (`/var/lib/jonasland2/*.sqlite`)
@@ -16,7 +16,7 @@ Minimal local SOA sandbox for oRPC services:
 
 ## Packages
 
-- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve + SigNoz stack`)
+- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve + ClickStack`)
 - `e2e/`: smoke tests using Docker SDK fixtures + MSW-backed proxy (HTTP + WS)
 - `apps/events-contract/`: oRPC contract package
 - `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs + Vite/React UI)
@@ -58,7 +58,7 @@ pnpm exec tsx outerbase-iframe-service.ts
 ## Endpoints
 
 OpenObserve runs in-container and is exposed through Caddy on `openobserve.iterate.localhost`.
-SigNoz runs in-container and is exposed through Caddy on `signoz.iterate.localhost`.
+ClickStack runs in-container and is exposed through Caddy on `clickstack.iterate.localhost`.
 
 Default OpenObserve credentials:
 
@@ -111,17 +111,13 @@ Then hit:
   - `http://outerbase.iterate.localhost/`
 - OpenObserve UI:
   - `http://openobserve.iterate.localhost/web/`
-- SigNoz UI:
-  - `http://signoz.iterate.localhost/` (root auto-login bootstrap page)
-  - fallback login credentials: `root@example.com` / `Complexpass#123`
+- ClickStack UI:
+  - `http://clickstack.iterate.localhost/`
 
-## SigNoz jobs
+## ClickStack job
 
-Run these Nomad jobs (order matters):
+Run this Nomad job:
 
 ```bash
-nomad job run /etc/jonasland2/nomad/jobs/zookeeper-1.nomad.hcl
-nomad job run /etc/jonasland2/nomad/jobs/clickhouse.nomad.hcl
-nomad job run /etc/jonasland2/nomad/jobs/signoz-otel-collector.nomad.hcl
-nomad job run /etc/jonasland2/nomad/jobs/signoz.nomad.hcl
+nomad job run /etc/jonasland2/nomad/jobs/clickstack.nomad.hcl
 ```

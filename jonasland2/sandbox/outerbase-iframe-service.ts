@@ -334,6 +334,9 @@ function authorize(req: IncomingMessage, res: ServerResponse): boolean {
 function buildPageHtml(): string {
   const studioSrcJson = JSON.stringify(studioSrc);
   const studioOriginJson = JSON.stringify(studioOrigin);
+  const allowedStudioOriginsJson = JSON.stringify(
+    Array.from(new Set([studioOrigin, "https://studio.outerbase.com", "https://libsqlstudio.com"])),
+  );
   const summaryJson = JSON.stringify({
     mainPath,
     attached: attachMap,
@@ -386,6 +389,7 @@ function buildPageHtml(): string {
       const iframe = document.getElementById("editor");
       const studioSrc = ${studioSrcJson};
       const studioOrigin = ${studioOriginJson};
+      const allowedStudioOrigins = ${allowedStudioOriginsJson};
       const summary = ${summaryJson};
 
       const attached = Object.keys(summary.attached);
@@ -395,28 +399,28 @@ function buildPageHtml(): string {
           ? ""
           : " · attach: <code>" + attached.map((key) => key + "=" + summary.attached[key]).join(", ") + "</code>");
 
-      async function relay(message) {
+      async function relay(message, targetOrigin) {
         const response = await fetch("/query", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(message),
         });
         const payload = await response.json();
-        iframe.contentWindow.postMessage(payload, studioOrigin);
+        iframe.contentWindow.postMessage(payload, targetOrigin);
       }
 
       window.addEventListener("message", (event) => {
-        if (event.origin !== studioOrigin) return;
+        if (!allowedStudioOrigins.includes(event.origin)) return;
         const data = event.data;
         if (!data || (data.type !== "query" && data.type !== "transaction")) return;
-        relay(data).catch((error) => {
+        relay(data, event.origin).catch((error) => {
           iframe.contentWindow.postMessage(
             {
               type: data.type,
               id: data.id,
               error: error && error.message ? error.message : String(error),
             },
-            studioOrigin,
+            event.origin,
           );
         });
       });

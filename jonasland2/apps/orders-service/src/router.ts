@@ -5,14 +5,21 @@ import { desc, eq, sql } from "drizzle-orm";
 import { RPCLink } from "@orpc/client/fetch";
 import { inferRPCMethodFromContractRouter } from "@orpc/contract";
 import { eventsContract } from "@jonasland2/events-contract";
-import { orderSchema, ordersContract, ordersServiceEnvSchema } from "@jonasland2/orders-contract";
 import {
+  orderSchema,
+  ordersContract,
+  ordersServiceEnvSchema,
+  ordersServiceManifest,
+} from "@jonasland2/orders-contract";
+import {
+  createServiceSubRouterHandlers,
   createServiceContextMiddleware,
   infoFromContext,
   type ServiceInitialContext,
 } from "@jonasland2/shared";
-import { db, ordersTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
+import { db } from "./db.ts";
+import * as schema from "./db.ts";
 
 type OrderRecord = InferSchemaOutput<typeof orderSchema>;
 type OrdersContext = ServiceInitialContext;
@@ -46,7 +53,7 @@ const eventsLink = new RPCLink<EventsClientContext>({
 const eventsClient: ContractRouterClient<typeof eventsContract, EventsClientContext> =
   createORPCClient(eventsLink);
 
-function toOrderRecord(row: typeof ordersTable.$inferSelect): OrderRecord {
+function toOrderRecord(row: typeof schema.ordersTable.$inferSelect): OrderRecord {
   return {
     id: row.id,
     sku: row.sku,
@@ -59,7 +66,11 @@ function toOrderRecord(row: typeof ordersTable.$inferSelect): OrderRecord {
 }
 
 async function getOrderRowById(id: string) {
-  const [row] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
+  const [row] = await db
+    .select()
+    .from(schema.ordersTable)
+    .where(eq(schema.ordersTable.id, id))
+    .limit(1);
   return row ?? null;
 }
 
@@ -104,7 +115,7 @@ const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, 
   const createdEvent = await createEventForOrder(order, context.requestId);
   order.eventId = createdEvent.id;
 
-  await db.insert(ordersTable).values({
+  await db.insert(schema.ordersTable).values({
     id: order.id,
     sku: order.sku,
     quantity: order.quantity,
@@ -127,12 +138,12 @@ const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, 
 });
 
 const listOrders = withSharedMiddlewares.orders.list.handler(async ({ input, context }) => {
-  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(ordersTable);
+  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(schema.ordersTable);
 
   const rows = await db
     .select()
-    .from(ordersTable)
-    .orderBy(desc(ordersTable.createdAt))
+    .from(schema.ordersTable)
+    .orderBy(desc(schema.ordersTable.createdAt))
     .limit(input.limit)
     .offset(input.offset);
 
@@ -180,13 +191,13 @@ const updateOrder = withSharedMiddlewares.orders.update.handler(async ({ input, 
   const nextQuantity = input.quantity ?? existing.quantity;
 
   await db
-    .update(ordersTable)
+    .update(schema.ordersTable)
     .set({
       sku: nextSku,
       quantity: nextQuantity,
       updatedAt,
     })
-    .where(eq(ordersTable.id, input.id));
+    .where(eq(schema.ordersTable.id, input.id));
 
   const updated = toOrderRecord({
     ...existing,
@@ -210,7 +221,7 @@ const removeOrder = withSharedMiddlewares.orders.remove.handler(async ({ input, 
   const existing = await getOrderRowById(input.id);
 
   if (existing) {
-    await db.delete(ordersTable).where(eq(ordersTable.id, input.id));
+    await db.delete(schema.ordersTable).where(eq(schema.ordersTable.id, input.id));
   }
 
   infoFromContext(context, "orders.removed", {
@@ -239,7 +250,17 @@ const ping = withSharedMiddlewares.orders.ping.handler(async ({ context }) => {
   };
 });
 
+const serviceProcedures = createServiceSubRouterHandlers(withSharedMiddlewares, {
+  manifest: {
+    name: serviceName,
+    version: ordersServiceManifest.version,
+  },
+  executeSql: schema.executeOrdersSql,
+  logPrefix: "orders.service",
+});
+
 export const ordersRouter = withSharedMiddlewares.router({
+  service: serviceProcedures,
   orders: {
     place: placeOrder,
     list: listOrders,

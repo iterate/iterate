@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.15.15",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
     "@opentelemetry/instrumentation-http": "^0.206.0",
@@ -21,7 +22,8 @@
     "@orpc/zod": "^1.13.5",
     "evlog": "^1.8.0",
     "vite": "^7.3.1",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

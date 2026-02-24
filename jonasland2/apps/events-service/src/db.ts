@@ -49,6 +49,10 @@ export async function getEventsDbRuntimeConfig() {
   };
 }
 
+export async function executeEventsSql(statement: string) {
+  return client.execute(statement);
+}
+
 export async function initializeEventsDb() {
   await mkdir(dirname(eventsDbPath), { recursive: true });
   await client.execute("PRAGMA journal_mode = WAL;");

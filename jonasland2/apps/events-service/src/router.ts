@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { eventSchema, eventsContract } from "@jonasland2/events-contract";
+import { eventSchema, eventsContract, eventsServiceManifest } from "@jonasland2/events-contract";
 import {
+  createServiceSubRouterHandlers,
   createServiceContextMiddleware,
   infoFromContext,
   type ServiceInitialContext,
 } from "@jonasland2/shared";
 import { desc, eq, sql } from "drizzle-orm";
-import { db, eventsTable } from "./db.ts";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
+import { db } from "./db.ts";
+import * as schema from "./db.ts";
 
 type EventRecord = InferSchemaOutput<typeof eventSchema>;
 type EventsContext = ServiceInitialContext;
@@ -28,7 +30,7 @@ function parsePayload(payload: string): Record<string, unknown> {
   return {};
 }
 
-function toEventRecord(row: typeof eventsTable.$inferSelect): EventRecord {
+function toEventRecord(row: typeof schema.eventsTable.$inferSelect): EventRecord {
   return {
     id: row.id,
     type: row.type,
@@ -39,17 +41,21 @@ function toEventRecord(row: typeof eventsTable.$inferSelect): EventRecord {
 }
 
 async function getEventRowById(id: string) {
-  const [row] = await db.select().from(eventsTable).where(eq(eventsTable.id, id)).limit(1);
+  const [row] = await db
+    .select()
+    .from(schema.eventsTable)
+    .where(eq(schema.eventsTable.id, id))
+    .limit(1);
   return row ?? null;
 }
 
 const listEvents = withSharedMiddlewares.events.list.handler(async ({ input, context }) => {
-  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(eventsTable);
+  const [totalRow] = await db.select({ value: sql<number>`count(*)` }).from(schema.eventsTable);
 
   const rows = await db
     .select()
-    .from(eventsTable)
-    .orderBy(desc(eventsTable.createdAt))
+    .from(schema.eventsTable)
+    .orderBy(desc(schema.eventsTable.createdAt))
     .limit(input.limit)
     .offset(input.offset);
 
@@ -71,7 +77,7 @@ const createEvent = withSharedMiddlewares.events.create.handler(async ({ input, 
   const now = new Date().toISOString();
   const id = randomUUID();
 
-  await db.insert(eventsTable).values({
+  await db.insert(schema.eventsTable).values({
     id,
     type: input.type,
     payload: JSON.stringify(input.payload ?? {}),
@@ -128,13 +134,13 @@ const updateEvent = withSharedMiddlewares.events.update.handler(async ({ input, 
     input.payload !== undefined ? JSON.stringify(input.payload) : existing.payload;
 
   await db
-    .update(eventsTable)
+    .update(schema.eventsTable)
     .set({
       type: nextType,
       payload: nextPayload,
       updatedAt,
     })
-    .where(eq(eventsTable.id, input.id));
+    .where(eq(schema.eventsTable.id, input.id));
 
   const updated = toEventRecord({
     ...existing,
@@ -157,7 +163,7 @@ const removeEvent = withSharedMiddlewares.events.remove.handler(async ({ input, 
   const existing = await getEventRowById(input.id);
 
   if (existing) {
-    await db.delete(eventsTable).where(eq(eventsTable.id, input.id));
+    await db.delete(schema.eventsTable).where(eq(schema.eventsTable.id, input.id));
   }
 
   infoFromContext(context, "events.removed", {
@@ -174,7 +180,17 @@ const removeEvent = withSharedMiddlewares.events.remove.handler(async ({ input, 
   };
 });
 
+const serviceProcedures = createServiceSubRouterHandlers(withSharedMiddlewares, {
+  manifest: {
+    name: serviceName,
+    version: eventsServiceManifest.version,
+  },
+  executeSql: schema.executeEventsSql,
+  logPrefix: "events.service",
+});
+
 export const eventsRouter = withSharedMiddlewares.router({
+  service: serviceProcedures,
   events: {
     list: listEvents,
     create: createEvent,

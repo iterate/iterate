@@ -2,9 +2,9 @@ receivers:
   otlp:
     protocols:
       grpc:
-        endpoint: 0.0.0.0:4317
+        endpoint: 0.0.0.0:15317
       http:
-        endpoint: 0.0.0.0:4318
+        endpoint: 0.0.0.0:15318
 
 processors:
   batch: {}
@@ -23,12 +23,12 @@ exporters:
       Authorization: Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM=
       stream-name: orpc_logs
 
-  otlphttp/signoz:
-    endpoint: http://127.0.0.1:14318
+  otlphttp/clickstack:
+    endpoint: http://127.0.0.1:4318
 
 extensions:
   health_check:
-    endpoint: 0.0.0.0:13133
+    endpoint: 0.0.0.0:15333
 
 service:
   telemetry:
@@ -44,12 +44,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_traces, otlphttp/signoz]
+      exporters: [otlphttp/openobserve_traces, otlphttp/clickstack]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/openobserve_logs, otlphttp/signoz]
+      exporters: [otlphttp/openobserve_logs, otlphttp/clickstack]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/signoz]
+      exporters: [otlphttp/clickstack]

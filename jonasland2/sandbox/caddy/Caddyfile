@@ -19,18 +19,11 @@
         }
     }
 
-    @signoz host signoz.iterate.localhost
-    handle @signoz {
-        @signoz_autologin path /
-        handle @signoz_autologin {
-            root * /etc/jonasland2/caddy/static
-            rewrite * /signoz-autologin.html
-            file_server
-        }
-
+    @clickstack host clickstack.iterate.localhost
+    handle @clickstack {
         reverse_proxy {
             dynamic srv {
-                name signoz.service.consul
+                name clickstack.service.consul
                 resolvers 127.0.0.1:53
                 refresh 1s
             }
@@ -126,18 +119,11 @@
         }
     }
 
-    @signoz host signoz.iterate.localhost
-    handle @signoz {
-        @signoz_autologin path /
-        handle @signoz_autologin {
-            root * /etc/jonasland2/caddy/static
-            rewrite * /signoz-autologin.html
-            file_server
-        }
-
+    @clickstack host clickstack.iterate.localhost
+    handle @clickstack {
         reverse_proxy {
             dynamic srv {
-                name signoz.service.consul
+                name clickstack.service.consul
                 resolvers 127.0.0.1:53
                 refresh 1s
             }

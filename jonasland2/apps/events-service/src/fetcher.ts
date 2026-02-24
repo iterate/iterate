@@ -4,10 +4,11 @@ import { randomUUID } from "node:crypto";
 import { ROOT_CONTEXT, context as otelContext, propagation } from "@opentelemetry/api";
 import { eventsServiceManifest, type EventsServiceEnv } from "@jonasland2/events-contract";
 import {
+  createHealthzHandler,
   createOrpcErrorInterceptor,
+  createServiceObservabilityHandler,
   createServiceRequestLogger,
   extractIncomingTraceContext,
-  getOtelRuntimeConfig,
   getRequestIdHeader,
   initializeServiceEvlog,
   initializeServiceOtel,
@@ -120,12 +121,8 @@ export async function eventsService(_env: EventsServiceEnv) {
     }
   });
 
-  app.get("/healthz", (c) => c.text("ok"));
-
-  app.get("/api/observability", async (c) => {
-    const sqlite = await getEventsDbRuntimeConfig();
-    return c.json({ otel: getOtelRuntimeConfig(), sqlite });
-  });
+  app.get("/healthz", createHealthzHandler());
+  app.get("/api/observability", createServiceObservabilityHandler(getEventsDbRuntimeConfig));
 
   app.use("/orpc/*", async (c, next) => {
     const { matched, response } = await rpcHandler.handle(createBodyParserSafeRequest(c), {

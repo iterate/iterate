@@ -5,15 +5,15 @@ job "otel-collector" {
   group "otel-collector" {
     network {
       port "grpc" {
-        static = 4317
+        static = 15317
       }
 
       port "http" {
-        static = 4318
+        static = 15318
       }
 
       port "health" {
-        static = 13133
+        static = 15333
       }
     }
 

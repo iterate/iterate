@@ -1,4 +1,5 @@
 import { oc } from "@orpc/contract";
+import { createServiceSubRouterContract } from "@jonasland2/shared";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -20,7 +21,13 @@ export const listEventsInputSchema = z.object({
   offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
+const serviceSubRouter = createServiceSubRouterContract({
+  healthSummary: "Events service health metadata",
+  sqlSummary: "Execute SQL against events-service sqlite database",
+});
+
 export const eventsContract = oc.router({
+  ...serviceSubRouter,
   events: {
     list: oc
       .route({
