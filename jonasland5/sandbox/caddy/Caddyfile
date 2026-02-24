@@ -22,6 +22,14 @@ http://orders.iterate.localhost {
     reverse_proxy 127.0.0.1:19020
 }
 
+http://home.iterate.localhost {
+    reverse_proxy 127.0.0.1:19030
+}
+
+http://outerbase.iterate.localhost {
+    reverse_proxy 127.0.0.1:19040
+}
+
 http://caddy-admin.iterate.localhost {
     reverse_proxy 127.0.0.1:2019
 }

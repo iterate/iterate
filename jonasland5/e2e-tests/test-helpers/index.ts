@@ -535,6 +535,16 @@ export async function projectDeployment(params: {
     });
     await waitForPidnapProcessRunning({
       client: pidnap,
+      target: "home",
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
+      target: "outerbase",
+      timeoutMs: 45_000,
+    });
+    await waitForPidnapProcessRunning({
+      client: pidnap,
       target: "egress-proxy",
       timeoutMs: 45_000,
     });

@@ -25,6 +25,26 @@ describe.runIf(RUN_E2E)("jonasland5 smoke", () => {
     expect(config).toBeTypeOf("object");
   });
 
+  test("home and outerbase host routes are reachable", async () => {
+    await using deployment = await projectDeployment({
+      image,
+      name: `jonasland5-e2e-home-outerbase-${randomUUID()}`,
+    });
+
+    const home = await deployment.exec(
+      "curl -fsS -H 'Host: home.iterate.localhost' http://127.0.0.1/",
+    );
+    expect(home.exitCode).toBe(0);
+    expect(home.output).toContain("jonasland5");
+    expect(home.output).toContain("Lightweight local service index");
+
+    const outerbase = await deployment.exec(
+      "curl -fsS -H 'Host: outerbase.iterate.localhost' http://127.0.0.1/healthz",
+    );
+    expect(outerbase.exitCode).toBe(0);
+    expect(outerbase.output).toContain('"ok":true');
+  });
+
   test("fixture returns typed pidnap/caddy/services clients", async () => {
     await using deployment = await projectDeployment({
       image,

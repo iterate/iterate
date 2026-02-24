@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@libsql/client": "^0.15.15",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
     "@orpc/server": "^1.13.5",

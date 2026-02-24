@@ -58,6 +58,32 @@ export default {
       },
     },
     {
+      name: "home",
+      definition: {
+        command: "/opt/jonasland5-sandbox/node_modules/.bin/tsx",
+        args: ["/opt/jonasland5-sandbox/services/home-service.ts"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
+      name: "outerbase",
+      definition: {
+        command: "/opt/jonasland5-sandbox/node_modules/.bin/tsx",
+        args: ["/opt/jonasland5-sandbox/services/outerbase-iframe-service.ts"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
       name: "egress-proxy",
       definition: {
         command: "node",
