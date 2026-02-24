@@ -56,8 +56,23 @@ export class EnvManager {
   public registerFile(key: string, filePath: string): void {
     const absolutePath = isAbsolute(filePath) ? filePath : resolve(this.config.cwd, filePath);
     this.logger.debug(`Registering custom env file for "${key}": ${absolutePath}`);
+    this.clearKeyState(key);
     this.customKeys.add(key);
     this.loadEnvFile(key, absolutePath);
+  }
+
+  public unregisterCustomFile(key: string): void {
+    if (!this.customKeys.has(key)) return;
+
+    this.logger.debug(`Unregistering custom env file for "${key}"`);
+    this.customKeys.delete(key);
+    this.clearKeyState(key);
+
+    const autoPath = resolve(this.config.cwd, `.env.${key}`);
+    if (existsSync(autoPath)) {
+      this.logger.debug(`Falling back to auto-discovered env file for "${key}": ${autoPath}`);
+      this.loadEnvFile(key, autoPath);
+    }
   }
 
   /**
@@ -65,6 +80,19 @@ export class EnvManager {
    */
   public hasCustomFile(key: string): boolean {
     return this.customKeys.has(key);
+  }
+
+  private clearKeyState(key: string): void {
+    this.env.delete(key);
+    for (const [absolutePath, mappedKey] of this.fileToKey.entries()) {
+      if (mappedKey !== key) continue;
+      const watcher = this.watchers.get(absolutePath);
+      if (watcher) {
+        watcher.close();
+        this.watchers.delete(absolutePath);
+      }
+      this.fileToKey.delete(absolutePath);
+    }
   }
 
   /**

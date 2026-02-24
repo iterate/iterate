@@ -720,6 +720,7 @@ export class Manager {
     this.stateChangeUnsubscribes.delete(name);
     this.schedulers.get(name)?.stop();
     this.schedulers.delete(name);
+    this.envManager.unregisterCustomFile(name);
     this.envReloadConfig.delete(name);
     const timer = this.envReloadTimers.get(name);
     if (timer) clearTimeout(timer);
