@@ -23,6 +23,7 @@ job "egress-proxy" {
       }
 
       service {
+        provider = "consul"
         name = "egress-proxy"
         port = "http"
         check {

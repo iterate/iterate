@@ -4,6 +4,10 @@
 }
 
 :80 {
+    tracing {
+        span "caddy-http"
+    }
+
     @health path /healthz
     respond @health "ok" 200
 
@@ -42,13 +46,7 @@
 
     @nomad host nomad.iterate.localhost
     handle @nomad {
-        reverse_proxy {
-            dynamic srv {
-                name nomad-client.service.consul
-                resolvers 127.0.0.1:53
-                refresh 1s
-            }
-        }
+        reverse_proxy 127.0.0.1:4646
     }
 
     @consul host consul.iterate.localhost
@@ -74,6 +72,10 @@
         on_demand
     }
 
+    tracing {
+        span "caddy-https"
+    }
+
     @health path /healthz
     respond @health "ok" 200
 
@@ -112,13 +114,7 @@
 
     @nomad host nomad.iterate.localhost
     handle @nomad {
-        reverse_proxy {
-            dynamic srv {
-                name nomad-client.service.consul
-                resolvers 127.0.0.1:53
-                refresh 1s
-            }
-        }
+        reverse_proxy 127.0.0.1:4646
     }
 
     @consul host consul.iterate.localhost

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import {
+  createHandlerLoggingPlugin,
   createServiceLogger,
   getOtelRuntimeConfig,
   initializeServiceOtel,
@@ -12,11 +13,13 @@ import { ordersRouter } from "./router.ts";
 const serviceName = "jonasland2-orders-service";
 const port = Number(process.env.ORDERS_SERVICE_PORT || "19020");
 const log = createServiceLogger(serviceName);
+const loggingPlugin = createHandlerLoggingPlugin(log);
 
 initializeServiceOtel(serviceName);
 
 const openapiHandler = new OpenAPIHandler(ordersRouter, {
   plugins: [
+    loggingPlugin,
     new OpenAPIReferencePlugin({
       docsProvider: "scalar",
       docsPath: "/docs",
@@ -33,6 +36,12 @@ const openapiHandler = new OpenAPIHandler(ordersRouter, {
   ],
 });
 
+function getRequestIdHeader(value: string | string[] | undefined) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value[0]) return value[0];
+  return undefined;
+}
+
 const server = createServer(async (req, res) => {
   if (req.url === "/healthz" && req.method === "GET") {
     res.writeHead(200, { "content-type": "text/plain" });
@@ -47,9 +56,12 @@ const server = createServer(async (req, res) => {
   }
 
   if ((req.url || "").startsWith("/api")) {
+    const requestId = getRequestIdHeader(req.headers["x-request-id"]);
     const { matched } = await openapiHandler.handle(req, res, {
       prefix: "/api",
-      context: {},
+      context: {
+        requestId,
+      },
     });
 
     if (matched) return;
@@ -60,7 +72,9 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  log("service.started", {
+  log.info({
+    event: "service.started",
+    service: serviceName,
     port,
     docs_path: "/api/docs",
     spec_path: "/api/openapi.json",

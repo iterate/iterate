@@ -1,61 +1,73 @@
 import { randomUUID } from "node:crypto";
-import { eventSchema } from "@jonasland2/events-contract";
+import { createORPCClient } from "@orpc/client";
+import type { ContractRouterClient } from "@orpc/contract";
+import type { JsonifiedClient } from "@orpc/openapi-client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { eventsContract } from "@jonasland2/events-contract";
 import { orderSchema, ordersContract } from "@jonasland2/orders-contract";
 import {
-  createRequestContextMiddleware,
-  createRequestLifecycleMiddleware,
-  createServiceLogger,
-  type SharedRequestContext,
+  createServiceContextMiddleware,
+  infoFromContext,
+  type ServiceInitialContext,
 } from "@jonasland2/orpc-shared";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 
 type OrderRecord = InferSchemaOutput<typeof orderSchema>;
-type OrdersContext = SharedRequestContext;
+type OrdersContext = ServiceInitialContext;
 
 const serviceName = "jonasland2-orders-service";
-const log = createServiceLogger(serviceName);
 const os = implement(ordersContract).$context<OrdersContext>();
 
-const withSharedMiddlewares = os
-  .use(os.middleware(createRequestContextMiddleware(serviceName, log)))
-  .use(os.middleware(createRequestLifecycleMiddleware(serviceName, log)));
+const withSharedMiddlewares = os.use(os.middleware(createServiceContextMiddleware(serviceName)));
 
 const eventsServiceBaseUrl =
   process.env.EVENTS_SERVICE_BASE_URL || "http://events-service.service.consul:19010/api";
 const orders: OrderRecord[] = [];
 
-async function createEventForOrder(order: OrderRecord, requestId: string | undefined) {
-  const response = await fetch(`${eventsServiceBaseUrl}/events`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(requestId ? { "x-request-id": requestId } : {}),
-    },
-    body: JSON.stringify({
-      type: "order_placed",
-      payload: {
-        orderId: order.id,
-        sku: order.sku,
-        quantity: order.quantity,
+interface EventsClientContext {
+  requestId: string;
+}
+
+const eventsLink = new OpenAPILink<EventsClientContext>(eventsContract, {
+  url: eventsServiceBaseUrl,
+  headers: ({ context: clientContext }) => {
+    const headers: Record<string, string> = {};
+
+    if (clientContext?.requestId) {
+      headers["x-request-id"] = clientContext.requestId;
+    }
+
+    return headers;
+  },
+});
+
+const eventsClient: JsonifiedClient<
+  ContractRouterClient<typeof eventsContract, EventsClientContext>
+> = createORPCClient(eventsLink);
+
+async function createEventForOrder(order: OrderRecord, requestId: string) {
+  try {
+    return await eventsClient.events.create(
+      {
+        type: "order_placed",
+        payload: {
+          orderId: order.id,
+          sku: order.sku,
+          quantity: order.quantity,
+        },
       },
-    }),
-  });
-
-  if (!response.ok) {
+      {
+        context: {
+          requestId,
+        },
+      },
+    );
+  } catch (error) {
     throw new ORPCError("BAD_GATEWAY", {
-      message: `events-service responded with ${response.status}`,
+      message: error instanceof Error ? error.message : "events-service request failed",
+      cause: error,
     });
   }
-
-  const body = await response.json();
-  const parsed = eventSchema.safeParse(body);
-  if (!parsed.success) {
-    throw new ORPCError("BAD_GATEWAY", {
-      message: "events-service response shape mismatch",
-    });
-  }
-
-  return parsed.data;
 }
 
 const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, input }) => {
@@ -74,7 +86,8 @@ const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, 
   orders.unshift(order);
   if (orders.length > 500) orders.length = 500;
 
-  log("orders.placed", {
+  infoFromContext(context, "orders.placed", {
+    service: context.serviceName,
     request_id: context.requestId,
     order_id: order.id,
     event_id: order.eventId,
@@ -85,7 +98,12 @@ const placeOrder = withSharedMiddlewares.orders.place.handler(async ({ context, 
   return order;
 });
 
-const ping = withSharedMiddlewares.orders.ping.handler(async () => {
+const ping = withSharedMiddlewares.orders.ping.handler(async ({ context }) => {
+  infoFromContext(context, "orders.ping", {
+    service: context.serviceName,
+    request_id: context.requestId,
+  });
+
   return {
     ok: true,
     service: serviceName,

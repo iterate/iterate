@@ -16,10 +16,11 @@ job "orders-service" {
       env {
         ORDERS_SERVICE_PORT                = "${NOMAD_PORT_http}"
         EVENTS_SERVICE_BASE_URL            = "http://events-service.service.consul:19010/api"
-        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:5080/api/default/v1/traces"
-        OTEL_EXPORTER_OTLP_HEADERS         = "Authorization=Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
-        OTEL_CORRELATED_LOGS_ENDPOINT      = "http://127.0.0.1:5080/api/default/orpc_logs/_json"
-        OTEL_CORRELATED_LOGS_HEADERS       = "Authorization=Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:4318/v1/traces"
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT   = "http://127.0.0.1:4318/v1/logs"
+        OTEL_EXPORTER_OTLP_PROTOCOL        = "http/protobuf"
+        OTEL_EXPORTER_OTLP_LOGS_PROTOCOL   = "http/protobuf"
+        OTEL_PROPAGATORS                   = "tracecontext,baggage"
       }
 
       config {
@@ -28,6 +29,7 @@ job "orders-service" {
       }
 
       service {
+        provider = "consul"
         name = "orders-service"
         port = "http"
         check {

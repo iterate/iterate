@@ -1,28 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { eventSchema, eventsContract } from "@jonasland2/events-contract";
 import {
-  createRequestContextMiddleware,
-  createRequestLifecycleMiddleware,
-  createServiceLogger,
-  type SharedRequestContext,
+  createServiceContextMiddleware,
+  infoFromContext,
+  type ServiceInitialContext,
 } from "@jonasland2/orpc-shared";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 
 type EventRecord = InferSchemaOutput<typeof eventSchema>;
-type EventsContext = SharedRequestContext;
+type EventsContext = ServiceInitialContext;
 
 const serviceName = "jonasland2-events-service";
-const log = createServiceLogger(serviceName);
 const os = implement(eventsContract).$context<EventsContext>();
 
-const withSharedMiddlewares = os
-  .use(os.middleware(createRequestContextMiddleware(serviceName, log)))
-  .use(os.middleware(createRequestLifecycleMiddleware(serviceName, log)));
+const withSharedMiddlewares = os.use(os.middleware(createServiceContextMiddleware(serviceName)));
 
 const events: EventRecord[] = [];
 
 const listEvents = withSharedMiddlewares.events.list.handler(async ({ input, context }) => {
-  log("events.list", {
+  infoFromContext(context, "events.list", {
+    service: context.serviceName,
     request_id: context.requestId,
     limit: input.limit,
     total: events.length,
@@ -45,7 +42,8 @@ const createEvent = withSharedMiddlewares.events.create.handler(async ({ input, 
   events.unshift(event);
   if (events.length > 500) events.length = 500;
 
-  log("events.created", {
+  infoFromContext(context, "events.created", {
+    service: context.serviceName,
     request_id: context.requestId,
     event_id: event.id,
     event_type: event.type,
@@ -62,7 +60,8 @@ const findEvent = withSharedMiddlewares.events.find.handler(async ({ input, cont
     });
   }
 
-  log("events.found", {
+  infoFromContext(context, "events.found", {
+    service: context.serviceName,
     request_id: context.requestId,
     event_id: event.id,
   });

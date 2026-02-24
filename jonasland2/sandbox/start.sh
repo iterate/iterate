@@ -55,12 +55,14 @@ wait_for_url "http://127.0.0.1:8500/v1/status/leader" "consul" 240
 printf 'nameserver 127.0.0.1\noptions ndots:0\n' > /etc/resolv.conf
 
 nomad job run -detach /etc/jonasland2/nomad/jobs/openobserve.nomad.hcl
+nomad job run -detach /etc/jonasland2/nomad/jobs/otel-collector.nomad.hcl
 nomad job run -detach /etc/jonasland2/nomad/jobs/egress.nomad.hcl
 nomad job run -detach /etc/jonasland2/nomad/jobs/events-service.nomad.hcl
 nomad job run -detach /etc/jonasland2/nomad/jobs/orders-service.nomad.hcl
 nomad job run -detach /etc/jonasland2/nomad/jobs/caddy.nomad.hcl
 
 wait_for_url "http://127.0.0.1:5080/healthz" "openobserve"
+wait_for_url "http://127.0.0.1:13133/" "otel-collector"
 wait_for_url "http://127.0.0.1:19010/healthz" "events-service"
 wait_for_url "http://127.0.0.1:19020/healthz" "orders-service"
 wait_for_url "http://127.0.0.1:80/healthz" "caddy"

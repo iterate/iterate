@@ -10,7 +10,10 @@
     "@jonasland2/events-contract": "file:../events-contract",
     "@jonasland2/orpc-shared": "file:../orpc-shared",
     "@jonasland2/orders-contract": "file:../orders-contract",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
     "@orpc/openapi": "^1.13.5",
+    "@orpc/openapi-client": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5"
   }

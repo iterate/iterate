@@ -5,16 +5,20 @@ Minimal local SOA sandbox for oRPC services:
 - Nomad (orchestration) on `:4646`
 - Consul (service discovery) on `:8500`, DNS on `:53`
 - Caddy edge proxy on `:80/:443` (dynamic SRV discovery via Consul)
+- OTEL collector on `:4317/:4318` (single exporter fan-out)
 - OpenObserve in-container on `:5080`
-- `events-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
+- `events-service` + `orders-service` via oRPC `OpenAPIHandler` mounted at `/api/*`
 - egress proxy service behind Caddy fallback route
 
 ## Packages
 
-- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OpenObserve`) + build script
+- `sandbox/`: Debian slim Docker image (`Nomad + Consul + Caddy + OTEL collector + OpenObserve`)
 - `e2e/`: smoke tests using Docker SDK fixtures + MSW-backed proxy (HTTP + WS)
 - `apps/events-contract/`: oRPC contract package
 - `apps/events-service/`: contract implementation package (OpenAPI handler + Scalar docs)
+- `apps/orders-contract/`: oRPC contract package
+- `apps/orders-service/`: contract implementation package (OpenAPI handler + Scalar docs)
+- `apps/orpc-shared/`: shared middleware + OTEL + pino setup
 - `tasks/`: jonasland2-local task backlog
 
 ## Run
@@ -22,7 +26,6 @@ Minimal local SOA sandbox for oRPC services:
 ```bash
 cd jonasland2
 pnpm build
-pnpm test
 ```
 
 ## Endpoints
@@ -59,6 +62,10 @@ Then hit:
   - `http://events.iterate.localhost/api/openapi.json`
   - `http://events.iterate.localhost/api/docs` (Scalar)
   - `http://events.iterate.localhost/api/events`
+- Orders service:
+  - `http://orders.iterate.localhost/api/openapi.json`
+  - `http://orders.iterate.localhost/api/docs` (Scalar)
+  - `http://orders.iterate.localhost/api/orders/ping`
 - Consul UI:
   - `http://consul.iterate.localhost/`
 - Nomad UI:

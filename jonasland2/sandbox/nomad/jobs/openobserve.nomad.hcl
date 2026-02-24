@@ -31,6 +31,7 @@ job "openobserve" {
       }
 
       service {
+        provider = "consul"
         name = "openobserve"
         port = "http"
         check {

@@ -13,6 +13,9 @@
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-node": "^0.206.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
-    "@orpc/otel": "^1.13.5"
+    "@orpc/experimental-pino": "^1.13.5",
+    "@orpc/otel": "^1.13.5",
+    "pino": "^10.1.0",
+    "pino-opentelemetry-transport": "^2.0.0"
   }
 }
