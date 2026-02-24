@@ -1,0 +1,1 @@
+Proof of concept: a utilisation explorer that sits on the egress proxy and inspects outbound traffic. It should match requests to pricing tables (e.g. LLM token usage, API calls) and report what resources the sandbox consumed. The pricing table and utilisation loggers are "injected" by the os worker.

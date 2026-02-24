@@ -1,0 +1,1 @@
+Re-using volumes and maintaining continuity after sandbox restarts. Data written during a session should survive restarts — figure out which paths to persist and how to reattach volumes to new sandbox instances.

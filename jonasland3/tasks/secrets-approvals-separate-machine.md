@@ -1,0 +1,1 @@
+Move secrets management and human approval flows to a separate machine from the coding agent sandbox. The sandbox should not have direct access to secrets — it requests them through a controlled channel on a different machine.
