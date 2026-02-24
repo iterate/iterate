@@ -153,6 +153,11 @@ export const projectRouter = {
         ...ProjectInput.shape,
         name: z.string().min(1).max(100).optional(),
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
+        // TODO(custom-domain): Add customDomain to the input schema:
+        //   customDomain: z.string().max(253).nullable().optional(),
+        // Validate: must be a valid hostname (no scheme, port, path, or wildcard).
+        // null clears the custom domain back to default iterate.app.
+        // Also need to check uniqueness across all projects.
       }),
     )
     .handler(async ({ context: ctx, input }) => {
@@ -183,6 +188,9 @@ export const projectRouter = {
         }
       }
 
+      // TODO(custom-domain): Include customDomain in the .set() spread below.
+      // Use `input.customDomain !== undefined` (not truthy) since null means "clear".
+      // When setting a custom domain, also trigger CF for SaaS custom hostname creation.
       const [updated] = await ctx.db
         .update(project)
         .set({

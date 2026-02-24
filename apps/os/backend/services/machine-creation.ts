@@ -104,6 +104,9 @@ export async function buildMachineEnvVars(params: {
 
   const envVars = Object.fromEntries(globalEnvVars.map((envVar) => [envVar.key, envVar.value]));
 
+  // TODO(custom-domain): Pass project.customDomain here. When set, buildMachineIngressEnvVars
+  // should use the custom domain for ITERATE_PROJECT_BASE_URL and ITERATE_PROJECT_INGRESS_DOMAIN.
+  // This requires fetching the project record (or accepting customDomain as a param).
   const ingressEnvVars = buildMachineIngressEnvVars({
     projectSlug,
     projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,

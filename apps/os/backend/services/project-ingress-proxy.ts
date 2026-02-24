@@ -69,6 +69,15 @@ export function getProjectIngressRequestHostname(request: Request): string {
  * Check if a hostname should be handled as project ingress.
  * Uses the PROJECT_INGRESS_DOMAIN env var — matches any subdomain of it.
  */
+// TODO(custom-domain): This is the hot-path gate for every request. Must also check
+// if the hostname matches a known custom domain. Options:
+//   (a) DB query with Cache API (short TTL) — simplest, fine for few custom domains
+//   (b) KV store of custom domains — faster, requires sync on domain change
+//   (c) In-memory Set loaded on worker init — fast but stale until redeploy
+// For MVP, (a) is fine. The check becomes:
+//   return isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN)
+//       || await isCustomDomainHostname(hostname);
+// Note: making this async requires changing the caller in worker.ts.
 export function shouldHandleProjectIngressHostname(hostname: string, env: CloudflareEnv): boolean {
   return isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN);
 }
@@ -335,6 +344,13 @@ function buildParseDetails(params: {
   return details;
 }
 
+// TODO(custom-domain): This function needs a second code path for custom domain hostnames.
+// When the hostname doesn't match PROJECT_INGRESS_DOMAIN but IS a known custom domain:
+//   1. Look up the project by custom_domain column (DB query, cached)
+//   2. Parse the subdomain as a port number, service alias, or machine ID
+//   3. Skip the slug-based project resolution — we already have the project from step 1
+//   4. Canonical redirect should use the custom domain, not iterate.app
+// The auth bridge also needs updating — the redirect target must be the custom domain host.
 export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
@@ -350,6 +366,8 @@ export async function handleProjectIngressRequest(
   }
 
   if (!isProjectIngressHostname(requestHostname, projectIngressDomain)) {
+    // TODO(custom-domain): Instead of 404 here, check if hostname is/is-subdomain-of a custom domain.
+    // If yes, resolve project by custom_domain, parse subdomain for port/alias, and continue proxy flow.
     return jsonError(
       404,
       "not_found",

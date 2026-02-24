@@ -67,6 +67,10 @@ function ProjectSettingsPage() {
   const [sandboxProvider, setSandboxProvider] = useState<ProjectSandboxProvider>(
     project.sandboxProvider as ProjectSandboxProvider,
   );
+  // TODO(custom-domain): Add state for customDomain:
+  //   const [customDomain, setCustomDomain] = useState(project.customDomain ?? "");
+  // Track changes: const hasCustomDomainChange = (customDomain || null) !== (project.customDomain ?? null);
+  // Include in hasChanges and handleSubmit.
 
   const updateProject = useMutation({
     mutationFn: async (input: { name?: string; sandboxProvider?: ProjectSandboxProvider }) => {
@@ -146,6 +150,22 @@ function ProjectSettingsPage() {
               <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
               <Input id="project-slug" value={project.slug} disabled />
             </Field>
+            {/* TODO(custom-domain): Add custom domain input field here:
+            <Field>
+              <FieldLabel htmlFor="project-custom-domain">Custom domain</FieldLabel>
+              <Input
+                id="project-custom-domain"
+                value={customDomain}
+                onChange={(event) => setCustomDomain(event.target.value)}
+                placeholder="e.g. templestein.com"
+                disabled={updateProject.isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. Set a custom domain to use instead of {project.slug}.iterate.app.
+                Add a CNAME record pointing to iterate.app.
+              </p>
+            </Field>
+            */}
             <Field>
               <FieldLabel htmlFor="project-sandbox-provider">Sandbox provider</FieldLabel>
               {canChangeProvider ? (

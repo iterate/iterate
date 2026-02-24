@@ -53,6 +53,16 @@ export type ParsedIngressHostname =
  *
  * If identifier starts with `mach_`, it's a machine target; otherwise it's a project slug.
  */
+// TODO(custom-domain): This function needs a custom-domain-aware overload or sibling.
+// For custom domains, the hostname structure is different:
+//   templestein.com             → project target, port 3000
+//   4096.templestein.com        → project target, port 4096 (dot separator, not __)
+//   opencode.templestein.com    → project target, port from SERVICE_ALIASES map
+//   4096__mach123.templestein.com → machine target, port 4096
+// Consider adding: parseCustomDomainHostname(hostname, customDomain) that extracts
+// the subdomain label and resolves it against the alias map or as a port number.
+// The SERVICE_ALIASES map should live here too:
+//   const SERVICE_ALIASES: Record<string, number> = { opencode: 4096, terminal: 4096 };
 export function parseProjectIngressHostname(hostname: string): ParsedIngressHostname {
   const normalized = hostname.toLowerCase();
   const labels = normalized.split(".").filter(Boolean);
@@ -105,6 +115,11 @@ export function parseProjectIngressHostname(hostname: string): ParsedIngressHost
  *   - `ITERATE_OS_BASE_URL`             — e.g. `https://os.iterate.com`
  *   - `ITERATE_PROJECT_INGRESS_DOMAIN`  — e.g. `iterate.app`
  */
+// TODO(custom-domain): Add optional `customDomain` param. When set:
+//   ITERATE_PROJECT_BASE_URL = `${scheme}://${customDomain}` (not slug.iterate.app)
+//   ITERATE_PROJECT_INGRESS_DOMAIN = customDomain (not iterate.app)
+// This makes all daemon-side URL builders (observability links, agent debug links,
+// buildProjectPortUrl, etc.) automatically use the custom domain.
 export function buildMachineIngressEnvVars(params: {
   projectSlug: string;
   projectIngressDomain: string;

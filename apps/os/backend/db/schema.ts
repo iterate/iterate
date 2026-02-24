@@ -260,6 +260,11 @@ export const project = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
+    // TODO(custom-domain): Add customDomain column here:
+    //   customDomain: t.text(),
+    // Nullable — null means "use default <slug>.iterate.app". When set, this domain
+    // replaces iterate.app for all ingress routing and env vars.
+    // Migration: ALTER TABLE "project" ADD COLUMN "custom_domain" text;
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
