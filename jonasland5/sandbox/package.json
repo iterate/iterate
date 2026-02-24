@@ -4,11 +4,20 @@
   "type": "module",
   "scripts": {
     "build": "tsx scripts/build-image.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "services:start": "tsx services/services-service.ts",
+    "services:example-service": "tsx services/example-ephemeral-service.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "tsx": "^4.20.6",
+    "valibot": "^1.2.0"
   }
 }

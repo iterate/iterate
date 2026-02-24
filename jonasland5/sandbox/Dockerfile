@@ -1,65 +1,48 @@
 # syntax=docker/dockerfile:1
 
-FROM caddymanager/caddymanager-backend:latest AS caddymanager_backend
-FROM caddymanager/caddymanager-frontend:latest AS caddymanager_frontend
+FROM node:24-trixie-slim
 
-FROM debian:bookworm-slim
-
-ARG NOMAD_VERSION=1.11.2
-ARG CONSUL_VERSION=1.22.4
 ARG CADDY_VERSION=2.11.1
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    iptables \
     tini \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/nomad.zip && \
-    mkdir -p /tmp/nomad-extract && \
-    unzip -qq /tmp/nomad.zip -d /tmp/nomad-extract && \
-    install -m 0755 /tmp/nomad-extract/nomad /usr/local/bin/nomad && \
-    rm -rf /tmp/nomad.zip /tmp/nomad-extract
-
-RUN curl -fsSL "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/consul.zip && \
-    mkdir -p /tmp/consul-extract && \
-    unzip -qq /tmp/consul.zip -d /tmp/consul-extract && \
-    install -m 0755 /tmp/consul-extract/consul /usr/local/bin/consul && \
-    rm -rf /tmp/consul.zip /tmp/consul-extract
 
 RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy
 
-COPY --from=caddymanager_backend /usr/local/bin/node /usr/local/bin/node
-COPY --from=caddymanager_backend /usr/src/node-app /opt/caddymanager/backend
-COPY --from=caddymanager_frontend /usr/share/caddy /opt/caddymanager/frontend
+RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
+
+WORKDIR /opt/pidnap
+COPY packages/pidnap/package.json /opt/pidnap/package.json
+COPY packages/pidnap/src /opt/pidnap/src
+RUN pnpm install --prod --no-frozen-lockfile
+
+WORKDIR /opt/jonasland5-services
+COPY jonasland5/sandbox/package.json /opt/jonasland5-services/package.json
+COPY jonasland5/sandbox/pnpm-lock.yaml /opt/jonasland5-services/pnpm-lock.yaml
+COPY jonasland5/sandbox/services /opt/jonasland5-services/services
+RUN pnpm install --prod --frozen-lockfile
 
 RUN mkdir -p \
-    /etc/jonasland5/nomad/jobs \
     /etc/jonasland5/caddy \
-    /etc/jonasland5/caddymanager \
-    /etc/jonasland5/scripts \
-    /nomad-data \
-    /consul-data \
     /caddy-data \
-    /caddymanager-data
-COPY jonasland5/sandbox/nomad/base.hcl /etc/jonasland5/nomad/base.hcl
-COPY jonasland5/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland5/nomad/jobs/
-COPY jonasland5/sandbox/caddy/Caddyfile /etc/jonasland5/caddy/Caddyfile
-COPY jonasland5/sandbox/caddymanager/Caddyfile /etc/jonasland5/caddymanager/Caddyfile
-COPY jonasland5/sandbox/scripts/run-caddymanager-backend.sh /etc/jonasland5/scripts/run-caddymanager-backend.sh
-COPY jonasland5/sandbox/scripts/bootstrap-caddymanager.sh /etc/jonasland5/scripts/bootstrap-caddymanager.sh
-COPY jonasland5/sandbox/start.sh /etc/jonasland5/start.sh
-RUN chmod +x \
-    /etc/jonasland5/start.sh \
-    /etc/jonasland5/scripts/run-caddymanager-backend.sh \
-    /etc/jonasland5/scripts/bootstrap-caddymanager.sh
+    /var/log/pidnap
 
-VOLUME ["/nomad-data", "/consul-data", "/caddy-data", "/caddymanager-data"]
-EXPOSE 53 80 443 8500 8501 4646 2019
+COPY jonasland5/sandbox/caddy/Caddyfile /etc/jonasland5/caddy/Caddyfile
+COPY jonasland5/sandbox/pidnap.config.ts /etc/jonasland5/pidnap.config.ts
+COPY jonasland5/sandbox/start.sh /etc/jonasland5/start.sh
+RUN chmod +x /etc/jonasland5/start.sh
+
+VOLUME ["/caddy-data"]
+EXPOSE 80
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=20 \
+  CMD curl -fsS http://127.0.0.1/ >/dev/null || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/etc/jonasland5/start.sh"]

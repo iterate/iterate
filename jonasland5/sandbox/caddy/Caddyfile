@@ -1,18 +1,20 @@
 {
-    admin 127.0.0.1:2019
+    admin 0.0.0.0:2019 {
+        origins *
+    }
     auto_https off
 }
 
-http://nomad.localhost {
-    reverse_proxy {
-        dynamic srv {
-            name nomad.service.consul
-            resolvers 127.0.0.1:53
-            refresh 1s
-        }
+http://pidnap.iterate.localhost {
+    reverse_proxy 127.0.0.1:9876
+}
 
-        lb_policy round_robin
-    }
+http://services.iterate.localhost {
+    reverse_proxy 127.0.0.1:8777
+}
+
+http://caddy-admin.iterate.localhost {
+    reverse_proxy 127.0.0.1:2019
 }
 
 :80 {

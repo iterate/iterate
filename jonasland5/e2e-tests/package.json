@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@docker/node-sdk": "^0.0.17",
     "@types/node": "^25.0.10",
     "typescript": "^5.9.3",

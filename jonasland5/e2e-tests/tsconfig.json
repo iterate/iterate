@@ -12,5 +12,5 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true
   },
-  "include": ["lib/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["test-helpers/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }
