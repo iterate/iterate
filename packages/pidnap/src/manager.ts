@@ -110,8 +110,7 @@ export const ManagerConfig = v.object({
 });
 export type ManagerConfig = v.InferOutput<typeof ManagerConfig>;
 
-const ProcessSourceSchema = v.picklist(["config", "overlay"]);
-type ProcessSource = v.InferOutput<typeof ProcessSourceSchema>;
+type ProcessSource = "config" | "overlay";
 
 const AutosaveProcessEntry = v.object({
   name: v.string(),

@@ -3,7 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
 import { publicProcedure } from "../init.ts";
 
-const processDefinitionSchema = z.object({
+const ProcessDefinition = z.object({
   command: z.string(),
   args: z.array(z.string()).optional(),
   cwd: z.string().optional(),
@@ -11,7 +11,7 @@ const processDefinitionSchema = z.object({
   inheritProcessEnv: z.boolean().optional(),
 });
 
-const backoffSchema = z.union([
+const Backoff = z.union([
   z.object({
     type: z.literal("fixed"),
     delayMs: z.number(),
@@ -24,9 +24,9 @@ const backoffSchema = z.union([
   }),
 ]);
 
-const restartOptionsSchema = z.object({
+const RestartOptions = z.object({
   restartPolicy: z.enum(["always", "on-failure", "never", "unless-stopped", "on-success"]),
-  backoff: backoffSchema.optional(),
+  backoff: Backoff.optional(),
   crashLoop: z
     .object({
       maxRestarts: z.number(),
@@ -38,7 +38,7 @@ const restartOptionsSchema = z.object({
   maxTotalRestarts: z.number().optional(),
 });
 
-const envOptionsSchema = z.object({
+const EnvOptions = z.object({
   envFile: z.string().optional(),
   inheritProcessEnv: z.boolean().optional(),
   inheritGlobalEnv: z.boolean().optional(),
@@ -47,9 +47,9 @@ const envOptionsSchema = z.object({
 
 const processConfigSchema = z
   .object({
-    definition: processDefinitionSchema,
-    options: restartOptionsSchema.optional(),
-    envOptions: envOptionsSchema.optional(),
+    definition: ProcessDefinition,
+    options: RestartOptions.optional(),
+    envOptions: EnvOptions.optional(),
     tags: z.array(z.string()).optional(),
     persistence: z.enum(["durable", "ephemeral"]).optional(),
     desiredState: z.enum(["running", "stopped"]).optional(),

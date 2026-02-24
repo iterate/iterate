@@ -12,7 +12,6 @@ const canUseDocker =
 
 const describeDocker = canUseDocker ? describe : describe.skip;
 
-const rootDir = join(import.meta.dirname, "..");
 const imageTag = `pidnap-test-${Date.now()}-${randomUUID().slice(0, 8)}`;
 const tempRoot = join(tmpdir(), `pidnap-docker-test-${Date.now()}-${randomUUID().slice(0, 8)}`);
 const workspaceDir = join(tempRoot, "workspace");
