@@ -22,7 +22,33 @@ export default {
       name: "services",
       definition: {
         command: "/opt/jonasland5-services/node_modules/.bin/tsx",
-        args: ["/opt/jonasland5-services/services/services-service.ts"],
+        args: ["/opt/jonasland5-services/services/src/server.ts"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
+      name: "events",
+      definition: {
+        command: "/opt/jonasland5-services/node_modules/.bin/tsx",
+        args: ["/opt/jonasland5-services/events/src/server.ts"],
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
+      name: "egress-proxy",
+      definition: {
+        command: "node",
+        args: ["/opt/jonasland5-sandbox/services/egress-service.mjs"],
       },
       options: {
         restartPolicy: "always",

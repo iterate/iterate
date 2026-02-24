@@ -24,9 +24,20 @@ COPY packages/pidnap/src /opt/pidnap/src
 RUN pnpm install --prod --no-frozen-lockfile
 
 WORKDIR /opt/jonasland5-services
-COPY jonasland5/sandbox/package.json /opt/jonasland5-services/package.json
-COPY jonasland5/sandbox/pnpm-lock.yaml /opt/jonasland5-services/pnpm-lock.yaml
-COPY jonasland5/sandbox/services /opt/jonasland5-services/services
+COPY jonasland5/services/package.json /opt/jonasland5-services/package.json
+COPY jonasland5/services/pnpm-workspace.yaml /opt/jonasland5-services/pnpm-workspace.yaml
+COPY jonasland5/services/pnpm-lock.yaml /opt/jonasland5-services/pnpm-lock.yaml
+COPY jonasland5/services/shared /opt/jonasland5-services/shared
+COPY jonasland5/services/events-contract /opt/jonasland5-services/events-contract
+COPY jonasland5/services/events /opt/jonasland5-services/events
+COPY jonasland5/services/services-contract /opt/jonasland5-services/services-contract
+COPY jonasland5/services/services /opt/jonasland5-services/services
+RUN pnpm install --prod --frozen-lockfile
+
+WORKDIR /opt/jonasland5-sandbox
+COPY jonasland5/sandbox/package.json /opt/jonasland5-sandbox/package.json
+COPY jonasland5/sandbox/pnpm-lock.yaml /opt/jonasland5-sandbox/pnpm-lock.yaml
+COPY jonasland5/sandbox/services /opt/jonasland5-sandbox/services
 RUN pnpm install --prod --frozen-lockfile
 
 RUN mkdir -p \

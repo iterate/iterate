@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createServicesClient } from "./services-service.ts";
+import { createServicesClient } from "../../services/services/src/client.ts";
 
 const servicesRpcUrl = process.env.SERVICES_RPC_URL ?? "http://127.0.0.1:8777/rpc";
 const caddyAdminUrl = process.env.CADDY_ADMIN_URL ?? "http://127.0.0.1:2019";

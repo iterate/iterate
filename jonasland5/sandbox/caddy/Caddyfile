@@ -2,6 +2,7 @@
     admin 0.0.0.0:2019 {
         origins *
     }
+    local_certs
     auto_https off
 }
 
@@ -13,10 +14,38 @@ http://services.iterate.localhost {
     reverse_proxy 127.0.0.1:8777
 }
 
+http://events.iterate.localhost {
+    reverse_proxy 127.0.0.1:19010
+}
+
 http://caddy-admin.iterate.localhost {
     reverse_proxy 127.0.0.1:2019
 }
 
 :80 {
-    respond "caddy ok" 200
+    @health path /healthz
+    respond @health "ok" 200
+
+    @local host 127.0.0.1 localhost
+    handle @local {
+        respond "caddy ok" 200
+    }
+
+    reverse_proxy 127.0.0.1:19000 {
+        header_up X-Original-Host {http.request.header.Host}
+        header_up X-Original-SNI {http.request.tls.server_name}
+        header_up X-Original-Proto {http.request.scheme}
+    }
+}
+
+:443 {
+    tls internal {
+        on_demand
+    }
+
+    reverse_proxy 127.0.0.1:19000 {
+        header_up X-Original-Host {http.request.header.Host}
+        header_up X-Original-SNI {http.request.tls.server_name}
+        header_up X-Original-Proto {http.request.scheme}
+    }
 }

@@ -5,8 +5,9 @@
   "scripts": {
     "build": "tsx scripts/build-image.ts",
     "typecheck": "tsc --noEmit",
-    "services:start": "tsx services/services-service.ts",
-    "services:example-service": "tsx services/example-ephemeral-service.ts"
+    "services:start": "tsx ../services/services/src/server.ts",
+    "services:example-service": "tsx services/example-ephemeral-service.ts",
+    "events:start": "tsx ../services/events/src/server.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
@@ -17,6 +18,7 @@
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
     "@orpc/server": "^1.13.5",
+    "http-proxy": "^1.18.1",
     "tsx": "^4.20.6",
     "valibot": "^1.2.0"
   }
