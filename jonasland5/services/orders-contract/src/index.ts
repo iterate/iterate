@@ -109,6 +109,21 @@ export const ordersContract = oc.router({
           deleted: z.boolean(),
         }),
       ),
+
+    ping: oc
+      .route({
+        method: "GET",
+        path: "/orders/ping",
+        summary: "Simple health style ping",
+        tags: ["orders"],
+      })
+      .input(z.object({}).optional().default({}))
+      .output(
+        z.object({
+          ok: z.literal(true),
+          service: z.string(),
+        }),
+      ),
   },
 });
 

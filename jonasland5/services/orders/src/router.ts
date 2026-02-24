@@ -256,6 +256,18 @@ const removeOrder = os.orders.remove.handler(async ({ input, context }) => {
   };
 });
 
+const ping = os.orders.ping.handler(async ({ context }) => {
+  infoFromContext(context, "orders.ping", {
+    service: context.serviceName,
+    request_id: context.requestId,
+  });
+
+  return {
+    ok: true,
+    service: serviceName,
+  };
+});
+
 export const ordersRouter = os.router({
   service: {
     health: serviceHealth,
@@ -267,5 +279,6 @@ export const ordersRouter = os.router({
     find: findOrder,
     update: updateOrder,
     remove: removeOrder,
+    ping,
   },
 });
