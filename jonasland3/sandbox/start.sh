@@ -30,4 +30,9 @@ until curl -fsS http://127.0.0.1:80 >/dev/null 2>&1; do
   sleep 1
 done
 
+nomad job run /etc/jonasland3/nomad/jobs/caddymanager.nomad.hcl
+until curl -fsS http://127.0.0.1:8501 >/dev/null 2>&1; do
+  sleep 1
+done
+
 wait "$NOMAD_PID"

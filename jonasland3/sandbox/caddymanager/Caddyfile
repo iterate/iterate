@@ -1,0 +1,26 @@
+{
+    admin off
+    auto_https off
+}
+
+:8501 {
+    handle /config {
+        header Content-Type "application/json"
+        respond `{
+            "api_base_url": "/api/v1",
+            "app_name": "Caddy Manager",
+            "enable_dark_mode": "true"
+        }`
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    handle {
+        root * /opt/caddymanager/frontend
+        try_files {path} /index.html
+        encode gzip
+        file_server
+    }
+}

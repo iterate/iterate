@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+FROM caddymanager/caddymanager-backend:latest AS caddymanager_backend
+FROM caddymanager/caddymanager-frontend:latest AS caddymanager_frontend
+
 FROM debian:bookworm-slim
 
 ARG NOMAD_VERSION=1.11.2
@@ -30,15 +33,29 @@ RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_
     | tar -xz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy
 
-RUN mkdir -p /etc/jonasland3/nomad/jobs /etc/jonasland3/caddy /nomad-data /consul-data /caddy-data
+COPY --from=caddymanager_backend /usr/local/bin/node /usr/local/bin/node
+COPY --from=caddymanager_backend /usr/src/node-app /opt/caddymanager/backend
+COPY --from=caddymanager_frontend /usr/share/caddy /opt/caddymanager/frontend
+
+RUN mkdir -p \
+    /etc/jonasland3/nomad/jobs \
+    /etc/jonasland3/caddy \
+    /etc/jonasland3/caddymanager \
+    /etc/jonasland3/scripts \
+    /nomad-data \
+    /consul-data \
+    /caddy-data \
+    /caddymanager-data
 COPY jonasland3/sandbox/nomad/base.hcl /etc/jonasland3/nomad/base.hcl
 COPY jonasland3/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland3/nomad/jobs/
 COPY jonasland3/sandbox/caddy/Caddyfile /etc/jonasland3/caddy/Caddyfile
+COPY jonasland3/sandbox/caddymanager/Caddyfile /etc/jonasland3/caddymanager/Caddyfile
+COPY jonasland3/sandbox/scripts/run-caddymanager-backend.sh /etc/jonasland3/scripts/run-caddymanager-backend.sh
 COPY jonasland3/sandbox/start.sh /etc/jonasland3/start.sh
-RUN chmod +x /etc/jonasland3/start.sh
+RUN chmod +x /etc/jonasland3/start.sh /etc/jonasland3/scripts/run-caddymanager-backend.sh
 
-VOLUME ["/nomad-data", "/consul-data", "/caddy-data"]
-EXPOSE 53 80 443 8500 4646 2019
+VOLUME ["/nomad-data", "/consul-data", "/caddy-data", "/caddymanager-data"]
+EXPOSE 53 80 443 8500 8501 4646 2019
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/etc/jonasland3/start.sh"]
