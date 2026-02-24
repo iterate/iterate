@@ -27,6 +27,7 @@ import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -383,8 +384,26 @@ resendApp.post("/webhook", async (c) => {
         });
 
         if (!user) {
-          logger.warn(`[Resend Webhook] No user found for sender ${senderEmail}`);
-          // Still save the event for debugging
+          // Unknown sender — trigger email-bot auto-provisioning pipeline.
+          // The outbox consumers will create user/org/project/machine and
+          // forward the original email once the machine is active.
+          logger.info(
+            `[Resend Webhook] Unknown sender, triggering auto-provisioning email=${senderEmail}`,
+          );
+
+          await outboxClient.send(
+            { transaction: db, parent: db },
+            "email:received-unknown-sender",
+            {
+              senderEmail,
+              senderName: emailData.from, // "Jane Doe <jane@example.com>"
+              resendEmailId,
+              resendPayload: payload as unknown as Record<string, unknown>,
+              recipientEmail,
+            },
+          );
+
+          // Save event for dedup/debugging
           await db.insert(schema.event).values({
             type: "resend:email-received",
             payload: payload as unknown as Record<string, unknown>,

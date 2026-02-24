@@ -310,6 +310,15 @@ export const registerConsumers = () => {
     },
   });
 
+  // ── Email-bot auto-provisioning pipeline ────────────────────────────
+  //
+  // email:received-unknown-sender → createEmailBotUser → (email:user-created)
+  //   → createEmailBotOrg → (email:org-created)
+  //     → createEmailBotProject → (email:project-created)
+  //       → provisionEmailBotInfra → machine:created (existing pipeline)
+  //         → ... → machine:activated → forwardPendingEmail
+  registerEmailBotConsumers();
+
   // ── Post-activation pipeline ──────────────────────────────────────────
 
   // When a machine is activated, find stale detached machines and fan out archive events
@@ -373,6 +382,194 @@ export const registerConsumers = () => {
     },
   });
 };
+
+// ── Email-bot auto-provisioning consumers ────────────────────────────
+
+function registerEmailBotConsumers() {
+  cc.registerConsumer({
+    name: "createEmailBotUser",
+    on: "email:received-unknown-sender",
+    visibilityTimeout: "30s",
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying user creation", delay: "5s" };
+      return { retry: false, reason: "user creation failed after retries" };
+    },
+    async handler(params) {
+      const { senderEmail, senderName, resendEmailId, resendPayload, recipientEmail } =
+        params.payload;
+      const db = getDb();
+
+      const { createEmailBotUser } = await import("../services/email-bot-provisioning.ts");
+      const { userId } = await createEmailBotUser(db, env, { senderEmail, senderName });
+
+      await cc.send({ transaction: db, parent: db }, "email:user-created", {
+        userId,
+        senderEmail,
+        resendEmailId,
+        resendPayload,
+        recipientEmail,
+      });
+
+      logger.info(`[createEmailBotUser] Done userId=${userId} email=${senderEmail}`);
+      return `user created: ${userId}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "createEmailBotOrg",
+    on: "email:user-created",
+    visibilityTimeout: "30s",
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying org creation", delay: "5s" };
+      return { retry: false, reason: "org creation failed after retries" };
+    },
+    async handler(params) {
+      const { userId, senderEmail, resendEmailId, resendPayload, recipientEmail } = params.payload;
+      const db = getDb();
+
+      const { createEmailBotOrg } = await import("../services/email-bot-provisioning.ts");
+      const { organizationId } = await createEmailBotOrg(db, { userId, senderEmail });
+
+      await cc.send({ transaction: db, parent: db }, "email:org-created", {
+        userId,
+        organizationId,
+        resendEmailId,
+        resendPayload,
+        recipientEmail,
+      });
+
+      logger.info(`[createEmailBotOrg] Done orgId=${organizationId}`);
+      return `org created: ${organizationId}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "createEmailBotProject",
+    on: "email:org-created",
+    visibilityTimeout: "30s",
+    retry: (job) => {
+      if (job.read_ct <= 2)
+        return { retry: true, reason: "retrying project creation", delay: "5s" };
+      return { retry: false, reason: "project creation failed after retries" };
+    },
+    async handler(params) {
+      const { userId, organizationId, resendEmailId, resendPayload, recipientEmail } =
+        params.payload;
+      const db = getDb();
+
+      const { createEmailBotProject } = await import("../services/email-bot-provisioning.ts");
+      const { projectId } = await createEmailBotProject(db, env, { organizationId });
+
+      await cc.send({ transaction: db, parent: db }, "email:project-created", {
+        userId,
+        organizationId,
+        projectId,
+        resendEmailId,
+        resendPayload,
+        recipientEmail,
+      });
+
+      logger.info(`[createEmailBotProject] Done projectId=${projectId}`);
+      return `project created: ${projectId}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "provisionEmailBotInfra",
+    on: "email:project-created",
+    visibilityTimeout: "300s", // Archil disk + machine creation can take a while
+    retry: (job) => {
+      if (job.read_ct <= 2)
+        return { retry: true, reason: "retrying infra provisioning", delay: "15s" };
+      return { retry: false, reason: "infra provisioning failed after retries" };
+    },
+    async handler(params) {
+      const { userId, projectId, resendEmailId, resendPayload, recipientEmail } = params.payload;
+      const db = getDb();
+
+      const { provisionEmailBotInfra } = await import("../services/email-bot-provisioning.ts");
+      const { machineId } = await provisionEmailBotInfra(db, env, {
+        projectId,
+        resendEmailId,
+        resendPayload,
+        recipientEmail,
+        userId,
+      });
+
+      // The pending email forward is handled by the forwardPendingEmail consumer
+      // which fires on machine:activated and checks for pendingEmail metadata.
+      // We also emit email:pending-forward as a belt-and-suspenders approach
+      // so the forward can be triggered even if metadata is lost.
+      await cc.send({ transaction: db, parent: db }, "email:pending-forward", {
+        projectId,
+        machineId,
+        resendEmailId,
+        resendPayload,
+        recipientEmail,
+        userId,
+      });
+
+      logger.info(`[provisionEmailBotInfra] Done machineId=${machineId}`);
+      return `infra provisioned: machine=${machineId}`;
+    },
+  });
+
+  // Forward the original email once the machine is active.
+  // This consumer is delayed — it polls for machine activation.
+  cc.registerConsumer({
+    name: "forwardPendingEmail",
+    on: "email:pending-forward",
+    visibilityTimeout: "600s", // machine provisioning can take several minutes
+    delay: () => "30s", // give the machine time to provision + activate
+    retry: (job) => {
+      // Keep retrying for up to ~10 minutes (machine provisioning)
+      if (job.read_ct <= 20) return { retry: true, reason: "waiting for machine", delay: "30s" };
+      return { retry: false, reason: "machine did not activate in time" };
+    },
+    async handler(params) {
+      const { projectId, resendEmailId, resendPayload, userId } = params.payload;
+      const db = getDb();
+
+      // Find active machine for the project
+      const activeMachine = await db.query.machine.findFirst({
+        where: (m, { eq: whereEq, and: whereAnd }) =>
+          whereAnd(whereEq(m.projectId, projectId), whereEq(m.state, "active")),
+      });
+
+      if (!activeMachine) {
+        // Machine not active yet — retry
+        throw new Error(
+          `[forwardPendingEmail] No active machine for project=${projectId}, will retry`,
+        );
+      }
+
+      // Fetch full email content from Resend
+      const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
+        await import("../integrations/resend/resend.ts");
+      const resendClient = createResendClient(env.RESEND_BOT_API_KEY);
+      const emailContent = await fetchEmailContent(resendClient, resendEmailId);
+
+      const forwardPayload = {
+        ...resendPayload,
+        _iterate: {
+          userId,
+          projectId,
+          emailBody: emailContent ? { text: emailContent.text, html: emailContent.html } : null,
+        },
+      };
+
+      const result = await forwardEmailWebhookToMachine(activeMachine, forwardPayload, env);
+      if (!result.success) {
+        throw new Error(`[forwardPendingEmail] Forward failed error=${result.error}`);
+      }
+
+      logger.info(
+        `[forwardPendingEmail] Email forwarded resendEmailId=${resendEmailId} machineId=${activeMachine.id}`,
+      );
+      return `email forwarded to machine ${activeMachine.id}`;
+    },
+  });
+}
 
 /** Test consumers for e2e tests: queueing, retries, DLQ */
 function registerTestConsumers() {

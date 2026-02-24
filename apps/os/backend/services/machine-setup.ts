@@ -128,6 +128,11 @@ export async function resolveMachineSetupData(
       : [];
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
+  // Customer repo / workspace path: first cloned repo, or the default iterate repo.
+  // When Archil is mounted at ~/src, both paths live on persistent storage automatically.
+  const customerRepoPath =
+    repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate";
+
   // Add daemon-specific env vars
   const daemonEnvVars = [
     ...unifiedEnvVars,
@@ -142,7 +147,7 @@ export async function resolveMachineSetupData(
     },
     {
       key: "ITERATE_CUSTOMER_REPO_PATH",
-      value: repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate",
+      value: customerRepoPath,
       secret: null,
       description: null,
       egressProxyRule: null,

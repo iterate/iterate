@@ -35,6 +35,27 @@ if [[ -n "${SANDBOX_ENTRY_ARGS:-}" ]]; then
 fi
 
 
+# Mount Archil persistent volume at ~/src if configured.
+# Env vars come from the sandbox provider or ~/.iterate/.env.
+if [[ -f /home/iterate/.iterate/.env ]]; then
+  set +e
+  eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' /home/iterate/.iterate/.env)"
+  set -e
+fi
+
+if [[ -n "${ARCHIL_DISK_NAME:-}" ]]; then
+  echo "[entry] Mounting Archil disk ${ARCHIL_DISK_NAME} at ~/src"
+  export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
+  if sudo --preserve-env=ARCHIL_MOUNT_TOKEN archil mount "${ARCHIL_DISK_NAME}" /home/iterate/src \
+       --region "${ARCHIL_REGION:-aws-us-east-1}" 2>&1; then
+    sudo chown -R iterate:iterate /home/iterate/src
+    echo "[entry] Archil mounted"
+  else
+    echo "[entry] WARNING: Archil mount failed, continuing without persistence"
+  fi
+  trap 'sudo archil unmount /home/iterate/src 2>/dev/null || true' EXIT
+fi
+
 # Setup console logging via named pipe (FIFO)
 # Using a FIFO keeps pidnap as direct child of tini for proper signal handling
 CONSOLE_LOG="/var/log/pidnap/console"

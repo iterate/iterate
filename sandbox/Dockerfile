@@ -104,6 +104,9 @@ USER iterate
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
+# Install Archil client (persistent POSIX volumes backed by S3/R2)
+RUN curl -s https://s3.amazonaws.com/archil-client/install | sh || true
+
 # Install uv and use that to install mitmproxy
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 RUN uv tool install mitmproxy
