@@ -1,6 +1,5 @@
 import { z } from "zod/v4";
 import { startServer } from "../start.ts";
-import { pidnapRouter } from "./procedures/pidnap.ts";
 import { tasksRouter } from "./procedures/tasks.ts";
 import { toolsRouter } from "./procedures/tools.ts";
 import { publicProcedure } from "./init.ts";
@@ -10,7 +9,6 @@ export const appRouter = {
   daemon: daemonRouter,
   tool: toolsRouter,
   task: tasksRouter,
-  pidnap: pidnapRouter,
   server: {
     start: publicProcedure
       .input(
