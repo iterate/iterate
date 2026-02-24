@@ -798,8 +798,26 @@ export class Manager {
           this.onProcessStateChange(processSlug, newState);
         });
         this.stateChangeUnsubscribes.set(processSlug, unsubscribe);
-        if (nextDesiredState === "running") {
+
+        try {
+          const entries = this.config.processes ?? [];
+          this.dependencyResolver.buildGraph(entries, this.restartingProcesses);
+          this.dependencyResolver.validateDependenciesExist();
+          this.dependencyResolver.validateNoCycles();
+        } catch (error) {
+          this.cleanupProcessResources(processSlug);
+          this.restartingProcesses.delete(processSlug);
+          this.removeProcessEntryByName(processSlug);
+          throw error;
+        }
+
+        if (
+          nextDesiredState === "running" &&
+          this.dependencyResolver.areDependenciesMet(processSlug)
+        ) {
           restartingProcess.start();
+        } else if (nextDesiredState === "running") {
+          this.logger.info(`Process ${processSlug} waiting for dependencies before start`);
         }
       } else {
         await this.reloadProcessByTarget(processSlug, nextEntry.definition, {
