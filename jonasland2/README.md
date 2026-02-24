@@ -59,5 +59,9 @@ Then hit:
   - `http://events.iterate.localhost/api/openapi.json`
   - `http://events.iterate.localhost/api/docs` (Scalar)
   - `http://events.iterate.localhost/api/events`
+- Consul UI:
+  - `http://consul.iterate.localhost/`
+- Nomad UI:
+  - `http://nomad.iterate.localhost/`
 - OpenObserve UI:
   - `http://openobserve.iterate.localhost/web/`

@@ -29,6 +29,22 @@
         }
     }
 
+    @nomad host nomad.iterate.localhost
+    handle @nomad {
+        reverse_proxy {
+            dynamic srv {
+                name nomad-client.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @consul host consul.iterate.localhost
+    handle @consul {
+        reverse_proxy 127.0.0.1:8500
+    }
+
     reverse_proxy {
         dynamic srv {
             name egress-proxy.service.consul
@@ -70,6 +86,22 @@
                 refresh 1s
             }
         }
+    }
+
+    @nomad host nomad.iterate.localhost
+    handle @nomad {
+        reverse_proxy {
+            dynamic srv {
+                name nomad-client.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @consul host consul.iterate.localhost
+    handle @consul {
+        reverse_proxy 127.0.0.1:8500
     }
 
     reverse_proxy {

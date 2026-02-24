@@ -1,35 +1,15 @@
-import { createServer, request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { createServer } from "node:http";
+import httpProxy from "http-proxy";
 
 const port = Number(process.env.PORT || "19000");
 const externalProxy = process.env.ITERATE_EXTERNAL_EGRESS_PROXY || "";
 const egressSeenHeader = "x-egress-proxy-seen";
 
-const hopByHop = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "host",
-]);
-
-function filteredHeaders(headers, options = {}) {
-  const stripHopByHop = options.stripHopByHop ?? true;
-  const stripHost = options.stripHost ?? true;
-  const next = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (value == null) continue;
-    const lowerKey = key.toLowerCase();
-    if (stripHost && lowerKey === "host") continue;
-    if (stripHopByHop && hopByHop.has(lowerKey)) continue;
-    next[key] = value;
-  }
-  return next;
-}
+const proxy = httpProxy.createProxyServer({
+  ws: true,
+  xfwd: true,
+  secure: false,
+});
 
 function normalizeProxyProtocol(url, protocolKind) {
   if (protocolKind === "ws") {
@@ -41,6 +21,48 @@ function normalizeProxyProtocol(url, protocolKind) {
   if (url.protocol === "ws:") url.protocol = "http:";
   if (url.protocol === "wss:") url.protocol = "https:";
   return url;
+}
+
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0] || "";
+  return value || "";
+}
+
+function buildTransparentTarget(req, protocolKind) {
+  const rawUrl = req.url || "/";
+  if (/^https?:\/\//i.test(rawUrl) || /^wss?:\/\//i.test(rawUrl)) {
+    return normalizeProxyProtocol(new URL(rawUrl), protocolKind).toString();
+  }
+
+  const host =
+    firstHeaderValue(req.headers["x-original-host"]) || firstHeaderValue(req.headers.host);
+  if (!host) return null;
+
+  const proto = String(firstHeaderValue(req.headers["x-original-proto"])).toLowerCase();
+  let scheme = "http";
+  if (protocolKind === "ws") {
+    scheme = proto === "https" || proto === "wss" ? "wss" : "ws";
+  } else {
+    scheme = proto === "https" || proto === "wss" ? "https" : "http";
+  }
+
+  const path = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
+  return `${scheme}://${host}${path}`;
+}
+
+function resolveProxyRequest(req, protocolKind) {
+  const target = resolveTarget(req, protocolKind);
+  if (!target) return null;
+
+  const targetUrl = new URL(target.url);
+  const targetOrigin = `${targetUrl.protocol}//${targetUrl.host}`;
+  const pathWithQuery = `${targetUrl.pathname}${targetUrl.search}`;
+
+  return {
+    mode: target.mode,
+    targetOrigin,
+    pathWithQuery,
+  };
 }
 
 function resolveTarget(req, protocolKind) {
@@ -57,26 +79,34 @@ function resolveTarget(req, protocolKind) {
 
   const directUrl = req.headers["x-target-url"];
   if (!directUrl || Array.isArray(directUrl)) {
-    return null;
+    const transparentUrl = buildTransparentTarget(req, protocolKind);
+    if (!transparentUrl) return null;
+    return { mode: "transparent", url: transparentUrl };
   }
 
   return { mode: "direct", url: directUrl };
 }
 
-function writeUpgradeResponse(socket, statusCode, statusMessage, headers) {
-  socket.write(`HTTP/1.1 ${String(statusCode)} ${statusMessage}\r\n`);
-  for (const [key, value] of Object.entries(headers)) {
-    if (value == null) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        socket.write(`${key}: ${item}\r\n`);
-      }
-      continue;
-    }
-    socket.write(`${key}: ${value}\r\n`);
-  }
-  socket.write("\r\n");
-}
+proxy.on("proxyRes", (proxyRes, req) => {
+  proxyRes.headers[egressSeenHeader] = "1";
+  proxyRes.headers["x-egress-mode"] = String(req.headers["x-egress-mode"] || "unknown");
+});
+
+proxy.on("error", (error, req, res) => {
+  if (!res || typeof res.writeHead !== "function") return;
+  if (res.headersSent) return;
+  res.writeHead(502, {
+    "content-type": "application/json",
+    "x-egress-mode": String(req?.headers?.["x-egress-mode"] || "unknown"),
+    [egressSeenHeader]: "1",
+  });
+  res.end(
+    JSON.stringify({
+      error: "egress_forward_failed",
+      message: error instanceof Error ? error.message : "proxy_error",
+    }),
+  );
+});
 
 const server = createServer(async (req, res) => {
   if ((req.url || "") === "/healthz") {
@@ -85,52 +115,27 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const target = resolveTarget(req, "http");
-  if (!target) {
+  const resolved = resolveProxyRequest(req, "http");
+  if (!resolved) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "missing_target_url" }));
     return;
   }
 
-  const bodyParts = [];
-  for await (const chunk of req) {
-    bodyParts.push(chunk);
-  }
+  req.url = resolved.pathWithQuery;
+  req.headers.host = new URL(resolved.targetOrigin).host;
+  req.headers[egressSeenHeader] = "1";
+  req.headers["x-egress-mode"] = resolved.mode;
 
-  const init = {
-    method: req.method,
-    headers: filteredHeaders(req.headers),
-    redirect: "manual",
-  };
-  init.headers[egressSeenHeader] = "1";
-  init.headers["x-egress-mode"] = target.mode;
-
-  if (bodyParts.length > 0) {
-    init.body = Buffer.concat(bodyParts);
-  }
-
-  try {
-    const upstream = await fetch(target.url, init);
-    const responseHeaders = filteredHeaders(Object.fromEntries(upstream.headers.entries()));
-    responseHeaders["x-egress-mode"] = target.mode;
-    responseHeaders[egressSeenHeader] = "1";
-
-    const responseBody = Buffer.from(await upstream.arrayBuffer());
-    res.writeHead(upstream.status, responseHeaders);
-    res.end(responseBody);
-  } catch {
-    res.writeHead(502, {
-      "content-type": "application/json",
-      "x-egress-mode": target.mode,
-      [egressSeenHeader]: "1",
-    });
-    res.end(JSON.stringify({ error: "egress_forward_failed" }));
-  }
+  proxy.web(req, res, {
+    target: resolved.targetOrigin,
+    changeOrigin: true,
+  });
 });
 
 server.on("upgrade", (req, socket, head) => {
-  const target = resolveTarget(req, "ws");
-  if (!target) {
+  const resolved = resolveProxyRequest(req, "ws");
+  if (!resolved) {
     socket.write(
       'HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\n\r\n{"error":"missing_target_url"}',
     );
@@ -138,69 +143,15 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  const targetUrl = new URL(target.url);
-  const isSecure = targetUrl.protocol === "wss:" || targetUrl.protocol === "https:";
-  const requestFn = isSecure ? httpsRequest : httpRequest;
-  const upstreamHeaders = filteredHeaders(req.headers, { stripHopByHop: false, stripHost: true });
-  upstreamHeaders[egressSeenHeader] = "1";
-  upstreamHeaders["x-egress-mode"] = target.mode;
+  req.url = resolved.pathWithQuery;
+  req.headers.host = new URL(resolved.targetOrigin).host;
+  req.headers[egressSeenHeader] = "1";
+  req.headers["x-egress-mode"] = resolved.mode;
 
-  const upstreamRequest = requestFn({
-    protocol: isSecure ? "https:" : "http:",
-    hostname: targetUrl.hostname,
-    port: targetUrl.port || (isSecure ? "443" : "80"),
-    path: `${targetUrl.pathname}${targetUrl.search}`,
-    method: "GET",
-    headers: upstreamHeaders,
+  proxy.ws(req, socket, head, {
+    target: resolved.targetOrigin,
+    changeOrigin: true,
   });
-
-  upstreamRequest.on("upgrade", (upstreamResponse, upstreamSocket, upstreamHead) => {
-    const responseHeaders = filteredHeaders(upstreamResponse.headers, {
-      stripHopByHop: false,
-      stripHost: true,
-    });
-    responseHeaders["x-egress-mode"] = target.mode;
-    responseHeaders[egressSeenHeader] = "1";
-
-    writeUpgradeResponse(
-      socket,
-      upstreamResponse.statusCode || 101,
-      upstreamResponse.statusMessage || "Switching Protocols",
-      responseHeaders,
-    );
-
-    if (head.length > 0) upstreamSocket.write(head);
-    if (upstreamHead.length > 0) socket.write(upstreamHead);
-
-    socket.pipe(upstreamSocket);
-    upstreamSocket.pipe(socket);
-
-    upstreamSocket.on("error", () => socket.destroy());
-    socket.on("error", () => upstreamSocket.destroy());
-  });
-
-  upstreamRequest.on("response", (upstreamResponse) => {
-    writeUpgradeResponse(
-      socket,
-      upstreamResponse.statusCode || 502,
-      upstreamResponse.statusMessage || "Bad Gateway",
-      {
-        ...filteredHeaders(upstreamResponse.headers, { stripHopByHop: false, stripHost: true }),
-        "x-egress-mode": target.mode,
-        [egressSeenHeader]: "1",
-      },
-    );
-    upstreamResponse.pipe(socket);
-  });
-
-  upstreamRequest.on("error", () => {
-    socket.write(
-      `HTTP/1.1 502 Bad Gateway\r\ncontent-type: application/json\r\nx-egress-mode: ${target.mode}\r\n${egressSeenHeader}: 1\r\n\r\n{"error":"egress_upgrade_failed"}`,
-    );
-    socket.destroy();
-  });
-
-  upstreamRequest.end();
 });
 
 server.listen(port, "0.0.0.0");

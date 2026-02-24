@@ -17,6 +17,7 @@
     "@orpc/server": "1.13.4",
     "@orpc/zod": "1.13.4",
     "hono": "^4.10.6",
+    "http-proxy": "^1.18.1",
     "tsx": "^4.20.6"
   },
   "devDependencies": {
