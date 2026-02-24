@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
 /** Prefixes allowed by default. Use --prefix to bypass this restriction. */
-const ALLOWED_PREFIXES = new Set(["dev", "stg"]);
+const ALLOWED_PREFIXES = new Set(["dev", "stg", "test"]);
 const LIST_APPS_PAGE_SIZE = 100;
 
 const FLY_ORG_APPS_QUERY = `
@@ -27,7 +27,7 @@ const FLY_ORG_APPS_QUERY = `
 const FlyEnv = z.object({
   FLY_API_TOKEN: z.string().optional(),
   FLY_ORG: z.string().default("iterate"),
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]).optional(),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd", "test"]).optional(),
 });
 
 type FlyEnv = z.infer<typeof FlyEnv>;
