@@ -29,6 +29,17 @@
         }
     }
 
+    @orders host orders.iterate.localhost
+    handle @orders {
+        reverse_proxy {
+            dynamic srv {
+                name orders-service.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
     @nomad host nomad.iterate.localhost
     handle @nomad {
         reverse_proxy {
@@ -82,6 +93,17 @@
         reverse_proxy {
             dynamic srv {
                 name events-service.service.consul
+                resolvers 127.0.0.1:53
+                refresh 1s
+            }
+        }
+    }
+
+    @orders host orders.iterate.localhost
+    handle @orders {
+        reverse_proxy {
+            dynamic srv {
+                name orders-service.service.consul
                 resolvers 127.0.0.1:53
                 refresh 1s
             }

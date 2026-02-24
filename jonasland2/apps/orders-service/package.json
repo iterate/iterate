@@ -1,5 +1,5 @@
 {
-  "name": "@jonasland2/events-service",
+  "name": "@jonasland2/orders-service",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,6 +9,7 @@
   "dependencies": {
     "@jonasland2/events-contract": "file:../events-contract",
     "@jonasland2/orpc-shared": "file:../orpc-shared",
+    "@jonasland2/orders-contract": "file:../orders-contract",
     "@orpc/openapi": "^1.13.5",
     "@orpc/server": "^1.13.5",
     "@orpc/zod": "^1.13.5"

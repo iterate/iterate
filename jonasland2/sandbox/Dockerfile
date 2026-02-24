@@ -35,7 +35,10 @@ COPY apps /app/apps
 RUN npm install --omit=dev --no-audit --no-fund
 RUN mkdir -p /app/node_modules/@jonasland2 && \
     ln -sf /app/apps/events-contract /app/node_modules/@jonasland2/events-contract && \
-    ln -sf /app/apps/events-service /app/node_modules/@jonasland2/events-service
+    ln -sf /app/apps/events-service /app/node_modules/@jonasland2/events-service && \
+    ln -sf /app/apps/orders-contract /app/node_modules/@jonasland2/orders-contract && \
+    ln -sf /app/apps/orders-service /app/node_modules/@jonasland2/orders-service && \
+    ln -sf /app/apps/orpc-shared /app/node_modules/@jonasland2/orpc-shared
 COPY caddy/Caddyfile /etc/jonasland2/caddy/Caddyfile
 COPY nomad/base.hcl /etc/jonasland2/nomad/base.hcl
 COPY nomad/jobs/*.nomad.hcl /etc/jonasland2/nomad/jobs/
@@ -45,6 +48,6 @@ RUN chmod +x /etc/jonasland2/start.sh && \
     mkdir -p /nomad-data /consul-data /caddy-data /var/lib/openobserve && \
     chown -R node:node /caddy-data /var/lib/openobserve
 
-EXPOSE 53 80 443 8500 4646 2019 5080 19000 19010
+EXPOSE 53 80 443 8500 4646 2019 5080 19000 19010 19020
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/etc/jonasland2/start.sh"]

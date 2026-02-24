@@ -7,15 +7,15 @@ import {
 import { OpenAPIHandler } from "@orpc/openapi/node";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { eventsRouter } from "./router.ts";
+import { ordersRouter } from "./router.ts";
 
-const serviceName = "jonasland2-events-service";
-const port = Number(process.env.EVENTS_SERVICE_PORT || "19010");
+const serviceName = "jonasland2-orders-service";
+const port = Number(process.env.ORDERS_SERVICE_PORT || "19020");
 const log = createServiceLogger(serviceName);
 
 initializeServiceOtel(serviceName);
 
-const openapiHandler = new OpenAPIHandler(eventsRouter, {
+const openapiHandler = new OpenAPIHandler(ordersRouter, {
   plugins: [
     new OpenAPIReferencePlugin({
       docsProvider: "scalar",
@@ -24,7 +24,7 @@ const openapiHandler = new OpenAPIHandler(eventsRouter, {
       schemaConverters: [new ZodToJsonSchemaConverter()],
       specGenerateOptions: {
         info: {
-          title: "jonasland2 events-service API",
+          title: "jonasland2 orders-service API",
           version: "1.0.0",
         },
         servers: [{ url: "/api" }],

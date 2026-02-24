@@ -38,6 +38,7 @@ async function createBuildContextTar(): Promise<Buffer> {
     "nomad/jobs/openobserve.nomad.hcl",
     "nomad/jobs/egress.nomad.hcl",
     "nomad/jobs/events-service.nomad.hcl",
+    "nomad/jobs/orders-service.nomad.hcl",
   ]) {
     await addFile(pack, join(sandboxDir, file), file);
   }
@@ -46,9 +47,15 @@ async function createBuildContextTar(): Promise<Buffer> {
     "apps/events-contract/package.json",
     "apps/events-contract/src/index.ts",
     "apps/events-service/package.json",
-    "apps/events-service/src/otel-init.ts",
     "apps/events-service/src/router.ts",
     "apps/events-service/src/server.ts",
+    "apps/orders-contract/package.json",
+    "apps/orders-contract/src/index.ts",
+    "apps/orders-service/package.json",
+    "apps/orders-service/src/router.ts",
+    "apps/orders-service/src/server.ts",
+    "apps/orpc-shared/package.json",
+    "apps/orpc-shared/src/index.ts",
   ]) {
     await addFile(pack, join(jonasland2Dir, file), file);
   }

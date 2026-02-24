@@ -1,5 +1,5 @@
 {
-  "name": "@jonasland2/events-contract",
+  "name": "@jonasland2/orders-contract",
   "private": true,
   "type": "module",
   "exports": {

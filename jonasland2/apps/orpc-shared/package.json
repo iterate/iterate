@@ -1,9 +1,9 @@
 {
-  "name": "@iterate-com/jonasland2-sandbox",
+  "name": "@jonasland2/orpc-shared",
   "private": true,
   "type": "module",
-  "scripts": {
-    "build": "tsx build-docker-image.ts"
+  "exports": {
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -13,16 +13,6 @@
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-node": "^0.206.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
-    "@orpc/contract": "1.13.5",
-    "@orpc/openapi": "1.13.5",
-    "@orpc/otel": "1.13.5",
-    "@orpc/server": "1.13.5",
-    "@orpc/zod": "1.13.5",
-    "http-proxy": "^1.18.1",
-    "tsx": "^4.20.6"
-  },
-  "devDependencies": {
-    "@docker/node-sdk": "^0.0.17",
-    "tar-stream": "^3.1.7"
+    "@orpc/otel": "^1.13.5"
   }
 }

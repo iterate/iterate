@@ -1,20 +1,21 @@
-job "events-service" {
+job "orders-service" {
   datacenters = ["dc1"]
   type        = "service"
 
-  group "events-service" {
+  group "orders-service" {
     network {
       port "http" {
-        static = 19010
+        static = 19020
       }
     }
 
-    task "events-service" {
+    task "orders-service" {
       driver = "raw_exec"
       user   = "node"
 
       env {
-        EVENTS_SERVICE_PORT                 = "${NOMAD_PORT_http}"
+        ORDERS_SERVICE_PORT                = "${NOMAD_PORT_http}"
+        EVENTS_SERVICE_BASE_URL            = "http://events-service.service.consul:19010/api"
         OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "http://127.0.0.1:5080/api/default/v1/traces"
         OTEL_EXPORTER_OTLP_HEADERS         = "Authorization=Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
         OTEL_CORRELATED_LOGS_ENDPOINT      = "http://127.0.0.1:5080/api/default/orpc_logs/_json"
@@ -23,11 +24,11 @@ job "events-service" {
 
       config {
         command = "/app/node_modules/.bin/tsx"
-        args    = ["/app/apps/events-service/src/server.ts"]
+        args    = ["/app/apps/orders-service/src/server.ts"]
       }
 
       service {
-        name = "events-service"
+        name = "orders-service"
         port = "http"
         check {
           type     = "http"
