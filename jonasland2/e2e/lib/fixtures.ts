@@ -1,36 +1,22 @@
 import { DockerClient } from "@docker/node-sdk";
-import { createMiddleware } from "@mswjs/http-middleware";
-import express from "express";
-import type { RequestHandler as MswRequestHandler } from "msw";
-import { randomUUID } from "node:crypto";
+import { getLocal, type CompletedRequest, type Mockttp } from "mockttp";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { WebSocketServer } from "ws";
 
-type MswHandler = MswRequestHandler;
-type MswOnUnhandledRequest = "bypass" | "warn" | "error";
-type MswRequestPhase = "start" | "match" | "unhandled" | "end";
+type MockttpOnUnhandledRequest = "bypass" | "warn" | "error";
 
-export interface MswRequestRecord {
-  phase: MswRequestPhase;
-  requestId: string;
-  method: string;
-  url: URL;
-  request: Request;
-  atMs: number;
-}
-
-export interface MswRequestFilter {
+export interface ProxyRequestFilter {
   method?: string;
   url?: string | RegExp | ((url: URL) => boolean);
   pathname?: string | RegExp;
-  predicate?: (record: MswRequestRecord) => boolean;
+  predicate?: (request: CompletedRequest) => boolean;
 }
 
 export interface WaitForRequestOptions {
-  phase?: MswRequestPhase;
   timeoutMs?: number;
+  source?: "all" | "unhandled";
 }
 
 let dockerClientPromise: Promise<DockerClient> | undefined;
@@ -69,37 +55,6 @@ function captureOutput(stream: PassThrough): { flush: () => string } {
   };
 }
 
-function sanitizeHeaders(headers: Headers | Record<string, string | string[] | undefined>) {
-  const hopByHop = new Set([
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "host",
-  ]);
-
-  const next: Record<string, string> = {};
-
-  if (headers instanceof Headers) {
-    for (const [key, value] of headers.entries()) {
-      if (!hopByHop.has(key.toLowerCase())) next[key] = value;
-    }
-    return next;
-  }
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (value == null) continue;
-    if (hopByHop.has(key.toLowerCase())) continue;
-    next[key] = Array.isArray(value) ? value.join(",") : value;
-  }
-
-  return next;
-}
-
 function urlMatches(
   actual: URL,
   expected: string | RegExp | ((url: URL) => boolean) | undefined,
@@ -116,33 +71,21 @@ function pathnameMatches(actual: URL, expected: string | RegExp | undefined): bo
   return expected.test(actual.pathname);
 }
 
-function requestMatches(record: MswRequestRecord, filter: MswRequestFilter): boolean {
-  if (filter.method && record.method.toUpperCase() !== filter.method.toUpperCase()) return false;
-  if (!urlMatches(record.url, filter.url)) return false;
-  if (!pathnameMatches(record.url, filter.pathname)) return false;
-  if (filter.predicate && !filter.predicate(record)) return false;
+function requestUrl(request: CompletedRequest): URL {
+  return new URL(request.url);
+}
+
+function requestMatches(request: CompletedRequest, filter: ProxyRequestFilter): boolean {
+  if (filter.method && request.method.toUpperCase() !== filter.method.toUpperCase()) return false;
+  const url = requestUrl(request);
+  if (!urlMatches(url, filter.url)) return false;
+  if (!pathnameMatches(url, filter.pathname)) return false;
+  if (filter.predicate && !filter.predicate(request)) return false;
   return true;
 }
 
-function recordFromEvent(
-  phase: MswRequestPhase,
-  requestId: string,
-  request: Request,
-): MswRequestRecord {
-  return {
-    phase,
-    requestId,
-    method: request.method,
-    url: new URL(request.url),
-    request,
-    atMs: Date.now(),
-  };
-}
-
-function summarizeRequestRecords(records: MswRequestRecord[]): string {
-  return records
-    .map((record) => `${record.phase.toUpperCase()} ${record.method} ${record.url.toString()}`)
-    .join("\n");
+function summarizeRequests(requests: CompletedRequest[]): string {
+  return requests.map((request) => `${request.method.toUpperCase()} ${request.url}`).join("\n");
 }
 
 export async function dockerPing(): Promise<boolean> {
@@ -250,25 +193,21 @@ export async function execInContainer(params: {
   };
 }
 
-export interface MswProxyFixture extends AsyncDisposable {
+export interface MockttpProxyFixture extends AsyncDisposable {
   proxyUrl: string;
   hostProxyUrl: string;
-  use(...handlers: MswHandler[]): void;
-  resetHandlers(...handlers: MswHandler[]): void;
-  restoreHandlers(): void;
-  boundary<Args extends Array<unknown>, ReturnValue>(
-    callback: (...args: Args) => ReturnValue,
-  ): (...args: Args) => ReturnValue;
-  listRequests(phase?: MswRequestPhase): MswRequestRecord[];
+  server: Mockttp;
+  listRequests(): CompletedRequest[];
+  listUnhandledRequests(): CompletedRequest[];
   waitForRequest(
-    filter: MswRequestFilter,
+    filter: ProxyRequestFilter,
     options?: WaitForRequestOptions,
-  ): Promise<MswRequestRecord>;
+  ): Promise<CompletedRequest>;
   expectRequest(
-    filter: MswRequestFilter,
+    filter: ProxyRequestFilter,
     options?: WaitForRequestOptions,
-  ): Promise<MswRequestRecord>;
-  expectNoUnhandledRequests(filter?: MswRequestFilter): void;
+  ): Promise<CompletedRequest>;
+  expectNoUnhandledRequests(filter?: ProxyRequestFilter): void;
 }
 
 export interface WebSocketHandshakeRecord {
@@ -374,112 +313,62 @@ export async function webSocketEchoServerFixture(): Promise<WebSocketEchoServerF
   };
 }
 
-export async function mswProxyFixture(params?: {
-  handlers?: MswHandler[];
-  onUnhandledRequest?: MswOnUnhandledRequest;
-  upstreamOrigin?: string;
-}): Promise<MswProxyFixture> {
-  const upstreamOrigin = params?.upstreamOrigin ?? "https://upstream.iterate.localhost";
+export async function mockttpProxyFixture(params?: {
+  onUnhandledRequest?: MockttpOnUnhandledRequest;
+}): Promise<MockttpProxyFixture> {
   const onUnhandledRequest = params?.onUnhandledRequest ?? "bypass";
-  const requestRecords: MswRequestRecord[] = [];
+  const server = getLocal();
+  await server.start();
 
-  let initialHandlers = [...(params?.handlers ?? [])];
-  let runtimeHandlers: MswHandler[] = [];
+  const seenRequests: CompletedRequest[] = [];
+  const unhandledRequests: CompletedRequest[] = [];
 
-  function activeHandlers(): MswHandler[] {
-    return [...runtimeHandlers, ...initialHandlers];
-  }
+  await server.on("request", (request) => {
+    seenRequests.push(request);
+  });
 
-  const app = express();
-  app.use(async (req, res, next) => {
-    try {
-      const targetUrl = new URL(req.url || "/", upstreamOrigin);
-      const requestId = randomUUID();
-      const requestMethod = req.method || "GET";
-      const requestForRecord = new Request(targetUrl.toString(), {
-        method: requestMethod,
-        headers: new Headers(
-          sanitizeHeaders(req.headers as unknown as Record<string, string | string[] | undefined>),
-        ),
-      });
-
-      requestRecords.push(recordFromEvent("start", requestId, requestForRecord));
-      req.url = targetUrl.toString();
-
-      const middleware = createMiddleware(...activeHandlers());
-      let passthrough = false;
-      let middlewareError: unknown;
-      await middleware(req, res, (error?: unknown) => {
-        passthrough = true;
-        middlewareError = error;
-      });
-
-      if (middlewareError) throw middlewareError;
-
-      if (!passthrough) {
-        requestRecords.push(recordFromEvent("match", requestId, requestForRecord));
-        requestRecords.push(recordFromEvent("end", requestId, requestForRecord));
-        return;
-      }
-
-      requestRecords.push(recordFromEvent("unhandled", requestId, requestForRecord));
-      requestRecords.push(recordFromEvent("end", requestId, requestForRecord));
-
-      const message = `Unhandled request: ${requestMethod} ${targetUrl.toString()}`;
+  await server
+    .forUnmatchedRequest()
+    .always()
+    .thenCallback((request) => {
+      unhandledRequests.push(request);
+      const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
       if (onUnhandledRequest === "error") {
-        res.status(500).json({ error: "msw_unhandled_request", message });
-        return;
+        return {
+          statusCode: 500,
+          json: { error: "mock_unhandled_request", message },
+        };
       }
 
-      res.status(404).json({
-        error: onUnhandledRequest === "warn" ? "msw_unhandled_request" : "mock_not_found",
-        message,
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.use((error: unknown, _req: unknown, res: any, _next: unknown) => {
-    res.status(502).json({
-      error: "msw_proxy_failed",
-      message: error instanceof Error ? error.message : String(error),
+      return {
+        statusCode: 404,
+        json: {
+          error: onUnhandledRequest === "warn" ? "mock_unhandled_request" : "mock_not_found",
+          message,
+        },
+      };
     });
-  });
-
-  const proxy = app.listen(0, "127.0.0.1");
-  await once(proxy, "listening");
-
-  const address = proxy.address();
-  if (!address || typeof address === "string") {
-    proxy.close();
-    throw new Error("proxy address unavailable");
-  }
 
   async function waitForRequest(
-    filter: MswRequestFilter,
+    filter: ProxyRequestFilter,
     options?: WaitForRequestOptions,
-  ): Promise<MswRequestRecord> {
-    const phase = options?.phase ?? "match";
+  ): Promise<CompletedRequest> {
     const timeoutMs = options?.timeoutMs ?? 7_500;
+    const source = options?.source ?? "all";
 
-    const existing = requestRecords.find(
-      (record) => record.phase === phase && requestMatches(record, filter),
-    );
-    if (existing) return existing;
+    const getPool = () => (source === "unhandled" ? unhandledRequests : seenRequests);
+    const firstMatch = getPool().find((request) => requestMatches(request, filter));
+    if (firstMatch) return firstMatch;
 
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      const current = requestRecords.find(
-        (record) => record.phase === phase && requestMatches(record, filter),
-      );
-      if (current) return current;
+      const match = getPool().find((request) => requestMatches(request, filter));
+      if (match) return match;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
 
-    const seenForPhase = requestRecords.filter((record) => record.phase === phase);
     throw new Error(
-      `Timed out waiting for MSW ${phase} request.\nFilter=${JSON.stringify(
+      `Timed out waiting for ${source} request.\nFilter=${JSON.stringify(
         {
           method: filter.method,
           url: typeof filter.url === "string" ? filter.url : String(filter.url),
@@ -488,50 +377,36 @@ export async function mswProxyFixture(params?: {
         },
         null,
         2,
-      )}\nSeen:\n${summarizeRequestRecords(seenForPhase) || "(none)"}`,
+      )}\nSeen:\n${summarizeRequests(getPool()) || "(none)"}`,
     );
   }
 
   return {
-    proxyUrl: `http://host.docker.internal:${String(address.port)}`,
-    hostProxyUrl: `http://127.0.0.1:${String(address.port)}`,
-    use(...handlers: MswHandler[]) {
-      runtimeHandlers = [...handlers, ...runtimeHandlers];
+    proxyUrl: `http://host.docker.internal:${String(server.port)}`,
+    hostProxyUrl: `http://127.0.0.1:${String(server.port)}`,
+    server,
+    listRequests() {
+      return [...seenRequests];
     },
-    resetHandlers(...handlers: MswHandler[]) {
-      if (handlers.length > 0) initialHandlers = [...handlers];
-      runtimeHandlers = [];
+    listUnhandledRequests() {
+      return [...unhandledRequests];
     },
-    restoreHandlers() {
-      // no-op: fixture uses explicit local handler arrays
-    },
-    boundary<Args extends Array<unknown>, ReturnValue>(
-      callback: (...args: Args) => ReturnValue,
-    ): (...args: Args) => ReturnValue {
-      return callback;
-    },
-    listRequests(phase?: MswRequestPhase) {
-      if (!phase) return [...requestRecords];
-      return requestRecords.filter((record) => record.phase === phase);
-    },
-    async waitForRequest(filter: MswRequestFilter, options?: WaitForRequestOptions) {
+    async waitForRequest(filter: ProxyRequestFilter, options?: WaitForRequestOptions) {
       return await waitForRequest(filter, options);
     },
-    async expectRequest(filter: MswRequestFilter, options?: WaitForRequestOptions) {
+    async expectRequest(filter: ProxyRequestFilter, options?: WaitForRequestOptions) {
       return await waitForRequest(filter, options);
     },
-    expectNoUnhandledRequests(filter?: MswRequestFilter) {
-      const unhandled = requestRecords
-        .filter((record) => record.phase === "unhandled")
-        .filter((record) => (filter ? requestMatches(record, filter) : true));
-      if (unhandled.length > 0) {
-        throw new Error(`MSW captured unhandled requests:\n${summarizeRequestRecords(unhandled)}`);
+    expectNoUnhandledRequests(filter?: ProxyRequestFilter) {
+      const unmatched = unhandledRequests.filter((request) =>
+        filter ? requestMatches(request, filter) : true,
+      );
+      if (unmatched.length > 0) {
+        throw new Error(`Mockttp captured unmatched requests:\n${summarizeRequests(unmatched)}`);
       }
     },
     async [Symbol.asyncDispose]() {
-      await new Promise<void>((resolve) => {
-        proxy.close(() => resolve());
-      });
+      await server.stop();
     },
   };
 }

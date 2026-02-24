@@ -7,9 +7,7 @@
   },
   "devDependencies": {
     "@docker/node-sdk": "^0.0.17",
-    "@mswjs/http-middleware": "^0.10.3",
-    "express": "^5.2.1",
-    "msw": "^2.12.2",
+    "mockttp": "^4.2.1",
     "vitest": "^4.0.18",
     "ws": "^8.18.3"
   }

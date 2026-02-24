@@ -1,18 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
 import {
   dockerContainerFixture,
   dockerPing,
   execInContainer,
-  mswProxyFixture,
+  mockttpProxyFixture,
   waitForHttpOk,
   webSocketEchoServerFixture,
 } from "./lib/fixtures.ts";
 
 const image = process.env.JONASLAND2_SANDBOX_IMAGE || "jonasland2-sandbox:local";
 const concurrentCaseIds = Array.from({ length: 10 }, (_, index) => `case-${String(index + 1)}`);
+
+function headerValue(headers: Record<string, string | string[] | undefined>, name: string) {
+  const value = headers[name];
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
 
 async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<string> }) {
   try {
@@ -25,10 +30,10 @@ async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<
   }
 }
 
-describe("msw proxy fixture concurrency proof", () => {
+describe("mockttp proxy fixture concurrency proof", () => {
   test.concurrent("parallel fixtures bind distinct host ports", async () => {
     const fixtures = await Promise.all(
-      Array.from({ length: 8 }, () => mswProxyFixture({ onUnhandledRequest: "error" })),
+      Array.from({ length: 8 }, () => mockttpProxyFixture({ onUnhandledRequest: "error" })),
     );
 
     try {
@@ -45,19 +50,18 @@ describe("msw proxy fixture concurrency proof", () => {
 
   for (const caseId of concurrentCaseIds) {
     test.concurrent(`isolates handlers on shared route (${caseId})`, async () => {
-      await using msw = await mswProxyFixture({ onUnhandledRequest: "error" });
-      msw.use(
-        http.get("https://upstream.iterate.localhost/shared", ({ request }) => {
-          return HttpResponse.json({
-            caseId,
-            seenHeader: request.headers.get("x-test-case"),
-          });
-        }),
-      );
+      await using proxy = await mockttpProxyFixture({ onUnhandledRequest: "error" });
+      await proxy.server.forGet("/shared").thenCallback((request) => ({
+        statusCode: 200,
+        json: {
+          caseId,
+          seenHeader: headerValue(request.headers, "x-test-case"),
+        },
+      }));
 
       await delay(Math.floor(Math.random() * 40));
 
-      const response = await fetch(`${msw.hostProxyUrl}/shared`, {
+      const response = await fetch(`${proxy.hostProxyUrl}/shared`, {
         headers: { "x-test-case": caseId },
       });
       expect(response.status).toBe(200);
@@ -66,32 +70,28 @@ describe("msw proxy fixture concurrency proof", () => {
         seenHeader: caseId,
       });
 
-      const seen = await msw.expectRequest({
+      const seen = await proxy.expectRequest({
         method: "GET",
         pathname: "/shared",
       });
-      expect(seen.request.headers.get("x-test-case")).toBe(caseId);
-      expect(msw.listRequests("match")).toHaveLength(1);
-      msw.expectNoUnhandledRequests();
+      expect(headerValue(seen.headers, "x-test-case")).toBe(caseId);
+      expect(proxy.listRequests()).toHaveLength(1);
+      proxy.expectNoUnhandledRequests();
     });
   }
 
   for (const caseId of concurrentCaseIds.slice(0, 4)) {
     test.concurrent(`late-bound handlers stay isolated (${caseId})`, async () => {
-      await using msw = await mswProxyFixture({ onUnhandledRequest: "error" });
+      await using proxy = await mockttpProxyFixture({ onUnhandledRequest: "error" });
       const path = "/late-bind";
 
       await delay(Math.floor(Math.random() * 40));
-      msw.use(
-        http.get(`https://upstream.iterate.localhost${path}`, () => {
-          return HttpResponse.json({ caseId });
-        }),
-      );
+      await proxy.server.forGet(path).thenJson(200, { caseId });
 
-      const response = await fetch(`${msw.hostProxyUrl}${path}`);
+      const response = await fetch(`${proxy.hostProxyUrl}${path}`);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ caseId });
-      msw.expectNoUnhandledRequests();
+      proxy.expectNoUnhandledRequests();
     });
   }
 });
@@ -205,8 +205,8 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     expect(orpcStatus.output.trim()).toBe("404");
   }, 120_000);
 
-  test("late-bound MSW handler + curl prove caddy MITM + iptables REDIRECT egress flow", async () => {
-    await using msw = await mswProxyFixture({
+  test("late-bound mockttp rule + curl prove caddy MITM + iptables REDIRECT egress flow", async () => {
+    await using proxy = await mockttpProxyFixture({
       onUnhandledRequest: "bypass",
     });
 
@@ -214,7 +214,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
       image,
       name: `jonasland2-e2e-${randomUUID()}`,
       env: {
-        ITERATE_EXTERNAL_EGRESS_PROXY: msw.proxyUrl,
+        ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
       exposedPorts: ["80/tcp", "443/tcp", "2019/tcp"],
       extraHosts: ["host.docker.internal:host-gateway", "upstream.iterate.localhost:203.0.113.10"],
@@ -225,14 +225,13 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     const caddyAdminPort = await container.publishedPort("2019/tcp");
     await waitForHealthyWithLogs(`http://127.0.0.1:${String(caddyHttpPort)}/healthz`, container);
 
-    msw.use(
-      http.get("https://upstream.iterate.localhost/from-curl", ({ request }) => {
-        return HttpResponse.json({
-          ok: true,
-          path: new URL(request.url).pathname,
-        });
-      }),
-    );
+    await proxy.server.forGet("/from-curl").thenCallback((request) => ({
+      statusCode: 200,
+      json: {
+        ok: true,
+        path: new URL(request.url).pathname,
+      },
+    }));
 
     const curl = await execInContainer({
       containerId: container.containerId,
@@ -253,13 +252,13 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     expect(curl.output.toLowerCase()).toContain("x-egress-proxy-seen: 1");
     expect(curl.output).toContain('{"ok":true,"path":"/from-curl"}');
 
-    const request = await msw.expectRequest({
+    const request = await proxy.expectRequest({
       method: "GET",
       pathname: "/from-curl",
     });
-    expect(request.request.headers.get("x-from-container")).toBe("yes");
-    expect(request.request.headers.get("x-egress-proxy-seen")).toBe("1");
-    msw.expectNoUnhandledRequests({
+    expect(headerValue(request.headers, "x-from-container")).toBe("yes");
+    expect(headerValue(request.headers, "x-egress-proxy-seen")).toBe("1");
+    proxy.expectNoUnhandledRequests({
       url: (url) => url.hostname === "upstream.iterate.localhost",
     });
 
