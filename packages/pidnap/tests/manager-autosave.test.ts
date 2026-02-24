@@ -164,4 +164,37 @@ describe("Manager autosave state", () => {
 
     await manager.stop();
   });
+
+  it("preserves base dependsOn and schedule when autosave overlays config entry", async () => {
+    const baseConfig = {
+      cwd: testDir,
+      state: { autosaveFile: autosavePath },
+      processes: [
+        {
+          name: "init",
+          definition: longRunningProcess,
+        },
+        {
+          name: "worker",
+          definition: longRunningProcess,
+          dependsOn: ["init"],
+          schedule: { cron: "* * * * *", runOnStart: false },
+        },
+      ],
+    };
+
+    const manager = new Manager(baseConfig, createMockLogger());
+    await manager.start();
+    await manager.updateProcessConfig({
+      processSlug: "worker",
+      definition: successProcess,
+    });
+    await manager.stop();
+
+    const managerAfterRestart = new Manager(baseConfig, createMockLogger());
+    const restored = managerAfterRestart.getManagedProcessEntry("worker");
+
+    expect(restored?.dependsOn).toEqual(["init"]);
+    expect(restored?.schedule).toEqual({ cron: "* * * * *", runOnStart: false });
+  });
 });

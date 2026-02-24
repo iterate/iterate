@@ -277,9 +277,17 @@ export class Manager {
           `Invalid autosave state at ${this.autosavePath}: key "${slug}" does not match entry name "${entry.name}"`,
         );
       }
+      const baseEntry = merged.get(slug);
       const normalized = this.normalizeProcessEntry({
-        ...entry,
         name: slug,
+        definition: entry.definition,
+        options: entry.options ?? baseEntry?.options,
+        envOptions: entry.envOptions ?? baseEntry?.envOptions,
+        tags: entry.tags ?? baseEntry?.tags,
+        dependsOn: baseEntry?.dependsOn,
+        schedule: baseEntry?.schedule,
+        persistence: entry.persistence ?? baseEntry?.persistence,
+        desiredState: entry.desiredState ?? baseEntry?.desiredState,
       });
       merged.set(slug, normalized);
     }
@@ -324,14 +332,20 @@ export class Manager {
     try {
       writeFileSync(tempPath, serialized, "utf-8");
       const fileHandle = openSync(tempPath, "r");
-      fsyncSync(fileHandle);
-      closeSync(fileHandle);
+      try {
+        fsyncSync(fileHandle);
+      } finally {
+        closeSync(fileHandle);
+      }
       renameSync(tempPath, this.autosavePath);
 
       try {
         const dirHandle = openSync(dir, "r");
-        fsyncSync(dirHandle);
-        closeSync(dirHandle);
+        try {
+          fsyncSync(dirHandle);
+        } finally {
+          closeSync(dirHandle);
+        }
       } catch {
         // best-effort on platforms/filesystems that don't support fsync on dirs
       }
