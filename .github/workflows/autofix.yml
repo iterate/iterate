@@ -23,12 +23,8 @@ jobs:
           cache: pnpm
       - name: install and update lockfile
         run: pnpm install --no-frozen-lockfile
-      - name: disable check annotations
-        run: |-
-          echo "::remove-matcher owner=eslint-compact::"
-          echo "::remove-matcher owner=eslint-stylish::"
       - name: fix lint issues
-        run: pnpm run lint --fix --max-warnings=-1
+        run: pnpm run lint:fix
       - name: fix format issues
         run: pnpm run format
       - name: revert changes to workflows

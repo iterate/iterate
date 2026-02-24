@@ -63,54 +63,50 @@ describe
 describe.runIf(RUN_SANDBOX_TESTS && TEST_CONFIG.provider === "docker")(
   "Docker Worktree Sync",
   () => {
-    test.concurrent(
-      "container git state matches host worktree exactly",
-      async ({ expect }) => {
-        await withWorktree({
-          repoRoot: ITERATE_REPO_PATH_ON_HOST,
-          fn: async (worktree) => {
-            writeFileSync(join(worktree.path, "staged-new.txt"), "staged content");
-            execSync("git add staged-new.txt", { cwd: worktree.path });
-            appendFileSync(join(worktree.path, "README.md"), "\n# test modification");
-            writeFileSync(join(worktree.path, "untracked.txt"), "untracked content");
+    test.concurrent("container git state matches host worktree exactly", async ({ expect }) => {
+      await withWorktree({
+        repoRoot: ITERATE_REPO_PATH_ON_HOST,
+        fn: async (worktree) => {
+          writeFileSync(join(worktree.path, "staged-new.txt"), "staged content");
+          execSync("git add staged-new.txt", { cwd: worktree.path });
+          appendFileSync(join(worktree.path, "README.md"), "\n# test modification");
+          writeFileSync(join(worktree.path, "untracked.txt"), "untracked content");
 
-            const hostGitState = execSync(
-              "git branch --show-current; git rev-parse HEAD; git status --porcelain",
-              { cwd: worktree.path, encoding: "utf-8" },
-            ).trim();
+          const hostGitState = execSync(
+            "git branch --show-current; git rev-parse HEAD; git status --porcelain",
+            { cwd: worktree.path, encoding: "utf-8" },
+          ).trim();
 
-            await withSandbox({
-              envOverrides: {
-                DOCKER_HOST_GIT_REPO_ROOT: worktree.path,
-                DOCKER_HOST_SYNC_ENABLED: "true",
-              },
-              sandboxOptions: {
-                externalId: "test-worktree",
-                id: "worktree-test",
-                name: "Worktree Test",
-                envVars: {},
-                entrypointArguments: ["sleep", "infinity"],
-              },
-              fn: async (sandbox) => {
-                await expect
-                  .poll(
-                    async () =>
-                      (
-                        await sandbox.exec([
-                          "bash",
-                          "-c",
-                          `cd ${ITERATE_REPO_PATH} && git branch --show-current; git rev-parse HEAD; git status --porcelain`,
-                        ])
-                      ).trim(),
-                    { timeout: 30_000, interval: 500 },
-                  )
-                  .toBe(hostGitState);
-              },
-            });
-          },
-        });
-      },
-      45000,
-    );
+          await withSandbox({
+            envOverrides: {
+              DOCKER_HOST_GIT_REPO_ROOT: worktree.path,
+              DOCKER_HOST_SYNC_ENABLED: "true",
+            },
+            sandboxOptions: {
+              externalId: "test-worktree",
+              id: "worktree-test",
+              name: "Worktree Test",
+              envVars: {},
+              entrypointArguments: ["sleep", "infinity"],
+            },
+            fn: async (sandbox) => {
+              await expect
+                .poll(
+                  async () =>
+                    (
+                      await sandbox.exec([
+                        "bash",
+                        "-c",
+                        `cd ${ITERATE_REPO_PATH} && git branch --show-current; git rev-parse HEAD; git status --porcelain`,
+                      ])
+                    ).trim(),
+                  { timeout: 30_000, interval: 500 },
+                )
+                .toBe(hostGitState);
+            },
+          });
+        },
+      });
+    }, 45000);
   },
 );

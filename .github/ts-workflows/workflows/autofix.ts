@@ -1,4 +1,3 @@
-import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
@@ -35,15 +34,8 @@ export default workflow({
           run: "pnpm install --no-frozen-lockfile",
         },
         {
-          name: "disable check annotations",
-          run: dedent`
-            echo "::remove-matcher owner=eslint-compact::"
-            echo "::remove-matcher owner=eslint-stylish::"
-          `,
-        },
-        {
           name: "fix lint issues",
-          run: "pnpm run lint --fix --max-warnings=-1",
+          run: "pnpm run lint:fix",
         },
         {
           name: "fix format issues",
