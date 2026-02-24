@@ -65,12 +65,10 @@ export type Transactable<D extends DBLike> = DBLike & {
   transaction: <T>(callback: (tx: D) => Promise<T>) => Promise<T>;
 };
 
-type RetryFn = (
-  job: ConsumerJobQueueMessage,
-  error: unknown,
-) =>
+export type RetryResult =
   | { retry: false; reason: string; delay?: never }
   | { retry: true; reason: string; delay: TimePeriod };
+export type RetryFn = (job: ConsumerJobQueueMessage, error: unknown) => RetryResult;
 
 export type ConsumerDefinition<Payload> = {
   /** consumer name */
@@ -98,13 +96,27 @@ export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
 export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
 
-export type QueuerEvent = {
-  job: ConsumerJobQueueMessage;
-  error?: string;
-};
+export type StatusChangeEvent =
+  | { job: ConsumerJobQueueMessage; error?: never; retry?: never }
+  | { job: ConsumerJobQueueMessage; error: unknown; retry: RetryResult };
+
+/*
+e.g.
+
+queuer.on("statusChange", async (event) => {
+  if (event.error && !event.retry?.retry) {
+    const { job, error, retry } = event;
+    logger.error(
+      `[outbox] Consumer ${job.message.consumer_name} failed after ${job.read_ct} attempts. Error: ${String(error)}`,
+      Object.assign(error, { detail: { job, retry } }),
+    );
+  }
+});
+
+*/
 
 export type QueuerEventMap = {
-  statusChange: QueuerEvent;
+  statusChange: StatusChangeEvent;
 };
 
 export interface Queuer<DBConnection> {
@@ -212,24 +224,33 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           consumerName: consumer.name,
           jobId: job.msg_id,
         };
-        // Bind to const so TS narrows inside the closure
-        const _consumer = consumer;
-        const _job = job;
-        const result = await outboxALS.run(causation, () =>
-          _consumer.handler({
-            eventId: _job.message.event_id,
-            eventName: _job.message.event_name,
-            payload: _job.message.event_payload as { input: unknown; output: unknown },
-            job: { id: _job.msg_id, attempt: _job.read_ct },
-          }),
-        );
+        logger.set({
+          outbox: {
+            consumerName: consumer.name,
+            jobId: job.msg_id,
+            messageStatus: job.message.status,
+            eventName: job.message.event_name,
+            eventId: job.message.event_id,
+            eventContext: job.message.event_context,
+          },
+        });
+        const result = await outboxALS.run(causation, () => {
+          return consumer.handler({
+            eventId: job.message.event_id,
+            eventName: job.message.event_name,
+            payload: job.message.event_payload,
+            job: { id: job.msg_id, attempt: job.read_ct },
+          });
+        });
         results.push(result);
         const [updated] = await exec.rows(sql<typeof job>`
           update pgmq.${sql.identifier(pgmqQueueTableName)}
           set message = jsonb_set(
             message,
             '{processing_results}',
-            message->'processing_results' || jsonb_build_array(${`#${job.read_ct} success: ${String(result)}`}::text)
+            message->'processing_results' || jsonb_build_array(
+              ${`#${job.read_ct} success: ${String(result)}`}::text
+            )
           ) || '{"status": "success"}'::jsonb
           where msg_id = ${job.msg_id}::bigint
           returning *
@@ -266,7 +287,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           where msg_id = ${job.msg_id}::bigint
           returning *
         `);
-        const eventData: QueuerEvent = { job: updated, error: String(e) };
+        const eventData: StatusChangeEvent = { job: updated, error: e, retry };
         if (!retry.retry) {
           logger.warn(
             `[outbox] giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving (DLQ = archive + status=failed)`,

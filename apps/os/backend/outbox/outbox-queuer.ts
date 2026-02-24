@@ -13,3 +13,22 @@ queuer.on("statusChange", async () => {
     logger.error("[outbox] broadcastInvalidation failed in statusChange listener", e);
   }
 });
+
+queuer.on("statusChange", async (event) => {
+  if (event.error && event.retry?.retry) {
+    const { job, error, retry } = event;
+
+    logger.warn(
+      `[outbox] Consumer ${job.message.consumer_name} retrying in ${retry.delay} after ${job.read_ct} attempts. Error: ${String(error)}`,
+      Object.assign(error, { detail: { job, retry } }),
+    );
+  }
+  if (event.error && !event.retry?.retry) {
+    const { job, error, retry } = event;
+    logger.error(
+      `[outbox] Consumer ${job.message.consumer_name} failed after ${job.read_ct} attempts. Error: ${String(error)}`,
+      Object.assign(error, { detail: { job, retry } }),
+    );
+  } else if (event.error) {
+  }
+});

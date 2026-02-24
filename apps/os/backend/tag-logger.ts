@@ -1,5 +1,10 @@
 import { log as rootLog } from "evlog";
-import { getRequestEvlogStore, log as requestLog, recordRequestEvlogError } from "./evlog.ts";
+import {
+  getRequestEvlogStore,
+  log as requestLog,
+  recordRequestEvlogError,
+  withRequestEvlogContext,
+} from "./evlog.ts";
 
 type LogLevel = "debug" | "error";
 
@@ -126,6 +131,10 @@ function writeMessageToEvlog(level: "info" | "warn", message: string): void {
 }
 
 export const logger = {
+  swap<T>(getContext: (old: unknown) => unknown, cb: () => T) {
+    const store = getRequestEvlogStore();
+    return withRequestEvlogContext({}, () => cb());
+  },
   set: (context: unknown) => writeRequestContext(context),
   debug: (...args: unknown[]) => writeErrorOrDebugToEvlog("debug", args),
   info: (message: string) => writeMessageToEvlog("info", message),
