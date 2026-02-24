@@ -1049,6 +1049,12 @@ export class Manager {
     const stopPromises = Array.from(this.restartingProcesses.values()).map((p) => p.stop(timeout));
     await Promise.all(stopPromises);
 
+    try {
+      this.writeAutosaveState();
+    } catch (error) {
+      this.logger.error("Failed to persist autosave state during shutdown:", error);
+    }
+
     this._state = "stopped";
     this.logger.info(`Manager stopped`);
   }

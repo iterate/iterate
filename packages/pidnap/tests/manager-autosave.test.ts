@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Manager } from "../src/manager.ts";
@@ -163,6 +163,28 @@ describe("Manager autosave state", () => {
     expect(entry?.desiredState).toBe("running");
 
     await manager.stop();
+  });
+
+  it("persists autosave state on manager stop", async () => {
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        state: { autosaveFile: autosavePath },
+      },
+      createMockLogger(),
+    );
+    await manager.start();
+
+    await manager.updateProcessConfig({
+      processSlug: "worker",
+      definition: longRunningProcess,
+    });
+
+    const revisionBeforeStop = JSON.parse(readFileSync(autosavePath, "utf-8")).revision as number;
+    await manager.stop();
+    const revisionAfterStop = JSON.parse(readFileSync(autosavePath, "utf-8")).revision as number;
+
+    expect(revisionAfterStop).toBeGreaterThan(revisionBeforeStop);
   });
 
   it("preserves base dependsOn and schedule when autosave overlays config entry", async () => {
