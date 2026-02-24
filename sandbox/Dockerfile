@@ -129,7 +129,7 @@ ENV PATH="/usr/local/go/bin:/home/iterate/go/bin:$PATH"
 ENV GOPATH="/home/iterate/go"
 
 # Install flyctl (Fly.io CLI)
-RUN curl -L https://fly.io/install.sh | sh
+RUN curl -fsSL https://fly.io/install.sh | sh
 ENV PATH="/home/iterate/.fly/bin:$PATH"
 
 # Install gogcli (Google Suite CLI: Gmail, GCal, GDrive, etc.)
