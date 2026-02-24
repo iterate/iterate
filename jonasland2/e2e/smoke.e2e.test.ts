@@ -5,7 +5,7 @@ import {
   dockerContainerFixture,
   dockerPing,
   execInContainer,
-  mockttpProxyFixture,
+  mockttpFixture,
   waitForHttpOk,
   webSocketEchoServerFixture,
 } from "./lib/fixtures.ts";
@@ -32,9 +32,7 @@ async function waitForHealthyWithLogs(url: string, container: { logs(): Promise<
 
 describe("mockttp proxy fixture concurrency proof", () => {
   test.concurrent("parallel fixtures bind distinct host ports", async () => {
-    const fixtures = await Promise.all(
-      Array.from({ length: 8 }, () => mockttpProxyFixture({ onUnhandledRequest: "error" })),
-    );
+    const fixtures = await Promise.all(Array.from({ length: 8 }, () => mockttpFixture()));
 
     try {
       const ports = fixtures.map((fixture) => {
@@ -50,7 +48,7 @@ describe("mockttp proxy fixture concurrency proof", () => {
 
   for (const caseId of concurrentCaseIds) {
     test.concurrent(`isolates handlers on shared route (${caseId})`, async () => {
-      await using proxy = await mockttpProxyFixture({ onUnhandledRequest: "error" });
+      await using proxy = await mockttpFixture();
       const sharedEndpoint = await proxy.server.forGet("/shared").thenCallback((request) => ({
         statusCode: 200,
         json: {
@@ -58,6 +56,7 @@ describe("mockttp proxy fixture concurrency proof", () => {
           seenHeader: headerValue(request.headers, "x-test-case"),
         },
       }));
+      const unmatched = await proxy.server.forUnmatchedRequest().always().thenReply(599);
 
       await delay(Math.floor(Math.random() * 40));
 
@@ -73,23 +72,24 @@ describe("mockttp proxy fixture concurrency proof", () => {
       const seen = await sharedEndpoint.getSeenRequests();
       expect(seen).toHaveLength(1);
       expect(headerValue(seen[0].headers, "x-test-case")).toBe(caseId);
-      const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+      const unhandled = await unmatched.getSeenRequests();
       expect(unhandled).toHaveLength(0);
     });
   }
 
   for (const caseId of concurrentCaseIds.slice(0, 4)) {
     test.concurrent(`late-bound handlers stay isolated (${caseId})`, async () => {
-      await using proxy = await mockttpProxyFixture({ onUnhandledRequest: "error" });
+      await using proxy = await mockttpFixture();
       const path = "/late-bind";
 
       await delay(Math.floor(Math.random() * 40));
       await proxy.server.forGet(path).thenJson(200, { caseId });
+      const unmatched = await proxy.server.forUnmatchedRequest().always().thenReply(599);
 
       const response = await fetch(`${proxy.hostProxyUrl}${path}`);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ caseId });
-      const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+      const unhandled = await unmatched.getSeenRequests();
       expect(unhandled).toHaveLength(0);
     });
   }
@@ -205,9 +205,20 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
   }, 120_000);
 
   test("late-bound mockttp rule + curl prove caddy MITM + iptables REDIRECT egress flow", async () => {
-    await using proxy = await mockttpProxyFixture({
-      onUnhandledRequest: "bypass",
-    });
+    await using proxy = await mockttpFixture();
+    const unmatched = await proxy.server
+      .forUnmatchedRequest()
+      .always()
+      .thenCallback((request) => {
+        const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
+        return {
+          statusCode: 404,
+          json: {
+            error: "mock_not_found",
+            message,
+          },
+        };
+      });
 
     await using container = await dockerContainerFixture({
       image,
@@ -256,7 +267,7 @@ describe.runIf(await dockerPing())("jonasland2 minimal caddy+egress", () => {
     const request = seen[0];
     expect(headerValue(request.headers, "x-from-container")).toBe("yes");
     expect(headerValue(request.headers, "x-egress-proxy-seen")).toBe("1");
-    const unhandled = await proxy.unmatchedRequests.getSeenRequests();
+    const unhandled = await unmatched.getSeenRequests();
     const upstreamUnhandled = unhandled.filter(
       (entry) => new URL(entry.url).hostname === "upstream.iterate.localhost",
     );

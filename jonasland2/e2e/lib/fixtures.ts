@@ -144,6 +144,11 @@ type WebSocketHandshakeRecord = {
   pathname: string;
   headers: IncomingHttpHeaders;
 };
+type WaitForHandshakeOptions = {
+  pathname?: string;
+  timeoutMs?: number;
+  predicate?: (record: WebSocketHandshakeRecord) => boolean;
+};
 
 export async function webSocketEchoServerFixture() {
   const httpServer = createServer();
@@ -192,7 +197,7 @@ export async function webSocketEchoServerFixture() {
 
   return {
     url: `ws://host.docker.internal:${String(address.port)}`,
-    async waitForHandshake(options) {
+    async waitForHandshake(options?: WaitForHandshakeOptions) {
       const timeoutMs = options?.timeoutMs ?? 7_500;
       const existing = handshakes.find((record) => {
         const pathnameOk = options?.pathname ? record.pathname === options.pathname : true;
@@ -234,36 +239,14 @@ export async function webSocketEchoServerFixture() {
   };
 }
 
-export async function mockttpProxyFixture(params?: { onUnhandledRequest?: "bypass" | "error" }) {
-  const onUnhandledRequest = params?.onUnhandledRequest ?? "bypass";
+export async function mockttpFixture() {
   const server = getLocal();
   await server.start();
-  const unmatchedRequests = await server
-    .forUnmatchedRequest()
-    .always()
-    .thenCallback((request) => {
-      const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
-      if (onUnhandledRequest === "error") {
-        return {
-          statusCode: 500,
-          json: { error: "mock_unhandled_request", message },
-        };
-      }
-
-      return {
-        statusCode: 404,
-        json: {
-          error: "mock_not_found",
-          message,
-        },
-      };
-    });
 
   return {
     proxyUrl: `http://host.docker.internal:${String(server.port)}`,
     hostProxyUrl: `http://127.0.0.1:${String(server.port)}`,
     server,
-    unmatchedRequests,
     async [Symbol.asyncDispose]() {
       await server.stop();
     },

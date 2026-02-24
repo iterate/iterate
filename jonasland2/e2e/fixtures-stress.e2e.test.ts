@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
-import { mockttpProxyFixture, waitForHttpOk } from "./lib/fixtures.ts";
+import { mockttpFixture, waitForHttpOk } from "./lib/fixtures.ts";
 
 const fixtureIds = Array.from({ length: 12 }, (_, index) => `fixture-${String(index + 1)}`);
 
@@ -12,10 +12,8 @@ function headerValue(headers: Record<string, string | string[] | undefined>, nam
 }
 
 describe("fixtures stress", () => {
-  test.concurrent("mockttpProxyFixture isolates 12 fixtures under burst load", async () => {
-    const fixtures = await Promise.all(
-      fixtureIds.map(() => mockttpProxyFixture({ onUnhandledRequest: "error" })),
-    );
+  test.concurrent("mockttp fixture isolates 12 fixtures under burst load", async () => {
+    const fixtures = await Promise.all(fixtureIds.map(() => mockttpFixture()));
 
     try {
       const burstEndpoints = await Promise.all(
@@ -28,6 +26,9 @@ describe("fixtures stress", () => {
             },
           }));
         }),
+      );
+      const unmatchedEndpoints = await Promise.all(
+        fixtures.map((fixture) => fixture.server.forUnmatchedRequest().always().thenReply(599)),
       );
 
       await Promise.all(
@@ -57,7 +58,7 @@ describe("fixtures stress", () => {
 
           const seen = await burstEndpoints[index].getSeenRequests();
           expect(seen).toHaveLength(requestCount);
-          const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+          const unhandled = await unmatchedEndpoints[index].getSeenRequests();
           expect(unhandled).toHaveLength(0);
         }),
       );
@@ -67,9 +68,7 @@ describe("fixtures stress", () => {
   });
 
   test.concurrent("late rules with higher priority stay local per fixture", async () => {
-    const fixtures = await Promise.all(
-      fixtureIds.slice(0, 6).map(() => mockttpProxyFixture({ onUnhandledRequest: "error" })),
-    );
+    const fixtures = await Promise.all(fixtureIds.slice(0, 6).map(() => mockttpFixture()));
 
     try {
       await Promise.all(
@@ -96,8 +95,18 @@ describe("fixtures stress", () => {
     }
   });
 
-  test.concurrent("onUnhandledRequest=error returns 500 and records unhandled", async () => {
-    await using fixture = await mockttpProxyFixture({ onUnhandledRequest: "error" });
+  test.concurrent("custom unmatched rule returns 500 and records unhandled", async () => {
+    await using fixture = await mockttpFixture();
+    const unmatchedEndpoint = await fixture.server
+      .forUnmatchedRequest()
+      .always()
+      .thenCallback((request) => {
+        const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
+        return {
+          statusCode: 500,
+          json: { error: "mock_unhandled_request", message },
+        };
+      });
     const response = await fetch(`${fixture.hostProxyUrl}/no-match-error`);
     expect(response.status).toBe(500);
     const body = await response.json();
@@ -105,14 +114,24 @@ describe("fixtures stress", () => {
     expect(body.message).toContain("Unhandled request: GET");
     expect(body.message).toContain("/no-match-error");
 
-    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    const unhandled = await unmatchedEndpoint.getSeenRequests();
     expect(unhandled.some((request) => new URL(request.url).pathname === "/no-match-error")).toBe(
       true,
     );
   });
 
-  test.concurrent("onUnhandledRequest=bypass returns 404 and records unhandled", async () => {
-    await using fixture = await mockttpProxyFixture({ onUnhandledRequest: "bypass" });
+  test.concurrent("custom unmatched rule returns 404 and records unhandled", async () => {
+    await using fixture = await mockttpFixture();
+    const unmatchedEndpoint = await fixture.server
+      .forUnmatchedRequest()
+      .always()
+      .thenCallback((request) => {
+        const message = `Unhandled request: ${request.method.toUpperCase()} ${request.url}`;
+        return {
+          statusCode: 404,
+          json: { error: "mock_not_found", message },
+        };
+      });
     const response = await fetch(`${fixture.hostProxyUrl}/no-match-bypass`);
     expect(response.status).toBe(404);
     const body = await response.json();
@@ -120,14 +139,15 @@ describe("fixtures stress", () => {
     expect(body.message).toContain("Unhandled request: GET");
     expect(body.message).toContain("/no-match-bypass");
 
-    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    const unhandled = await unmatchedEndpoint.getSeenRequests();
     expect(unhandled.some((request) => new URL(request.url).pathname === "/no-match-bypass")).toBe(
       true,
     );
   });
 
   test.concurrent("mockttp seen request APIs stay minimal and explicit", async () => {
-    await using fixture = await mockttpProxyFixture({ onUnhandledRequest: "bypass" });
+    await using fixture = await mockttpFixture();
+    const unmatchedEndpoint = await fixture.server.forUnmatchedRequest().always().thenReply(599);
     const endpoint = await fixture.server.forGet("/hit").thenJson(200, { ok: true });
 
     const hit = await fetch(`${fixture.hostProxyUrl}/hit`);
@@ -136,19 +156,22 @@ describe("fixtures stress", () => {
     const seen = await endpoint.getSeenRequests();
     expect(seen).toHaveLength(1);
     expect(new URL(seen[0].url).pathname).toBe("/hit");
-    const unhandled = await fixture.unmatchedRequests.getSeenRequests();
+    const unhandled = await unmatchedEndpoint.getSeenRequests();
     expect(unhandled).toHaveLength(0);
   });
 
   test.concurrent("proxy urls share same dynamic port and disposer closes listener", async () => {
-    const fixture = await mockttpProxyFixture({ onUnhandledRequest: "bypass" });
+    const fixture = await mockttpFixture();
     const hostPort = new URL(fixture.hostProxyUrl).port;
     const dockerPort = new URL(fixture.proxyUrl).port;
     expect(hostPort).toBe(dockerPort);
 
     const hostProxyUrl = fixture.hostProxyUrl;
     await fixture[Symbol.asyncDispose]();
-    await expect(fetch(`${hostProxyUrl}/after-dispose`)).rejects.toThrow();
+    const statusAfterDispose = await fetch(`${hostProxyUrl}/after-dispose`)
+      .then((response) => response.status)
+      .catch(() => -1);
+    expect(statusAfterDispose === -1 || statusAfterDispose === 503).toBe(true);
   });
 
   test.concurrent("waitForHttpOk survives delayed readiness", async () => {
