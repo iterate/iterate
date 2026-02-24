@@ -35,7 +35,7 @@ export default workflow({
         },
         {
           name: "fix lint issues",
-          run: "pnpm run lint:fix",
+          run: "pnpm exec oxlint . --fix --threads 1",
         },
         {
           name: "fix format issues",
