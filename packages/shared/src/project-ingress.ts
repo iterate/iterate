@@ -35,11 +35,24 @@ const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
 /**
  * Named service aliases — map friendly subdomain names to port numbers.
  * e.g. `opencode.templestein.com` → port 4096
+ *
+ * Used for:
+ * - Parsing: `opencode.templestein.com` → port 4096
+ * - Generation: port 4096 → `opencode.templestein.com` (first alias wins)
  */
 export const SERVICE_ALIASES: Record<string, number> = {
   opencode: 4096,
   terminal: 4096,
 };
+
+/**
+ * Reverse map: port → preferred alias name (first alias for each port wins).
+ * Used by URL builders to emit `opencode.templestein.com` instead of `4096.templestein.com`.
+ */
+export const PORT_TO_ALIAS: Record<number, string> = {};
+for (const [name, port] of Object.entries(SERVICE_ALIASES)) {
+  if (!(port in PORT_TO_ALIAS)) PORT_TO_ALIAS[port] = name;
+}
 
 // ---------------------------------------------------------------------------
 // 4a. Parse a project ingress hostname into project/machine + port
@@ -266,7 +279,7 @@ export function buildMachineIngressEnvVars(params: {
  * Example (custom domain):
  *   projectBaseUrl = "https://templestein.com"
  *   port = 4096
- *   → "https://4096.templestein.com/"
+ *   → "https://opencode.templestein.com/"  (uses SERVICE_ALIASES)
  */
 export function buildProjectPortUrl(params: {
   projectBaseUrl: string;
@@ -276,9 +289,14 @@ export function buildProjectPortUrl(params: {
   const { projectBaseUrl, port, path } = params;
   const url = new URL(projectBaseUrl);
   if (port !== DEFAULT_TARGET_PORT) {
-    // Custom domains use dot-separated subdomains; standard ingress uses `__` separator
     const isStandardIngress = isStandardIngressDomain(url.hostname);
-    url.hostname = isStandardIngress ? `${port}__${url.hostname}` : `${port}.${url.hostname}`;
+    if (isStandardIngress) {
+      url.hostname = `${port}__${url.hostname}`;
+    } else {
+      // Custom domains: prefer named alias (opencode) over numeric port (4096)
+      const alias = PORT_TO_ALIAS[port];
+      url.hostname = `${alias ?? port}.${url.hostname}`;
+    }
   }
   if (path) {
     url.pathname = path.startsWith("/") ? path : `/${path}`;

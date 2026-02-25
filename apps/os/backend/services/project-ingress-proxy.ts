@@ -1,9 +1,8 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import {
   isProjectIngressHostname,
-  isCustomDomainHostname,
   parseProjectIngressHostname,
   parseCustomDomainHostname,
   type IngressTarget,
@@ -92,7 +91,9 @@ export async function shouldHandleProjectIngressHostname(
 
 /**
  * Find a project whose custom_domain matches the given hostname (or is a parent of it).
- * For MVP, this does a simple DB query. Could be cached later.
+ *
+ * Matches both exact (`templestein.com`) and subdomain (`4096.templestein.com`) hostnames
+ * using a single SQL query instead of loading all custom domain projects.
  */
 async function findProjectByCustomDomainHostname(
   hostname: string,
@@ -100,18 +101,15 @@ async function findProjectByCustomDomainHostname(
   const db = getDb();
   const normalizedHostname = hostname.toLowerCase();
 
-  // Get all projects with custom domains (should be very few)
-  const projectsWithCustomDomains = await db.query.project.findMany({
-    where: isNotNull(schema.project.customDomain),
+  // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
+  const project = await db.query.project.findFirst({
+    where: or(
+      eq(schema.project.customDomain, normalizedHostname),
+      sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
+    ),
   });
 
-  for (const proj of projectsWithCustomDomains) {
-    if (proj.customDomain && isCustomDomainHostname(normalizedHostname, proj.customDomain)) {
-      return proj;
-    }
-  }
-
-  return null;
+  return project ?? null;
 }
 
 /**

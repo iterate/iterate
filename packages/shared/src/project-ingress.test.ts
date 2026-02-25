@@ -8,6 +8,7 @@ import {
   buildMachinePortUrl,
   isProjectIngressHostname,
   SERVICE_ALIASES,
+  PORT_TO_ALIAS,
 } from "./project-ingress.ts";
 
 describe("parseProjectIngressHostname", () => {
@@ -163,9 +164,16 @@ describe("buildProjectPortUrl", () => {
 });
 
 describe("buildProjectPortUrl with custom domain", () => {
-  it("uses dot separator for custom domain", () => {
+  it("uses named alias for known ports on custom domains", () => {
+    // port 4096 → "opencode" alias
     expect(buildProjectPortUrl({ projectBaseUrl: "https://templestein.com", port: 4096 })).toBe(
-      "https://4096.templestein.com/",
+      "https://opencode.templestein.com/",
+    );
+  });
+
+  it("falls back to numeric port when no alias exists", () => {
+    expect(buildProjectPortUrl({ projectBaseUrl: "https://templestein.com", port: 8080 })).toBe(
+      "https://8080.templestein.com/",
     );
   });
 
@@ -175,16 +183,16 @@ describe("buildProjectPortUrl with custom domain", () => {
     );
   });
 
-  it("uses dot separator for subdomain custom domain", () => {
+  it("uses named alias for subdomain custom domain", () => {
     expect(
       buildProjectPortUrl({ projectBaseUrl: "https://iterate.templestein.com", port: 4096 }),
-    ).toBe("https://4096.iterate.templestein.com/");
+    ).toBe("https://opencode.iterate.templestein.com/");
   });
 
   it("uses __ separator for standard iterate.app domain", () => {
-    expect(buildProjectPortUrl({ projectBaseUrl: "https://my-proj.iterate.app", port: 4096 })).toBe(
-      "https://4096__my-proj.iterate.app/",
-    );
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://my-proj.iterate.app", port: 4096 }),
+    ).toBe("https://4096__my-proj.iterate.app/");
   });
 
   it("uses __ separator for localhost dev domain", () => {
@@ -203,7 +211,21 @@ describe("buildProjectPortUrl with custom domain", () => {
         port: 4096,
         path: "/foo/bar",
       }),
-    ).toBe("https://4096.templestein.com/foo/bar");
+    ).toBe("https://opencode.templestein.com/foo/bar");
+  });
+});
+
+describe("PORT_TO_ALIAS", () => {
+  it("maps port 4096 to opencode (first alias wins)", () => {
+    expect(PORT_TO_ALIAS[4096]).toBe("opencode");
+  });
+
+  it("is consistent with SERVICE_ALIASES", () => {
+    for (const [name, port] of Object.entries(SERVICE_ALIASES)) {
+      expect(PORT_TO_ALIAS[port]).toBeDefined();
+      // The reverse mapping should resolve back to the same port
+      expect(SERVICE_ALIASES[PORT_TO_ALIAS[port]!]).toBe(port);
+    }
   });
 });
 
