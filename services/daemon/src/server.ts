@@ -1,6 +1,6 @@
 import { execFile, type ExecFileException } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +12,7 @@ import { ptyRouter } from "./routers/pty.ts";
 
 const env = daemonServiceManifest.envVars.parse(process.env);
 const execFileAsync = promisify(execFile);
+const DEFAULT_EXPORT_PATTERN = /^\s*export\s+default\b/m;
 const TSX_BINARIES = [process.env.TSX_BINARY, "/opt/pidnap/node_modules/.bin/tsx", "tsx"].filter(
   (value): value is string => typeof value === "string" && value.trim().length > 0,
 );
@@ -20,13 +21,14 @@ baseApp.get("/healthz", (c) => c.text("ok"));
 baseApp.route("/api/pty", ptyRouter);
 
 function ensureModuleSource(code: string): string {
-  if (code.includes("export default")) return code;
+  if (DEFAULT_EXPORT_PATTERN.test(code)) return code;
   return `export default async () => {\n${code}\n};\n`;
 }
 
-function buildRunnerSource(scriptPath: string): string {
+function buildRunnerSource(scriptPath: string, resultPath: string): string {
   const scriptUrl = pathToFileURL(scriptPath).href;
   return [
+    "import { writeFile } from 'node:fs/promises';",
     `import run from ${JSON.stringify(scriptUrl)};`,
     "",
     "async function main() {",
@@ -34,7 +36,7 @@ function buildRunnerSource(scriptPath: string): string {
     "    throw new Error('code must export default async function');",
     "  }",
     "  const result = await run();",
-    "  process.stdout.write(JSON.stringify({ result }));",
+    `  await writeFile(${JSON.stringify(resultPath)}, JSON.stringify({ result }), "utf8");`,
     "}",
     "",
     "void main().catch((error) => {",
@@ -87,15 +89,16 @@ baseApp.post("/api/tools/exec-ts", async (c) => {
   const runId = randomUUID();
   const scriptPath = join(dir, `script-${runId}.mts`);
   const runnerPath = join(dir, `runner-${runId}.mts`);
+  const resultPath = join(dir, `result-${runId}.json`);
 
   try {
     await writeFile(scriptPath, ensureModuleSource(code), "utf8");
-    await writeFile(runnerPath, buildRunnerSource(scriptPath), "utf8");
+    await writeFile(runnerPath, buildRunnerSource(scriptPath, resultPath), "utf8");
     try {
-      const { stdout } = await runTsxFile(runnerPath);
-      const parsed = stdout.trim().length > 0 ? (JSON.parse(stdout) as { result?: unknown }) : {};
-      const result = parsed.result;
-      return c.json({ ok: true as const, result });
+      await runTsxFile(runnerPath);
+      const payloadText = await readFile(resultPath, "utf8");
+      const parsed = JSON.parse(payloadText) as { result?: unknown };
+      return c.json({ ok: true as const, result: parsed.result });
     } catch (error) {
       const details = getExecErrorDetails(error);
       const errorMessage = details.stderr || details.stdout || details.message;
@@ -105,6 +108,7 @@ baseApp.post("/api/tools/exec-ts", async (c) => {
   } finally {
     await rm(scriptPath, { force: true }).catch(() => {});
     await rm(runnerPath, { force: true }).catch(() => {});
+    await rm(resultPath, { force: true }).catch(() => {});
   }
 });
 
