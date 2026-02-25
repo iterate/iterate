@@ -33,15 +33,111 @@ jobs:
           EOF
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
+  slack-ci-start:
+    needs:
+      - variables
+    if: needs.variables.outputs.stage == 'prd'
+    runs-on: ubuntu-24.04
+    outputs:
+      thread_ts: ${{ steps.slack_ci_start.outputs.result }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: slack_ci_start
+        id: slack_ci_start
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            github.log = { ...console, debug: () => {} };
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
+            );
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function slack_ci_start() {
+              const { getSlackClient, slackChannelIds } =
+                await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const sha = "${{ github.sha }}".slice(0, 7);
+              const runUrl =
+                "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}";
+              const result = await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                text: `🚀 CI started for \`${sha}\` — <${runUrl}|view run>\n_deploying OS worker (early) →_`,
+              });
+              return result.ts;
+            };
+            return __handler(vars);
   deploy-os-early:
     uses: ./.github/workflows/deploy.yml
     needs:
       - variables
+      - slack-ci-start
     if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
     with:
       stage: ${{ needs.variables.outputs.stage }}
       deploy_iterate_com: false
+  notify-deploy-os-early:
+    needs:
+      - variables
+      - slack-ci-start
+      - deploy-os-early
+    if: needs.variables.outputs.stage == 'prd' && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: notify_deploy_os_early
+        id: notify_deploy_os_early
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.log = { ...console, debug: () => {} };
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
+            );
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function notify_deploy_os_early() {
+              const { getSlackClient, slackChannelIds } =
+                await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const failed = "${{ needs.deploy-os-early.result }}" === "failure";
+              const emoji = failed ? "❌" : "✅";
+              const suffix = failed ? "" : "\n_building sandbox image →_";
+              await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                thread_ts: "${{ needs.slack-ci-start.outputs.thread_ts }}",
+                text: `${emoji} OS worker deployed (early, old image)${suffix}`,
+              });
+            };
+            return __handler(vars);
   build-sandbox-image:
     uses: ./.github/workflows/build-sandbox-image.yml
     needs:
@@ -54,6 +150,53 @@ jobs:
       docker_platform: linux/amd64
       skip_load: false
       update_doppler: false
+  notify-build-sandbox-image:
+    needs:
+      - variables
+      - slack-ci-start
+      - build-sandbox-image
+    if: needs.variables.outputs.stage == 'prd' && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: notify_build_sandbox_image
+        id: notify_build_sandbox_image
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.log = { ...console, debug: () => {} };
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
+            );
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function notify_build_sandbox_image() {
+              const { getSlackClient, slackChannelIds } =
+                await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const failed = "${{ needs.build-sandbox-image.result }}" === "failure";
+              const emoji = failed ? "❌" : "✅";
+              const suffix = failed ? "" : "\n_running Fly sandbox tests →_";
+              await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                thread_ts: "${{ needs.slack-ci-start.outputs.thread_ts }}",
+                text: `${emoji} Sandbox image built${suffix}`,
+              });
+            };
+            return __handler(vars);
   test-sandbox-fly:
     needs:
       - variables
@@ -64,6 +207,53 @@ jobs:
     with:
       doppler_config: prd
       fly_image_tag: ${{ needs.build-sandbox-image.outputs.fly_image_tag }}
+  notify-test-sandbox-fly:
+    needs:
+      - variables
+      - slack-ci-start
+      - test-sandbox-fly
+    if: needs.variables.outputs.stage == 'prd' && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: notify_test_sandbox_fly
+        id: notify_test_sandbox_fly
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.log = { ...console, debug: () => {} };
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
+            );
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function notify_test_sandbox_fly() {
+              const { getSlackClient, slackChannelIds } =
+                await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const failed = "${{ needs.test-sandbox-fly.result }}" === "failure";
+              const emoji = failed ? "❌" : "✅";
+              const suffix = failed ? "" : "\n_promoting image + final deploy →_";
+              await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                thread_ts: "${{ needs.slack-ci-start.outputs.thread_ts }}",
+                text: `${emoji} Fly sandbox tests passed${suffix}`,
+              });
+            };
+            return __handler(vars);
   promote-fly-default-image:
     needs:
       - variables
@@ -102,9 +292,55 @@ jobs:
     secrets: inherit
     with:
       stage: ${{ needs.variables.outputs.stage }}
+  notify-deploy:
+    needs:
+      - variables
+      - slack-ci-start
+      - deploy
+    if: needs.variables.outputs.stage == 'prd' && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: notify_deploy
+        id: notify_deploy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.log = { ...console, debug: () => {} };
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
+            );
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function notify_deploy() {
+              const { getSlackClient, slackChannelIds } =
+                await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const failed = "${{ needs.deploy.result }}" === "failure";
+              await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                thread_ts: "${{ needs.slack-ci-start.outputs.thread_ts }}",
+                text: failed ? "❌ Final deploy failed" : "✅ OS worker deployed with new image — all done!",
+              });
+            };
+            return __handler(vars);
   slack_failure:
     needs:
       - variables
+      - slack-ci-start
       - deploy-os-early
       - build-sandbox-image
       - test-sandbox-fly
@@ -114,6 +350,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       NEEDS: ${{ toJson(needs) }}
+      THREAD_TS: ${{ needs.slack-ci-start.outputs.thread_ts }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -153,9 +390,21 @@ jobs:
               let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
               message +=
                 " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
+
+              // Post to #error-pulse (top-level)
               await slack.chat.postMessage({
                 channel: slackChannelIds["#error-pulse"],
                 text: message,
               });
+
+              // Also post failure summary to the CI thread in #building
+              const threadTs = process.env.THREAD_TS;
+              if (threadTs) {
+                await slack.chat.postMessage({
+                  channel: slackChannelIds["#building"],
+                  thread_ts: threadTs,
+                  text: `🚨 CI failed: ${failedJobs.join(", ")}`,
+                });
+              }
             };
             return __handler(vars);
