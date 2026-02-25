@@ -93,9 +93,7 @@ export const ON_DEMAND_PROCESSES_BY_NAME: OnDemandProcessMap = {
   },
 };
 
-export const ON_DEMAND_PROCESS_NAMES = Object.keys(
-  ON_DEMAND_PROCESSES_BY_NAME,
-) as OnDemandProcessName[];
+const ON_DEMAND_PROCESS_NAMES = Object.keys(ON_DEMAND_PROCESSES_BY_NAME) as OnDemandProcessName[];
 
 export const ON_DEMAND_PROCESSES: OnDemandProcessConfig[] = ON_DEMAND_PROCESS_NAMES.map((name) => ({
   slug: name,

@@ -601,10 +601,11 @@ const server = createServer(async (req, res) => {
         received: parseSafeJson(requestBody),
       });
     } else if (url.pathname === "/api/chat.postMessage") {
-      responseStatus = mockConfig.slackResponseOk ? 200 : 500;
+      responseStatus = 200;
       responseHeaders = { "content-type": "application/json; charset=utf-8" };
       responseBody = JSON.stringify({
         ok: mockConfig.slackResponseOk,
+        error: mockConfig.slackResponseOk ? undefined : "mock_slack_error",
         ts: mockConfig.slackResponseTs,
         received: parseSafeJson(requestBody),
       });
