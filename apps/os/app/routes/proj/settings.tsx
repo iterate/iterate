@@ -165,33 +165,12 @@ function ProjectSettingsPage() {
               />
               <p className="text-xs text-muted-foreground">
                 {customDomain.trim() ? (
-                  (() => {
-                    const domain = customDomain.trim().toLowerCase();
-                    // Count dots to determine if apex or subdomain
-                    // apex: "example.com" (1 dot) — subdomain: "iterate.example.com" (2+ dots)
-                    const isSubdomain = domain.split(".").length > 2;
-                    if (isSubdomain) {
-                      const sub = domain.split(".").slice(0, -2).join(".");
-                      return (
-                        <>
-                          Add these DNS records:
-                          <br />
-                          <code className="text-xs">*.{sub} CNAME &rarr; cname.iterate.app</code>
-                          <br />
-                          <code className="text-xs">{sub} CNAME &rarr; cname.iterate.app</code>
-                        </>
-                      );
-                    }
-                    return (
-                      <>
-                        Add these DNS records:
-                        <br />
-                        <code className="text-xs">* CNAME &rarr; cname.iterate.app</code>
-                        <br />
-                        <code className="text-xs">@ CNAME &rarr; cname.iterate.app</code>
-                      </>
-                    );
-                  })()
+                  <>
+                    Point these to <code className="text-xs">cname.iterate.app</code>:
+                    <br />
+                    <code className="text-xs">{customDomain.trim().toLowerCase()}</code> and{" "}
+                    <code className="text-xs">*.{customDomain.trim().toLowerCase()}</code>
+                  </>
                 ) : (
                   <>
                     Optional. Use a custom domain instead of{" "}

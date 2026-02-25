@@ -214,6 +214,49 @@ describe("buildProjectPortUrl with custom domain", () => {
       }),
     ).toBe("https://opencode.templestein.com/foo/bar");
   });
+
+  // Arbitrarily nested custom domains — must "just work" inside machines
+  it("multi-part TLD (co.uk) — alias port", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 4096 }),
+    ).toBe("https://opencode.my-domain.co.uk/");
+  });
+
+  it("multi-part TLD (co.uk) — numeric port", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 16686 }),
+    ).toBe("https://16686.my-domain.co.uk/");
+  });
+
+  it("multi-part TLD (co.uk) — default port", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 3000 }),
+    ).toBe("https://my-domain.co.uk/");
+  });
+
+  it("one-level subdomain of multi-part TLD", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://iterate.my-domain.co.uk", port: 4096 }),
+    ).toBe("https://opencode.iterate.my-domain.co.uk/");
+  });
+
+  it("two-level subdomain of multi-part TLD", () => {
+    expect(
+      buildProjectPortUrl({
+        projectBaseUrl: "https://iterate.playground.my-domain.co.uk",
+        port: 4096,
+      }),
+    ).toBe("https://opencode.iterate.playground.my-domain.co.uk/");
+  });
+
+  it("deeply nested custom domain — default port", () => {
+    expect(
+      buildProjectPortUrl({
+        projectBaseUrl: "https://iterate.playground.my-domain.co.uk",
+        port: 3000,
+      }),
+    ).toBe("https://iterate.playground.my-domain.co.uk/");
+  });
 });
 
 describe("PORT_TO_ALIAS", () => {
@@ -370,6 +413,118 @@ describe("parseCustomDomainHostname", () => {
       target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
     });
   });
+
+  // Multi-part TLD and arbitrarily nested custom domains
+  describe("multi-part TLDs (co.uk, etc.)", () => {
+    it("apex with multi-part TLD — exact match", () => {
+      const result = parseCustomDomainHostname("my-domain.co.uk", "my-domain.co.uk");
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 3000 } });
+    });
+
+    it("apex with multi-part TLD — port subdomain", () => {
+      const result = parseCustomDomainHostname("4096.my-domain.co.uk", "my-domain.co.uk");
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
+    });
+
+    it("apex with multi-part TLD — service alias", () => {
+      const result = parseCustomDomainHostname("opencode.my-domain.co.uk", "my-domain.co.uk");
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+      });
+    });
+
+    it("apex with multi-part TLD — machine target", () => {
+      const result = parseCustomDomainHostname(
+        "4096__mach_abc.my-domain.co.uk",
+        "my-domain.co.uk",
+      );
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "machine", machineId: "mach_abc", targetPort: 4096 },
+      });
+    });
+  });
+
+  describe("one-level subdomain custom domain", () => {
+    it("exact match", () => {
+      const result = parseCustomDomainHostname(
+        "iterate.my-domain.co.uk",
+        "iterate.my-domain.co.uk",
+      );
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 3000 } });
+    });
+
+    it("port subdomain", () => {
+      const result = parseCustomDomainHostname(
+        "4096.iterate.my-domain.co.uk",
+        "iterate.my-domain.co.uk",
+      );
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
+    });
+
+    it("service alias", () => {
+      const result = parseCustomDomainHostname(
+        "opencode.iterate.my-domain.co.uk",
+        "iterate.my-domain.co.uk",
+      );
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+      });
+    });
+
+    it("machine target with port", () => {
+      const result = parseCustomDomainHostname(
+        "4096__mach_abc.iterate.my-domain.co.uk",
+        "iterate.my-domain.co.uk",
+      );
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "machine", machineId: "mach_abc", targetPort: 4096 },
+      });
+    });
+  });
+
+  describe("two-level subdomain custom domain", () => {
+    it("exact match", () => {
+      const result = parseCustomDomainHostname(
+        "iterate.playground.my-domain.co.uk",
+        "iterate.playground.my-domain.co.uk",
+      );
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 3000 } });
+    });
+
+    it("port subdomain", () => {
+      const result = parseCustomDomainHostname(
+        "4096.iterate.playground.my-domain.co.uk",
+        "iterate.playground.my-domain.co.uk",
+      );
+      expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
+    });
+
+    it("service alias", () => {
+      const result = parseCustomDomainHostname(
+        "opencode.iterate.playground.my-domain.co.uk",
+        "iterate.playground.my-domain.co.uk",
+      );
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+      });
+    });
+
+    it("machine target with port", () => {
+      const result = parseCustomDomainHostname(
+        "4096__mach_abc.iterate.playground.my-domain.co.uk",
+        "iterate.playground.my-domain.co.uk",
+      );
+      expect(result).toEqual({
+        ok: true,
+        target: { kind: "machine", machineId: "mach_abc", targetPort: 4096 },
+      });
+    });
+  });
 });
 
 describe("isCustomDomainHostname", () => {
@@ -418,6 +573,36 @@ describe("buildMachineIngressEnvVars with customDomain", () => {
       ITERATE_PROJECT_BASE_URL: "https://my-proj.iterate.app",
       ITERATE_OS_BASE_URL: "https://os.iterate.com",
       ITERATE_PROJECT_INGRESS_DOMAIN: "iterate.app",
+    });
+  });
+
+  it("multi-part TLD custom domain (co.uk)", () => {
+    const result = buildMachineIngressEnvVars({
+      projectSlug: "my-proj",
+      projectIngressDomain: "iterate.app",
+      osBaseUrl: "https://os.iterate.com",
+      scheme: "https",
+      customDomain: "my-domain.co.uk",
+    });
+    expect(result).toEqual({
+      ITERATE_PROJECT_BASE_URL: "https://my-domain.co.uk",
+      ITERATE_OS_BASE_URL: "https://os.iterate.com",
+      ITERATE_PROJECT_INGRESS_DOMAIN: "my-domain.co.uk",
+    });
+  });
+
+  it("nested subdomain custom domain", () => {
+    const result = buildMachineIngressEnvVars({
+      projectSlug: "my-proj",
+      projectIngressDomain: "iterate.app",
+      osBaseUrl: "https://os.iterate.com",
+      scheme: "https",
+      customDomain: "iterate.playground.my-domain.co.uk",
+    });
+    expect(result).toEqual({
+      ITERATE_PROJECT_BASE_URL: "https://iterate.playground.my-domain.co.uk",
+      ITERATE_OS_BASE_URL: "https://os.iterate.com",
+      ITERATE_PROJECT_INGRESS_DOMAIN: "iterate.playground.my-domain.co.uk",
     });
   });
 });
