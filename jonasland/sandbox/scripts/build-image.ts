@@ -1,20 +1,11 @@
-import { execFileSync, execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { computeImageRefs } from "./image-refs.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
-const gitShaFull = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
-const gitShaShort = gitShaFull.slice(0, 7);
-const isDirty = (() => {
-  try {
-    const status = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf-8" });
-    return status.trim().length > 0;
-  } catch {
-    return false;
-  }
-})();
-const tagSuffix = `jonasland-sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
+const { depotImageTag, flyImageTag, gitShaFull, isDirty, localImageTag, tagSuffix } =
+  computeImageRefs();
 
 const buildPlatform = process.env.JONASLAND_BUILD_PLATFORM || "linux/amd64,linux/arm64";
 const skipLoad = process.env.JONASLAND_SKIP_LOAD === "true";
@@ -29,19 +20,6 @@ if (shouldPushFlyRegistry && !configuredFlyRegistryApp) {
     "JONASLAND_SANDBOX_FLY_REGISTRY_APP (or SANDBOX_FLY_REGISTRY_APP) is required when Fly push is enabled",
   );
 }
-
-function readDepotProjectId(): string {
-  const config = JSON.parse(readFileSync(join(repoRoot, "depot.json"), "utf-8")) as { id?: string };
-  if (!config.id) throw new Error("Missing depot project id in depot.json");
-  return config.id;
-}
-
-const depotProjectId = readDepotProjectId();
-const localImageTag = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const flyImageTag = configuredFlyRegistryApp
-  ? `registry.fly.io/${configuredFlyRegistryApp}:${tagSuffix}`
-  : null;
-const depotImageTag = `registry.depot.dev/${depotProjectId}:${tagSuffix}`;
 
 function ensureFlyAuth(token: string): void {
   try {
