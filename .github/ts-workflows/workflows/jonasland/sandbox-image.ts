@@ -91,7 +91,7 @@ export default workflow({
           },
           run: [
             "set -euo pipefail",
-            'doppler run -- pnpm --filter ./jonasland/sandbox image-refs -- --format=github-output >> "$GITHUB_OUTPUT"',
+            'doppler run -- pnpm --filter ./jonasland/sandbox exec tsx scripts/image-refs.ts --format=github-output >> "$GITHUB_OUTPUT"',
           ].join("\n"),
         },
       ],
