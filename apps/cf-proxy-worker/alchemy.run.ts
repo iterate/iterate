@@ -17,6 +17,18 @@ const db = await D1Database("routes-db", {
   adopt: true,
 });
 
+const routePattern = process.env.CF_PROXY_WORKER_ROUTE_PATTERN?.trim();
+const routeZoneId = process.env.CF_PROXY_WORKER_ROUTE_ZONE_ID?.trim();
+const routes = routePattern
+  ? [
+      {
+        pattern: routePattern,
+        adopt: true,
+        ...(routeZoneId ? { zoneId: routeZoneId } : {}),
+      },
+    ]
+  : undefined;
+
 export const worker = await Worker("worker", {
   name: isProduction ? "cf-proxy-worker" : undefined,
   entrypoint: "./server.ts",
@@ -26,7 +38,7 @@ export const worker = await Worker("worker", {
     DB: db,
     CF_PROXY_WORKER_API_TOKEN: alchemy.secret(adminToken),
   },
-  routes: [{ pattern: "*.cf-ingress-worker.com/*", adopt: true }],
+  routes,
   adopt: true,
 });
 
