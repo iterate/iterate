@@ -47,7 +47,7 @@ jobs:
             const vars = { github, context, core, glob, io, require };
             const workflow = { name: "CI" };
             const channel = "#misha-test";
-            const __handler = async function notification_init() {
+            const __handler = async function notification_init({ core }) {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
@@ -58,7 +58,8 @@ jobs:
                 channel: slackChannelIds[channel],
                 text: message,
               });
-              return { thread_ts: response.ts };
+              console.log("response", response);
+              core.setOutput("thread_ts", response.ts);
             };
             return __handler(vars);
     outputs:

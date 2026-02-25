@@ -185,7 +185,7 @@ async function addSlackNotifications(
           ...(await utils.githubScript(
             import.meta,
             { params: { workflow: { name: workflow.name }, channel } },
-            async function notification_init() {
+            async function notification_init({ core }) {
               const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
               let message = `Starting ${workflow.name}`;
@@ -195,7 +195,8 @@ async function addSlackNotifications(
                 channel: slackChannelIds[channel],
                 text: message,
               });
-              return { thread_ts: response.ts };
+              console.log("response", response);
+              core.setOutput("thread_ts", response.ts);
             },
           )),
         },
