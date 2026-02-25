@@ -77,6 +77,7 @@ export default {
         command: "/opt/pidnap/node_modules/.bin/tsx",
         args: ["/opt/services/orders-service/src/server.ts"],
         env: {
+          ORDERS_SERVICE_PORT: "19020",
           EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
@@ -97,6 +98,7 @@ export default {
         command: "/opt/pidnap/node_modules/.bin/tsx",
         args: ["/opt/services/docs-service/src/server.ts"],
         env: {
+          DOCS_SERVICE_PORT: "19050",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
