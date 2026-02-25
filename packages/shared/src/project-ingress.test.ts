@@ -217,21 +217,21 @@ describe("buildProjectPortUrl with custom domain", () => {
 
   // Arbitrarily nested custom domains — must "just work" inside machines
   it("multi-part TLD (co.uk) — alias port", () => {
-    expect(
-      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 4096 }),
-    ).toBe("https://opencode.my-domain.co.uk/");
+    expect(buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 4096 })).toBe(
+      "https://opencode.my-domain.co.uk/",
+    );
   });
 
   it("multi-part TLD (co.uk) — numeric port", () => {
-    expect(
-      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 16686 }),
-    ).toBe("https://16686.my-domain.co.uk/");
+    expect(buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 16686 })).toBe(
+      "https://16686.my-domain.co.uk/",
+    );
   });
 
   it("multi-part TLD (co.uk) — default port", () => {
-    expect(
-      buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 3000 }),
-    ).toBe("https://my-domain.co.uk/");
+    expect(buildProjectPortUrl({ projectBaseUrl: "https://my-domain.co.uk", port: 3000 })).toBe(
+      "https://my-domain.co.uk/",
+    );
   });
 
   it("one-level subdomain of multi-part TLD", () => {
@@ -435,10 +435,7 @@ describe("parseCustomDomainHostname", () => {
     });
 
     it("apex with multi-part TLD — machine target", () => {
-      const result = parseCustomDomainHostname(
-        "4096__mach_abc.my-domain.co.uk",
-        "my-domain.co.uk",
-      );
+      const result = parseCustomDomainHostname("4096__mach_abc.my-domain.co.uk", "my-domain.co.uk");
       expect(result).toEqual({
         ok: true,
         target: { kind: "machine", machineId: "mach_abc", targetPort: 4096 },
