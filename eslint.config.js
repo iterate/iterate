@@ -224,7 +224,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["packages/jonasland-ui/src/components/**/*.tsx"],
+    files: ["packages/ui/src/components/**/*.tsx"],
     rules: {
       "react-refresh/only-export-components": "off",
     },

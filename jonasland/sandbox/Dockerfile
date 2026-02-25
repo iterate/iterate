@@ -54,8 +54,8 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/registry-contract \
     --filter @iterate-com/events-contract \
     --filter @iterate-com/orders-contract \
-    --filter @iterate-com/jonasland-shared \
-    --filter @iterate-com/jonasland-ui
+    --filter @iterate-com/shared \
+    --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs
 
 RUN mkdir -p \

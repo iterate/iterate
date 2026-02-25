@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@iterate-com/jonasland-shared": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "better-sqlite3": "^12.4.1",
     "drizzle-orm": "^0.45.1"
   },

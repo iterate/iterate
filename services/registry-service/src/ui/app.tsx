@@ -1,11 +1,11 @@
 /// <reference lib="dom" />
 
 import { useEffect, useMemo, useState } from "react";
-import { StatusBanner, type StatusTone } from "@iterate-com/jonasland-ui";
-import { Button } from "@iterate-com/jonasland-ui/components/button";
-import { Input } from "@iterate-com/jonasland-ui/components/input";
-import { Label } from "@iterate-com/jonasland-ui/components/label";
-import { Textarea } from "@iterate-com/jonasland-ui/components/textarea";
+import { StatusBanner, type StatusTone } from "@iterate-com/ui";
+import { Button } from "@iterate-com/ui/components/button";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import { createRegistryClient } from "../client.ts";
 
 interface RouteRecord {

@@ -9,15 +9,12 @@ import {
   type EventStreamSummary,
 } from "@iterate-com/events-contract";
 import { IterateEventType } from "@iterate-com/events-contract/lib";
-import { cn } from "@iterate-com/jonasland-ui/lib/utils";
-import { Button } from "@iterate-com/jonasland-ui/components/button";
-import { Input } from "@iterate-com/jonasland-ui/components/input";
-import { Label } from "@iterate-com/jonasland-ui/components/label";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@iterate-com/jonasland-ui/components/native-select";
-import { Textarea } from "@iterate-com/jonasland-ui/components/textarea";
+import { cn } from "@iterate-com/ui/lib/utils";
+import { Button } from "@iterate-com/ui/components/button";
+import { Input } from "@iterate-com/ui/components/input";
+import { Label } from "@iterate-com/ui/components/label";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import { createEventBusClient, createEventBusWebSocketClient } from "../orpc/client.ts";
 
 type StreamTransport = "websocket" | "sse";

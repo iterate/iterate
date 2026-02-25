@@ -10,7 +10,7 @@ import {
   initializeServiceOtel,
   serviceLog,
   transformLibsqlResultSet,
-} from "@iterate-com/jonasland-shared";
+} from "@iterate-com/shared/jonasland";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 const serviceName = "jonasland-outerbase-service";

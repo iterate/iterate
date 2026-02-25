@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { SqlResultSet } from "@iterate-com/jonasland-shared";
+import type { SqlResultSet } from "@iterate-com/shared/jonasland";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
 interface PersistedRoute {

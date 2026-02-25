@@ -15,7 +15,7 @@ import {
   infoFromContext,
   transformSqlResultSet,
   type ServiceRequestLogger,
-} from "@iterate-com/jonasland-shared";
+} from "@iterate-com/shared/jonasland";
 import { ORPCError, implement, type InferSchemaOutput } from "@orpc/server";
 import { db } from "./db.ts";
 import * as schema from "./db.ts";

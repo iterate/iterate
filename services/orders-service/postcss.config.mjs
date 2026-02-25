@@ -1,3 +1,3 @@
-import uiConfig from "@iterate-com/jonasland-ui/postcss.config";
+import uiConfig from "@iterate-com/ui/postcss.config";
 
 export default uiConfig;

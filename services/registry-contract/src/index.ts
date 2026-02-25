@@ -1,5 +1,5 @@
 import { oc } from "@orpc/contract";
-import { createServiceSubRouterContract } from "@iterate-com/jonasland-shared";
+import { createServiceSubRouterContract } from "@iterate-com/shared/jonasland";
 import { z } from "zod/v4";
 import packageJson from "../package.json" with { type: "json" };
 

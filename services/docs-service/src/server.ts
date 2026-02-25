@@ -8,7 +8,7 @@ import {
   initializeServiceEvlog,
   initializeServiceOtel,
   serviceLog,
-} from "@iterate-com/jonasland-shared";
+} from "@iterate-com/shared/jonasland";
 import { z } from "zod/v4";
 
 interface OpenApiSource {

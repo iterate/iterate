@@ -1137,7 +1137,62 @@ importers:
         specifier: ^22.0.0
         version: 22.18.13
 
-  packages/jonasland-shared:
+  packages/pidnap:
+    dependencies:
+      '@orpc/client':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/contract':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)
+      '@orpc/server':
+        specifier: ^1.13.4
+        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@valibot/to-json-schema':
+        specifier: ^1.5.0
+        version: 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      chokidar:
+        specifier: ^5.0.0
+        version: 5.0.0
+      cli-table3:
+        specifier: ^0.6.5
+        version: 0.6.5
+      croner:
+        specifier: ^9.1.0
+        version: 9.1.0
+      dotenv:
+        specifier: ^17.2.3
+        version: 17.2.3
+      trpc-cli:
+        specifier: ^0.12.2
+        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      valibot:
+        specifier: ^1.2.0
+        version: 1.2.0(typescript@5.9.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      tsdown:
+        specifier: ^0.20.1
+        version: 0.20.1(@typescript/native-preview@7.0.0-dev.20260203.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@25.0.10)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/pidnap/docker:
+    dependencies:
+      pidnap:
+        specifier: link:../
+        version: link:..
+
+  packages/shared:
     dependencies:
       '@opentelemetry/api':
         specifier: ^1.9.0
@@ -1181,9 +1236,6 @@ importers:
       evlog:
         specifier: ^1.8.0
         version: 1.8.0
-      vite:
-        specifier: ^7.3.1
-        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       ws:
         specifier: ^8.18.3
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -1197,8 +1249,11 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: 7.2.4
+        version: 7.2.4(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
-  packages/jonasland-ui:
+  packages/ui:
     dependencies:
       '@base-ui/react':
         specifier: ^1.2.0
@@ -1283,67 +1338,6 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/pidnap:
-    dependencies:
-      '@orpc/client':
-        specifier: ^1.13.4
-        version: 1.13.4(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: ^1.13.4
-        version: 1.13.4(@opentelemetry/api@1.9.0)
-      '@orpc/server':
-        specifier: ^1.13.4
-        version: 1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@valibot/to-json-schema':
-        specifier: ^1.5.0
-        version: 1.5.0(valibot@1.2.0(typescript@5.9.3))
-      chokidar:
-        specifier: ^5.0.0
-        version: 5.0.0
-      cli-table3:
-        specifier: ^0.6.5
-        version: 0.6.5
-      croner:
-        specifier: ^9.1.0
-        version: 9.1.0
-      dotenv:
-        specifier: ^17.2.3
-        version: 17.2.3
-      trpc-cli:
-        specifier: ^0.12.2
-        version: 0.12.2(@orpc/server@1.13.4(@opentelemetry/api@1.9.0)(crossws@0.4.1(srvx@0.10.0))(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@trpc/server@11.10.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
-      tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
-      valibot:
-        specifier: ^1.2.0
-        version: 1.2.0(typescript@5.9.3)
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.0.10
-      tsdown:
-        specifier: ^0.20.1
-        version: 0.20.1(@typescript/native-preview@7.0.0-dev.20260203.1)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(msw@2.12.10(@types/node@25.0.10)(typescript@5.9.3))(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-
-  packages/pidnap/docker:
-    dependencies:
-      pidnap:
-        specifier: link:../
-        version: link:..
-
-  packages/shared:
-    devDependencies:
-      vite:
-        specifier: 7.2.4
-        version: 7.2.4(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
-
   repo-templates/default:
     dependencies:
       '@iterate-com/daemon':
@@ -1415,12 +1409,12 @@ importers:
 
   services/docs-service:
     dependencies:
-      '@iterate-com/jonasland-shared':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-shared
       '@iterate-com/registry-service':
         specifier: workspace:*
         version: link:../registry-service
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       zod:
         specifier: ^4.1.5
         version: 4.3.6
@@ -1434,9 +1428,9 @@ importers:
 
   services/egress-service:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
       http-proxy:
         specifier: ^1.18.1
         version: 1.18.1
@@ -1453,9 +1447,9 @@ importers:
 
   services/events-contract:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
       '@orpc/contract':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1484,15 +1478,15 @@ importers:
       '@iterate-com/events-contract':
         specifier: workspace:*
         version: link:../events-contract
-      '@iterate-com/jonasland-shared':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-shared
-      '@iterate-com/jonasland-ui':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-ui
       '@iterate-com/registry-service':
         specifier: workspace:*
         version: link:../registry-service
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1578,9 +1572,9 @@ importers:
 
   services/home-service:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
@@ -1591,9 +1585,9 @@ importers:
 
   services/orders-contract:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
       '@orpc/contract':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1616,18 +1610,18 @@ importers:
       '@iterate-com/events-contract':
         specifier: workspace:*
         version: link:../events-contract
-      '@iterate-com/jonasland-shared':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-shared
-      '@iterate-com/jonasland-ui':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-ui
       '@iterate-com/orders-contract':
         specifier: workspace:*
         version: link:../orders-contract
       '@iterate-com/registry-service':
         specifier: workspace:*
         version: link:../registry-service
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -1695,9 +1689,9 @@ importers:
 
   services/outerbase-service:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
       better-sqlite3:
         specifier: ^12.4.1
         version: 12.6.0
@@ -1714,9 +1708,9 @@ importers:
 
   services/registry-contract:
     dependencies:
-      '@iterate-com/jonasland-shared':
+      '@iterate-com/shared':
         specifier: workspace:*
-        version: link:../../packages/jonasland-shared
+        version: link:../../packages/shared
       '@orpc/contract':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)
@@ -1736,15 +1730,15 @@ importers:
       '@accelerated-software-development/caddy-api-client':
         specifier: ^0.4.3
         version: 0.4.3(zod@4.3.6)
-      '@iterate-com/jonasland-shared':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-shared
-      '@iterate-com/jonasland-ui':
-        specifier: workspace:*
-        version: link:../../packages/jonasland-ui
       '@iterate-com/registry-contract':
         specifier: workspace:*
         version: link:../registry-contract
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@orpc/client':
         specifier: ^1.13.5
         version: 1.13.5(@opentelemetry/api@1.9.0)

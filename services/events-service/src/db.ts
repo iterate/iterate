@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { serviceManifest } from "@iterate-com/events-contract";
-import type { SqlResultSet } from "@iterate-com/jonasland-shared";
+import type { SqlResultSet } from "@iterate-com/shared/jonasland";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";

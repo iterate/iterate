@@ -1,5 +1,5 @@
 import "@vitejs/plugin-react/preamble";
-import "@iterate-com/jonasland-ui/globals.css";
+import "@iterate-com/ui/globals.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app.tsx";
 

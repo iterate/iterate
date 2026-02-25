@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ordersServiceEnvSchema } from "@iterate-com/orders-contract";
-import type { SqlResultSet } from "@iterate-com/jonasland-shared";
+import type { SqlResultSet } from "@iterate-com/shared/jonasland";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";

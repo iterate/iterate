@@ -14,7 +14,7 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@iterate-com/jonasland-ui/*": ["../../packages/jonasland-ui/src/*"]
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]

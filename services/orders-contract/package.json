@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@iterate-com/jonasland-shared": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "@orpc/contract": "^1.13.5",
     "zod": "^4.1.11"
   },

@@ -9,7 +9,7 @@ import {
   initializeServiceOtel,
   serviceLog,
   type ServiceRequestLogger,
-} from "@iterate-com/jonasland-shared";
+} from "@iterate-com/shared/jonasland";
 
 const serviceName = "jonasland-egress-service";
 

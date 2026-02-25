@@ -21,7 +21,7 @@ import {
   serviceLog,
   transformSqlResultSet,
   type ServiceRequestLogger,
-} from "@iterate-com/jonasland-shared";
+} from "@iterate-com/shared/jonasland";
 import { implement } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/node";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
@@ -111,9 +111,7 @@ const serviceName = "jonasland-registry-service";
 const viteServiceRoot = fileURLToPath(new URL("..", import.meta.url));
 const viteUiRoot = fileURLToPath(new URL("./ui", import.meta.url));
 const viteUiIndexHtmlPath = fileURLToPath(new URL("./ui/index.html", import.meta.url));
-const viteUiPackageRoot = fileURLToPath(
-  new URL("../../../packages/jonasland-ui/src", import.meta.url),
-);
+const viteUiPackageRoot = fileURLToPath(new URL("../../../packages/ui/src", import.meta.url));
 const viteUiGlobalsCss = `${viteUiPackageRoot}/styles/globals.css`;
 const viteFsAllow = [
   "/",
@@ -121,7 +119,7 @@ const viteFsAllow = [
   viteUiRoot,
   viteUiPackageRoot,
   "/opt/packages",
-  "/opt/packages/jonasland-ui",
+  "/opt/packages/ui",
   fileURLToPath(new URL("../../../packages", import.meta.url)),
 ];
 const PACKAGE_FS_PREFIX = "/@fs/opt/packages/";
@@ -556,15 +554,15 @@ export async function startRegistryService(options?: {
     cacheDir: "/tmp/vite-registry-service",
     resolve: {
       alias: [
-        { find: "@iterate-com/jonasland-ui/globals.css", replacement: viteUiGlobalsCss },
-        { find: "@iterate-com/jonasland-ui/styles.css", replacement: viteUiGlobalsCss },
+        { find: "@iterate-com/ui/globals.css", replacement: viteUiGlobalsCss },
+        { find: "@iterate-com/ui/styles.css", replacement: viteUiGlobalsCss },
         {
-          find: "@iterate-com/jonasland-ui/components",
+          find: "@iterate-com/ui/components",
           replacement: `${viteUiPackageRoot}/components`,
         },
-        { find: "@iterate-com/jonasland-ui/lib", replacement: `${viteUiPackageRoot}/lib` },
-        { find: "@iterate-com/jonasland-ui/hooks", replacement: `${viteUiPackageRoot}/hooks` },
-        { find: "@iterate-com/jonasland-ui", replacement: `${viteUiPackageRoot}/index.ts` },
+        { find: "@iterate-com/ui/lib", replacement: `${viteUiPackageRoot}/lib` },
+        { find: "@iterate-com/ui/hooks", replacement: `${viteUiPackageRoot}/hooks` },
+        { find: "@iterate-com/ui", replacement: `${viteUiPackageRoot}/index.ts` },
       ],
     },
     plugins: [tailwindcss(), react()],
