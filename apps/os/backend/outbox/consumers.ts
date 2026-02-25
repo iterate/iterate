@@ -351,9 +351,7 @@ export const registerConsumers = () => {
       }
 
       logger.set({ machine: { id: machineId }, project: { id: projectId } });
-      logger.info(
-        `[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`,
-      );
+      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`);
       return `enqueued ${detached.length} delete-requested events`;
     },
   });
