@@ -12,6 +12,7 @@ type RecordEntry = {
 
 const port = Number.parseInt(process.env.JONASLAND_MOCK_EGRESS_PORT ?? "19099", 10);
 const records: RecordEntry[] = [];
+const INTERNAL_PATHS = new Set(["/healthz", "/records"]);
 
 function toHeaders(
   headers: import("node:http").IncomingHttpHeaders,
@@ -32,17 +33,19 @@ const server = createServer(async (req, res) => {
   const body = chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : "";
   const url = new URL(req.url ?? "/", "http://localhost");
 
-  const entry: RecordEntry = {
-    method: req.method ?? "GET",
-    path: `${url.pathname}${url.search}`,
-    host: req.headers.host ?? "",
-    headers: toHeaders(req.headers),
-    body,
-    createdAt: new Date().toISOString(),
-  };
-  records.push(entry);
-
-  process.stdout.write(`[mock-egress] ${entry.method} ${entry.path} host=${entry.host}\n`);
+  const path = `${url.pathname}${url.search}`;
+  if (!INTERNAL_PATHS.has(url.pathname)) {
+    const entry: RecordEntry = {
+      method: req.method ?? "GET",
+      path,
+      host: req.headers.host ?? "",
+      headers: toHeaders(req.headers),
+      body,
+      createdAt: new Date().toISOString(),
+    };
+    records.push(entry);
+    process.stdout.write(`[mock-egress] ${entry.method} ${entry.path} host=${entry.host}\n`);
+  }
 
   if (url.pathname === "/healthz") {
     res.writeHead(200, { "content-type": "application/json" });

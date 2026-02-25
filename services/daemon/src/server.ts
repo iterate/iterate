@@ -27,7 +27,7 @@ baseApp.post("/api/tools/exec-ts", async (c) => {
 
   const dir = join(tmpdir(), "jonasland-daemon-exec");
   await mkdir(dir, { recursive: true });
-  const scriptPath = join(dir, `script-${randomUUID()}.mjs`);
+  const scriptPath = join(dir, `script-${randomUUID()}.mts`);
 
   try {
     await writeFile(scriptPath, ensureModuleSource(code), "utf8");

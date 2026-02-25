@@ -112,38 +112,40 @@ app.post("/sessions/:sessionId", async (c) => {
     body: JSON.stringify({ path: session.agentPath, isWorking: true, shortStatus: "Thinking" }),
   }).catch(() => {});
 
-  const modelResponse = await callModel(prompt);
+  try {
+    const modelResponse = await callModel(prompt);
 
-  if (body.slack?.channel && body.slack?.threadTs) {
-    const slackPayload = {
-      channel: body.slack.channel,
-      thread_ts: body.slack.threadTs,
-      text: modelResponse,
-    };
+    if (body.slack?.channel && body.slack?.threadTs) {
+      const slackPayload = {
+        channel: body.slack.channel,
+        thread_ts: body.slack.threadTs,
+        text: modelResponse,
+      };
 
-    const code = [
-      "export default async () => {",
-      `  const payload = ${JSON.stringify(slackPayload)};`,
-      `  const response = await fetch(${JSON.stringify(`${env.SLACK_API_BASE_URL}/api/chat.postMessage`)}, {`,
-      "    method: 'POST',",
-      "    headers: {",
-      "      'content-type': 'application/json',",
-      '      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`',
-      "    },",
-      "    body: JSON.stringify(payload)",
-      "  });",
-      "  return await response.text();",
-      "};",
-    ].join("\n");
+      const code = [
+        "export default async () => {",
+        `  const payload = ${JSON.stringify(slackPayload)};`,
+        `  const response = await fetch(${JSON.stringify(`${env.SLACK_API_BASE_URL}/api/chat.postMessage`)}, {`,
+        "    method: 'POST',",
+        "    headers: {",
+        "      'content-type': 'application/json',",
+        '      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`',
+        "    },",
+        "    body: JSON.stringify(payload)",
+        "  });",
+        "  return await response.text();",
+        "};",
+      ].join("\n");
 
-    await execTs(code);
+      await execTs(code);
+    }
+  } finally {
+    await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/update`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: session.agentPath, isWorking: false, shortStatus: "" }),
+    }).catch(() => {});
   }
-
-  await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/update`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ path: session.agentPath, isWorking: false, shortStatus: "" }),
-  }).catch(() => {});
 
   return c.json({ ok: true as const });
 });

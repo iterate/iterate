@@ -488,12 +488,19 @@ async function stopSandbox(): Promise<void> {
   runtimePhase = "stopping";
   appendEvent(`stopping container: ${containerName ?? "unknown"}`);
 
-  await deployment[Symbol.asyncDispose]();
-  deployment = null;
-  containerName = null;
-  ingressUrl = null;
-  runtimePhase = "idle";
-  appendEvent("sandbox stopped");
+  const currentDeployment = deployment;
+  try {
+    await currentDeployment[Symbol.asyncDispose]();
+    appendEvent("sandbox stopped");
+  } catch (error) {
+    lastError = errorMessage(error);
+    appendEvent(`sandbox stop failed: ${lastError.split("\n")[0] ?? "unknown error"}`);
+  } finally {
+    deployment = null;
+    containerName = null;
+    ingressUrl = null;
+    runtimePhase = "idle";
+  }
 }
 
 async function simulateSlackWebhook(payload: {
