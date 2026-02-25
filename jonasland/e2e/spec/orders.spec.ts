@@ -1,30 +1,19 @@
 /* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { expect } from "@playwright/test";
-import { ingressRequest, projectDeployment, startOnDemandProcess, test } from "./test-helpers.ts";
+import { projectDeployment, test } from "./test-helpers.ts";
 
 test.describe("orders service", () => {
   test("supports place + find order and emits order stream events", async ({}) => {
     await using deployment = await projectDeployment();
-    await startOnDemandProcess(deployment, "orders");
+    await deployment.startOnDemandProcess("orders");
 
-    const healthResponse = await ingressRequest(deployment, {
-      host: "orders.iterate.localhost",
-      path: "/healthz",
-    });
-    expect(healthResponse.status).toBe(200);
-    expect((await healthResponse.text()).trim()).toBe("ok");
+    const health = await deployment.orders.service.health({});
+    expect(health.ok).toBe(true);
 
-    const placeResponse = await ingressRequest(deployment, {
-      host: "orders.iterate.localhost",
-      path: "/api/orders",
-      json: {
-        sku: "sku-123",
-        quantity: 2,
-      },
-    });
-    expect(placeResponse.status).toBe(200);
-
-    const placed = (await placeResponse.json()) as {
+    const placed = (await deployment.orders.orders.place({
+      sku: "sku-123",
+      quantity: 2,
+    })) as {
       id: string;
       eventId: string;
       sku: string;
@@ -37,17 +26,14 @@ test.describe("orders service", () => {
     expect(placed.quantity).toBe(2);
     expect(placed.status).toBe("accepted");
 
-    const findResponse = await ingressRequest(deployment, {
-      host: "orders.iterate.localhost",
-      path: `/api/orders/${placed.id}`,
-    });
-    expect(findResponse.status).toBe(200);
-
-    const found = (await findResponse.json()) as { id: string; eventId: string };
+    const found = (await deployment.orders.orders.find({ id: placed.id })) as {
+      id: string;
+      eventId: string;
+    };
     expect(found.id).toBe(placed.id);
     expect(found.eventId).toBe(placed.eventId);
 
-    const streamResponse = await ingressRequest(deployment, {
+    const streamResponse = await deployment.request({
       host: "events.iterate.localhost",
       path: "/api/streams/orders",
     });

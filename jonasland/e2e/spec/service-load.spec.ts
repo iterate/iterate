@@ -1,27 +1,21 @@
 /* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { expect } from "@playwright/test";
-import {
-  ingressRequest,
-  projectDeployment,
-  startOnDemandProcess,
-  test,
-  waitForDocsSources,
-} from "./test-helpers.ts";
+import { projectDeployment, test } from "./test-helpers.ts";
 
 test.describe("service load checks", () => {
   test("docs service loads and discovers events + orders OpenAPI sources", async ({}) => {
     await using deployment = await projectDeployment();
-    await startOnDemandProcess(deployment, "orders");
-    await startOnDemandProcess(deployment, "docs");
+    await deployment.startOnDemandProcess("orders");
+    await deployment.startOnDemandProcess("docs");
 
-    const docsHomeResponse = await ingressRequest(deployment, {
+    const docsHomeResponse = await deployment.request({
       host: "docs.iterate.localhost",
       path: "/",
     });
     expect(docsHomeResponse.status).toBe(200);
     expect(await docsHomeResponse.text()).toContain("jonasland API Docs");
 
-    const sourcesPayload = await waitForDocsSources(deployment, [
+    const sourcesPayload = await deployment.waitForDocsSources([
       "events.iterate.localhost",
       "orders.iterate.localhost",
     ]);
@@ -43,9 +37,9 @@ test.describe("service load checks", () => {
 
   test("outerbase service route loads", async ({}) => {
     await using deployment = await projectDeployment();
-    await startOnDemandProcess(deployment, "outerbase");
+    await deployment.startOnDemandProcess("outerbase");
 
-    const response = await ingressRequest(deployment, {
+    const response = await deployment.request({
       host: "outerbase.iterate.localhost",
       path: "/healthz",
     });
@@ -56,9 +50,9 @@ test.describe("service load checks", () => {
 
   test("openobserve route loads", async ({}) => {
     await using deployment = await projectDeployment();
-    await startOnDemandProcess(deployment, "openobserve");
+    await deployment.startOnDemandProcess("openobserve");
 
-    const openobserve = await ingressRequest(deployment, {
+    const openobserve = await deployment.request({
       host: "openobserve.iterate.localhost",
       path: "/",
     });
@@ -67,9 +61,9 @@ test.describe("service load checks", () => {
 
   test("caddy manager route loads", async ({}) => {
     await using deployment = await projectDeployment();
-    await startOnDemandProcess(deployment, "caddymanager");
+    await deployment.startOnDemandProcess("caddymanager");
 
-    const health = await ingressRequest(deployment, {
+    const health = await deployment.request({
       host: "caddymanager.iterate.localhost",
       path: "/healthz",
     });

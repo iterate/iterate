@@ -54,6 +54,55 @@ export const sharedOnDemandProcesses = {
   },
 } satisfies Record<string, OnDemandProcessConfig>;
 
+export const onDemandProcesses = {
+  ...sharedOnDemandProcesses,
+  home: {
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/home-service/src/server.ts"],
+      env: OTEL_SERVICE_ENV,
+    },
+    routeCheck: { host: "home.iterate.localhost", path: "/" },
+  },
+  "egress-proxy": {
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/egress-service/src/server.ts"],
+      env: OTEL_SERVICE_ENV,
+    },
+    directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
+  },
+  openobserve: {
+    definition: {
+      command: "/usr/local/bin/openobserve",
+      args: [],
+      env: {
+        ZO_ROOT_USER_EMAIL: "root@example.com",
+        ZO_ROOT_USER_PASSWORD: "Complexpass#123",
+        ZO_LOCAL_MODE: "true",
+        ZO_DATA_DIR: "/var/lib/openobserve",
+      },
+    },
+    startupTimeoutMs: 120_000,
+    routeCheck: {
+      host: "openobserve.iterate.localhost",
+      path: "/",
+      timeoutMs: 120_000,
+      readyStatus: "lt400",
+    },
+  },
+  caddymanager: {
+    definition: {
+      command: "node",
+      args: ["/opt/jonasland-sandbox/caddymanager/server.mjs"],
+      env: {},
+    },
+    routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+  },
+} satisfies Record<string, OnDemandProcessConfig>;
+
+export type OnDemandProcessName = keyof typeof onDemandProcesses;
+
 type OnDemandProcessRuntime = {
   pidnap: {
     processes: {
