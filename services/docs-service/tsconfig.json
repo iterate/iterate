@@ -10,7 +10,11 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@iterate-com/ui/*": ["../../packages/ui/src/*"]
+    }
   },
   "include": ["src/**/*.ts"]
 }
