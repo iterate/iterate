@@ -19,14 +19,16 @@ const tagSuffix = `jonasland-sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 const buildPlatform = process.env.JONASLAND_BUILD_PLATFORM || "linux/amd64,linux/arm64";
 const skipLoad = process.env.JONASLAND_SKIP_LOAD === "true";
 const flyApiToken = process.env.FLY_API_TOKEN;
-const flyRegistryApp =
+const configuredFlyRegistryApp =
   process.env.JONASLAND_SANDBOX_FLY_REGISTRY_APP || process.env.SANDBOX_FLY_REGISTRY_APP;
-if (!flyRegistryApp) {
-  throw new Error("JONASLAND_SANDBOX_FLY_REGISTRY_APP (or SANDBOX_FLY_REGISTRY_APP) is required");
-}
 const pushFlyRegistryEnv = process.env.JONASLAND_PUSH_FLY_REGISTRY;
 const shouldPushFlyRegistry =
   pushFlyRegistryEnv === "false" ? false : pushFlyRegistryEnv === "true" || Boolean(flyApiToken);
+if (shouldPushFlyRegistry && !configuredFlyRegistryApp) {
+  throw new Error(
+    "JONASLAND_SANDBOX_FLY_REGISTRY_APP (or SANDBOX_FLY_REGISTRY_APP) is required when Fly push is enabled",
+  );
+}
 
 function readDepotProjectId(): string {
   const config = JSON.parse(readFileSync(join(repoRoot, "depot.json"), "utf-8")) as { id?: string };
@@ -36,7 +38,9 @@ function readDepotProjectId(): string {
 
 const depotProjectId = readDepotProjectId();
 const localImageTag = `jonasland-sandbox:${tagSuffix}`;
-const flyImageTag = `registry.fly.io/${flyRegistryApp}:${tagSuffix}`;
+const flyImageTag = configuredFlyRegistryApp
+  ? `registry.fly.io/${configuredFlyRegistryApp}:${tagSuffix}`
+  : null;
 const depotImageTag = `registry.depot.dev/${depotProjectId}:${tagSuffix}`;
 
 function ensureFlyAuth(token: string): void {
@@ -62,6 +66,8 @@ if (shouldPushFlyRegistry) {
       throw new Error("JONASLAND_PUSH_FLY_REGISTRY=true but FLY_API_TOKEN is not set");
     }
     console.warn("Skipping Fly registry push: FLY_API_TOKEN not set");
+  } else if (!flyImageTag) {
+    throw new Error("Fly registry app is required when Fly push is enabled");
   } else {
     ensureFlyAuth(flyApiToken);
     pushTags.push(flyImageTag);
@@ -114,5 +120,5 @@ if (wantsLoad && wantsPush) {
 }
 
 console.log(`image_tag=${localImageTag}`);
-console.log(`fly_image_tag=${flyImageTag}`);
+console.log(`fly_image_tag=${flyImageTag ?? ""}`);
 console.log(`depot_image_tag=${depotImageTag}`);
