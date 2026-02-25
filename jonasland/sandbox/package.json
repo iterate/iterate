@@ -1,0 +1,28 @@
+{
+  "name": "@iterate-com/jonasland-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build-image.ts",
+    "typecheck": "tsc --noEmit",
+    "registry:start": "tsx ../../services/registry-service/src/server.ts",
+    "events:start": "tsx ../../services/events-service/src/server.ts",
+    "orders:start": "tsx ../../services/orders-service/src/server.ts",
+    "docs:start": "tsx ../../services/docs-service/src/server.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@orpc/client": "^1.13.5",
+    "@orpc/contract": "^1.13.5",
+    "@orpc/server": "^1.13.5",
+    "better-sqlite3": "^12.4.1",
+    "drizzle-orm": "^0.45.1",
+    "http-proxy": "^1.18.1",
+    "tsx": "^4.20.6",
+    "valibot": "^1.2.0"
+  }
+}

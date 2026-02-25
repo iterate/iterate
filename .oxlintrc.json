@@ -210,6 +210,13 @@
       "plugins": ["react"]
     },
     {
+      "files": ["packages/ui/src/components/**/*.tsx"],
+      "rules": {
+        "react/only-export-components": "off"
+      },
+      "plugins": ["react"]
+    },
+    {
       "files": ["apps/os/app/routes/**/*.ts", "apps/os/app/routes/**/*.tsx"],
       "plugins": ["typescript", "import", "react", "jsx-a11y"],
       "rules": {

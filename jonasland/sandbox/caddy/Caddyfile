@@ -1,0 +1,158 @@
+{
+    admin 0.0.0.0:2019 {
+        origins *
+    }
+    local_certs
+    auto_https off
+}
+
+(iterate_cors_openapi) {
+    @iterate_api_preflight {
+        method OPTIONS
+        path /api/*
+        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+    }
+    respond @iterate_api_preflight 204
+
+    @iterate_api_cors {
+        path /api/*
+        header_regexp Origin ^https?://([a-z0-9-]+\.)?iterate\.localhost(:[0-9]+)?$
+    }
+    header @iterate_api_cors Access-Control-Allow-Origin "{http.request.header.Origin}"
+    header @iterate_api_cors Access-Control-Allow-Methods "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    header @iterate_api_cors Access-Control-Allow-Headers "authorization,content-type,x-request-id,traceparent,tracestate,baggage"
+    header @iterate_api_cors Access-Control-Expose-Headers "content-type,x-request-id"
+    header @iterate_api_cors Access-Control-Max-Age "600"
+    header @iterate_api_cors Vary "Origin"
+}
+
+http://pidnap.iterate.localhost {
+    reverse_proxy 127.0.0.1:9876
+}
+
+http://registry.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:8777
+}
+
+http://events.iterate.localhost {
+    import iterate_cors_openapi
+    tracing {
+        span "caddy-events-http"
+    }
+
+    reverse_proxy 127.0.0.1:19010
+}
+
+http://orders.iterate.localhost {
+    import iterate_cors_openapi
+    tracing {
+        span "caddy-orders-http"
+    }
+
+    reverse_proxy 127.0.0.1:19020
+}
+
+http://docs.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19050
+}
+
+http://home.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19030
+}
+
+http://outerbase.iterate.localhost {
+    import iterate_cors_openapi
+    reverse_proxy 127.0.0.1:19040
+}
+
+http://caddymanager.iterate.localhost {
+    reverse_proxy 127.0.0.1:8501
+}
+
+http://caddy-admin.iterate.localhost {
+    reverse_proxy 127.0.0.1:2019
+}
+
+http://openobserve.iterate.localhost {
+    reverse_proxy 127.0.0.1:5080 {
+        header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+    }
+}
+
+http://clickstack.iterate.localhost {
+    reverse_proxy 127.0.0.1:8080
+}
+
+:80 {
+    @health path /healthz
+    respond @health "ok" 200
+
+    @local host 127.0.0.1 localhost
+    handle @local {
+        respond "caddy ok" 200
+    }
+
+    reverse_proxy 127.0.0.1:19000 {
+        header_up X-Iterate-Original-Host {http.request.header.Host}
+        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
+        header_up X-Iterate-Original-Proto {http.request.scheme}
+    }
+}
+
+:443 {
+    tls internal {
+        on_demand
+    }
+
+    @events host events.iterate.localhost
+    handle @events {
+        import iterate_cors_openapi
+        tracing {
+            span "caddy-events-https"
+        }
+
+        reverse_proxy 127.0.0.1:19010
+    }
+
+    @orders host orders.iterate.localhost
+    handle @orders {
+        import iterate_cors_openapi
+        tracing {
+            span "caddy-orders-https"
+        }
+
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @docs host docs.iterate.localhost
+    handle @docs {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19050
+    }
+
+    @openobserve host openobserve.iterate.localhost
+    handle @openobserve {
+        reverse_proxy 127.0.0.1:5080 {
+            header_up Authorization "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyMxMjM="
+        }
+    }
+
+    @clickstack host clickstack.iterate.localhost
+    handle @clickstack {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    @caddymanager host caddymanager.iterate.localhost
+    handle @caddymanager {
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    reverse_proxy 127.0.0.1:19000 {
+        header_up X-Iterate-Original-Host {http.request.header.Host}
+        header_up X-Iterate-Original-SNI {http.request.tls.server_name}
+        header_up X-Iterate-Original-Proto {http.request.scheme}
+    }
+}
