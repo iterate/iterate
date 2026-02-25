@@ -10,6 +10,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { projectDeployment, type ProjectDeployment } from "../e2e/test-helpers/index.ts";
+import { ON_DEMAND_PROCESSES } from "../shared/on-demand-processes.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,84 +75,16 @@ const sandboxImage = process.env.JONASLAND_SANDBOX_IMAGE ?? "jonasland-sandbox:l
 const externalEgressProxy =
   process.env.JONASLAND_DEMO_EGRESS_PROXY ?? `http://host.docker.internal:${String(apiPort)}`;
 
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
-
-const processes: ProcessConfig[] = [
-  {
-    slug: "egress-proxy",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz", timeoutMs: 60_000 },
-  },
-  {
-    slug: "opencode",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/jonasland-sandbox/scripts/opencode-mock.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        OPENCODE_PORT: "4096",
-      },
-    },
-    directHttpCheck: { url: "http://127.0.0.1:4096/healthz", timeoutMs: 60_000 },
-  },
-  {
-    slug: "agents",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/agents/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        AGENTS_SERVICE_PORT: "19061",
-        OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
-      },
-    },
-    routeCheck: { host: "agents.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
-  },
-  {
-    slug: "opencode-wrapper",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/opencode-wrapper/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        OPENCODE_WRAPPER_SERVICE_PORT: "19062",
-        OPENCODE_BASE_URL: "http://127.0.0.1:4096",
-        OPENAI_BASE_URL: "http://api.openai.com",
-        SLACK_API_BASE_URL: "http://slack.com",
-        OPENAI_MODEL: "gpt-4o-mini",
-        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
-        DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
-      },
-    },
-    routeCheck: {
-      host: "opencode-wrapper.iterate.localhost",
-      path: "/healthz",
-      timeoutMs: 60_000,
-    },
-  },
-  {
-    slug: "slack",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/slack/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        SLACK_SERVICE_PORT: "19063",
-        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
-      },
-    },
-    routeCheck: { host: "slack.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
-  },
-];
+const processes: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfig) => ({
+  slug: processConfig.slug,
+  definition: processConfig.definition,
+  ...(processConfig.routeCheck
+    ? { routeCheck: { ...processConfig.routeCheck, timeoutMs: 60_000 } }
+    : {}),
+  ...(processConfig.directHttpCheck
+    ? { directHttpCheck: { ...processConfig.directHttpCheck, timeoutMs: 60_000 } }
+    : {}),
+}));
 
 const mockConfig: MockConfig = {
   openaiOutputText: "The answer is 42",

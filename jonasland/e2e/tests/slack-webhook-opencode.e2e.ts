@@ -5,18 +5,13 @@ import {
   projectDeployment,
   type ProjectDeployment,
 } from "../test-helpers/index.ts";
+import {
+  ON_DEMAND_PROCESSES_BY_NAME,
+  type OnDemandProcessName,
+} from "../../shared/on-demand-processes.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
-
-type OnDemandProcessName = "egress-proxy" | "opencode" | "agents" | "opencode-wrapper" | "slack";
 
 type OnDemandProcessConfig = {
   definition: {
@@ -27,69 +22,8 @@ type OnDemandProcessConfig = {
   routeCheck?: { host: string; path: string };
   directHttpCheck?: { url: string };
 };
-
-const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
-  "egress-proxy": {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
-  },
-  opencode: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/jonasland-sandbox/scripts/opencode-mock.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        OPENCODE_PORT: "4096",
-      },
-    },
-    directHttpCheck: { url: "http://127.0.0.1:4096/healthz" },
-  },
-  agents: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/agents/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        AGENTS_SERVICE_PORT: "19061",
-        OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
-      },
-    },
-    routeCheck: { host: "agents.iterate.localhost", path: "/healthz" },
-  },
-  "opencode-wrapper": {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/opencode-wrapper/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        OPENCODE_WRAPPER_SERVICE_PORT: "19062",
-        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
-        DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
-        OPENCODE_BASE_URL: "http://127.0.0.1:4096",
-        OPENAI_BASE_URL: "http://api.openai.com",
-        SLACK_API_BASE_URL: "http://slack.com",
-        OPENAI_MODEL: "gpt-4o-mini",
-      },
-    },
-    routeCheck: { host: "opencode-wrapper.iterate.localhost", path: "/healthz" },
-  },
-  slack: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/slack/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        SLACK_SERVICE_PORT: "19063",
-        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
-      },
-    },
-    routeCheck: { host: "slack.iterate.localhost", path: "/healthz" },
-  },
-};
+const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> =
+  ON_DEMAND_PROCESSES_BY_NAME;
 
 async function waitForHostRoute(
   deployment: ProjectDeployment,
