@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import * as path from "node:path";
 import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- fixture extension only
-import { type ProjectDeployment, projectDeployment } from "../test-helpers/index.ts";
+import { type SandboxFixture, sandboxFixture } from "../test-helpers/index.ts";
 import { addPlugins } from "./playwright-plugin.ts";
 import { hydrationWaiter, spinnerWaiter, uiErrorReporter, videoMode } from "./plugins/index.ts";
 
@@ -82,7 +82,7 @@ function withBody(params: HostRequestParams): { body: string | undefined; header
 }
 
 export async function ingressRequest(
-  deployment: Pick<ProjectDeployment, "ingressUrl">,
+  deployment: Pick<SandboxFixture, "ingressUrl">,
   params: HostRequestParams,
 ): Promise<Response> {
   const ingressBaseUrl = await deployment.ingressUrl();
@@ -139,7 +139,7 @@ export async function ingressRequest(
 }
 
 export async function waitForHostRoute(
-  deployment: Pick<ProjectDeployment, "ingressUrl">,
+  deployment: Pick<SandboxFixture, "ingressUrl">,
   params: { host: string; path: string; timeoutMs?: number },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
@@ -162,7 +162,7 @@ export async function waitForHostRoute(
 }
 
 export async function waitForDocsSources(
-  deployment: Pick<ProjectDeployment, "ingressUrl">,
+  deployment: Pick<SandboxFixture, "ingressUrl">,
   expectedHosts: string[],
 ): Promise<{ sources: Array<{ id: string; title: string; specUrl: string }>; total: number }> {
   const deadline = Date.now() + 45_000;
@@ -197,7 +197,7 @@ export async function waitForDocsSources(
 }
 
 export async function startOnDemandProcess(
-  deployment: Pick<ProjectDeployment, "pidnap" | "waitForPidnapProcessRunning" | "ingressUrl">,
+  deployment: Pick<SandboxFixture, "pidnap" | "waitForPidnapProcessRunning" | "ingressUrl">,
   processName: OnDemandProcessName,
 ): Promise<void> {
   const processConfig = ON_DEMAND_PROCESSES[processName];
@@ -223,7 +223,7 @@ export async function startOnDemandProcess(
 
 export const baseTest = base;
 
-export const test = base.extend<{ deployment: ProjectDeployment }>({
+export const test = base.extend<{ deployment: SandboxFixture }>({
   page: async ({ page: basePage }, use, testInfo) => {
     await using page = await addPlugins({
       page: basePage,
@@ -241,7 +241,7 @@ export const test = base.extend<{ deployment: ProjectDeployment }>({
   },
 
   deployment: async ({}, use, testInfo) => {
-    await using deployment = await projectDeployment({
+    await using deployment = await sandboxFixture({
       image,
       name: `jonasland-playwright-${randomUUID()}`,
     });
