@@ -42,7 +42,7 @@ const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
  */
 export const SERVICE_ALIASES: Record<string, number> = {
   opencode: 4096,
-  terminal: 4096,
+  daemon: 3000,
 };
 
 /**

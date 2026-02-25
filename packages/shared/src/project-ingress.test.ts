@@ -356,11 +356,11 @@ describe("parseCustomDomainHostname", () => {
     });
   });
 
-  it("terminal alias → project, aliased port", () => {
-    const result = parseCustomDomainHostname("terminal.templestein.com", "templestein.com");
+  it("daemon alias → project, default port", () => {
+    const result = parseCustomDomainHostname("daemon.templestein.com", "templestein.com");
     expect(result).toEqual({
       ok: true,
-      target: { kind: "project", targetPort: SERVICE_ALIASES.terminal },
+      target: { kind: "project", targetPort: SERVICE_ALIASES.daemon },
     });
   });
 
