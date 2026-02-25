@@ -20,6 +20,19 @@ jobs:
   notification_init:
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_init
         name: notification_init
         uses: actions/github-script@v7
@@ -55,6 +68,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -104,6 +130,19 @@ jobs:
       - variables
     if: needs.variables.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -135,6 +174,19 @@ jobs:
       - variables
     if: always() && needs.variables.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -165,6 +217,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -206,6 +271,19 @@ jobs:
       - deploy-os-early
     if: needs.deploy-os-early.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -237,6 +315,19 @@ jobs:
       - deploy-os-early
     if: always() && needs.deploy-os-early.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -267,6 +358,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -311,6 +415,19 @@ jobs:
       - build-sandbox-image
     if: needs.build-sandbox-image.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -342,6 +459,19 @@ jobs:
       - build-sandbox-image
     if: always() && needs.build-sandbox-image.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -372,6 +502,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -414,6 +557,19 @@ jobs:
       - test-sandbox-fly
     if: needs.test-sandbox-fly.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -445,6 +601,19 @@ jobs:
       - test-sandbox-fly
     if: always() && needs.test-sandbox-fly.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -475,6 +644,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -533,6 +715,19 @@ jobs:
       - promote-fly-default-image
     if: needs.promote-fly-default-image.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -564,6 +759,19 @@ jobs:
       - promote-fly-default-image
     if: always() && needs.promote-fly-default-image.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -594,6 +802,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -638,6 +859,19 @@ jobs:
       - deploy
     if: needs.deploy.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -669,6 +903,19 @@ jobs:
       - deploy
     if: always() && needs.deploy.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -699,6 +946,19 @@ jobs:
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_before
         name: notification_before
         uses: actions/github-script@v7
@@ -788,6 +1048,19 @@ jobs:
       - slack_failure
     if: needs.slack_failure.result == 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7
@@ -819,6 +1092,19 @@ jobs:
       - slack_failure
     if: always() && needs.slack_failure.result != 'success'
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - id: notification_after
         name: notification_after
         uses: actions/github-script@v7

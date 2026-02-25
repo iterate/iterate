@@ -178,6 +178,7 @@ async function addSlackNotifications(
     {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
+        ...utils.setupRepo,
         {
           id: "notification_init",
           name: "Initialize notification thread",
@@ -209,6 +210,7 @@ async function addSlackNotifications(
         needs: ["notification_init"],
         env: { NEEDS: "${{ toJson(needs) }}" },
         steps: [
+          ...utils.setupRepo,
           {
             id: `${name}_notification_before`,
             ...(await utils.githubScript(import.meta, async function notification_before() {
@@ -233,6 +235,7 @@ async function addSlackNotifications(
         needs: ["notification_init", `${name}_notification_before`, name],
         if: `needs.${name}.result == 'success'`,
         steps: [
+          ...utils.setupRepo,
           {
             id: `${name}_notification_after`,
             ...(await utils.githubScript(import.meta, async function notification_after() {
@@ -255,6 +258,7 @@ async function addSlackNotifications(
         needs: ["notification_init", `${name}_notification_before`, name],
         if: `always() && needs.${name}.result != 'success'`,
         steps: [
+          ...utils.setupRepo,
           {
             id: `${name}_notification_failure`,
             ...(await utils.githubScript(import.meta, async function notification_after() {
