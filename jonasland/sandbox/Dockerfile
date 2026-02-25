@@ -1,45 +1,79 @@
 # syntax=docker/dockerfile:1
 
-ARG CADDY_VERSION=2.11.1
-FROM caddy:${CADDY_VERSION} AS caddy-bin
+ARG OPENOBSERVE_IMAGE=public.ecr.aws/zinclabs/openobserve:latest@sha256:88e244620dcb3786b0d04a0339fc9de8342568c6c91e4e09c6e8fd93d2eb9efd
+ARG OTELCOL_IMAGE=otel/opentelemetry-collector-contrib:latest@sha256:f6e429c1052ab50f85a7afa5f7e32f25931697751622b0e1f453d10f79a1df3c
+ARG CLICKSTACK_IMAGE=clickhouse/clickstack-local:2@sha256:9d65a40b1376f15455c0b02be1f1ce728f38f47d6aec302528a4b35ecc6a59ec
 
-FROM node:24-bookworm-slim
-ARG NOMAD_VERSION=1.11.2
-ARG CONSUL_VERSION=1.22.4
+FROM ${OPENOBSERVE_IMAGE} AS openobserve
+FROM ${OTELCOL_IMAGE} AS otelcol
+FROM ${CLICKSTACK_IMAGE} AS clickstack
+
+FROM node:24-trixie-slim
+
+ARG GIT_SHA=unknown
+ARG CADDY_VERSION=2.11.1
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
-    gosu \
-    iproute2 \
     iptables \
-    unzip \
+    procps \
+    tini \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/nomad.zip && \
-    mkdir -p /tmp/nomad-extract && \
-    unzip -q /tmp/nomad.zip -d /tmp/nomad-extract && \
-    install -m 0755 /tmp/nomad-extract/nomad /usr/local/bin/nomad && \
-    rm -rf /tmp/nomad.zip /tmp/nomad-extract
+RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${TARGETARCH}.tar.gz" \
+    | tar -xz -C /usr/local/bin caddy && \
+    chmod +x /usr/local/bin/caddy
 
-RUN curl -fsSL "https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_${TARGETARCH}.zip" -o /tmp/consul.zip && \
-    mkdir -p /tmp/consul-extract && \
-    unzip -q /tmp/consul.zip -d /tmp/consul-extract && \
-    install -m 0755 /tmp/consul-extract/consul /usr/local/bin/consul && \
-    rm -rf /tmp/consul.zip /tmp/consul-extract
+RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
-COPY --from=caddy-bin /usr/bin/caddy /usr/local/bin/caddy
-RUN chmod +x /usr/local/bin/caddy
+COPY --from=openobserve /openobserve /usr/local/bin/openobserve
+COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
+COPY --from=clickstack / /opt/clickstack-root
 
-RUN mkdir -p /etc/jonasland/nomad/jobs /etc/jonasland/caddy /etc/jonasland/services /etc/jonasland/scripts /var/lib/nomad /var/lib/caddy
-COPY jonasland/sandbox/nomad/base.hcl /etc/jonasland/nomad/base.hcl
-COPY jonasland/sandbox/nomad/jobs/*.nomad.hcl /etc/jonasland/nomad/jobs/
-COPY jonasland/sandbox/caddy/Caddyfile.tmpl /etc/jonasland/caddy/Caddyfile.tmpl
-COPY jonasland/sandbox/services/ /etc/jonasland/services/
-COPY jonasland/sandbox/scripts/ /etc/jonasland/scripts/
-RUN find /etc/jonasland/scripts -name "*.sh" -exec chmod +x {} \;
-RUN chown -R node:node /var/lib/caddy
+WORKDIR /opt/pidnap
+COPY packages/pidnap/package.json /opt/pidnap/package.json
+COPY packages/pidnap/src /opt/pidnap/src
+RUN pnpm install --prod
 
-CMD ["nomad", "agent", "-dev", "-config=/etc/jonasland/nomad/base.hcl"]
+WORKDIR /opt
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
+COPY services /opt/services
+COPY packages /opt/packages
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
+    --filter @iterate-com/registry-service \
+    --filter @iterate-com/events-service \
+    --filter @iterate-com/orders-service \
+    --filter @iterate-com/home-service \
+    --filter @iterate-com/docs-service \
+    --filter @iterate-com/outerbase-service \
+    --filter @iterate-com/egress-service \
+    --filter @iterate-com/registry-contract \
+    --filter @iterate-com/events-contract \
+    --filter @iterate-com/orders-contract \
+    --filter @iterate-com/jonasland-shared \
+    --filter @iterate-com/jonasland-ui
+RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs
+
+RUN mkdir -p \
+    /opt/jonasland-sandbox \
+    /caddy-data \
+    /var/lib/jonasland \
+    /var/lib/openobserve \
+    /var/log/pidnap
+
+COPY jonasland/sandbox /opt/jonasland-sandbox
+RUN chmod +x /opt/jonasland-sandbox/start.sh /opt/jonasland-sandbox/clickstack-launcher.sh
+
+VOLUME ["/caddy-data"]
+EXPOSE 80
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=20 \
+  CMD curl -fsS http://127.0.0.1/healthz >/dev/null || exit 1
+
+LABEL org.opencontainers.image.revision=$GIT_SHA
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/opt/jonasland-sandbox/start.sh"]

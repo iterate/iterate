@@ -1,62 +1,48 @@
-# Jonasland Architecture
+# JonasLand Architecture
 
 ## Goal
 
-Minimal local sandbox for routing all HTTP/HTTPS traffic through vanilla Caddy + Consul service discovery, with Nomad running jobs in `raw_exec` mode and an egress service for observability.
+Smallest working single-container homelab stack:
 
-## Components
+- Pidnap is the main process manager inside one Docker container.
+- Caddy runs as a pidnap-managed process.
+- Registry service runs as a pidnap-managed process (in-memory route table + ORPC API).
+- All ingress enters via a single host-mapped URL to Caddy on container port `80`.
+- Outbound TCP `:80/:443` is transparently redirected to Caddy with iptables.
 
-- `nomad` dev agent (single node, container entrypoint)
-- `consul` agent (service registry + KV)
-- `caddy` (official upstream binary, no custom modules)
-- `egress` Node.js service (logs + forwarding)
-- `whoami` demo service (tagged `caddy` for auto-routing)
-- `iptables` OUTPUT redirect (80/443)
-- `jonasland/e2e-tests` Vitest suite using Docker HTTP API
+No custom Caddy plugins. No Docker socket mount. No sibling containers.
 
-## Config Model
+## Runtime flow
 
-- Static files are source of truth in repo.
-- Nomad jobs are `.nomad.hcl` files.
-- Caddy runtime config is rendered by Nomad template in `jonasland/sandbox/nomad/jobs/caddy.nomad.hcl`.
-- `jonasland/sandbox/caddy/Caddyfile.tmpl` mirrors that template for readability and validation follow-ups.
-- Nomad template integration signals Caddy with `SIGUSR1` on catalog changes.
-- Sandbox image copies jobs from `/etc/jonasland/nomad/jobs`.
+1. Container starts `start.sh`.
+2. `start.sh` installs `nat OUTPUT` rules redirecting `:80/:443` to local Caddy.
+3. `start.sh` starts pidnap (`pidnap.config.ts`).
+4. Pidnap starts `caddy` and `registry`.
 
-## Traffic Model
+## Service routing
 
-- Caddy catch-all routes forward through `egress` service.
-- Services with `tags=["caddy"]` are auto-routed as `<service>.localhost`.
-- Consul DNS listens on port `53` with public recursors for external lookups.
-- `iptables` redirects outbound TCP 80/443 through Caddy.
-- Local service discovery domain is Consul-native (`*.service.consul`).
+- Caddy listens on port `80`.
+- `Host: pidnap.iterate.localhost` routes to `127.0.0.1:9876`.
+- `Host: registry.iterate.localhost` routes to `127.0.0.1:8777`.
+- `Host: caddy-admin.iterate.localhost` routes to Caddy admin `127.0.0.1:2019`.
+- Any outbound HTTP(S) from root-owned processes is redirected to Caddy by iptables.
+- Caddy admin API listens on `0.0.0.0:2019` inside the container.
+- Admin API is reached externally via the single ingress URL + `Host: caddy-admin.iterate.localhost`.
+- Registry ORPC listens on `0.0.0.0:8777` inside the container.
 
-## Egress Modes
+## E2E scope
 
-- If `ITERATE_EXTERNAL_EGRESS_PROXY` is set: egress forwards to that endpoint.
-- If unset: egress forwards directly to original target from upstream headers.
-- Egress logs both request metadata and downstream status to stdout.
+`jonasland/e2e` validates:
 
-## How To Use
+- Pidnap RPC is up.
+- Caddy is running and typed SDK client access works.
+- Registry service is running and typed client access works.
+- Caddy rejects browser-style navigation access to admin endpoints.
+- Caddy can proxy to pidnap via host routing.
+- iptables redirect rules are present and outbound HTTP is intercepted by Caddy.
+- Pidnap can imperatively add/start/stop/remove runtime processes after baseline health.
 
-1. Build image: `pnpm --filter ./jonasland/sandbox build`
-2. Run tests: `pnpm --filter ./jonasland/e2e-tests test:e2e` (runs via `doppler run --`)
-3. Inspect runtime with container logs + Nomad/Consul/Caddy APIs.
+## Commands
 
-The image is intentionally minimal (`node:24-bookworm-slim`) and installs pinned `nomad` + `consul` binaries plus the official pinned `caddy` binary.
-
-Smoke tests cover both egress paths:
-
-- `ITERATE_EXTERNAL_EGRESS_PROXY` set (`external-proxy` mode)
-- env var unset (`direct` mode fallback to original target)
-
-## Known Limits
-
-- MVP is local-only (no Depot/Fly/Doppler).
-- Single-node dev topology.
-- Security hardening of Caddy admin API is follow-up.
-- For Nomad-in-Docker dev mode, the container must run with host cgroup namespace and `/sys/fs/cgroup` mounted RW.
-
-## Follow-up Tasks
-
-See `jonasland/tasks/`.
+- Build image: `pnpm --filter ./jonasland/sandbox build`
+- Run e2e: `pnpm --filter ./jonasland/e2e test:e2e`

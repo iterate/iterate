@@ -223,6 +223,12 @@ export default defineConfig([
       "react-refresh/only-export-components": "off",
     },
   },
+  {
+    files: ["packages/jonasland-ui/src/components/**/*.tsx"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
   ...pluginRouter.configs["flat/recommended"],
   // custom iterate-internal rules
   {

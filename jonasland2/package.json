@@ -1,9 +1,0 @@
-{
-  "name": "@iterate-com/jonasland2",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "docker build -t ${JONASLAND2_SANDBOX_IMAGE:-jonasland2-sandbox:local} -f sandbox/Dockerfile .",
-    "test": "pnpm --filter ./e2e test"
-  }
-}

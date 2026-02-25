@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "../../packages/jonasland-ui/src/styles/globals.css",
+    "baseColor": "zinc",
+    "cssVariables": true
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@iterate-com/jonasland-ui/components",
+    "utils": "@iterate-com/jonasland-ui/lib/utils",
+    "hooks": "@iterate-com/jonasland-ui/hooks",
+    "lib": "@iterate-com/jonasland-ui/lib",
+    "ui": "@iterate-com/jonasland-ui/components"
+  }
+}

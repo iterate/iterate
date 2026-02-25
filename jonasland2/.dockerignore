@@ -1,8 +1,0 @@
-*
-!package.json
-!apps
-!apps/**
-!packages
-!packages/**
-!sandbox
-!sandbox/**
