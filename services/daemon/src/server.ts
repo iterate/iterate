@@ -21,6 +21,60 @@ const TSX_BINARIES = [process.env.TSX_BINARY, "/opt/pidnap/node_modules/.bin/tsx
 baseApp.get("/healthz", (c) => c.text("ok"));
 baseApp.route("/api/pty", ptyRouter);
 
+function serviceHealthPayload() {
+  return {
+    ok: true as const,
+    service: daemonServiceManifest.name,
+    version: daemonServiceManifest.version,
+  };
+}
+
+function serviceSqlPayload() {
+  return {
+    rows: [],
+    headers: [],
+    stat: {
+      rowsAffected: 0,
+      rowsRead: null,
+      rowsWritten: null,
+      queryDurationMs: 0,
+    },
+  };
+}
+
+function parseSqlStatementInput(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as {
+    statement?: unknown;
+    json?: { statement?: unknown };
+  };
+  const statementRaw =
+    typeof payload.statement === "string"
+      ? payload.statement
+      : typeof payload.json?.statement === "string"
+        ? payload.json.statement
+        : null;
+  const statement = statementRaw?.trim();
+  return statement && statement.length > 0 ? statement : null;
+}
+
+baseApp.get("/api/service/health", (c) => c.json(serviceHealthPayload()));
+baseApp.get("/orpc/service/health", (c) => c.json({ json: serviceHealthPayload() }));
+
+baseApp.post("/api/service/sql", async (c) => {
+  const input = await c.req.json().catch(() => null);
+  const statement = parseSqlStatementInput(input);
+  if (!statement) return c.json({ error: "statement is required" }, 400);
+  return c.json(serviceSqlPayload());
+});
+
+baseApp.post("/orpc/service/sql", async (c) => {
+  const input = await c.req.json().catch(() => null);
+  const statement = parseSqlStatementInput(input);
+  if (!statement) return c.json({ error: "statement is required" }, 400);
+  return c.json({ json: serviceSqlPayload() });
+});
+
 function ensureModuleSource(code: string): string {
   if (DEFAULT_EXPORT_PATTERN.test(code)) return code;
   return `export default async () => {\n${code}\n};\n`;

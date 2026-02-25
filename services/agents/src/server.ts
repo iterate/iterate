@@ -23,6 +23,60 @@ const app = new Hono();
 
 app.get("/healthz", (c) => c.text("ok"));
 
+function serviceHealthPayload() {
+  return {
+    ok: true as const,
+    service: agentsServiceManifest.name,
+    version: agentsServiceManifest.version,
+  };
+}
+
+function serviceSqlPayload() {
+  return {
+    rows: [],
+    headers: [],
+    stat: {
+      rowsAffected: 0,
+      rowsRead: null,
+      rowsWritten: null,
+      queryDurationMs: 0,
+    },
+  };
+}
+
+function parseSqlStatementInput(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as {
+    statement?: unknown;
+    json?: { statement?: unknown };
+  };
+  const statementRaw =
+    typeof payload.statement === "string"
+      ? payload.statement
+      : typeof payload.json?.statement === "string"
+        ? payload.json.statement
+        : null;
+  const statement = statementRaw?.trim();
+  return statement && statement.length > 0 ? statement : null;
+}
+
+app.get("/api/service/health", (c) => c.json(serviceHealthPayload()));
+app.get("/orpc/service/health", (c) => c.json({ json: serviceHealthPayload() }));
+
+app.post("/api/service/sql", async (c) => {
+  const input = await c.req.json().catch(() => null);
+  const statement = parseSqlStatementInput(input);
+  if (!statement) return c.json({ error: "statement is required" }, 400);
+  return c.json(serviceSqlPayload());
+});
+
+app.post("/orpc/service/sql", async (c) => {
+  const input = await c.req.json().catch(() => null);
+  const statement = parseSqlStatementInput(input);
+  if (!statement) return c.json({ error: "statement is required" }, 400);
+  return c.json({ json: serviceSqlPayload() });
+});
+
 function nowIso(): string {
   return new Date().toISOString();
 }
