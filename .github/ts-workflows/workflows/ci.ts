@@ -182,18 +182,22 @@ async function addSlackNotifications(
         {
           id: "notification_init",
           name: "Initialize notification thread",
-          ...(await utils.githubScript(import.meta, async function notification_init() {
-            const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-            const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-            let message = `Starting ${workflow.name}`;
-            message +=
-              " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
-            const response = await slack.chat.postMessage({
-              channel: slackChannelIds[channel],
-              text: message,
-            });
-            return { thread_ts: response.ts };
-          })),
+          ...(await utils.githubScript(
+            import.meta,
+            { params: { workflow: { name: workflow.name } } },
+            async function notification_init() {
+              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              let message = `Starting ${workflow.name}`;
+              message +=
+                " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
+              const response = await slack.chat.postMessage({
+                channel: slackChannelIds[channel],
+                text: message,
+              });
+              return { thread_ts: response.ts };
+            },
+          )),
         },
       ],
       outputs: {

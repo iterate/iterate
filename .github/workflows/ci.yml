@@ -37,6 +37,9 @@ jobs:
         name: notification_init
         uses: actions/github-script@v7
         with:
+          params:
+            workflow:
+              name: CI
           script: |
             github.log = { ...console, debug: () => {} };
             // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
@@ -45,6 +48,7 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const workflow = { name: "CI" };
             const __handler = async function notification_init() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
