@@ -216,8 +216,16 @@ app.get("/api/trpc-cli-procedures", (c) => {
 
 app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
-  if (await shouldHandleProjectIngressHostname(requestDomain, c.env)) {
-    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+  const ingressCheck = await shouldHandleProjectIngressHostname(requestDomain, c.env);
+  if (ingressCheck) {
+    // If ingressCheck is a project object (custom domain), pass it to avoid a duplicate DB query
+    const cachedProject = typeof ingressCheck === "object" ? ingressCheck : undefined;
+    const ingressResponse = await handleProjectIngressRequest(
+      c.req.raw,
+      c.env,
+      c.var.session,
+      cachedProject,
+    );
     if (ingressResponse) return ingressResponse;
   }
   return next();

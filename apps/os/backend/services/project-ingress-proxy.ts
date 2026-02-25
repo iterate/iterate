@@ -76,17 +76,27 @@ export function getProjectIngressRequestHostname(request: Request): string {
 /**
  * Check if a hostname should be handled as project ingress.
  * Checks both the standard PROJECT_INGRESS_DOMAIN and any custom domains in the DB.
+ *
+ * Returns the custom domain project if found (to avoid a duplicate DB query later),
+ * `true` for standard ingress, or `false` if the hostname isn't ingress at all.
  */
 export async function shouldHandleProjectIngressHostname(
   hostname: string,
   env: CloudflareEnv,
-): Promise<boolean> {
+): Promise<typeof schema.project.$inferSelect | boolean> {
   if (isProjectIngressHostname(hostname, env.PROJECT_INGRESS_DOMAIN)) {
     return true;
   }
+
+  // Short-circuit for the control plane's own hostname — never a custom domain
+  const controlPlaneHostname = new URL(env.VITE_PUBLIC_URL).hostname.toLowerCase();
+  if (hostname.toLowerCase() === controlPlaneHostname) {
+    return false;
+  }
+
   // Check if hostname matches any project's custom domain
   const customDomainProject = await findProjectByCustomDomainHostname(hostname);
-  return customDomainProject !== null;
+  return customDomainProject ?? false;
 }
 
 /**
@@ -102,14 +112,21 @@ async function findProjectByCustomDomainHostname(
   const normalizedHostname = hostname.toLowerCase();
 
   // hostname = custom_domain (exact) OR hostname LIKE '%.' || custom_domain (subdomain)
-  const project = await db.query.project.findFirst({
-    where: or(
-      eq(schema.project.customDomain, normalizedHostname),
-      sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
-    ),
-  });
+  // Order by domain length DESC so the longest (most specific) match wins.
+  // e.g. `a.example.com` matches before `example.com` for hostname `4096.a.example.com`.
+  const results = await db
+    .select()
+    .from(schema.project)
+    .where(
+      or(
+        eq(schema.project.customDomain, normalizedHostname),
+        sql`${normalizedHostname} LIKE '%.' || ${schema.project.customDomain}`,
+      ),
+    )
+    .orderBy(sql`length(${schema.project.customDomain}) DESC`)
+    .limit(1);
 
-  return project ?? null;
+  return results[0] ?? null;
 }
 
 /**
@@ -375,10 +392,15 @@ function buildParseDetails(params: {
   return details;
 }
 
+/**
+ * @param cachedCustomDomainProject - Pre-resolved custom domain project from
+ *   `shouldHandleProjectIngressHostname`. Avoids a duplicate DB lookup.
+ */
 export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
   session: AuthSession,
+  cachedCustomDomainProject?: typeof schema.project.$inferSelect,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const requestHostname = getProjectIngressRequestHostname(request);
@@ -397,6 +419,7 @@ export async function handleProjectIngressRequest(
       requestHostname,
       env,
       session,
+      cachedCustomDomainProject,
     );
     // Sentinel: custom domain recognized but needs control plane handling (e.g. /_/exchange-token)
     if (customDomainResponse === FALL_THROUGH_TO_CONTROL_PLANE) return null;
@@ -549,9 +572,10 @@ async function handleCustomDomainRequest(
   requestHostname: string,
   env: CloudflareEnv,
   session: AuthSession,
+  cachedProject?: typeof schema.project.$inferSelect,
 ): Promise<Response | typeof FALL_THROUGH_TO_CONTROL_PLANE | null> {
-  // Find the project by custom domain
-  const project = await findProjectByCustomDomainHostname(requestHostname);
+  // Use the pre-resolved project from shouldHandleProjectIngressHostname, or look it up
+  const project = cachedProject ?? (await findProjectByCustomDomainHostname(requestHostname));
   if (!project || !project.customDomain) return null;
 
   // Parse the custom domain hostname into a target

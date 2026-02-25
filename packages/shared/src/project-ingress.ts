@@ -392,3 +392,21 @@ function isStandardIngressDomain(hostname: string): boolean {
   const lower = hostname.toLowerCase();
   return lower.endsWith(".iterate.app") || lower.endsWith(".iterate.app.localhost");
 }
+
+/**
+ * System domain suffixes that must never be used as custom domains.
+ * Prevents hijacking the control plane, ingress, or dev tunnel domains.
+ */
+const BLOCKED_DOMAIN_SUFFIXES = ["iterate.com", "iterate.app", "nustom.com", "nustom.app"];
+
+/**
+ * Check if a custom domain would conflict with system hostnames.
+ * Blocks exact matches and subdomains of reserved system domains.
+ */
+export function isBlockedCustomDomain(domain: string): boolean {
+  const lower = domain.toLowerCase();
+  for (const suffix of BLOCKED_DOMAIN_SUFFIXES) {
+    if (lower === suffix || lower.endsWith(`.${suffix}`)) return true;
+  }
+  return false;
+}

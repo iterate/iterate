@@ -3,6 +3,7 @@ import {
   parseProjectIngressHostname,
   parseCustomDomainHostname,
   isCustomDomainHostname,
+  isBlockedCustomDomain,
   buildMachineIngressEnvVars,
   buildProjectPortUrl,
   buildMachinePortUrl,
@@ -221,7 +222,7 @@ describe("PORT_TO_ALIAS", () => {
   });
 
   it("is consistent with SERVICE_ALIASES", () => {
-    for (const [name, port] of Object.entries(SERVICE_ALIASES)) {
+    for (const [_name, port] of Object.entries(SERVICE_ALIASES)) {
       expect(PORT_TO_ALIAS[port]).toBeDefined();
       // The reverse mapping should resolve back to the same port
       expect(SERVICE_ALIASES[PORT_TO_ALIAS[port]!]).toBe(port);
@@ -418,5 +419,38 @@ describe("buildMachineIngressEnvVars with customDomain", () => {
       ITERATE_OS_BASE_URL: "https://os.iterate.com",
       ITERATE_PROJECT_INGRESS_DOMAIN: "iterate.app",
     });
+  });
+});
+
+describe("isBlockedCustomDomain", () => {
+  it("blocks iterate.com and subdomains", () => {
+    expect(isBlockedCustomDomain("iterate.com")).toBe(true);
+    expect(isBlockedCustomDomain("os.iterate.com")).toBe(true);
+    expect(isBlockedCustomDomain("dev.iterate.com")).toBe(true);
+  });
+
+  it("blocks iterate.app and subdomains", () => {
+    expect(isBlockedCustomDomain("iterate.app")).toBe(true);
+    expect(isBlockedCustomDomain("my-proj.iterate.app")).toBe(true);
+  });
+
+  it("blocks nustom.com and subdomains", () => {
+    expect(isBlockedCustomDomain("nustom.com")).toBe(true);
+    expect(isBlockedCustomDomain("test.nustom.com")).toBe(true);
+  });
+
+  it("blocks nustom.app and subdomains", () => {
+    expect(isBlockedCustomDomain("nustom.app")).toBe(true);
+  });
+
+  it("allows unrelated domains", () => {
+    expect(isBlockedCustomDomain("templestein.com")).toBe(false);
+    expect(isBlockedCustomDomain("example.com")).toBe(false);
+    expect(isBlockedCustomDomain("myapp.io")).toBe(false);
+  });
+
+  it("is case insensitive", () => {
+    expect(isBlockedCustomDomain("Iterate.COM")).toBe(true);
+    expect(isBlockedCustomDomain("OS.ITERATE.COM")).toBe(true);
   });
 });

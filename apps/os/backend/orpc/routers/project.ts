@@ -28,6 +28,7 @@ import {
 import { decrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
+import { isBlockedCustomDomain } from "@iterate-com/shared/project-ingress";
 import { linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import {
@@ -191,8 +192,16 @@ export const projectRouter = {
         }
       }
 
-      // Validate custom domain uniqueness if being set
+      // Validate custom domain if being set
       if (input.customDomain !== undefined && input.customDomain !== null) {
+        // Block system hostnames to prevent hijacking control plane or ingress domains
+        const blocked = isBlockedCustomDomain(input.customDomain);
+        if (blocked) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: `'${input.customDomain}' is a reserved system domain and cannot be used as a custom domain`,
+          });
+        }
+
         const existing = await ctx.db.query.project.findFirst({
           where: and(eq(project.customDomain, input.customDomain), ne(project.id, ctx.project.id)),
         });
