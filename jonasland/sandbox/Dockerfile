@@ -43,6 +43,10 @@ WORKDIR /opt
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
 COPY services /opt/services
 COPY packages /opt/packages
+RUN test -f /opt/services/registry-service/src/server.ts \
+    && test -f /opt/services/events-service/src/server.ts \
+    && test -f /opt/services/orders-service/src/server.ts \
+    && test -f /opt/services/docs-service/src/server.ts
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/registry-service \
     --filter @iterate-com/events-service \
