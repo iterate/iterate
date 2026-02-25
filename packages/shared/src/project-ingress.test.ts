@@ -190,9 +190,9 @@ describe("buildProjectPortUrl with custom domain", () => {
   });
 
   it("uses __ separator for standard iterate.app domain", () => {
-    expect(
-      buildProjectPortUrl({ projectBaseUrl: "https://my-proj.iterate.app", port: 4096 }),
-    ).toBe("https://4096__my-proj.iterate.app/");
+    expect(buildProjectPortUrl({ projectBaseUrl: "https://my-proj.iterate.app", port: 4096 })).toBe(
+      "https://4096__my-proj.iterate.app/",
+    );
   });
 
   it("uses __ separator for localhost dev domain", () => {
