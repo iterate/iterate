@@ -22,7 +22,11 @@ export default defineConfig({
     host: "0.0.0.0",
     cors: false,
     strictPort: false,
-    allowedHosts: ["host.docker.internal", ".local.iterate.town"],
+    allowedHosts: true,
+  },
+  preview: {
+    host: "0.0.0.0",
+    allowedHosts: true,
   },
   plugins: [
     {
