@@ -37,13 +37,16 @@ const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
+const JONASLAND_SANDBOX_DIR = `${ITERATE_REPO}/jonasland/sandbox`;
 
 const processes: ProcessConfig[] = [
   {
     slug: "orders",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
@@ -54,8 +57,8 @@ const processes: ProcessConfig[] = [
   {
     slug: "docs",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
@@ -63,8 +66,8 @@ const processes: ProcessConfig[] = [
   {
     slug: "home",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/home-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/home-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/", timeoutMs: 60_000 },
@@ -72,8 +75,8 @@ const processes: ProcessConfig[] = [
   {
     slug: "outerbase",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
@@ -81,8 +84,8 @@ const processes: ProcessConfig[] = [
   {
     slug: "egress-proxy",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz", timeoutMs: 60_000 },
@@ -103,7 +106,7 @@ const processes: ProcessConfig[] = [
   {
     slug: "clickstack",
     definition: {
-      command: "/opt/jonasland-sandbox/clickstack-launcher.sh",
+      command: `${JONASLAND_SANDBOX_DIR}/clickstack-launcher.sh`,
     },
     routeCheck: { host: "clickstack.iterate.localhost", path: "/", timeoutMs: 120_000 },
   },
@@ -113,7 +116,7 @@ const processes: ProcessConfig[] = [
       command: "/usr/local/bin/otelcol-contrib",
       args: [
         "--config",
-        "/opt/jonasland-sandbox/otel-collector/config.yaml",
+        `${JONASLAND_SANDBOX_DIR}/otel-collector/config.yaml`,
         "--set=service.telemetry.metrics.level=None",
       ],
     },
@@ -123,7 +126,7 @@ const processes: ProcessConfig[] = [
     slug: "caddymanager",
     definition: {
       command: "node",
-      args: ["/opt/jonasland-sandbox/caddymanager/server.mjs"],
+      args: [`${JONASLAND_SANDBOX_DIR}/caddymanager/server.mjs`],
     },
     routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
   },
