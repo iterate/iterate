@@ -38,6 +38,7 @@ export default {
         args: ["/opt/services/registry-service/src/server.ts"],
         env: {
           PORT: "19010",
+          EVENTS_SERVICE_ORPC_URL: "http://127.0.0.1:19010/orpc",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
@@ -62,6 +63,25 @@ export default {
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
           OTEL_PROPAGATORS: "tracecontext,baggage",
+        },
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
+      name: "caddy-sync",
+      definition: {
+        command: "/opt/pidnap/node_modules/.bin/tsx",
+        args: ["/opt/jonasland-sandbox/services/caddy-sync-service.ts"],
+        env: {
+          CADDY_SYNC_EVENTS_SERVICE_ORPC_URL: "http://127.0.0.1:19010/orpc",
+          CADDY_SYNC_REGISTRY_SERVICE_ORPC_URL: "http://127.0.0.1:8777/orpc",
+          CADDY_SYNC_CADDY_ADMIN_URL: "http://127.0.0.1:2019",
+          CADDY_SYNC_CADDY_LISTEN_ADDRESS: ":80",
         },
       },
       options: {

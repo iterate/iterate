@@ -8,7 +8,8 @@
     "registry:start": "tsx ../../services/registry-service/src/server.ts",
     "events:start": "tsx ../../services/events-service/src/server.ts",
     "orders:start": "tsx ../../services/orders-service/src/server.ts",
-    "docs:start": "tsx ../../services/docs-service/src/server.ts"
+    "docs:start": "tsx ../../services/docs-service/src/server.ts",
+    "caddy-sync:start": "tsx services/caddy-sync-service.ts"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
@@ -16,6 +17,10 @@
   },
   "dependencies": {
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
+    "@iterate-com/events-contract": "workspace:*",
+    "@iterate-com/registry-contract": "workspace:*",
+    "@iterate-com/registry-service": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "@orpc/client": "^1.13.5",
     "@orpc/contract": "^1.13.5",
     "@orpc/server": "^1.13.5",

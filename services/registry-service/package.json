@@ -15,6 +15,7 @@
     "@accelerated-software-development/caddy-api-client": "^0.4.3",
     "@tailwindcss/vite": "^4.1.17",
     "@vitejs/plugin-react": "^5.1.2",
+    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/registry-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",

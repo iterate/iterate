@@ -7,11 +7,19 @@ import { CaddyClient, buildHostRoute } from "@accelerated-software-development/c
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import {
+  eventBusContract,
+  serviceManifest as eventsServiceManifest,
+} from "@iterate-com/events-contract";
+import {
+  REGISTRY_ROUTE_CHANGED_EVENT_TYPE,
+  REGISTRY_ROUTE_CHANGED_STREAM_PATH,
   registryContract,
+  registryRouteChangedPayloadSchema,
   registryServiceEnvSchema,
   registryServiceManifest,
 } from "@iterate-com/registry-contract";
 import {
+  createOrpcRpcServiceClient,
   createOrpcErrorInterceptor,
   createServiceRequestLogger,
   getOtelRuntimeConfig,
@@ -38,6 +46,8 @@ interface RegistryContext {
   store: ServicesStore;
   env: RegistryEnv;
 }
+
+type RegistryRouteChangedPayload = ReturnType<typeof registryRouteChangedPayloadSchema.parse>;
 
 function buildCaddyLoadPayload(params: {
   routes: Array<{
@@ -186,6 +196,45 @@ async function handleCaddyLoadInvocation(params: {
   };
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function emitRegistryRouteChangedEvent(params: {
+  payload: RegistryRouteChangedPayload;
+  context: RegistryContext;
+}): Promise<void> {
+  const payload = registryRouteChangedPayloadSchema.parse(params.payload);
+  const eventsClient = createOrpcRpcServiceClient<typeof eventBusContract>({
+    env: {},
+    manifest: eventsServiceManifest,
+    url: params.context.env.EVENTS_SERVICE_ORPC_URL,
+  });
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await eventsClient.append({
+        path: REGISTRY_ROUTE_CHANGED_STREAM_PATH,
+        events: [{ type: REGISTRY_ROUTE_CHANGED_EVENT_TYPE, payload }],
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await delay(200 * attempt);
+      }
+    }
+  }
+
+  serviceLog.warn({
+    event: "registry.routes.event_publish_failed",
+    action: payload.action,
+    stream_path: REGISTRY_ROUTE_CHANGED_STREAM_PATH,
+    message: lastError instanceof Error ? lastError.message : String(lastError),
+  });
+}
+
 function writeJsonResponse(
   res: import("node:http").ServerResponse,
   statusCode: number,
@@ -244,6 +293,14 @@ export const registryRouter = os.router({
     upsert: os.routes.upsert.handler(async ({ input, context }) => {
       const route = await context.store.upsertRoute(input);
       const routes = await context.store.listRoutes();
+      await emitRegistryRouteChangedEvent({
+        payload: {
+          action: "upsert",
+          route,
+          routeCount: routes.length,
+        },
+        context,
+      });
       infoFromContext(context, "registry.routes.upsert", {
         host: route.host,
         route_count: routes.length,
@@ -254,10 +311,22 @@ export const registryRouter = os.router({
       };
     }),
     remove: os.routes.remove.handler(async ({ input, context }) => {
-      const removed = await context.store.removeRoute(input.host);
+      const normalizedHost = input.host.trim().toLowerCase();
+      const removed = await context.store.removeRoute(normalizedHost);
       const routes = await context.store.listRoutes();
+      if (removed) {
+        await emitRegistryRouteChangedEvent({
+          payload: {
+            action: "remove",
+            host: normalizedHost,
+            removed,
+            routeCount: routes.length,
+          },
+          context,
+        });
+      }
       infoFromContext(context, "registry.routes.remove", {
-        host: input.host,
+        host: normalizedHost,
         removed,
         route_count: routes.length,
       });
@@ -415,15 +484,36 @@ export async function startRegistryService(options?: {
             ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
           });
           const routes = await store.listRoutes();
+          await emitRegistryRouteChangedEvent({
+            payload: {
+              action: "upsert",
+              route,
+              routeCount: routes.length,
+            },
+            context,
+          });
           writeJsonResponse(res, 200, { route, routeCount: routes.length });
           return;
         }
 
         if (req.method === "POST" && pathname === "/api/routes/remove") {
           const body = await readJsonBody(req);
-          const host = String(body.host ?? "");
+          const host = String(body.host ?? "")
+            .trim()
+            .toLowerCase();
           const removed = await store.removeRoute(host);
           const routes = await store.listRoutes();
+          if (removed) {
+            await emitRegistryRouteChangedEvent({
+              payload: {
+                action: "remove",
+                host,
+                removed,
+                routeCount: routes.length,
+              },
+              context,
+            });
+          }
           writeJsonResponse(res, 200, { removed, routeCount: routes.length });
           return;
         }

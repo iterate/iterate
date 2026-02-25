@@ -26,6 +26,25 @@ export const ConfigEntry = z.object({
   updatedAt: z.string(),
 });
 
+export const REGISTRY_ROUTE_CHANGED_STREAM_PATH = "registry/routes" as const;
+export const REGISTRY_ROUTE_CHANGED_EVENT_TYPE =
+  "https://events.iterate.com/registry/route-changed" as const;
+
+export const RegistryRouteChangedPayload = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("upsert"),
+    route: RouteRecord,
+    routeCount: z.number().int().nonnegative(),
+  }),
+  z.object({
+    action: z.literal("remove"),
+    host: z.string(),
+    removed: z.boolean(),
+    routeCount: z.number().int().nonnegative(),
+  }),
+]);
+export type RegistryRouteChangedPayload = z.infer<typeof RegistryRouteChangedPayload>;
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Registry service health metadata",
   sqlSummary: "Execute SQL against registry sqlite database",
@@ -194,6 +213,7 @@ export const RegistryServiceEnv = z.object({
   REGISTRY_DB_PATH: nonEmptyStringWithTrimDefault("/var/lib/jonasland/registry.sqlite"),
   CADDY_ADMIN_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:2019"),
   CADDY_LISTEN_ADDRESS: nonEmptyStringWithTrimDefault(":80"),
+  EVENTS_SERVICE_ORPC_URL: nonEmptyStringWithTrimDefault("http://127.0.0.1:17301/orpc"),
 });
 
 export type RegistryServiceEnv = z.infer<typeof RegistryServiceEnv>;
@@ -202,6 +222,7 @@ export {
   RouteRecord as routeRecordSchema,
   RouteUpsertInput as routeUpsertInputSchema,
   ConfigEntry as configEntrySchema,
+  RegistryRouteChangedPayload as registryRouteChangedPayloadSchema,
   RegistryServiceEnv as registryServiceEnvSchema,
 };
 
