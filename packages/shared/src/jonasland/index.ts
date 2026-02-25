@@ -188,6 +188,86 @@ export function createServiceSubRouterHandlers<TBuilder extends ServiceSubRouter
   return { health, sql };
 }
 
+export interface ServiceSubRouterHttpContext {
+  req: {
+    json: () => Promise<unknown>;
+  };
+  json: (body: unknown, status?: number) => unknown;
+}
+
+export interface ServiceSubRouterHttpApp {
+  get: (path: string, handler: (context: ServiceSubRouterHttpContext) => unknown) => unknown;
+  post: (
+    path: string,
+    handler: (context: ServiceSubRouterHttpContext) => Promise<unknown> | unknown,
+  ) => unknown;
+}
+
+function parseServiceSqlStatementInput(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as {
+    statement?: unknown;
+    json?: { statement?: unknown };
+  };
+
+  const statementRaw =
+    typeof payload.statement === "string"
+      ? payload.statement
+      : typeof payload.json?.statement === "string"
+        ? payload.json.statement
+        : null;
+  const statement = statementRaw?.trim();
+  return statement && statement.length > 0 ? statement : null;
+}
+
+function createNoopSqlResult(): ServiceSqlResult {
+  return {
+    rows: [],
+    headers: [],
+    stat: {
+      rowsAffected: 0,
+      rowsRead: null,
+      rowsWritten: null,
+      queryDurationMs: 0,
+    },
+  };
+}
+
+export function mountServiceSubRouterHttpRoutes(options: {
+  app: ServiceSubRouterHttpApp;
+  manifest: {
+    name: string;
+    version: string;
+  };
+  executeSql?: (statement: string) => Promise<ServiceSqlResult>;
+}) {
+  const healthPayload = {
+    ok: true as const,
+    service: options.manifest.name,
+    version: options.manifest.version,
+  };
+  const executeSql =
+    options.executeSql ??
+    (async (_statement: string): Promise<ServiceSqlResult> => createNoopSqlResult());
+
+  options.app.get("/api/service/health", (context) => context.json(healthPayload));
+  options.app.get("/orpc/service/health", (context) => context.json({ json: healthPayload }));
+
+  options.app.post("/api/service/sql", async (context) => {
+    const input = await context.req.json().catch(() => null);
+    const statement = parseServiceSqlStatementInput(input);
+    if (!statement) return context.json({ error: "statement is required" }, 400);
+    return context.json(await executeSql(statement));
+  });
+
+  options.app.post("/orpc/service/sql", async (context) => {
+    const input = await context.req.json().catch(() => null);
+    const statement = parseServiceSqlStatementInput(input);
+    if (!statement) return context.json({ error: "statement is required" }, 400);
+    return context.json({ json: await executeSql(statement) });
+  });
+}
+
 function resolveTraceExporterUrl() {
   return process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? "http://127.0.0.1:4318/v1/traces";
 }

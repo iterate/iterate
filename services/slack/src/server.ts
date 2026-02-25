@@ -2,46 +2,10 @@ import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import { slackServiceManifest } from "@iterate-com/slack-contract";
 import { Hono } from "hono";
+import { mountServiceSubRouterHttpRoutes } from "../../../packages/shared/src/jonasland/index.ts";
 
 const env = slackServiceManifest.envVars.parse(process.env);
 const app = new Hono();
-
-function serviceHealthPayload() {
-  return {
-    ok: true as const,
-    service: slackServiceManifest.name,
-    version: slackServiceManifest.version,
-  };
-}
-
-function serviceSqlPayload() {
-  return {
-    rows: [],
-    headers: [],
-    stat: {
-      rowsAffected: 0,
-      rowsRead: null,
-      rowsWritten: null,
-      queryDurationMs: 0,
-    },
-  };
-}
-
-function parseSqlStatementInput(input: unknown): string | null {
-  if (typeof input !== "object" || input === null) return null;
-  const payload = input as {
-    statement?: unknown;
-    json?: { statement?: unknown };
-  };
-  const statementRaw =
-    typeof payload.statement === "string"
-      ? payload.statement
-      : typeof payload.json?.statement === "string"
-        ? payload.json.statement
-        : null;
-  const statement = statementRaw?.trim();
-  return statement && statement.length > 0 ? statement : null;
-}
 
 function sanitizeThreadTs(threadTs: string): string {
   return threadTs.replace(/\./g, "-");
@@ -52,22 +16,7 @@ function toAgentPath(threadTs: string): string {
 }
 
 app.get("/healthz", (c) => c.text("ok"));
-app.get("/api/service/health", (c) => c.json(serviceHealthPayload()));
-app.get("/orpc/service/health", (c) => c.json({ json: serviceHealthPayload() }));
-
-app.post("/api/service/sql", async (c) => {
-  const input = await c.req.json().catch(() => null);
-  const statement = parseSqlStatementInput(input);
-  if (!statement) return c.json({ error: "statement is required" }, 400);
-  return c.json(serviceSqlPayload());
-});
-
-app.post("/orpc/service/sql", async (c) => {
-  const input = await c.req.json().catch(() => null);
-  const statement = parseSqlStatementInput(input);
-  if (!statement) return c.json({ error: "statement is required" }, 400);
-  return c.json({ json: serviceSqlPayload() });
-});
+mountServiceSubRouterHttpRoutes({ app, manifest: slackServiceManifest });
 
 app.post("/agent-change-callback", async (c) => {
   await c.req.text();
