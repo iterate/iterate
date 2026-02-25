@@ -48,16 +48,6 @@ app.post("/webhook", async (c) => {
 
   const agentPath = toAgentPath(threadTs);
 
-  const getOrCreate = await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/get-or-create`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agentPath }),
-  });
-
-  if (!getOrCreate.ok) {
-    return c.json({ error: `agents get-or-create failed: ${await getOrCreate.text()}` }, 502);
-  }
-
   const forward = await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/forward${agentPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
