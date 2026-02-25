@@ -47,8 +47,8 @@ export type InternalEventTypes = {
     machineId: string;
     projectId: string;
   };
-  /** A request to archive a machine via the provider SDK. */
-  "machine:archive-requested": {
+  /** A request to delete a machine via the provider SDK. */
+  "machine:delete-requested": {
     machineId: string;
     type: MachineType;
     externalId: string;

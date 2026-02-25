@@ -1,4 +1,4 @@
-import { eq, and, lt, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -298,7 +298,7 @@ export const registerConsumers = () => {
           .update(schema.machine)
           .set({ state: "detached" })
           .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
-          .returning({ id: true });
+          .returning({ id: schema.machine.id });
 
         // Promote this machine to active
         await tx
@@ -324,21 +324,25 @@ export const registerConsumers = () => {
 
   // ── Post-activation pipeline ──────────────────────────────────────────
 
-  // When a machine is activated, find stale detached machines and fan out archive events
+  // When a machine is activated, find detached machines and fan out delete events
   cc.registerConsumer({
-    name: "archiveStaleDetachedMachines",
+    name: "deleteDetachedMachines",
     on: "machine:activated",
     delay: () => "4h",
     async handler(params) {
       const { projectId, machineId, detachedMachineIds } = params.payload;
       const db = getDb();
 
-      const staleDetached = await db.query.machine.findMany({
+      if (detachedMachineIds.length === 0) {
+        return "no detached machines to delete";
+      }
+
+      const detached = await db.query.machine.findMany({
         where: inArray(schema.machine.id, detachedMachineIds),
       });
 
-      for (const m of staleDetached) {
-        await cc.send({ transaction: db, parent: db }, "machine:archive-requested", {
+      for (const m of detached) {
+        await cc.send({ transaction: db, parent: db }, "machine:delete-requested", {
           machineId: m.id,
           type: m.type,
           externalId: m.externalId,
@@ -348,16 +352,16 @@ export const registerConsumers = () => {
 
       logger.set({ machine: { id: machineId }, project: { id: projectId } });
       logger.info(
-        `[archiveStaleDetachedMachines] Fan-out archival enqueuedCount=${staleDetached.length}`,
+        `[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`,
       );
-      return `enqueued ${staleDetached.length} archive-requested events`;
+      return `enqueued ${detached.length} delete-requested events`;
     },
   });
 
-  // Archive a single machine via the provider SDK (e.g. Daytona)
+  // Delete a single machine via the provider SDK
   cc.registerConsumer({
-    name: "archiveMachineViaProvider",
-    on: "machine:archive-requested",
+    name: "deleteMachineViaProvider",
+    on: "machine:delete-requested",
     async handler(params) {
       const { machineId, type, externalId, metadata } = params.payload;
       const db = getDb();
@@ -368,7 +372,7 @@ export const registerConsumers = () => {
         externalId,
         metadata,
       });
-      await runtime.archive();
+      await runtime.delete();
 
       await db
         .update(schema.machine)
@@ -376,8 +380,8 @@ export const registerConsumers = () => {
         .where(eq(schema.machine.id, machineId));
 
       logger.set({ machine: { id: machineId } });
-      logger.info("[archiveMachineViaProvider] Archived machine");
-      return `archived machine ${machineId}`;
+      logger.info("[deleteMachineViaProvider] Deleted machine");
+      return `deleted machine ${machineId}`;
     },
   });
 };
