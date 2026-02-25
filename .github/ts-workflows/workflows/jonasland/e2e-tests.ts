@@ -2,6 +2,37 @@ import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../../utils/index.ts";
 import { checkoutRefExpression, jonaslandTriggerPaths } from "./paths.ts";
 
+const setupRepoWithoutPnpmAction = [
+  {
+    name: "Checkout code",
+    ...uses("actions/checkout@v4", {
+      ref: checkoutRefExpression,
+    }),
+  },
+  {
+    name: "Setup Node",
+    ...uses("actions/setup-node@v4", {
+      "node-version": 24,
+      cache: "pnpm",
+    }),
+  },
+  {
+    name: "Install pnpm",
+    run: [
+      "set -euo pipefail",
+      "export PNPM_VERSION=10.24.0",
+      "curl -fsSL https://get.pnpm.io/install.sh | sh -",
+      'echo "PNPM_HOME=$HOME/.local/share/pnpm" >> "$GITHUB_ENV"',
+      'echo "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"',
+      "$HOME/.local/share/pnpm/pnpm --version",
+    ].join("\n"),
+  },
+  {
+    name: "Install dependencies",
+    run: "pnpm install",
+  },
+] as const;
+
 export default workflow({
   name: "e2e-tests",
   permissions: {
@@ -42,7 +73,7 @@ export default workflow({
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 45,
       steps: [
-        ...utils.getSetupRepo({ ref: checkoutRefExpression }),
+        ...setupRepoWithoutPnpmAction,
         ...utils.setupDoppler({ config: "dev" }),
         {
           name: "Docker info",

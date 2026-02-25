@@ -69,13 +69,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+      - name: Install pnpm
+        run: |-
+          set -euo pipefail
+          export PNPM_VERSION=10.24.0
+          curl -fsSL https://get.pnpm.io/install.sh | sh -
+          echo "PNPM_HOME=$HOME/.local/share/pnpm" >> "$GITHUB_ENV"
+          echo "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
+          $HOME/.local/share/pnpm/pnpm --version
       - name: Install dependencies
         run: pnpm install
       - name: Install Doppler CLI
