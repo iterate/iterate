@@ -706,11 +706,7 @@ async function handleCustomDomainRequest(
 
   // When the port wasn't explicitly specified and the project has a custom default port,
   // route to that port instead of 3000.
-  const effectiveTargetHost = getEffectiveTargetHost(
-    requestHostname,
-    target,
-    project.defaultPort,
-  );
+  const effectiveTargetHost = getEffectiveTargetHost(requestHostname, target, project.defaultPort);
 
   try {
     const runtime = await createMachineStub({

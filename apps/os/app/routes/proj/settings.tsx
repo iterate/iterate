@@ -116,7 +116,8 @@ function ProjectSettingsPage() {
     (customDomain.trim().toLowerCase() || null) !== (project.customDomain ?? null);
   const parsedDefaultPort = defaultPort.trim() ? Number(defaultPort.trim()) : null;
   const hasDefaultPortChange = parsedDefaultPort !== (project.defaultPort ?? null);
-  const hasChanges = hasNameChange || hasProviderChange || hasCustomDomainChange || hasDefaultPortChange;
+  const hasChanges =
+    hasNameChange || hasProviderChange || hasCustomDomainChange || hasDefaultPortChange;
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
