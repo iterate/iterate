@@ -11,12 +11,17 @@ export type ProxyWorkerEnv = {
 
 export type RouteHeaders = Record<string, string>;
 export type RouteMetadata = Record<string, unknown>;
+export type RouteStatus = "active" | "expired" | "disabled";
 
 export type RouteRecord = {
   route: string;
   target: string;
   headers: RouteHeaders;
   metadata: RouteMetadata;
+  status: RouteStatus;
+  ttlSeconds: number | null;
+  expiresAt: string | null;
+  expiredAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -26,6 +31,10 @@ type RouteRow = {
   target: string;
   headers: string;
   metadata: string;
+  status: string;
+  ttl_seconds: number | null;
+  expires_at: string | null;
+  expired_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -39,6 +48,7 @@ export type SetRouteInput = {
   target: string;
   headers?: RouteHeaders;
   metadata?: RouteMetadata;
+  ttlSeconds?: number | null;
 };
 
 class InputError extends Error {}
@@ -68,11 +78,20 @@ function parseJsonObject(value: string, field: "headers" | "metadata"): Record<s
 }
 
 function rowToRouteRecord(row: RouteRow): RouteRecord {
+  const status: RouteStatus =
+    row.status === "active" || row.status === "expired" || row.status === "disabled"
+      ? row.status
+      : "active";
+
   return {
     route: row.route,
     target: row.target,
     headers: parseJsonObject(row.headers, "headers") as RouteHeaders,
     metadata: parseJsonObject(row.metadata, "metadata"),
+    status,
+    ttlSeconds: row.ttl_seconds,
+    expiresAt: row.expires_at,
+    expiredAt: row.expired_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -153,19 +172,79 @@ export function readBearerToken(headerValue: string | null): string | null {
   return token.length > 0 ? token : null;
 }
 
-export async function ensureSchema(db: D1Database): Promise<void> {
+function toSqliteTimestamp(date: Date): string {
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function computeExpiresAt(ttlSeconds: number | null | undefined): string | null {
+  if (ttlSeconds === null || ttlSeconds === undefined) return null;
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+  return toSqliteTimestamp(expiresAt);
+}
+
+function isTtlExpired(route: RouteRecord, nowSql: string): boolean {
+  return route.expiresAt !== null && route.expiresAt <= nowSql;
+}
+
+async function runSchemaStatement(db: D1Database, sql: string): Promise<void> {
+  try {
+    await db.prepare(sql).run();
+  } catch (error) {
+    if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) {
+      throw error;
+    }
+  }
+}
+
+async function markRouteExpired(db: D1Database, routeKey: string, nowSql: string): Promise<void> {
   await db
     .prepare(`
+      UPDATE routes
+      SET
+        status = 'expired',
+        expired_at = COALESCE(expired_at, ?2),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE route = ?1
+    `)
+    .bind(routeKey, nowSql)
+    .run();
+}
+
+export async function ensureSchema(db: D1Database): Promise<void> {
+  await runSchemaStatement(
+    db,
+    `
     CREATE TABLE IF NOT EXISTS routes (
       route TEXT PRIMARY KEY,
       target TEXT NOT NULL,
       headers TEXT NOT NULL DEFAULT '{}',
       metadata TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'expired', 'disabled')),
+      ttl_seconds INTEGER,
+      expires_at TEXT,
+      expired_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-  `)
+  `,
+  );
+
+  // Keep runtime schema self-healing for already-created early versions of the table.
+  await runSchemaStatement(
+    db,
+    "ALTER TABLE routes ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+  );
+  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN ttl_seconds INTEGER");
+  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN expires_at TEXT");
+  await runSchemaStatement(db, "ALTER TABLE routes ADD COLUMN expired_at TEXT");
+
+  await db
+    .prepare(
+      "CREATE INDEX IF NOT EXISTS idx_routes_status_expires_at ON routes(status, expires_at)",
+    )
     .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_routes_expires_at ON routes(expires_at)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_routes_status ON routes(status)").run();
 }
 
 export async function listRoutes(db: D1Database): Promise<RouteRecord[]> {
@@ -173,7 +252,7 @@ export async function listRoutes(db: D1Database): Promise<RouteRecord[]> {
 
   const rows = await db
     .prepare(`
-      SELECT route, target, headers, metadata, created_at, updated_at
+      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
       FROM routes
       ORDER BY route ASC
     `)
@@ -189,23 +268,29 @@ export async function setRoute(db: D1Database, input: SetRouteInput): Promise<Ro
   const target = parseTargetUrl(input.target).toString();
   const headers = input.headers ?? {};
   const metadata = input.metadata ?? {};
+  const ttlSeconds = input.ttlSeconds ?? null;
+  const expiresAt = computeExpiresAt(ttlSeconds);
 
   await db
     .prepare(`
-      INSERT INTO routes (route, target, headers, metadata, updated_at)
-      VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+      INSERT INTO routes (route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, NULL, CURRENT_TIMESTAMP)
       ON CONFLICT(route) DO UPDATE SET
         target = excluded.target,
         headers = excluded.headers,
         metadata = excluded.metadata,
+        status = 'active',
+        ttl_seconds = excluded.ttl_seconds,
+        expires_at = excluded.expires_at,
+        expired_at = NULL,
         updated_at = CURRENT_TIMESTAMP
     `)
-    .bind(route, target, JSON.stringify(headers), JSON.stringify(metadata))
+    .bind(route, target, JSON.stringify(headers), JSON.stringify(metadata), ttlSeconds, expiresAt)
     .run();
 
   const row = await db
     .prepare(`
-      SELECT route, target, headers, metadata, created_at, updated_at
+      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
       FROM routes
       WHERE route = ?1
     `)
@@ -240,10 +325,11 @@ export async function resolveRoute(
 
   const host = normalizeInboundHost(request.headers.get("host"));
   if (!host) return null;
+  const nowSql = toSqliteTimestamp(new Date());
 
   const exactRow = await db
     .prepare(`
-      SELECT route, target, headers, metadata, created_at, updated_at
+      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
       FROM routes
       WHERE route = ?1
       LIMIT 1
@@ -253,12 +339,17 @@ export async function resolveRoute(
 
   if (exactRow) {
     const exact = rowToRouteRecord(exactRow);
+    if (exact.status === "expired" || exact.status === "disabled") return null;
+    if (isTtlExpired(exact, nowSql)) {
+      await markRouteExpired(db, exact.route, nowSql);
+      return null;
+    }
     return { ...exact, targetUrl: parseTargetUrl(exact.target) };
   }
 
   const wildcardRows = await db
     .prepare(`
-      SELECT route, target, headers, metadata, created_at, updated_at
+      SELECT route, target, headers, metadata, status, ttl_seconds, expires_at, expired_at, created_at, updated_at
       FROM routes
       WHERE route LIKE '*.%'
     `)
@@ -273,10 +364,18 @@ export async function resolveRoute(
     })
     .sort((a, b) => b.route.length - a.route.length);
 
-  const bestMatch = wildcardMatches[0];
-  if (!bestMatch) return null;
+  for (const wildcardMatch of wildcardMatches) {
+    if (wildcardMatch.status === "expired" || wildcardMatch.status === "disabled") {
+      continue;
+    }
+    if (isTtlExpired(wildcardMatch, nowSql)) {
+      await markRouteExpired(db, wildcardMatch.route, nowSql);
+      continue;
+    }
+    return { ...wildcardMatch, targetUrl: parseTargetUrl(wildcardMatch.target) };
+  }
 
-  return { ...bestMatch, targetUrl: parseTargetUrl(bestMatch.target) };
+  return null;
 }
 
 export function buildUpstreamUrl(targetUrl: URL, requestUrl: URL): URL {
@@ -387,6 +486,13 @@ const SetRoute = z.object({
   target: z.string().min(1),
   headers: z.record(z.string(), z.string()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  ttlSeconds: z
+    .number()
+    .int()
+    .positive()
+    .max(365 * 24 * 60 * 60)
+    .nullable()
+    .optional(),
 });
 
 const DeleteRoute = z.object({
