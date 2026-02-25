@@ -21,7 +21,7 @@ const baseWorkflow = {
   },
   on: {
     push: {
-      branches: ["main"],
+      branches: ["main", "mmkal/26/02/25/extraextraslack"],
     },
     workflow_dispatch: {
       inputs: {
