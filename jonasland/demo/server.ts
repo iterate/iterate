@@ -691,7 +691,6 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     const message = errorMessage(error);
     lastError = message;
-    runtimePhase = runtimePhase === "stopping" ? "stopping" : "error";
     appendEvent(`error: ${message.split("\n")[0] ?? "unknown error"}`);
     sendJson(res, 500, { error: message });
   }

@@ -590,9 +590,6 @@ async function main(): Promise<void> {
     `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{"event":{"type":"app_mention","user":"U1","text":"<@BOT> what is 50 minus 8","channel":"C1","ts":"1730000000.000100","thread_ts":"1730000000.000100"}}' ${ingressUrl}/webhook\n`,
   );
   process.stdout.write(
-    `- list pidnap processes:\n  curl -sS -H 'Host: pidnap.iterate.localhost' -H 'content-type: application/json' --data '{}' ${ingressUrl}/rpc/processes/list\n`,
-  );
-  process.stdout.write(
     `- create another order:\n  curl -sS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{"sku":"demo-2","quantity":3}' ${ingressUrl}/api/orders\n`,
   );
   process.stdout.write(

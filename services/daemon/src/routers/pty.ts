@@ -135,8 +135,14 @@ function createSession(ptyProcess: pty.IPty, ws: WSContext<WebSocket>): PtySessi
 
 function attachToSession(session: PtySession, ws: WSContext<WebSocket>): void {
   cancelCleanup(session);
-  if (session.ws) {
-    wsToSessionId.delete(session.ws);
+  const previousWs = session.ws;
+  if (previousWs && previousWs !== ws) {
+    wsToSessionId.delete(previousWs);
+    try {
+      previousWs.close(1000, "Reattached from another client");
+    } catch {
+      // ignore close errors from stale sockets
+    }
   }
   session.ws = ws;
   wsToSessionId.set(ws, session.id);
