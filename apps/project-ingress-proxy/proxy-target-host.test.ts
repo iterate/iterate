@@ -54,4 +54,16 @@ describe("parseProxyTargetHost", () => {
   it("rejects explicit non-local host:port target", () => {
     expect(parseProxyTargetHost("example.com:4096")).toBeNull();
   });
+
+  // Regression: custom domain hostnames like "opencode.templestein.com" were sent
+  // verbatim as x-iterate-proxy-target-host, which falls through to default port 3000.
+  // The CF worker must send "localhost:<port>" instead for custom domain requests.
+  it("defaults to port 3000 for custom domain hostnames without __ prefix", () => {
+    // This is the WRONG behavior that was happening before the fix —
+    // "opencode.templestein.com" has no __ separator and no colon, so it defaults to 3000.
+    expect(parseProxyTargetHost("opencode.templestein.com")?.upstreamPort).toBe(3000);
+    expect(parseProxyTargetHost("4096.templestein.com")?.upstreamPort).toBe(3000);
+    // The fix is on the CF worker side: it now sends "localhost:4096" instead.
+    expect(parseProxyTargetHost("localhost:4096")?.upstreamPort).toBe(4096);
+  });
 });
