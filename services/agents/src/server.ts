@@ -14,6 +14,7 @@ interface AgentRecord {
 
 const agents = new Map<string, AgentRecord>();
 const subscriptions = new Map<string, Set<string>>();
+const inFlightAgentCreations = new Map<string, Promise<AgentRecord>>();
 
 const env = agentsServiceManifest.envVars.parse(process.env);
 const port = env.AGENTS_SERVICE_PORT;
@@ -46,19 +47,9 @@ async function createDestination(agentPath: string): Promise<string> {
   return routeToAbsolute(env.OPENCODE_WRAPPER_BASE_URL, payload.route);
 }
 
-app.post("/api/agents/get-or-create", async (c) => {
-  const body = (await c.req.json()) as { agentPath?: string };
-  const agentPath = body.agentPath?.trim();
-  if (!agentPath) return c.json({ error: "agentPath is required" }, 400);
-
-  const existing = agents.get(agentPath);
-  if (existing) {
-    return c.json({ agent: existing, wasNewlyCreated: false });
-  }
-
+function createAgentRecord(agentPath: string, destination: string): AgentRecord {
   const createdAt = nowIso();
-  const destination = await createDestination(agentPath);
-  const created: AgentRecord = {
+  return {
     path: agentPath,
     destination,
     isWorking: false,
@@ -66,9 +57,46 @@ app.post("/api/agents/get-or-create", async (c) => {
     createdAt,
     updatedAt: createdAt,
   };
-  agents.set(agentPath, created);
+}
 
-  return c.json({ agent: created, wasNewlyCreated: true });
+async function getOrCreateAgentRecord(
+  agentPath: string,
+): Promise<{ agent: AgentRecord; wasNewlyCreated: boolean }> {
+  const existing = agents.get(agentPath);
+  if (existing) {
+    return { agent: existing, wasNewlyCreated: false };
+  }
+
+  let pending = inFlightAgentCreations.get(agentPath);
+  if (!pending) {
+    pending = (async () => {
+      const destination = await createDestination(agentPath);
+      const created = createAgentRecord(agentPath, destination);
+      agents.set(agentPath, created);
+      return created;
+    })();
+    inFlightAgentCreations.set(agentPath, pending);
+    void pending.finally(() => {
+      if (inFlightAgentCreations.get(agentPath) === pending) {
+        inFlightAgentCreations.delete(agentPath);
+      }
+    });
+
+    const created = await pending;
+    return { agent: created, wasNewlyCreated: true };
+  }
+
+  const resolved = await pending;
+  return { agent: resolved, wasNewlyCreated: false };
+}
+
+app.post("/api/agents/get-or-create", async (c) => {
+  const body = (await c.req.json()) as { agentPath?: string };
+  const agentPath = body.agentPath?.trim();
+  if (!agentPath) return c.json({ error: "agentPath is required" }, 400);
+
+  const { agent, wasNewlyCreated } = await getOrCreateAgentRecord(agentPath);
+  return c.json({ agent, wasNewlyCreated });
 });
 
 app.post("/api/agents/update", async (c) => {
@@ -134,20 +162,7 @@ app.post("/api/agents/forward/*", async (c) => {
   const agentPath = suffix.startsWith("/") ? suffix : `/${suffix}`;
   if (agentPath === "/") return c.json({ error: "agent path missing" }, 400);
 
-  let agent = agents.get(agentPath);
-  if (!agent) {
-    const destination = await createDestination(agentPath);
-    const createdAt = nowIso();
-    agent = {
-      path: agentPath,
-      destination,
-      isWorking: false,
-      shortStatus: "",
-      createdAt,
-      updatedAt: createdAt,
-    };
-    agents.set(agentPath, agent);
-  }
+  const { agent } = await getOrCreateAgentRecord(agentPath);
 
   if (!agent.destination) {
     return c.json({ error: "agent destination unavailable" }, 503);
