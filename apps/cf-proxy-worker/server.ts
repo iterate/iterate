@@ -456,6 +456,16 @@ export async function proxyRequest(request: Request, env: ProxyWorkerEnv): Promi
   const responseHeaders = new Headers(upstreamResponse.headers);
   responseHeaders.set("x-cf-proxy-route", resolved.route);
 
+  if (upstreamResponse.status === 101) {
+    const init = {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers: responseHeaders,
+      webSocket: (upstreamResponse as Response & { webSocket?: WebSocket | null }).webSocket,
+    };
+    return new Response(null, init as ResponseInit);
+  }
+
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,

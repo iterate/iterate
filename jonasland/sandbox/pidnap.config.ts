@@ -1,3 +1,6 @@
+const iteratePublicBaseUrl = process.env.ITERATE_PUBLIC_BASE_URL ?? "http://iterate.localhost";
+const iteratePublicBaseUrlType = process.env.ITERATE_PUBLIC_BASE_URL_TYPE ?? "subdomain-wildcard";
+
 export default {
   http: {
     host: "0.0.0.0",
@@ -38,6 +41,8 @@ export default {
         args: ["/opt/services/registry-service/src/server.ts"],
         env: {
           PORT: "19010",
+          ITERATE_PUBLIC_BASE_URL: iteratePublicBaseUrl,
+          ITERATE_PUBLIC_BASE_URL_TYPE: iteratePublicBaseUrlType,
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
           OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",

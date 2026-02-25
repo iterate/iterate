@@ -7,6 +7,8 @@ import {
 } from "../test-helpers/index.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
+const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
+const RUN_DOCKER_E2E = RUN_E2E && E2E_PROVIDER === "docker";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -167,7 +169,7 @@ async function waitForDocsSources(
   throw new Error(`timed out waiting for docs sources: ${expectedHosts.join(", ")}`);
 }
 
-describe.runIf(RUN_E2E)("jonasland smoke", () => {
+describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
   test("caddy admin is API-only and typed caddy client works", async () => {
     await using deployment = await projectDeployment({
       image,
@@ -222,21 +224,21 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
     expect(managerStatus.state).toBe("running");
 
     const discoveryHost = `fixture-${randomUUID().slice(0, 8)}.iterate.localhost`;
-    const upsert = await deployment.services.routes.upsert({
+    const upsert = await deployment.registry.routes.upsert({
       host: discoveryHost,
       target: "127.0.0.1:9876",
       metadata: { source: "e2e" },
     });
     expect(upsert.route.host).toBe(discoveryHost);
 
-    const load = await deployment.services.routes.caddyLoadInvocation({
+    const load = await deployment.registry.routes.caddyLoadInvocation({
       adminUrl: await deployment.ingressUrl(),
       apply: false,
     });
     expect(load.invocation.path).toBe("/load");
     expect(load.routeCount).toBeGreaterThan(0);
 
-    const removed = await deployment.services.routes.remove({
+    const removed = await deployment.registry.routes.remove({
       host: discoveryHost,
     });
     expect(removed.removed).toBe(true);
@@ -402,7 +404,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
     });
 
     const readJournalMode = async () => {
-      const result = await deployment.services.service.sql({
+      const result = await deployment.registry.service.sql({
         statement: "PRAGMA journal_mode;",
       });
       const firstRow = result.rows[0] ?? {};
@@ -411,13 +413,13 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
     };
 
     const routeHost = `persist-${randomUUID().slice(0, 8)}.iterate.localhost`;
-    await deployment.services.routes.upsert({
+    await deployment.registry.routes.upsert({
       host: routeHost,
       target: "127.0.0.1:19010",
       metadata: { source: "persistence-test" },
       tags: ["caddy"],
     });
-    await deployment.services.config.set({
+    await deployment.registry.config.set({
       key: "caddy.adminUrl",
       value: "http://127.0.0.1:2019",
     });
@@ -435,10 +437,10 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
     const modeAfterRestart = await readJournalMode();
     expect(modeAfterRestart).toBe("wal");
 
-    const routes = await deployment.services.routes.list({});
+    const routes = await deployment.registry.routes.list({});
     expect(routes.routes.some((route) => route.host === routeHost)).toBe(true);
 
-    const config = await deployment.services.config.get({
+    const config = await deployment.registry.config.get({
       key: "caddy.adminUrl",
     });
     expect(config.found).toBe(true);

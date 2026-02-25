@@ -22,6 +22,11 @@ interface ConfigEntry {
   readonly updatedAt: string;
 }
 
+interface IngressEnvValues {
+  readonly ITERATE_PUBLIC_BASE_URL: string | null;
+  readonly ITERATE_PUBLIC_BASE_URL_TYPE: "prefixed" | "subdomain-wildcard";
+}
+
 const parseJsonObject = (raw: string): Record<string, string> => {
   if (raw.trim().length === 0) {
     return {};
@@ -59,6 +64,7 @@ const client = createRegistryClient({ url: "/orpc" });
 export function App() {
   const [routes, setRoutes] = useState<RouteRecord[]>([]);
   const [entries, setEntries] = useState<ConfigEntry[]>([]);
+  const [ingressEnv, setIngressEnv] = useState<IngressEnvValues | null>(null);
   const [selectedHost, setSelectedHost] = useState("");
 
   const [host, setHost] = useState("demo.iterate.localhost");
@@ -72,6 +78,8 @@ export function App() {
 
   const [configKey, setConfigKey] = useState("caddy.sync.mode");
   const [configValueInput, setConfigValueInput] = useState('"manual"');
+  const [internalURL, setInternalURL] = useState("http://events.iterate.localhost");
+  const [publicURL, setPublicURL] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -107,10 +115,23 @@ export function App() {
     return response.total;
   };
 
+  const loadIngressEnv = async () => {
+    const response = await fetch("/api/ingress-env");
+    if (!response.ok) {
+      throw new Error(`Failed to load ingress env (${response.status})`);
+    }
+    const payload = (await response.json()) as IngressEnvValues;
+    setIngressEnv(payload);
+  };
+
   const refresh = async () => {
     setBusy(true);
     try {
-      const [routeTotal, configTotal] = await Promise.all([loadRoutes(), loadConfig()]);
+      const [routeTotal, configTotal] = await Promise.all([
+        loadRoutes(),
+        loadConfig(),
+        loadIngressEnv(),
+      ]);
       setInfo(
         `Loaded ${String(routeTotal)} route(s) and ${String(configTotal)} config entr${configTotal === 1 ? "y" : "ies"}`,
       );
@@ -201,6 +222,21 @@ export function App() {
     }
   };
 
+  const onGetPublicURL = async () => {
+    setBusy(true);
+    try {
+      const response = await client.getPublicURL({
+        internalURL,
+      });
+      setPublicURL(response.publicURL);
+      setInfo(`Resolved public URL for ${internalURL}`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial data load should run once on mount
@@ -220,6 +256,32 @@ export function App() {
             >
               Refresh
             </Button>
+          </div>
+
+          <div className="space-y-3 rounded-lg border bg-muted p-3 text-xs">
+            <h2 className="text-sm font-semibold">Get public URL</h2>
+            <div className="grid gap-2">
+              <Label className="text-muted-foreground">Internal URL</Label>
+              <Input onChange={(event) => setInternalURL(event.target.value)} value={internalURL} />
+            </div>
+            <div>
+              <Button disabled={busy} onClick={() => void onGetPublicURL()} type="button">
+                getPublicURL
+              </Button>
+            </div>
+            <p className="break-all text-[11px]">
+              Result: <span className="font-mono">{publicURL || "—"}</span>
+            </p>
+            <p className="break-all text-[11px]">
+              ITERATE_PUBLIC_BASE_URL:{" "}
+              <span className="font-mono">{ingressEnv?.ITERATE_PUBLIC_BASE_URL ?? "unset"}</span>
+            </p>
+            <p className="break-all text-[11px]">
+              ITERATE_PUBLIC_BASE_URL_TYPE:{" "}
+              <span className="font-mono">
+                {ingressEnv?.ITERATE_PUBLIC_BASE_URL_TYPE ?? "prefixed"}
+              </span>
+            </p>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">

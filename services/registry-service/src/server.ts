@@ -22,12 +22,13 @@ import {
   transformSqlResultSet,
   type ServiceRequestLogger,
 } from "@iterate-com/shared/jonasland";
-import { implement } from "@orpc/server";
+import { ORPCError, implement } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/node";
 import { RPCHandler as WebSocketRPCHandler } from "@orpc/server/ws";
 import { createServer as createViteServer, searchForWorkspaceRoot, type ViteDevServer } from "vite";
 import { WebSocketServer, type WebSocket } from "ws";
 import { ServicesStore } from "./db.ts";
+import { ResolvePublicUrlError, resolvePublicUrl } from "./resolve-public-url.ts";
 
 type RegistryEnv = ReturnType<typeof registryServiceEnvSchema.parse>;
 
@@ -222,6 +223,25 @@ async function readJsonBody(
 }
 
 export const registryRouter = os.router({
+  getPublicURL: os.getPublicURL.handler(async ({ input, context }) => {
+    try {
+      return {
+        publicURL: resolvePublicUrl({
+          ITERATE_PUBLIC_BASE_URL: context.env.ITERATE_PUBLIC_BASE_URL,
+          ITERATE_PUBLIC_BASE_URL_TYPE: context.env.ITERATE_PUBLIC_BASE_URL_TYPE,
+          internalURL: input.internalURL,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof ResolvePublicUrlError) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: error.message,
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }),
   service: {
     health: os.service.health.handler(async ({ context }) => ({
       ok: true,
@@ -398,6 +418,14 @@ export async function startRegistryService(options?: {
 
     if (isApiRequest) {
       try {
+        if (req.method === "GET" && pathname === "/api/ingress-env") {
+          writeJsonResponse(res, 200, {
+            ITERATE_PUBLIC_BASE_URL: env.ITERATE_PUBLIC_BASE_URL ?? null,
+            ITERATE_PUBLIC_BASE_URL_TYPE: env.ITERATE_PUBLIC_BASE_URL_TYPE,
+          });
+          return;
+        }
+
         if (req.method === "GET" && pathname === "/api/routes") {
           const routes = await store.listRoutes();
           writeJsonResponse(res, 200, { routes, total: routes.length });

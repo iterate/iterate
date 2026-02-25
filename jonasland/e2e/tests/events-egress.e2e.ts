@@ -7,6 +7,8 @@ import {
 } from "../test-helpers/index.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
+const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
+const RUN_DOCKER_E2E = RUN_E2E && E2E_PROVIDER === "docker";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 
 const OTEL_SERVICE_ENV = {
@@ -76,7 +78,7 @@ async function postEventsOrpc(
   ]);
 }
 
-describe.runIf(RUN_E2E)("jonasland events egress", () => {
+describe.runIf(RUN_DOCKER_E2E)("jonasland events egress", () => {
   test("events service health + append/listStreams work inside the container", async () => {
     await using deployment = await projectDeployment({
       image,
