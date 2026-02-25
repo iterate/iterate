@@ -33,7 +33,7 @@ async function waitForHostRoute(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = await deployment
-      .exec(`curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${params.path}' >/dev/null`)
+      .exec(["curl", "-fsS", "-H", `Host: ${params.host}`, `http://127.0.0.1${params.path}`])
       .catch(() => ({ exitCode: 1, output: "" }));
     if (result.exitCode === 0) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -48,9 +48,10 @@ async function waitForDirectHttp(
   const timeoutMs = params.timeoutMs ?? 45_000;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await deployment
-      .exec(`curl -fsS '${params.url}' >/dev/null`)
-      .catch(() => ({ exitCode: 1, output: "" }));
+    const result = await deployment.exec(["curl", "-fsS", params.url]).catch(() => ({
+      exitCode: 1,
+      output: "",
+    }));
     if (result.exitCode === 0) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
