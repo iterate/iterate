@@ -67,9 +67,18 @@ function ProjectSettingsPage() {
   const [sandboxProvider, setSandboxProvider] = useState<ProjectSandboxProvider>(
     project.sandboxProvider as ProjectSandboxProvider,
   );
+  const [customDomain, setCustomDomain] = useState(project.customDomain ?? "");
+  const [defaultPort, setDefaultPort] = useState(
+    project.defaultPort ? String(project.defaultPort) : "",
+  );
 
   const updateProject = useMutation({
-    mutationFn: async (input: { name?: string; sandboxProvider?: ProjectSandboxProvider }) => {
+    mutationFn: async (input: {
+      name?: string;
+      sandboxProvider?: ProjectSandboxProvider;
+      customDomain?: string | null;
+      defaultPort?: number | null;
+    }) => {
       return orpcClient.project.update({
         projectSlug: params.projectSlug,
         ...input,
@@ -103,7 +112,12 @@ function ProjectSettingsPage() {
 
   const hasNameChange = name.trim() && name !== project.name;
   const hasProviderChange = sandboxProvider !== project.sandboxProvider;
-  const hasChanges = hasNameChange || hasProviderChange;
+  const hasCustomDomainChange =
+    (customDomain.trim().toLowerCase() || null) !== (project.customDomain ?? null);
+  const parsedDefaultPort = defaultPort.trim() ? Number(defaultPort.trim()) : null;
+  const hasDefaultPortChange = parsedDefaultPort !== (project.defaultPort ?? null);
+  const hasChanges =
+    hasNameChange || hasProviderChange || hasCustomDomainChange || hasDefaultPortChange;
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -112,6 +126,8 @@ function ProjectSettingsPage() {
     updateProject.mutate({
       ...(hasNameChange ? { name: name.trim() } : {}),
       ...(hasProviderChange ? { sandboxProvider } : {}),
+      ...(hasCustomDomainChange ? { customDomain: customDomain.trim().toLowerCase() || null } : {}),
+      ...(hasDefaultPortChange ? { defaultPort: parsedDefaultPort } : {}),
     });
   };
 
@@ -145,6 +161,47 @@ function ProjectSettingsPage() {
             <Field>
               <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
               <Input id="project-slug" value={project.slug} disabled />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="project-custom-domain">Custom domain</FieldLabel>
+              <Input
+                id="project-custom-domain"
+                value={customDomain}
+                onChange={(event) => setCustomDomain(event.target.value)}
+                placeholder="e.g. example.com"
+                disabled={updateProject.isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                {customDomain.trim() ? (
+                  <>
+                    Point these to <code className="text-xs">cname.iterate.app</code>:
+                    <br />
+                    <code className="text-xs">{customDomain.trim().toLowerCase()}</code> and{" "}
+                    <code className="text-xs">*.{customDomain.trim().toLowerCase()}</code>
+                  </>
+                ) : (
+                  <>
+                    Optional. Use a custom domain instead of{" "}
+                    <code className="text-xs">{project.slug}.iterate.app</code>.
+                  </>
+                )}
+              </p>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="project-default-port">Default port</FieldLabel>
+              <Input
+                id="project-default-port"
+                type="number"
+                min={1}
+                max={65535}
+                value={defaultPort}
+                onChange={(event) => setDefaultPort(event.target.value)}
+                placeholder="3000"
+                disabled={updateProject.isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                The port to route to when no port is specified in the URL. Defaults to 3000.
+              </p>
             </Field>
             <Field>
               <FieldLabel htmlFor="project-sandbox-provider">Sandbox provider</FieldLabel>

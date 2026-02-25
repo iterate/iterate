@@ -95,13 +95,16 @@ async function runMatchedAgentCommand<C extends AgentCommand>(
   return payload;
 }
 
-export async function runAgentCommand(
-  environment: AgentCommandEnvironment,
-): Promise<AgentCommandMatch | null> {
-  const sanitizedMessage = environment.message.replace(/<@[^>]+>/g, " ").trim();
-  if (!sanitizedMessage) return null;
+/**
+ * Sanitize raw Slack text (strip @mentions) and match the first token against
+ * known command aliases. Shared by both `runAgentCommand` and
+ * `looksLikeAgentCommand` to avoid duplicated matching logic.
+ */
+function findMatchingCommand(rawText: string) {
+  const sanitized = rawText.replace(/<@[^>]+>/g, " ").trim();
+  if (!sanitized) return null;
 
-  const [firstToken] = sanitizedMessage.split(/\s+/);
+  const [firstToken] = sanitized.split(/\s+/);
   if (!firstToken) return null;
 
   const command = AGENT_COMMANDS.find((entry) =>
@@ -109,7 +112,28 @@ export async function runAgentCommand(
   );
   if (!command) return null;
 
-  return runMatchedAgentCommand(command, { ...environment, message: sanitizedMessage });
+  return { command, sanitized };
+}
+
+export async function runAgentCommand(
+  environment: AgentCommandEnvironment,
+): Promise<AgentCommandMatch | null> {
+  const match = findMatchingCommand(environment.message);
+  if (!match) return null;
+
+  return runMatchedAgentCommand(match.command, {
+    ...environment,
+    message: match.sanitized,
+  });
+}
+
+/**
+ * Lightweight check whether raw message text looks like an agent command.
+ * Used by the Slack router to let command-like self-messages through the
+ * feedback-loop guard so the command handler can process them.
+ */
+export function looksLikeAgentCommand(rawText: string): boolean {
+  return findMatchingCommand(rawText) !== null;
 }
 
 function renderResultAsYamlMarkdown(result: unknown): string {

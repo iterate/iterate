@@ -50,11 +50,27 @@ export const InsertedEvent = z.looseObject({
   id: z.string(),
 });
 
-export type TimePeriod = `${number}s`;
+type TimeUnit = "s" | "m" | "h" | "d";
+export type TimePeriod = `${number}${TimeUnit}`;
 const periodSeconds = (period: TimePeriod): number => {
-  if (!period.match(/^\d+s$/))
-    throw new Error(`Expected period in seconds e.g. 123s, got ${period}`);
-  return Number(period.replace("s", ""));
+  if (!period.match(/^\d+(s|m|h|d)$/))
+    throw new Error(`Expected period in seconds, minutes, hours or days e.g. 123s, got ${period}`);
+  const lastDigit = period.slice(-1) as TimeUnit;
+  const value = Number(period.slice(0, -1));
+  switch (lastDigit) {
+    case "s":
+      return value;
+    case "m":
+      return value * 60;
+    case "h":
+      return value * 60 * 60;
+    case "d":
+      return value * 60 * 60 * 24;
+    default: {
+      lastDigit satisfies never;
+      throw new Error(`Unknown time unit: ${lastDigit}`);
+    }
+  }
 };
 
 export type WhenFn<Payload> = (params: { payload: Payload }) => boolean | null | undefined | "";

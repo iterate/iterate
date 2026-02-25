@@ -713,6 +713,16 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const allowedDomains = [
     ...new Set([...domains, `*.${projectIngressDomain}`, projectIngressDomain]),
   ];
+  // TODO(custom-domain): Custom domains don't need explicit worker routes here.
+  // Use Cloudflare for SaaS (https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/)
+  // to register custom hostnames. CF for SaaS routes traffic through a "fallback origin"
+  // which should point to this worker. SSL certs are auto-provisioned.
+  // Setup steps:
+  //   1. Enable CF for SaaS on the iterate.app zone
+  //   2. Create a fallback origin (e.g. fallback.iterate.app → this worker)
+  //   3. When a project sets a custom domain, call the CF API to create a custom hostname
+  //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
+  // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
 
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.

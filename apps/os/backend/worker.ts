@@ -216,8 +216,16 @@ app.get("/api/trpc-cli-procedures", (c) => {
 
 app.use("*", async (c, next) => {
   const requestDomain = getProjectIngressRequestHostname(c.req.raw);
-  if (shouldHandleProjectIngressHostname(requestDomain, c.env)) {
-    const ingressResponse = await handleProjectIngressRequest(c.req.raw, c.env, c.var.session);
+  const ingressCheck = await shouldHandleProjectIngressHostname(requestDomain, c.env);
+  if (ingressCheck) {
+    // If ingressCheck is a project object (custom domain), pass it to avoid a duplicate DB query
+    const cachedProject = typeof ingressCheck === "object" ? ingressCheck : undefined;
+    const ingressResponse = await handleProjectIngressRequest(
+      c.req.raw,
+      c.env,
+      c.var.session,
+      cachedProject,
+    );
     if (ingressResponse) return ingressResponse;
   }
   return next();
@@ -229,41 +237,48 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
   const requestedProjectIngressProxyPath = c.req.query("path") ?? c.req.query("redirectPath");
   const projectIngressDomain = c.env.PROJECT_INGRESS_DOMAIN;
 
-  let normalizedRequestedProjectIngressProxyHost = requestedProjectIngressProxyHost
-    ?.trim()
-    .toLowerCase();
-  if (!normalizedRequestedProjectIngressProxyHost && requestedProjectIngressProxySubdomain) {
+  let normalizedHost = requestedProjectIngressProxyHost?.trim().toLowerCase();
+
+  // Legacy: support ?subdomain= param (standard ingress only)
+  if (!normalizedHost && requestedProjectIngressProxySubdomain) {
     const normalizedSubdomain = requestedProjectIngressProxySubdomain.trim().toLowerCase();
     if (!normalizedSubdomain || normalizedSubdomain.includes(".")) {
       return c.json({ error: "Invalid subdomain" }, 400);
     }
-
-    normalizedRequestedProjectIngressProxyHost = `${normalizedSubdomain}.${projectIngressDomain}`;
+    normalizedHost = `${normalizedSubdomain}.${projectIngressDomain}`;
   }
 
-  if (!normalizedRequestedProjectIngressProxyHost) {
+  if (!normalizedHost) {
     return c.json({ error: "Missing projectIngressProxyHost or subdomain" }, 400);
   }
 
-  if (!isProjectIngressHostname(normalizedRequestedProjectIngressProxyHost, projectIngressDomain)) {
-    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+  // Determine if this is a standard ingress host or a custom domain
+  const isStandardIngress = isProjectIngressHostname(normalizedHost, projectIngressDomain);
+  let canonicalHost: string;
+
+  if (isStandardIngress) {
+    const parsedIngressHost = parseProjectIngressHostname(normalizedHost);
+    if (!parsedIngressHost.ok) {
+      return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+    }
+    canonicalHost = buildCanonicalProjectIngressProxyHostname({
+      target: parsedIngressHost.target,
+      projectIngressDomain,
+    });
+  } else {
+    // Custom domain — validate it exists by checking shouldHandleProjectIngressHostname
+    if (!(await shouldHandleProjectIngressHostname(normalizedHost, c.env))) {
+      return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
+    }
+    canonicalHost = normalizedHost;
   }
 
-  const parsedIngressHost = parseProjectIngressHostname(normalizedRequestedProjectIngressProxyHost);
-  if (!parsedIngressHost.ok) {
-    return c.json({ error: "Invalid projectIngressProxyHost" }, 400);
-  }
-
-  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
-    target: parsedIngressHost.target,
-    projectIngressDomain,
-  });
   const redirectPath = normalizeProjectIngressProxyRedirectPath(requestedProjectIngressProxyPath);
 
   if (!c.var.session) {
     const controlPlaneLoginUrl = buildControlPlaneProjectIngressProxyLoginUrl({
       controlPlanePublicUrl: c.env.VITE_PUBLIC_URL,
-      projectIngressProxyHost: canonicalProjectIngressProxyHost,
+      projectIngressProxyHost: canonicalHost,
       redirectPath,
     });
     return c.redirect(controlPlaneLoginUrl.toString(), 302);
@@ -274,7 +289,7 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
   });
   const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
   const exchangeUrl = new URL(
-    `${projectIngressProxyScheme}://${canonicalProjectIngressProxyHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
+    `${projectIngressProxyScheme}://${canonicalHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
   );
   exchangeUrl.searchParams.set("token", oneTimeToken.token);
   exchangeUrl.searchParams.set("redirectPath", redirectPath);
@@ -284,21 +299,27 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
 app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
   const requestHost = getProjectIngressRequestHostname(c.req.raw);
   const projectIngressDomain = c.env.PROJECT_INGRESS_DOMAIN;
-  if (!isProjectIngressHostname(requestHost, projectIngressDomain)) {
-    return c.json({ error: "Invalid ingress host" }, 400);
-  }
+  const isStandardIngress = isProjectIngressHostname(requestHost, projectIngressDomain);
 
-  const parsedIngressHost = parseProjectIngressHostname(requestHost);
-  if (!parsedIngressHost.ok) {
-    return c.json({ error: "Invalid ingress host" }, 400);
-  }
+  if (isStandardIngress) {
+    // Standard ingress: validate and canonicalize
+    const parsedIngressHost = parseProjectIngressHostname(requestHost);
+    if (!parsedIngressHost.ok) {
+      return c.json({ error: "Invalid ingress host" }, 400);
+    }
 
-  const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
-    target: parsedIngressHost.target,
-    projectIngressDomain,
-  });
-  if (requestHost !== canonicalProjectIngressProxyHost) {
-    return c.json({ error: "Non-canonical ingress host" }, 400);
+    const canonicalProjectIngressProxyHost = buildCanonicalProjectIngressProxyHostname({
+      target: parsedIngressHost.target,
+      projectIngressDomain,
+    });
+    if (requestHost !== canonicalProjectIngressProxyHost) {
+      return c.json({ error: "Non-canonical ingress host" }, 400);
+    }
+  } else {
+    // Custom domain: validate it's a known custom domain
+    if (!(await shouldHandleProjectIngressHostname(requestHost, c.env))) {
+      return c.json({ error: "Invalid ingress host" }, 400);
+    }
   }
 
   const exchangePath = new URL(

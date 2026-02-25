@@ -260,6 +260,8 @@ export const project = pgTable(
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
     sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
+    customDomain: t.text().unique(),
+    defaultPort: t.integer(),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],

@@ -83,6 +83,7 @@ export async function buildMachineEnvVars(params: {
   machineId: string;
   name: string;
   apiKey: string;
+  customDomain?: string | null;
 }): Promise<Record<string, string>> {
   const {
     db,
@@ -94,6 +95,7 @@ export async function buildMachineEnvVars(params: {
     machineId,
     name,
     apiKey,
+    customDomain,
   } = params;
 
   const globalEnvVars = await db.query.projectEnvVar.findMany({
@@ -110,6 +112,7 @@ export async function buildMachineEnvVars(params: {
     projectIngressDomain: env.PROJECT_INGRESS_DOMAIN,
     osBaseUrl: env.VITE_PUBLIC_URL,
     scheme: getIngressSchemeFromPublicUrl(env.VITE_PUBLIC_URL),
+    customDomain,
   });
 
   return {

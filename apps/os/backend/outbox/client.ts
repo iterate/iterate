@@ -40,14 +40,15 @@ export type InternalEventTypes = {
   "machine:activated": {
     machineId: string;
     projectId: string;
+    detachedMachineIds: string[];
   };
   /** OS pushed setup data (env vars, repos) to the daemon via tool.writeFile/execCommand. */
   "machine:setup-pushed": {
     machineId: string;
     projectId: string;
   };
-  /** A request to archive a machine via the provider SDK. */
-  "machine:archive-requested": {
+  /** A request to delete a machine via the provider SDK. */
+  "machine:delete-requested": {
     machineId: string;
     type: MachineType;
     externalId: string;

@@ -1,4 +1,5 @@
-import { useState, useRef, type FormEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
@@ -62,13 +63,40 @@ function OrDivider() {
   );
 }
 
-function EmailOtpSignIn({ redirectUrl }: { redirectUrl: string }) {
+function EmailOtpSignIn({
+  redirectUrl,
+  initialEmail,
+  initialStep,
+}: {
+  redirectUrl: string;
+  initialEmail?: string;
+  initialStep?: "email" | "otp";
+}) {
+  const navigate = useNavigate({ from: "/login" });
   const [isLoading, setIsLoading] = useState(false);
-  const [step, setStep] = useState<"email" | "otp">("email");
-  const [email, setEmail] = useState("");
+  const [step, setStepState] = useState<"email" | "otp">(
+    initialStep === "otp" && initialEmail ? "otp" : "email",
+  );
+  const [email, setEmail] = useState(initialEmail ?? "");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
+
+  const setStep = useCallback(
+    (newStep: "email" | "otp", newEmail?: string) => {
+      const emailValue = newEmail ?? email;
+      setStepState(newStep);
+      void navigate({
+        search: (prev) => ({
+          ...prev,
+          step: newStep === "otp" ? ("otp" as const) : undefined,
+          email: newStep === "otp" ? emailValue : undefined,
+        }),
+        replace: true,
+      });
+    },
+    [email, navigate],
+  );
 
   const handleEmailSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -80,7 +108,7 @@ function EmailOtpSignIn({ redirectUrl }: { redirectUrl: string }) {
     setError(null);
     try {
       await authClient.emailOtp.sendVerificationOtp({ email: emailValue, type: "sign-in" });
-      setStep("otp");
+      setStep("otp", emailValue);
       toast.success("Code sent to your email");
     } catch (err) {
       console.error("Failed to send OTP:", err);
@@ -144,6 +172,20 @@ function EmailOtpSignIn({ redirectUrl }: { redirectUrl: string }) {
     setOtp("");
     setError(null);
   };
+
+  // Auto-resend OTP when restoring step=otp from URL (e.g. after page reload)
+  const didAutoResend = useRef(false);
+  useEffect(() => {
+    if (initialStep === "otp" && initialEmail && !didAutoResend.current) {
+      didAutoResend.current = true;
+      void authClient.emailOtp
+        .sendVerificationOtp({ email: initialEmail, type: "sign-in" })
+        .then(() => toast.success("Code resent to your email"))
+        .catch(() => {
+          /* user can manually resend */
+        });
+    }
+  }, [initialStep, initialEmail]);
 
   if (step === "otp") {
     return (
@@ -214,12 +256,24 @@ function EmailOtpSignIn({ redirectUrl }: { redirectUrl: string }) {
   );
 }
 
-export function LoginCard({ redirectUrl }: { redirectUrl: string }) {
+export function LoginCard({
+  redirectUrl,
+  initialEmail,
+  initialStep,
+}: {
+  redirectUrl: string;
+  initialEmail?: string;
+  initialStep?: "email" | "otp";
+}) {
   return (
     <div className="w-full max-w-md space-y-6">
       {EMAIL_OTP_ENABLED && (
         <>
-          <EmailOtpSignIn redirectUrl={redirectUrl} />
+          <EmailOtpSignIn
+            redirectUrl={redirectUrl}
+            initialEmail={initialEmail}
+            initialStep={initialStep}
+          />
           <OrDivider />
         </>
       )}

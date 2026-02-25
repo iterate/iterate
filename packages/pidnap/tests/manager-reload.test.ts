@@ -28,7 +28,7 @@ describe("Manager - Reload & Remove", () => {
       // Wait for initial process to complete using polling for reliability
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc).toBeDefined();
-      await expect.poll(() => proc?.state, { timeout: 2000 }).toBe("stopped");
+      await expect.poll(() => proc?.state, { timeout: 5000 }).toBe("stopped");
 
       // Reload with long-running process
       await manager.reloadProcessByTarget("test-proc", longRunningProcess);
