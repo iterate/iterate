@@ -60,14 +60,17 @@ Allow projects to use a custom domain (e.g. `templestein.com`) instead of `<slug
 
 11. **`buildCanonicalProjectIngressProxyHostname()`**: needs custom domain awareness for redirect logic.
 
-### Phase 4: Cloudflare routing
+### Phase 4: Cloudflare routing (implemented)
 
-12. **Worker route patterns**: currently `*.iterate.app/*`. Custom domains need their own routes: `*.templestein.com/*` and `templestein.com/*`. This requires:
-    - Either a separate worker route per custom domain (added via API/Alchemy when domain is set)
-    - Or a Cloudflare for SaaS / SSL for SaaS setup with custom hostnames
-    - **Recommendation**: use [Cloudflare for SaaS (custom hostnames)](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/). This lets us add custom hostnames programmatically, and Cloudflare handles SSL cert provisioning + routing to our worker automatically.
+12. **CF for SaaS custom hostnames**: uses the outbox system to register/delete custom hostnames via CF API when a project's custom domain changes. Implementation:
+    - `backend/services/cloudflare-custom-hostname.ts` — CF Custom Hostnames API wrapper
+    - `backend/outbox/client.ts` — `project:custom-domain-set` and `project:custom-domain-removed` events
+    - `backend/outbox/consumers.ts` — `registerCustomHostname` and `deleteCustomHostname` consumers
+    - `backend/orpc/routers/project.ts` — emits outbox events on `project.update`
+    - `alchemy.run.ts` — `CF_CUSTOM_HOSTNAME_API_TOKEN` and `CF_CUSTOM_HOSTNAME_ZONE_ID` env bindings
+    - **One-time setup required**: Enable CF for SaaS on iterate.app zone, set fallback origin to `cname.iterate.app`, add env vars in Doppler
 
-13. **DNS instructions for users**: the settings UI should show what DNS records the user needs to add (CNAME to a fallback origin, likely `fallback.iterate.app` or similar).
+13. **DNS instructions for users**: the settings UI already shows DNS instructions (CNAME to `cname.iterate.app`).
 
 ### Phase 5: Named service aliases
 

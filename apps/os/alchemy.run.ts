@@ -429,6 +429,11 @@ const Env = z.object({
   // This bypasses the egress proxy and exposes secrets directly in env vars.
   // Only enable this for local development or trusted environments.
   DANGEROUS_RAW_SECRETS_ENABLED: BoolyString,
+  // Cloudflare for SaaS: custom hostname management for project custom domains.
+  // API token needs Custom Hostnames:Edit permission on the iterate.app zone.
+  CF_CUSTOM_HOSTNAME_API_TOKEN: Optional,
+  // Zone ID for the iterate.app zone where CF for SaaS custom hostnames are registered.
+  CF_CUSTOM_HOSTNAME_ZONE_ID: Optional,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
@@ -707,16 +712,19 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const allowedDomains = [
     ...new Set([...domains, `*.${projectIngressDomain}`, projectIngressDomain]),
   ];
-  // TODO(custom-domain): Custom domains don't need explicit worker routes here.
-  // Use Cloudflare for SaaS (https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/)
-  // to register custom hostnames. CF for SaaS routes traffic through a "fallback origin"
-  // which should point to this worker. SSL certs are auto-provisioned.
-  // Setup steps:
+  // Custom domains use Cloudflare for SaaS (custom hostnames).
+  // When a project sets a custom domain, an outbox event triggers CF API calls
+  // to register it as a custom hostname on the iterate.app zone. CF handles
+  // SSL cert provisioning and routes traffic through the fallback origin
+  // (cname.iterate.app) to this worker. No per-domain worker routes needed.
+  //
+  // Prerequisites (one-time CF dashboard setup):
   //   1. Enable CF for SaaS on the iterate.app zone
-  //   2. Create a fallback origin (e.g. fallback.iterate.app → this worker)
-  //   3. When a project sets a custom domain, call the CF API to create a custom hostname
-  //   4. Show the user DNS instructions (CNAME to fallback.iterate.app)
-  // The allowedDomains/routeHosts arrays above don't need custom domains — CF for SaaS handles routing.
+  //   2. Set fallback origin to cname.iterate.app (AAAA 100:: proxied)
+  //   3. Set CF_CUSTOM_HOSTNAME_API_TOKEN and CF_CUSTOM_HOSTNAME_ZONE_ID in Doppler
+  //
+  // See: backend/services/cloudflare-custom-hostname.ts
+  //      backend/outbox/consumers.ts (registerCustomHostname, deleteCustomHostname)
 
   const worker = await TanStackStart("os", {
     bindings: {
