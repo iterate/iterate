@@ -161,11 +161,11 @@ Two paths, shown as tabs or auto-detected:
 - Always available, default if Domain Connect not supported
 - Show a table/card of required DNS records:
 
-  | Type  | Name                               | Value               | Status |
-  | ----- | ---------------------------------- | ------------------- | ------ |
-  | CNAME | `kaletsky.com`                     | `cname.iterate.app` | --     |
-  | CNAME | `*.kaletsky.com`                   | `cname.iterate.app` | --     |
-  | CNAME | `_acme-challenge.kaletsky.com`     | `kaletsky.com.<DCV_ID>.dcv.cloudflare.com` | --     |
+  | Type  | Name                           | Value                                      | Status |
+  | ----- | ------------------------------ | ------------------------------------------ | ------ |
+  | CNAME | `kaletsky.com`                 | `cname.iterate.app`                        | --     |
+  | CNAME | `*.kaletsky.com`               | `cname.iterate.app`                        | --     |
+  | CNAME | `_acme-challenge.kaletsky.com` | `kaletsky.com.<DCV_ID>.dcv.cloudflare.com` | --     |
   - All 3 records are permanent CNAMEs — no TXT records, no rotating values.
   - DCV CNAME row: only shown if domain DNS is not on Cloudflare (if on CF, DCV is automatic).
   - Each row has a copy button for the value
