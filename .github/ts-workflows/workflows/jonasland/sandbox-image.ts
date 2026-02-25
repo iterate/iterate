@@ -81,7 +81,10 @@ export default workflow({
             JONASLAND_PUSH_FLY_REGISTRY: "true",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
-          run: "doppler run -- pnpm --filter ./jonasland/sandbox build",
+          run: [
+            "set -euo pipefail",
+            'for i in 1 2 3; do doppler run -- pnpm --filter ./jonasland/sandbox build && break; if [ "$i" -eq 3 ]; then echo "Failed to build/push jonasland sandbox image after $i attempts"; exit 1; fi; echo "Attempt $i failed, retrying in 15s..."; sleep 15; done',
+          ].join("\n"),
         },
         {
           id: "output",
