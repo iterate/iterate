@@ -1471,8 +1471,8 @@
             "slug"
           ]
         },
-        "project_custom_domain_unique": {
-          "name": "project_custom_domain_unique",
+        "project_customDomain_unique": {
+          "name": "project_customDomain_unique",
           "nullsNotDistinct": false,
           "columns": [
             "custom_domain"
