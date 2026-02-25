@@ -12,7 +12,7 @@ export const daemonContract = oc.router({
   ...serviceSubRouter,
   tools: {
     execTs: oc
-      .route({ method: "POST", path: "/tools/exec-ts", summary: "Execute TypeScript snippet" })
+      .route({ method: "POST", path: "/api/tools/exec-ts", summary: "Execute TypeScript snippet" })
       .input(z.object({ code: z.string().min(1) }))
       .output(z.object({ ok: z.literal(true), result: z.unknown().optional() })),
   },

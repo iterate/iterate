@@ -416,41 +416,64 @@ async function startSandbox(): Promise<void> {
     return;
   }
 
+  if (deployment !== null) {
+    appendEvent("cleaning up stale sandbox before start");
+    await deployment[Symbol.asyncDispose]().catch(() => {});
+    deployment = null;
+    containerName = null;
+    ingressUrl = null;
+  }
+
   runtimePhase = "starting";
   lastError = null;
 
-  appendEvent(`building image: ${sandboxImage}`);
-  await execFileAsync("pnpm", ["--filter", "./jonasland/sandbox", "build"], {
-    cwd: repoRootPath,
-  });
+  let sandbox: ProjectDeployment | null = null;
+  let nextContainerName: string | null = null;
 
-  containerName = `jonasland-demo-ui-${randomUUID().slice(0, 8)}`;
-  appendEvent(`starting container: ${containerName}`);
+  try {
+    appendEvent(`building image: ${sandboxImage}`);
+    await execFileAsync("pnpm", ["--filter", "./jonasland/sandbox", "build"], {
+      cwd: repoRootPath,
+    });
 
-  const sandbox = await projectDeployment({
-    image: sandboxImage,
-    name: containerName,
-    capAdd: ["NET_ADMIN", "SYS_ADMIN"],
-    extraHosts: ["host.docker.internal:host-gateway"],
-    env: {
-      ITERATE_EXTERNAL_EGRESS_PROXY: externalEgressProxy,
-    },
-  });
+    nextContainerName = `jonasland-demo-ui-${randomUUID().slice(0, 8)}`;
+    appendEvent(`starting container: ${nextContainerName}`);
 
-  deployment = sandbox;
-  ingressUrl = await sandbox.ingressUrl();
+    sandbox = await projectDeployment({
+      image: sandboxImage,
+      name: nextContainerName,
+      capAdd: ["NET_ADMIN", "SYS_ADMIN"],
+      extraHosts: ["host.docker.internal:host-gateway"],
+      env: {
+        ITERATE_EXTERNAL_EGRESS_PROXY: externalEgressProxy,
+      },
+    });
+    const nextIngressUrl = await sandbox.ingressUrl();
 
-  appendEvent("ensuring baseline processes");
-  for (const processSlug of ["caddy", "registry", "events", "daemon"] as const) {
-    await sandbox.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
+    appendEvent("ensuring baseline processes");
+    for (const processSlug of ["caddy", "registry", "events", "daemon"] as const) {
+      await sandbox.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
+    }
+
+    for (const processConfig of processes) {
+      await startProcess(sandbox, processConfig);
+    }
+
+    deployment = sandbox;
+    containerName = nextContainerName;
+    ingressUrl = nextIngressUrl;
+    runtimePhase = "running";
+    appendEvent(`sandbox ready at ${nextIngressUrl}`);
+  } catch (error) {
+    await sandbox?.[Symbol.asyncDispose]().catch(() => {});
+    deployment = null;
+    containerName = null;
+    ingressUrl = null;
+    runtimePhase = "error";
+    lastError = errorMessage(error);
+    appendEvent(`sandbox start failed: ${lastError.split("\n")[0] ?? "unknown error"}`);
+    throw error;
   }
-
-  for (const processConfig of processes) {
-    await startProcess(sandbox, processConfig);
-  }
-
-  runtimePhase = "running";
-  appendEvent(`sandbox ready at ${String(ingressUrl)}`);
 }
 
 async function stopSandbox(): Promise<void> {

@@ -71,6 +71,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
         DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
         OPENCODE_BASE_URL: "http://127.0.0.1:4096",
         OPENAI_BASE_URL: "http://api.openai.com",
+        SLACK_API_BASE_URL: "http://slack.com",
         OPENAI_MODEL: "gpt-4o-mini",
       },
     },
@@ -223,7 +224,7 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
 
     if (!/HTTP\/\d(?:\.\d)? 200/.test(webhook.output)) {
       const logs = await deployment.logs();
-      throw new Error(`webhook failed:\\n${webhook.output}\\n\\ncontainer logs:\\n${logs}`);
+      throw new Error(`webhook failed:\n${webhook.output}\n\ncontainer logs:\n${logs}`);
     }
 
     const llmRecord = await llmReq;

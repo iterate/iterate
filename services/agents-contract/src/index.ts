@@ -32,7 +32,7 @@ export const agentsContract = oc.router({
   ...serviceSubRouter,
   agents: {
     getOrCreate: oc
-      .route({ method: "POST", path: "/agents/get-or-create", summary: "Get or create agent" })
+      .route({ method: "POST", path: "/api/agents/get-or-create", summary: "Get or create agent" })
       .input(GetOrCreateAgentInput)
       .output(
         z.object({
@@ -41,11 +41,15 @@ export const agentsContract = oc.router({
         }),
       ),
     update: oc
-      .route({ method: "POST", path: "/agents/update", summary: "Update agent state" })
+      .route({ method: "POST", path: "/api/agents/update", summary: "Update agent state" })
       .input(UpdateAgentInput)
       .output(z.object({ ok: z.literal(true), agent: Agent })),
     subscribe: oc
-      .route({ method: "POST", path: "/agents/subscribe", summary: "Subscribe to agent changes" })
+      .route({
+        method: "POST",
+        path: "/api/agents/subscribe",
+        summary: "Subscribe to agent changes",
+      })
       .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
       .output(z.object({ ok: z.literal(true) })),
   },

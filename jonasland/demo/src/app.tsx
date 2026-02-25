@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DemoEvent, EgressRecord, MockConfig, RuntimeState } from "./types.ts";
 
 const API_BASE = import.meta.env.VITE_JONASLAND_DEMO_API_BASE ?? "http://127.0.0.1:19099";
@@ -71,27 +71,39 @@ export function App() {
   const [openaiModelDraft, setOpenaiModelDraft] = useState("gpt-4o-mini");
   const [slackResponseOkDraft, setSlackResponseOkDraft] = useState(true);
   const [slackResponseTsDraft, setSlackResponseTsDraft] = useState("123.456");
+  const hasLoadedInitialDrafts = useRef(false);
 
-  const refresh = useCallback(async () => {
-    const [nextRuntime, nextEvents, nextRecords] = await Promise.all([
-      requestJson<RuntimeState>("/__demo/state"),
-      requestJson<{ events: DemoEvent[] }>("/__demo/events"),
-      requestJson<{ records: EgressRecord[] }>("/records"),
-    ]);
-
-    setRuntime(nextRuntime);
-    setEvents(nextEvents.events);
-    setRecords(nextRecords.records);
-
-    setOpenaiOutputDraft(nextRuntime.mockConfig.openaiOutputText);
-    setOpenaiModelDraft(nextRuntime.mockConfig.openaiModel);
-    setSlackResponseOkDraft(nextRuntime.mockConfig.slackResponseOk);
-    setSlackResponseTsDraft(nextRuntime.mockConfig.slackResponseTs);
-    setPromptDraft(nextRuntime.mockConfig.defaultSlackPrompt);
+  const applyDraftsFromConfig = useCallback((config: MockConfig) => {
+    setOpenaiOutputDraft(config.openaiOutputText);
+    setOpenaiModelDraft(config.openaiModel);
+    setSlackResponseOkDraft(config.slackResponseOk);
+    setSlackResponseTsDraft(config.slackResponseTs);
+    setPromptDraft(config.defaultSlackPrompt);
   }, []);
 
+  const refresh = useCallback(
+    async (options?: { syncDrafts?: boolean }) => {
+      const [nextRuntime, nextEvents, nextRecords] = await Promise.all([
+        requestJson<RuntimeState>("/__demo/state"),
+        requestJson<{ events: DemoEvent[] }>("/__demo/events"),
+        requestJson<{ records: EgressRecord[] }>("/records"),
+      ]);
+
+      setRuntime(nextRuntime);
+      setEvents(nextEvents.events);
+      setRecords(nextRecords.records);
+
+      const shouldSyncDrafts = options?.syncDrafts === true || !hasLoadedInitialDrafts.current;
+      if (shouldSyncDrafts) {
+        applyDraftsFromConfig(nextRuntime.mockConfig);
+        hasLoadedInitialDrafts.current = true;
+      }
+    },
+    [applyDraftsFromConfig],
+  );
+
   useEffect(() => {
-    void refresh().catch((error) => {
+    void refresh({ syncDrafts: true }).catch((error) => {
       setErrorText(error instanceof Error ? error.message : String(error));
     });
   }, [refresh]);
@@ -109,12 +121,12 @@ export function App() {
   }, [autoRefresh, refresh]);
 
   const runAction = useCallback(
-    async (action: () => Promise<void>) => {
+    async (action: () => Promise<void>, options?: { syncDrafts?: boolean }) => {
       setActionBusy(true);
       setErrorText(null);
       try {
         await action();
-        await refresh();
+        await refresh({ syncDrafts: options?.syncDrafts === true });
       } catch (error) {
         setErrorText(error instanceof Error ? error.message : String(error));
       } finally {
@@ -138,18 +150,21 @@ export function App() {
   }, [runAction]);
 
   const onSaveMockConfig = useCallback(() => {
-    void runAction(async () => {
-      await requestJson("/__demo/config", {
-        method: "POST",
-        body: JSON.stringify({
-          openaiOutputText: openaiOutputDraft,
-          openaiModel: openaiModelDraft,
-          slackResponseOk: slackResponseOkDraft,
-          slackResponseTs: slackResponseTsDraft,
-          defaultSlackPrompt: promptDraft,
-        } satisfies Partial<MockConfig>),
-      });
-    });
+    void runAction(
+      async () => {
+        await requestJson("/__demo/config", {
+          method: "POST",
+          body: JSON.stringify({
+            openaiOutputText: openaiOutputDraft,
+            openaiModel: openaiModelDraft,
+            slackResponseOk: slackResponseOkDraft,
+            slackResponseTs: slackResponseTsDraft,
+            defaultSlackPrompt: promptDraft,
+          } satisfies Partial<MockConfig>),
+        });
+      },
+      { syncDrafts: true },
+    );
   }, [
     openaiModelDraft,
     openaiOutputDraft,
@@ -180,6 +195,7 @@ export function App() {
 
   const disableActions = actionBusy || runtime?.busy === true;
   const isRunning = runtime?.phase === "running";
+  const canStop = runtime !== null && runtime.phase !== "idle";
 
   const phaseTone = useMemo(() => {
     if (runtime?.phase === "running") return "is-running";
@@ -211,12 +227,16 @@ export function App() {
             </button>
             <button
               className="danger"
-              disabled={disableActions || !runtime || !isRunning}
+              disabled={disableActions || !canStop}
               onClick={onStopSandbox}
             >
               Stop Sandbox
             </button>
-            <button className="ghost" disabled={disableActions} onClick={() => void refresh()}>
+            <button
+              className="ghost"
+              disabled={disableActions}
+              onClick={() => void refresh({ syncDrafts: true })}
+            >
               Refresh
             </button>
           </div>
