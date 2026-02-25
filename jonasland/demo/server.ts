@@ -597,8 +597,16 @@ const server = createServer(async (req, res) => {
       responseHeaders = { "content-type": "application/json; charset=utf-8" };
       responseBody = JSON.stringify({
         id: `resp_${randomUUID().slice(0, 8)}`,
+        object: "response",
+        status: "completed",
         model: mockConfig.openaiModel,
         output_text: mockConfig.openaiOutputText,
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: mockConfig.openaiOutputText }],
+          },
+        ],
         received: parseSafeJson(requestBody),
       });
     } else if (url.pathname === "/api/chat.postMessage") {

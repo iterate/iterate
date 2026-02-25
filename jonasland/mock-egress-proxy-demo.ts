@@ -64,7 +64,16 @@ const server = createServer(async (req, res) => {
     res.end(
       JSON.stringify({
         id: "resp_demo",
+        object: "response",
+        status: "completed",
+        model: "gpt-4o-mini",
         output_text: "The answer is 42",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "The answer is 42" }],
+          },
+        ],
       }),
     );
     return;
