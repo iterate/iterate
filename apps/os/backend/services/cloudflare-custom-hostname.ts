@@ -5,7 +5,20 @@
  * customer vanity domains (e.g. kaletsky.com) route through CF → os worker
  * with auto-provisioned SSL certificates.
  *
+ * We create **wildcard** custom hostnames (e.g. `kaletsky.com` + `*.kaletsky.com`)
+ * because projects use port subdomains like `4096.kaletsky.com`.
+ *
+ * SSL validation uses **Delegated DCV**: instead of customers managing rotating
+ * TXT records every 90 days, they add a single permanent CNAME:
+ *   `_acme-challenge.kaletsky.com CNAME kaletsky.com.<DCV_DELEGATION_ID>.dcv.cloudflare.com`
+ * CF then places the ACME TXT tokens automatically for initial issuance and renewals.
+ *
+ * The DCV Delegation ID is a per-zone constant retrieved once from:
+ *   `GET /zones/{zone_id}/dcv_delegation/uuid`
+ * and stored as `CF_DCV_DELEGATION_ID` env var.
+ *
  * @see https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/
+ * @see https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/security/certificate-management/issue-and-validate/validate-certificates/delegated-dcv/
  * @see https://developers.cloudflare.com/api/resources/custom_hostnames/
  */
 
@@ -52,16 +65,29 @@ export interface CloudflareCustomHostnameConfig {
   apiToken: string;
   /** Zone ID for the iterate.app zone (where CF for SaaS is enabled). */
   zoneId: string;
+  /** DCV Delegation UUID for the zone. Used to compute per-domain DCV CNAME targets. */
+  dcvDelegationId?: string;
 }
 
 function getConfig(env: {
   CF_CUSTOM_HOSTNAME_API_TOKEN?: string;
   CF_CUSTOM_HOSTNAME_ZONE_ID?: string;
+  CF_DCV_DELEGATION_ID?: string;
 }): CloudflareCustomHostnameConfig | null {
   const apiToken = env.CF_CUSTOM_HOSTNAME_API_TOKEN;
   const zoneId = env.CF_CUSTOM_HOSTNAME_ZONE_ID;
   if (!apiToken || !zoneId) return null;
-  return { apiToken, zoneId };
+  return { apiToken, zoneId, dcvDelegationId: env.CF_DCV_DELEGATION_ID };
+}
+
+/**
+ * Compute the DCV CNAME target for a customer domain.
+ *
+ * Customers add: `_acme-challenge.<domain> CNAME <domain>.<dcvDelegationId>.dcv.cloudflare.com`
+ * This delegates ACME challenge management to CF for automatic wildcard cert issuance/renewal.
+ */
+export function getDcvCnameTarget(dcvDelegationId: string, hostname: string): string {
+  return `${hostname}.${dcvDelegationId}.dcv.cloudflare.com`;
 }
 
 function headers(apiToken: string) {
@@ -188,6 +214,9 @@ export async function deleteCustomHostname(
 
 /**
  * Get the status of a custom hostname (for polling/UI display).
+ *
+ * Returns hostname status, SSL status, and the DCV CNAME target that
+ * customers need to add for Delegated DCV (wildcard cert issuance).
  */
 export async function getCustomHostnameStatus(
   config: CloudflareCustomHostnameConfig,
@@ -196,6 +225,8 @@ export async function getCustomHostnameStatus(
   status: string;
   sslStatus: string;
   validationRecords: CustomHostnameSSL["validation_records"];
+  /** The CNAME target for `_acme-challenge.<hostname>` (Delegated DCV). Null if dcvDelegationId not configured. */
+  dcvCnameTarget: string | null;
 } | null> {
   const result = await findCustomHostname(config, hostname);
   if (!result) return null;
@@ -203,19 +234,31 @@ export async function getCustomHostnameStatus(
     status: result.status,
     sslStatus: result.ssl.status ?? "unknown",
     validationRecords: result.ssl.validation_records ?? [],
+    dcvCnameTarget: config.dcvDelegationId
+      ? getDcvCnameTarget(config.dcvDelegationId, hostname)
+      : null,
   };
 }
 
 // ── High-level operations ────────────────────────────────────────────────
 
+type CfSaasEnv = {
+  CF_CUSTOM_HOSTNAME_API_TOKEN?: string;
+  CF_CUSTOM_HOSTNAME_ZONE_ID?: string;
+  CF_DCV_DELEGATION_ID?: string;
+};
+
 /**
  * Register a project's custom domain with CF for SaaS.
  * Idempotent: if the hostname already exists, returns it.
  *
+ * Creates a wildcard custom hostname with TXT-based DCV (requires Delegated DCV
+ * CNAME from customer for auto-renewal).
+ *
  * Returns null if CF for SaaS is not configured (missing env vars).
  */
 export async function registerProjectCustomDomain(
-  env: { CF_CUSTOM_HOSTNAME_API_TOKEN?: string; CF_CUSTOM_HOSTNAME_ZONE_ID?: string },
+  env: CfSaasEnv,
   customDomain: string,
 ): Promise<CustomHostnameResult | null> {
   const config = getConfig(env);
@@ -235,7 +278,7 @@ export async function registerProjectCustomDomain(
  * Returns early if CF for SaaS is not configured.
  */
 export async function removeProjectCustomDomain(
-  env: { CF_CUSTOM_HOSTNAME_API_TOKEN?: string; CF_CUSTOM_HOSTNAME_ZONE_ID?: string },
+  env: CfSaasEnv,
   customDomain: string,
 ): Promise<void> {
   const config = getConfig(env);
@@ -246,4 +289,47 @@ export async function removeProjectCustomDomain(
     return;
   }
   await deleteCustomHostname(config, customDomain);
+}
+
+/**
+ * Get the DNS records a customer needs to set up for their custom domain.
+ *
+ * Returns the 3 CNAME records (apex, wildcard, DCV delegation) that the
+ * customer needs to add to their DNS. All are permanent — no rotating values.
+ */
+export function getRequiredDnsRecords(
+  env: CfSaasEnv,
+  customDomain: string,
+): {
+  records: Array<{ type: "CNAME"; name: string; value: string; purpose: string }>;
+  dcvDelegationConfigured: boolean;
+} {
+  const config = getConfig(env);
+  const dcvDelegationId = config?.dcvDelegationId;
+
+  const records: Array<{ type: "CNAME"; name: string; value: string; purpose: string }> = [
+    {
+      type: "CNAME",
+      name: customDomain,
+      value: "cname.iterate.app",
+      purpose: "Routes traffic for your domain to Iterate",
+    },
+    {
+      type: "CNAME",
+      name: `*.${customDomain}`,
+      value: "cname.iterate.app",
+      purpose: "Routes traffic for subdomains (e.g. port forwarding) to Iterate",
+    },
+  ];
+
+  if (dcvDelegationId) {
+    records.push({
+      type: "CNAME",
+      name: `_acme-challenge.${customDomain}`,
+      value: getDcvCnameTarget(dcvDelegationId, customDomain),
+      purpose: "Delegates SSL certificate validation to Cloudflare (required for wildcard HTTPS)",
+    });
+  }
+
+  return { records, dcvDelegationConfigured: !!dcvDelegationId };
 }

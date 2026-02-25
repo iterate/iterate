@@ -434,6 +434,10 @@ const Env = z.object({
   CF_CUSTOM_HOSTNAME_API_TOKEN: Optional,
   // Zone ID for the iterate.app zone where CF for SaaS custom hostnames are registered.
   CF_CUSTOM_HOSTNAME_ZONE_ID: Optional,
+  // DCV Delegation UUID for the iterate.app zone. Used to compute per-domain
+  // Delegated DCV CNAME targets for wildcard SSL cert issuance/renewal.
+  // Retrieve once via: GET /zones/{zone_id}/dcv_delegation/uuid
+  CF_DCV_DELEGATION_ID: Optional,
 } satisfies Record<string, z.ZodType<unknown, string | undefined>> & {
   [K in GlobalSecretEnvVarName]: typeof Required;
 });
@@ -712,16 +716,23 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
   const allowedDomains = [
     ...new Set([...domains, `*.${projectIngressDomain}`, projectIngressDomain]),
   ];
-  // Custom domains use Cloudflare for SaaS (custom hostnames).
+  // Custom domains use Cloudflare for SaaS (custom hostnames) with Delegated DCV.
   // When a project sets a custom domain, an outbox event triggers CF API calls
-  // to register it as a custom hostname on the iterate.app zone. CF handles
+  // to register it as a wildcard custom hostname on the iterate.app zone. CF handles
   // SSL cert provisioning and routes traffic through the fallback origin
   // (cname.iterate.app) to this worker. No per-domain worker routes needed.
+  //
+  // Customers add 3 permanent CNAMEs (no TXT records):
+  //   1. kaletsky.com CNAME cname.iterate.app (apex)
+  //   2. *.kaletsky.com CNAME cname.iterate.app (wildcard for port subdomains)
+  //   3. _acme-challenge.kaletsky.com CNAME kaletsky.com.<DCV_ID>.dcv.cloudflare.com (Delegated DCV)
   //
   // Prerequisites (one-time CF dashboard setup):
   //   1. Enable CF for SaaS on the iterate.app zone
   //   2. Set fallback origin to cname.iterate.app (AAAA 100:: proxied)
-  //   3. Set CF_CUSTOM_HOSTNAME_API_TOKEN and CF_CUSTOM_HOSTNAME_ZONE_ID in Doppler
+  //   3. Enable DCV Delegation on the zone
+  //   4. Set CF_CUSTOM_HOSTNAME_API_TOKEN, CF_CUSTOM_HOSTNAME_ZONE_ID, and
+  //      CF_DCV_DELEGATION_ID in Doppler
   //
   // See: backend/services/cloudflare-custom-hostname.ts
   //      backend/outbox/consumers.ts (registerCustomHostname, deleteCustomHostname)
