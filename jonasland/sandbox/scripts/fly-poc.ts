@@ -200,8 +200,7 @@ async function main(): Promise<void> {
 
   const runQuiet = (command: string, args: string[]): string => run(command, args, { quiet: true });
   const hasCfProxyToken = Boolean(process.env.CF_PROXY_WORKER_API_TOKEN);
-  const useCfProxy =
-    cfProxyMode === "true" || (cfProxyMode === "auto" && hasCfProxyToken);
+  const useCfProxy = cfProxyMode === "true" || (cfProxyMode === "auto" && hasCfProxyToken);
   if (cfProxyMode === "true" && !hasCfProxyToken) {
     throw new Error("JONASLAND_CF_PROXY_ENABLE=true but CF_PROXY_WORKER_API_TOKEN is missing");
   }
@@ -328,10 +327,10 @@ async function main(): Promise<void> {
     console.log(`cf_proxy_orders_url=${cfProxyUrls.ordersUrl}`);
   }
   console.log(
-    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"events\"}}' ${publicControlBase}/rpc/processes/restart`,
+    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{"json":{"target":"events"}}' ${publicControlBase}/rpc/processes/restart`,
   );
   console.log(
-    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"orders\"}}' ${publicControlBase}/rpc/processes/restart`,
+    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{"json":{"target":"orders"}}' ${publicControlBase}/rpc/processes/restart`,
   );
   console.log(`events_health=curl -fsS ${publicEventsHealth}`);
   console.log(`orders_health=curl -fsS ${publicOrdersHealth}`);

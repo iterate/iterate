@@ -72,7 +72,9 @@ function createClient(params: { workerBaseUrl: string; apiToken: string }): CfPr
   ) as unknown as CfProxyClient;
 }
 
-export async function registerCfProxyRoutes(params: RegisterCfProxyRoutesParams): Promise<CfProxyRouteSet> {
+export async function registerCfProxyRoutes(
+  params: RegisterCfProxyRoutesParams,
+): Promise<CfProxyRouteSet> {
   const log = params.logger ?? (() => {});
   const runId = sanitizeRunId(params.runId);
   const workerBaseUrl = normalizeBaseUrl(

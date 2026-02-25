@@ -183,10 +183,10 @@ async function main(): Promise<void> {
   console.log(`container_name=${containerName}`);
   console.log(`image=${imageTag}`);
   console.log(
-    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"events\"}}' ${baseUrl}/_pidnap/rpc/processes/restart`,
+    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{"json":{"target":"events"}}' ${baseUrl}/_pidnap/rpc/processes/restart`,
   );
   console.log(
-    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"orders\"}}' ${baseUrl}/_pidnap/rpc/processes/restart`,
+    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{"json":{"target":"orders"}}' ${baseUrl}/_pidnap/rpc/processes/restart`,
   );
   console.log(`events_health=curl -fsS ${baseUrl}/_events/healthz`);
   console.log(`orders_health=curl -fsS ${baseUrl}/_orders/healthz`);
