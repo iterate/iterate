@@ -77,7 +77,7 @@ jobs:
         run: |-
           set -euo pipefail
           export PNPM_VERSION=10.24.0
-          curl -fsSL https://get.pnpm.io/install.sh | sh -
+          for i in 1 2 3; do curl -fsSL https://get.pnpm.io/install.sh | sh - && break; if [ "$i" -eq 3 ]; then echo "Failed to install pnpm after $i attempts"; exit 1; fi; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           echo "PNPM_HOME=$HOME/.local/share/pnpm" >> "$GITHUB_ENV"
           echo "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
           $HOME/.local/share/pnpm/pnpm --version
