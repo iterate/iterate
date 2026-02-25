@@ -80,7 +80,8 @@ function parseSSE(chunk: string): Array<Event> {
       currentData = line.slice(6);
     } else if (line === "" && currentData !== null) {
       // Empty line = end of event
-      if (currentEvent === "data") {
+      const isDataEvent = currentEvent === null || currentEvent === "message";
+      if (isDataEvent) {
         try {
           const parsed = JSON.parse(currentData);
           const decoded = Schema.decodeUnknownSync(Event)(parsed);

@@ -33,6 +33,9 @@ interface EventsClientContext {
 }
 
 const serviceName = "jonasland-orders-service";
+const ORDER_PLACED_EVENT_TYPE = "https://events.iterate.com/orders/order-placed";
+const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";
+const ORDER_WORKFLOW_COMPLETED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-completed";
 const os = implement(ordersContract).$context<OrdersContext>();
 const env = ordersServiceEnvSchema.parse(process.env);
 
@@ -51,6 +54,15 @@ const eventsClient = createOrpcRpcServiceClient<typeof eventBusContract>({
 
 function resolveEventsServiceOrpcUrl(parsedEnv: { EVENTS_SERVICE_BASE_URL: string }) {
   return parsedEnv.EVENTS_SERVICE_BASE_URL;
+}
+
+function normalizeStreamPath(path: string): string {
+  const normalized = path.replace(/^\/+/, "");
+  return normalized.length > 0 ? normalized : "orders";
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function toOrderRecord(row: typeof schema.ordersTable.$inferSelect): OrderRecord {
@@ -74,28 +86,31 @@ async function getOrderRowById(id: string) {
   return row ?? null;
 }
 
-async function createEventForOrder(order: OrderRecord, requestId: string) {
+async function appendEventToStream(params: {
+  path: string;
+  type: `https://events.iterate.com/${string}`;
+  payload: Record<string, unknown>;
+  requestId: string;
+}) {
   const eventId = randomUUID();
 
   try {
     await eventsClient.append(
       {
-        path: "/orders",
+        path: normalizeStreamPath(params.path),
         events: [
           {
-            type: "https://events.iterate.com/orders/order-placed",
+            type: params.type,
             payload: {
               eventId,
-              orderId: order.id,
-              sku: order.sku,
-              quantity: order.quantity,
+              ...params.payload,
             },
           },
         ],
       },
       {
         context: {
-          requestId,
+          requestId: params.requestId,
         },
       },
     );
@@ -103,10 +118,23 @@ async function createEventForOrder(order: OrderRecord, requestId: string) {
     return { id: eventId };
   } catch (error) {
     throw new ORPCError("BAD_GATEWAY", {
-      message: error instanceof Error ? error.message : "events-service request failed",
+      message: toError(error).message || "events-service request failed",
       cause: error,
     });
   }
+}
+
+async function createEventForOrder(order: OrderRecord, requestId: string) {
+  return await appendEventToStream({
+    path: "/orders",
+    type: ORDER_PLACED_EVENT_TYPE,
+    payload: {
+      orderId: order.id,
+      sku: order.sku,
+      quantity: order.quantity,
+    },
+    requestId,
+  });
 }
 
 const serviceHealth = os.service.health.handler(async ({ context }) => ({
@@ -166,6 +194,109 @@ const placeOrder = os.orders.place.handler(async ({ context, input }) => {
   });
 
   return order;
+});
+
+const kickoffWorkflow = os.orders.kickoffWorkflow.handler(async ({ context, input }) => {
+  const now = new Date().toISOString();
+  const workflowId = randomUUID();
+  const orderId = randomUUID();
+  const streamPath = normalizeStreamPath(input.streamPath);
+
+  const order: OrderRecord = {
+    id: orderId,
+    sku: input.sku,
+    quantity: input.quantity,
+    status: "accepted",
+    eventId: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const startedEvent = await appendEventToStream({
+    path: streamPath,
+    type: ORDER_WORKFLOW_STARTED_EVENT_TYPE,
+    payload: {
+      workflowId,
+      orderId: order.id,
+      sku: order.sku,
+      quantity: order.quantity,
+      delayMs: input.delayMs,
+      streamPath,
+    },
+    requestId: context.requestId,
+  });
+
+  order.eventId = startedEvent.id;
+
+  await db.insert(schema.ordersTable).values({
+    id: order.id,
+    sku: order.sku,
+    quantity: order.quantity,
+    status: order.status,
+    eventId: order.eventId,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+  });
+
+  const timer = setTimeout(() => {
+    void appendEventToStream({
+      path: streamPath,
+      type: ORDER_WORKFLOW_COMPLETED_EVENT_TYPE,
+      payload: {
+        workflowId,
+        orderId: order.id,
+        sku: order.sku,
+        quantity: order.quantity,
+        delayMs: input.delayMs,
+        streamPath,
+        startedEventId: startedEvent.id,
+      },
+      requestId: context.requestId,
+    })
+      .then((completedEvent) => {
+        infoFromContext(context, "orders.workflow.completed", {
+          service: context.serviceName,
+          request_id: context.requestId,
+          workflow_id: workflowId,
+          order_id: order.id,
+          event_id: completedEvent.id,
+          delay_ms: input.delayMs,
+          stream_path: streamPath,
+        });
+      })
+      .catch((error) => {
+        context.log.error(toError(error), {
+          event: "orders.workflow.complete.failed",
+          service: context.serviceName,
+          request_id: context.requestId,
+          workflow_id: workflowId,
+          order_id: order.id,
+          stream_path: streamPath,
+          delay_ms: input.delayMs,
+        });
+      });
+  }, input.delayMs);
+  timer.unref?.();
+
+  infoFromContext(context, "orders.workflow.started", {
+    service: context.serviceName,
+    request_id: context.requestId,
+    workflow_id: workflowId,
+    order_id: order.id,
+    event_id: startedEvent.id,
+    delay_ms: input.delayMs,
+    stream_path: streamPath,
+  });
+
+  return {
+    accepted: true as const,
+    workflowId,
+    orderId: order.id,
+    streamPath,
+    delayMs: input.delayMs,
+    createdEventId: startedEvent.id,
+    createdAt: now,
+  };
 });
 
 const listOrders = os.orders.list.handler(async ({ input, context }) => {
@@ -288,6 +419,7 @@ export const ordersRouter = os.router({
   },
   orders: {
     place: placeOrder,
+    kickoffWorkflow,
     list: listOrders,
     find: findOrder,
     update: updateOrder,

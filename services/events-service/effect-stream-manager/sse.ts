@@ -12,6 +12,8 @@ export interface SseEvent {
   readonly id?: string;
 }
 
+const SSE_MESSAGE_EVENT = "message";
+
 /**
  * Encode an event to SSE format
  */
@@ -26,13 +28,18 @@ export const encode = (event: SseEvent): string => {
 };
 
 /**
- * Encode an Event to SSE data format with proper Schema encoding.
+ * Encode an Event to standard SSE message format with proper Schema encoding.
  * This ensures Option fields are properly transformed (e.g., Option -> null).
  */
-export const data = (event: Event): string => {
+export const message = (event: Event): string => {
   const encoded = Schema.encodeSync(Event)(event);
-  return encode({ event: "data", data: JSON.stringify(encoded) });
+  return encode({ event: SSE_MESSAGE_EVENT, data: JSON.stringify(encoded) });
 };
+
+/**
+ * @deprecated Use `message` instead.
+ */
+export const data = message;
 
 /**
  * Encode a control event
