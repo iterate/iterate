@@ -1,6 +1,6 @@
 {
-  "id": "bf892a4c-cef5-4b71-81e4-73a1fc492555",
-  "prevId": "ba5282f7-3436-49a0-84eb-66db85eded91",
+  "id": "6fff269e-2095-4f7e-bab3-3d6dffe81857",
+  "prevId": "bf892a4c-cef5-4b71-81e4-73a1fc492555",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1406,6 +1406,12 @@
         "custom_domain": {
           "name": "custom_domain",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "default_port": {
+          "name": "default_port",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
