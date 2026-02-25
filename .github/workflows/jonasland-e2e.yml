@@ -3,6 +3,8 @@
 name: Jonasland E2E
 permissions:
   contents: read
+  packages: write
+  id-token: write
 on:
   push:
     branches:
@@ -17,6 +19,7 @@ on:
       - packages/pidnap/**
       - .github/workflows/jonasland-e2e.yml
       - .github/ts-workflows/workflows/jonasland-e2e.ts
+      - .github/ts-workflows/workflows/jonasland/**
   pull_request:
     paths:
       - jonasland/e2e/**
@@ -28,6 +31,7 @@ on:
       - packages/pidnap/**
       - .github/workflows/jonasland-e2e.yml
       - .github/ts-workflows/workflows/jonasland-e2e.ts
+      - .github/ts-workflows/workflows/jonasland/**
   workflow_dispatch:
     inputs:
       ref:
@@ -55,11 +59,64 @@ jobs:
         run: pnpm install
       - name: Docker info
         run: docker version && docker info
-      - name: Build jonasland sandbox image
-        run: pnpm --filter ./jonasland/sandbox build
+      - name: Setup Depot CLI
+        uses: depot/setup-action@v1
+      - id: jonasland_image_meta
+        name: Compute jonasland image tags
+        env:
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/jonasland-sandbox
+        run: |-
+          set -euo pipefail
+          git_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          local_image="jonasland-sandbox:ci-${short_sha}"
+          registry_image_ref="${REGISTRY_IMAGE}:sha-${short_sha}"
+          echo "git_sha=${git_sha}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "local_image=${local_image}" >> "$GITHUB_OUTPUT"
+          echo "registry_image_ref=${registry_image_ref}" >> "$GITHUB_OUTPUT"
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push jonasland image (Depot)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GIT_SHA: ${{ steps.jonasland_image_meta.outputs.git_sha }}
+          REGISTRY_IMAGE_REF: ${{ steps.jonasland_image_meta.outputs.registry_image_ref }}
+        run: |-
+          set -euo pipefail
+          depot build \
+            --platform linux/amd64 \
+            -f jonasland/sandbox/Dockerfile \
+            --build-arg GIT_SHA=${GIT_SHA} \
+            -t ${REGISTRY_IMAGE_REF} \
+            --push \
+            .
+      - name: Build and load jonasland image for docker e2e (Depot)
+        env:
+          GIT_SHA: ${{ steps.jonasland_image_meta.outputs.git_sha }}
+          LOCAL_IMAGE: ${{ steps.jonasland_image_meta.outputs.local_image }}
+        run: |-
+          set -euo pipefail
+          depot build \
+            --platform linux/amd64 \
+            -f jonasland/sandbox/Dockerfile \
+            --build-arg GIT_SHA=${GIT_SHA} \
+            -t ${LOCAL_IMAGE} \
+            --load \
+            .
+      - name: Install Playwright browsers
+        run: pnpm --filter ./jonasland/e2e exec playwright install --with-deps chromium
       - name: Typecheck jonasland e2e
         run: pnpm --filter ./jonasland/e2e typecheck
-      - name: Run jonasland playwright e2e
+      - name: Run jonasland playwright e2e against Docker
+        env:
+          RUN_JONASLAND_E2E: "true"
+          JONASLAND_SANDBOX_IMAGE: ${{ steps.jonasland_image_meta.outputs.local_image }}
         run: pnpm --filter ./jonasland/e2e spec:e2e
       - name: Upload jonasland e2e artifacts
         if: always()
