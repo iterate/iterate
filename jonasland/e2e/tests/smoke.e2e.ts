@@ -8,6 +8,8 @@ import {
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
@@ -34,8 +36,8 @@ type OnDemandProcessConfig = {
 const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
   orders: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
@@ -45,32 +47,32 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
   },
   home: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/home-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/home-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/" },
   },
   outerbase: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
   },
   "egress-proxy": {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
   },
   docs: {
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },

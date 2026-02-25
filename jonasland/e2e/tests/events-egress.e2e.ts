@@ -8,6 +8,8 @@ import {
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
+const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
 
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -39,8 +41,8 @@ async function startEgressProxyProcess(deployment: ProjectDeployment): Promise<v
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "egress-proxy",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     options: { restartPolicy: "always" },
