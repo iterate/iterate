@@ -6,6 +6,7 @@ import {
   parseProjectIngressHostname,
   parseCustomDomainHostname,
   type IngressTarget,
+  type CustomDomainTarget,
   type ParsedIngressHostname,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
@@ -202,6 +203,7 @@ type ResolveMachineForIngressResult = {
   accessDenied?: boolean;
   machineExists?: boolean;
   machineState?: typeof schema.machine.$inferSelect.state;
+  defaultPort?: number | null;
 };
 
 async function resolveMachineForIngress(
@@ -215,6 +217,7 @@ async function resolveMachineForIngress(
     const rows = await db
       .select({
         projectId: schema.project.id,
+        defaultPort: schema.project.defaultPort,
         membershipId: schema.organizationUserMembership.id,
       })
       .from(schema.project)
@@ -240,12 +243,13 @@ async function resolveMachineForIngress(
     const machine = await db.query.machine.findFirst({
       where: and(eq(schema.machine.projectId, row.projectId), eq(schema.machine.state, "active")),
     });
-    return { machine: machine ?? null, projectFound: true };
+    return { machine: machine ?? null, projectFound: true, defaultPort: row.defaultPort };
   }
 
   const rows = await db
     .select({
       machine: schema.machine,
+      defaultPort: schema.project.defaultPort,
       membershipId: schema.organizationUserMembership.id,
     })
     .from(schema.machine)
@@ -288,6 +292,7 @@ async function resolveMachineForIngress(
     machine: row.machine,
     machineExists: true,
     machineState: row.machine.state,
+    defaultPort: row.defaultPort,
   };
 }
 
@@ -354,6 +359,49 @@ async function proxyWithFetcher(
     statusText: response.statusText,
     headers: responseHeaders,
   });
+}
+
+/**
+ * Determine the effective `x-iterate-proxy-target-host` header value.
+ *
+ * For standard ingress (e.g. `4096__my-proj.iterate.app`), the hostname contains
+ * a `__` port separator that the sandbox proxy can parse directly.
+ *
+ * For custom domains (e.g. `templestein.com`, `opencode.templestein.com`), the hostname
+ * uses dot-separated subdomains that the sandbox proxy can't parse, so we always send
+ * `localhost:{port}` explicitly.
+ *
+ * When the project has a custom default port and the URL didn't specify a port
+ * explicitly, the default port overrides the normal 3000 default.
+ */
+function getEffectiveTargetHost(
+  requestHostname: string,
+  target: IngressTarget | CustomDomainTarget,
+  defaultPort: number | null | undefined,
+): string {
+  const isStandardIngress = "isPortExplicit" in target;
+  const isExplicit = isStandardIngress
+    ? target.isPortExplicit
+    : target.targetPort !== DEFAULT_TARGET_PORT;
+
+  // Apply project default port override when the user didn't specify a port
+  const effectivePort =
+    !isExplicit && defaultPort && defaultPort !== DEFAULT_TARGET_PORT
+      ? defaultPort
+      : target.targetPort;
+
+  // Standard ingress hostnames use __ separator — sandbox proxy can parse them.
+  // Only override when we need a non-standard port.
+  if (isStandardIngress) {
+    if (effectivePort !== target.targetPort) {
+      return `localhost:${effectivePort}`;
+    }
+    return requestHostname;
+  }
+
+  // Custom domains: always send localhost:{port} since sandbox proxy can't parse
+  // dot-separated custom domain subdomains.
+  return `localhost:${effectivePort}`;
 }
 
 function buildParseDetails(params: {
@@ -532,6 +580,14 @@ export async function handleProjectIngressRequest(
     });
   }
 
+  // When the port wasn't explicitly specified in the URL and the project has a custom
+  // default port, tell the sandbox-side proxy to route to that port instead of 3000.
+  const effectiveTargetHost = getEffectiveTargetHost(
+    requestHostname,
+    resolvedHost.target,
+    resolvedMachine.defaultPort,
+  );
+
   try {
     const runtime = await createMachineStub({
       type: machine.type,
@@ -541,7 +597,7 @@ export async function handleProjectIngressRequest(
     });
     const fetcher = await runtime.getFetcher(SANDBOX_INGRESS_PORT);
     const pathWithQuery = `${url.pathname}${url.search}`;
-    return await proxyWithFetcher(request, pathWithQuery, fetcher, requestHostname);
+    return await proxyWithFetcher(request, pathWithQuery, fetcher, effectiveTargetHost);
   } catch (error) {
     logger.error("[project-ingress] Failed to proxy request", error, {
       host: requestHostname,
@@ -648,6 +704,14 @@ async function handleCustomDomainRequest(
     return jsonError(503, "machine_unavailable", { hostname: requestHostname });
   }
 
+  // When the port wasn't explicitly specified and the project has a custom default port,
+  // route to that port instead of 3000.
+  const effectiveTargetHost = getEffectiveTargetHost(
+    requestHostname,
+    target,
+    project.defaultPort,
+  );
+
   try {
     const runtime = await createMachineStub({
       type: machine.type,
@@ -657,11 +721,7 @@ async function handleCustomDomainRequest(
     });
     const fetcher = await runtime.getFetcher(SANDBOX_INGRESS_PORT);
     const pathWithQuery = `${url.pathname}${url.search}`;
-    // Custom domain hostnames (e.g. "opencode.templestein.com") don't use the __
-    // separator that the sandbox proxy expects. Send "localhost:<port>" so the
-    // sandbox proxy routes to the correct upstream port.
-    const targetHost = `localhost:${target.targetPort}`;
-    return await proxyWithFetcher(request, pathWithQuery, fetcher, targetHost);
+    return await proxyWithFetcher(request, pathWithQuery, fetcher, effectiveTargetHost);
   } catch (error) {
     logger.error("[project-ingress] Failed to proxy custom domain request", error, {
       host: requestHostname,

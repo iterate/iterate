@@ -162,6 +162,7 @@ export const projectRouter = {
           })
           .nullable()
           .optional(),
+        defaultPort: z.number().int().min(1).max(65535).nullable().optional(),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
@@ -218,6 +219,7 @@ export const projectRouter = {
           ...(input.name && { name: input.name }),
           ...(input.sandboxProvider && { sandboxProvider: input.sandboxProvider }),
           ...(input.customDomain !== undefined && { customDomain: input.customDomain }),
+          ...(input.defaultPort !== undefined && { defaultPort: input.defaultPort }),
         })
         .where(eq(project.id, ctx.project.id))
         .returning();

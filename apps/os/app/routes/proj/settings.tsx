@@ -68,12 +68,16 @@ function ProjectSettingsPage() {
     project.sandboxProvider as ProjectSandboxProvider,
   );
   const [customDomain, setCustomDomain] = useState(project.customDomain ?? "");
+  const [defaultPort, setDefaultPort] = useState(
+    project.defaultPort ? String(project.defaultPort) : "",
+  );
 
   const updateProject = useMutation({
     mutationFn: async (input: {
       name?: string;
       sandboxProvider?: ProjectSandboxProvider;
       customDomain?: string | null;
+      defaultPort?: number | null;
     }) => {
       return orpcClient.project.update({
         projectSlug: params.projectSlug,
@@ -110,7 +114,9 @@ function ProjectSettingsPage() {
   const hasProviderChange = sandboxProvider !== project.sandboxProvider;
   const hasCustomDomainChange =
     (customDomain.trim().toLowerCase() || null) !== (project.customDomain ?? null);
-  const hasChanges = hasNameChange || hasProviderChange || hasCustomDomainChange;
+  const parsedDefaultPort = defaultPort.trim() ? Number(defaultPort.trim()) : null;
+  const hasDefaultPortChange = parsedDefaultPort !== (project.defaultPort ?? null);
+  const hasChanges = hasNameChange || hasProviderChange || hasCustomDomainChange || hasDefaultPortChange;
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -120,6 +126,7 @@ function ProjectSettingsPage() {
       ...(hasNameChange ? { name: name.trim() } : {}),
       ...(hasProviderChange ? { sandboxProvider } : {}),
       ...(hasCustomDomainChange ? { customDomain: customDomain.trim().toLowerCase() || null } : {}),
+      ...(hasDefaultPortChange ? { defaultPort: parsedDefaultPort } : {}),
     });
   };
 
@@ -177,6 +184,22 @@ function ProjectSettingsPage() {
                     <code className="text-xs">{project.slug}.iterate.app</code>.
                   </>
                 )}
+              </p>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="project-default-port">Default port</FieldLabel>
+              <Input
+                id="project-default-port"
+                type="number"
+                min={1}
+                max={65535}
+                value={defaultPort}
+                onChange={(event) => setDefaultPort(event.target.value)}
+                placeholder="3000"
+                disabled={updateProject.isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                The port to route to when no port is specified in the URL. Defaults to 3000.
               </p>
             </Field>
             <Field>
