@@ -22,6 +22,7 @@ pnpm drizzle-kit generate --name descriptive_migration_name
 ```
 
 This produces three things:
+
 - A `.sql` migration file
 - An updated `meta/_journal.json`
 - A new `meta/*_snapshot.json`
