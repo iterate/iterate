@@ -1,6 +1,6 @@
 /**
  * API key utilities for the egress proxy.
- * Extracted from trpc/routers/machine.ts to avoid pulling in the full router
+ * Extracted from orpc/routers/machine.ts to avoid pulling in the full router
  * and its transitive TanStack dependencies.
  */
 

@@ -1,7 +1,8 @@
 import { oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
-import { RestartingProcessState } from "../restarting-process.ts";
+import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
+import { EnvOptions } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -27,6 +28,7 @@ export const ProcessDefinitionInfoSchema = v.object({
   args: v.optional(v.array(v.string())),
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
+  inheritProcessEnv: v.optional(v.boolean()),
 });
 
 export type ProcessDefinitionInfo = v.InferOutput<typeof ProcessDefinitionInfoSchema>;
@@ -34,6 +36,7 @@ export type ProcessDefinitionInfo = v.InferOutput<typeof ProcessDefinitionInfoSc
 // API response schemas
 export const RestartingProcessInfoSchema = v.object({
   name: v.string(),
+  tags: v.array(v.string()),
   state: RestartingProcessState,
   restarts: v.number(),
   definition: ProcessDefinitionInfoSchema,
@@ -63,24 +66,26 @@ export const processes = {
     .input(v.object({ target: ResourceTarget, includeEffectiveEnv: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
   list: oc.output(v.array(RestartingProcessInfoSchema)),
-  add: oc
-    .input(v.object({ name: v.string(), definition: ProcessDefinition }))
+  updateConfig: oc
+    .input(
+      v.object({
+        processSlug: v.string(),
+        definition: ProcessDefinition,
+        options: v.optional(RestartingProcessOptions),
+        envOptions: v.optional(EnvOptions),
+        tags: v.optional(v.array(v.string())),
+        restartImmediately: v.optional(v.boolean()),
+      }),
+    )
     .output(RestartingProcessInfoSchema),
   start: oc.input(v.object({ target: ResourceTarget })).output(RestartingProcessInfoSchema),
   stop: oc.input(v.object({ target: ResourceTarget })).output(RestartingProcessInfoSchema),
   restart: oc
     .input(v.object({ target: ResourceTarget, force: v.optional(v.boolean()) }))
     .output(RestartingProcessInfoSchema),
-  reload: oc
-    .input(
-      v.object({
-        target: ResourceTarget,
-        definition: ProcessDefinition,
-        restartImmediately: v.optional(v.boolean()),
-      }),
-    )
-    .output(RestartingProcessInfoSchema),
-  remove: oc.input(v.object({ target: ResourceTarget })).output(v.object({ success: v.boolean() })),
+  delete: oc
+    .input(v.object({ processSlug: v.string() }))
+    .output(v.object({ success: v.boolean() })),
   waitForRunning: oc
     .input(
       v.object({

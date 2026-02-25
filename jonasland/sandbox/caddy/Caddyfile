@@ -26,6 +26,53 @@
     header @iterate_api_cors Vary "Origin"
 }
 
+(iterate_proxy_hosts) {
+    @proxy_pidnap header X-Iterate-Proxy-Service pidnap
+    handle @proxy_pidnap {
+        reverse_proxy 127.0.0.1:9876
+    }
+
+    @proxy_events header X-Iterate-Proxy-Service events
+    handle @proxy_events {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19010
+    }
+
+    @proxy_orders header X-Iterate-Proxy-Service orders
+    handle @proxy_orders {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19020
+    }
+
+    @proxy_docs header X-Iterate-Proxy-Service docs
+    handle @proxy_docs {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19050
+    }
+
+    @proxy_home header X-Iterate-Proxy-Service home
+    handle @proxy_home {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19030
+    }
+
+    @proxy_outerbase header X-Iterate-Proxy-Service outerbase
+    handle @proxy_outerbase {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19040
+    }
+
+    @proxy_registry header_regexp X-Iterate-Proxy-Service ^(registry|web|sandbox)$
+    handle @proxy_registry {
+        reverse_proxy 127.0.0.1:8777 {
+            header_up Host registry.iterate.localhost
+            header_up X-Iterate-Original-Host {http.request.header.Host}
+            header_up X-Iterate-Original-SNI {http.request.tls.server_name}
+            header_up X-Iterate-Original-Proto {http.request.scheme}
+        }
+    }
+}
+
 http://pidnap.iterate.localhost {
     reverse_proxy 127.0.0.1:9876
 }
@@ -90,6 +137,8 @@ http://clickstack.iterate.localhost {
     @health path /healthz
     respond @health "ok" 200
 
+    import iterate_proxy_hosts
+
     handle_path /_pidnap/* {
         reverse_proxy 127.0.0.1:9876
     }
@@ -103,7 +152,6 @@ http://clickstack.iterate.localhost {
         import iterate_cors_openapi
         reverse_proxy 127.0.0.1:19020
     }
-
     @local host 127.0.0.1 localhost
     handle @local {
         respond "caddy ok" 200
@@ -121,6 +169,8 @@ http://clickstack.iterate.localhost {
     tls internal {
         on_demand
     }
+
+    import iterate_proxy_hosts
 
     @events host events.iterate.localhost
     handle @events {

@@ -40,4 +40,6 @@ SYNC_COMMIT="$(git -C "${ITERATE_REPO}" rev-parse FETCH_HEAD)"
 echo "[entry] Checking out ${SYNC_COMMIT}"
 git -C "${ITERATE_REPO}" checkout --detach --force "${SYNC_COMMIT}"
 
+# Keep workspace dependencies aligned with checked-out package/lock changes.
+(cd "${ITERATE_REPO}" && pnpm install --frozen-lockfile --prefer-offline)
 bash "${ITERATE_REPO}/sandbox/after-repo-sync-steps.sh"

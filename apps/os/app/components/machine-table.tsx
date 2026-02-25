@@ -20,11 +20,18 @@ interface Machine {
   state: "starting" | "active" | "detached" | "archived";
   externalId: string;
   createdAt: Date;
-  metadata: {
-    daemonStatus?: "ready" | "error" | "restarting" | "stopping";
-    daemonReadyAt?: string;
-    daemonStatusMessage?: string;
-  } & Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  lastEvent?: {
+    name: string;
+    payload: Record<string, unknown>;
+    createdAt: Date;
+  } | null;
+  consumers?: Array<{
+    name: string;
+    status: "pending" | "retrying" | "failed";
+    readCount: number;
+    lastResult: string | null;
+  }>;
 }
 
 interface MachineTableProps {
@@ -128,9 +135,8 @@ export function MachineTable({
                 <span>·</span>
                 <DaemonStatus
                   state={machine.state}
-                  daemonStatus={machine.metadata.daemonStatus}
-                  daemonReadyAt={machine.metadata.daemonReadyAt}
-                  daemonStatusMessage={machine.metadata.daemonStatusMessage}
+                  lastEvent={machine.lastEvent}
+                  consumers={machine.consumers}
                 />
                 <span>·</span>
                 <span>{formatDistanceToNow(new Date(machine.createdAt), { addSuffix: true })}</span>

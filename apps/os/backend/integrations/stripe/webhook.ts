@@ -31,7 +31,10 @@ function trackBillingEvent(
       properties,
       groups: { organization: organizationId },
     }).catch((error) => {
-      logger.error("Failed to track billing event in PostHog", { error, event, organizationId });
+      logger.error("Failed to track billing event in PostHog", error, {
+        event,
+        organization: { id: organizationId },
+      });
     }),
   );
 }
@@ -75,30 +78,25 @@ stripeWebhookApp.post("/", async (c) => {
 
       case "customer.subscription.paused": {
         const subscription = event.data.object as Stripe.Subscription;
-        logger.info("Subscription paused", { subscriptionId: subscription.id });
+        logger.info("Subscription paused");
         await handleSubscriptionUpdate(subscription);
         break;
       }
 
       case "customer.subscription.resumed": {
         const subscription = event.data.object as Stripe.Subscription;
-        logger.info("Subscription resumed", { subscriptionId: subscription.id });
+        logger.info("Subscription resumed");
         await handleSubscriptionUpdate(subscription);
         break;
       }
 
       case "customer.subscription.trial_will_end": {
-        const subscription = event.data.object as Stripe.Subscription;
-        logger.info("Subscription trial will end", {
-          subscriptionId: subscription.id,
-          trialEnd: subscription.trial_end,
-        });
+        logger.info("Subscription trial will end");
         break;
       }
 
       case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        logger.info("Checkout session completed", { sessionId: session.id });
+        logger.info("Checkout session completed");
         break;
       }
 
@@ -149,11 +147,8 @@ async function handleSubscriptionCreated(
     });
   }
 
-  logger.info("Subscription created", {
-    customerId,
-    status: subscription.status,
-    subscriptionId: subscription.id,
-  });
+  logger.set({ subscriptionStatus: subscription.status });
+  logger.info(`Subscription created customerId=${customerId} subscriptionId=${subscription.id}`);
 }
 
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Promise<void> {
@@ -162,11 +157,8 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  logger.info("Updated billing account", {
-    customerId,
-    status: subscription.status,
-    subscriptionId: subscription.id,
-  });
+  logger.set({ subscriptionStatus: subscription.status });
+  logger.info(`Updated billing account customerId=${customerId} subscriptionId=${subscription.id}`);
 }
 
 async function updateBillingAccount(subscription: Stripe.Subscription): Promise<void> {
@@ -206,7 +198,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
     })
     .where(eq(schema.billingAccount.stripeCustomerId, customerId));
 
-  logger.info("Subscription deleted", { customerId, subscriptionId: subscription.id });
+  logger.info(`Subscription deleted customerId=${customerId} subscriptionId=${subscription.id}`);
 }
 
 async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
@@ -238,12 +230,7 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
     });
   }
 
-  logger.info("Invoice paid", {
-    customerId,
-    invoiceId: invoice.id,
-    amountPaid: invoice.amount_paid,
-    currency: invoice.currency,
-  });
+  logger.info(`Invoice paid customerId=${customerId} invoiceId=${invoice.id}`);
 }
 
 async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice): Promise<void> {
@@ -272,10 +259,5 @@ async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice):
     });
   }
 
-  logger.info("Payment failed", {
-    customerId,
-    invoiceId: invoice.id,
-    amountDue: invoice.amount_due,
-    currency: invoice.currency,
-  });
+  logger.info(`Payment failed customerId=${customerId} invoiceId=${invoice.id}`);
 }

@@ -1,9 +1,10 @@
+import { inspect } from "node:util";
 import { Hono, type Context } from "hono";
 import { stream } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { propagation, context } from "@opentelemetry/api";
 import { z } from "zod/v4";
-import { TRPCError } from "@trpc/server";
+import { ORPCError, createRouterClient } from "@orpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
@@ -11,7 +12,7 @@ import type { Agent, AgentRoute } from "../db/schema.ts";
 import { IterateEvent } from "../types/events.ts";
 import { validateAgentPath, extractAgentPathFromUrl } from "../utils/agent-path.ts";
 import { getAgentWorkingDirectory } from "../utils/agent-working-directory.ts";
-import { createTRPCRouter, publicProcedure } from "../trpc/init.ts";
+import { publicProcedure } from "../orpc/init.ts";
 import { withSpan } from "../utils/otel.ts";
 
 // ────────────────────────────── Serialization ──────────────────────────────
@@ -65,7 +66,7 @@ async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Pro
       console.error("[agent-change] callback failed", {
         agentPath,
         callbackUrl: subscription.callbackUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: inspect(error, { depth: null }),
       });
     });
   }
@@ -80,10 +81,10 @@ async function notifyAgentChange(agentPath: string, agent: SerializedAgent): Pro
  */
 const inflightCreates = new Map<string, Promise<AgentRoute>>();
 
-// ──────────────────────────── tRPC sub-router ──────────────────────────────
+// ──────────────────────────── oRPC sub-router ──────────────────────────────
 
-export const agentTrpcRouter = createTRPCRouter({
-  listAgents: publicProcedure.query(async (): Promise<SerializedAgent[]> => {
+export const agentOrpcRouter = {
+  listAgents: publicProcedure.handler(async (): Promise<SerializedAgent[]> => {
     const rows = await db
       .select({ agent: schema.agents, route: schema.agentRoutes })
       .from(schema.agents)
@@ -102,7 +103,7 @@ export const agentTrpcRouter = createTRPCRouter({
 
   getAgent: publicProcedure
     .input(z.object({ path: z.string() }))
-    .query(async ({ input }): Promise<SerializedAgent | null> => {
+    .handler(async ({ input }): Promise<SerializedAgent | null> => {
       const rows = await db
         .select({ agent: schema.agents, route: schema.agentRoutes })
         .from(schema.agents)
@@ -122,7 +123,7 @@ export const agentTrpcRouter = createTRPCRouter({
 
   archiveAgent: publicProcedure
     .input(z.object({ path: z.string() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+    .handler(async ({ input }): Promise<{ success: boolean }> => {
       const [agent] = await db
         .select()
         .from(schema.agents)
@@ -156,7 +157,7 @@ export const agentTrpcRouter = createTRPCRouter({
         archivedAt: z.coerce.date().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }): Promise<SerializedAgent | null> => {
+    .handler(async ({ input }): Promise<SerializedAgent | null> => {
       const setValues: Partial<typeof schema.agents.$inferInsert> = {
         updatedAt: new Date(),
       };
@@ -191,7 +192,7 @@ export const agentTrpcRouter = createTRPCRouter({
 
   subscribeToAgentChanges: publicProcedure
     .input(z.object({ agentPath: z.string(), callbackUrl: z.string().url() }))
-    .mutation(async ({ input }): Promise<{ success: boolean }> => {
+    .handler(async ({ input }): Promise<{ success: boolean }> => {
       const existing = await db
         .select()
         .from(schema.agentSubscriptions)
@@ -226,11 +227,11 @@ export const agentTrpcRouter = createTRPCRouter({
         newAgentPath: z.string().default("/opencode/new"),
       }),
     )
-    .mutation(async ({ input }) => {
+    .handler(async ({ input }) => {
       const { agentPath, createWithEvents, newAgentPath } = input;
       const validation = validateAgentPath(agentPath);
       if (!validation.valid) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: validation.error });
+        throw new ORPCError("BAD_REQUEST", { message: validation.error });
       }
 
       const result = db.transaction((tx) => {
@@ -253,8 +254,7 @@ export const agentTrpcRouter = createTRPCRouter({
             .get();
 
           if (!unarchived) {
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
+            throw new ORPCError("INTERNAL_SERVER_ERROR", {
               message: `Failed to reactivate archived agent for ${agentPath}`,
             });
           }
@@ -291,8 +291,7 @@ export const agentTrpcRouter = createTRPCRouter({
               .get();
 
             if (!existingByPath) {
-              throw new TRPCError({
-                code: "INTERNAL_SERVER_ERROR",
+              throw new ORPCError("INTERNAL_SERVER_ERROR", {
                 message: `Failed to load agent after creation conflict for ${agentPath}`,
               });
             }
@@ -324,8 +323,7 @@ export const agentTrpcRouter = createTRPCRouter({
 
         const routeAfterInsert = pendingRoute ?? getActiveRoute();
         if (!routeAfterInsert) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: `Failed to create or load pending route for ${agentPath}`,
           });
         }
@@ -369,8 +367,7 @@ export const agentTrpcRouter = createTRPCRouter({
 
       // ── We are the creator: run the create and resolve waiters ──
       if (!result.pendingRoute) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
           message: `Missing pending route for ${agentPath}`,
         });
       }
@@ -397,8 +394,7 @@ export const agentTrpcRouter = createTRPCRouter({
         });
 
         if (!createResponse.ok) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: `Failed to create session: ${await createResponse.text()}`,
           });
         }
@@ -453,7 +449,7 @@ export const agentTrpcRouter = createTRPCRouter({
         inflightCreates.delete(agentPath);
       }
     }),
-});
+};
 
 // ─────────────────────────── Hono HTTP router ──────────────────────────────
 
@@ -494,7 +490,7 @@ async function forwardAgentRequest(c: Context): Promise<Response> {
     "daemon.agent.forward",
     { attributes: { "agent.path": agentPath, "http.method": method } },
     async (span) => {
-      const caller = agentTrpcRouter.createCaller({});
+      const caller = createRouterClient(agentOrpcRouter, { context: {} });
       const { route } = await caller.getOrCreateAgent({
         agentPath,
         createWithEvents: [],

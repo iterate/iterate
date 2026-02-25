@@ -108,20 +108,26 @@ const getPluginState = (page: Page): PluginState | undefined => {
  *
  * @example
  * ```ts
- * await using page = await addPlugins(basePage, testInfo, [
- *   hydrationWaiter(),
- *   spinnerWaiter(),
- *   videoMode(),
- * ]);
+ * await using page = await addPlugins({
+ *   page: basePage,
+ *   testInfo,
+ *   plugins: [
+ *     hydrationWaiter(),
+ *     spinnerWaiter(),
+ *     videoMode(),
+ *   ]
+ * });
  * ```
  */
-export const addPlugins = async (
-  page: Page,
-  testInfo: TestInfo,
-  plugins: (Plugin | false | null | undefined)[],
-): Promise<PageWithPlugins> => {
+export const addPlugins = async (params: {
+  page: Page;
+  testInfo: TestInfo;
+  plugins: (Plugin | false | null | undefined)[];
+  boxedStackPrefixes?: (defaults: string[]) => string[];
+}): Promise<PageWithPlugins> => {
+  const { page, testInfo, plugins, boxedStackPrefixes } = params;
   // Patch Locator prototype once globally
-  patchLocatorPrototype(page);
+  patchLocatorPrototype(page, boxedStackPrefixes);
 
   // Initialize state on page
   const state: PluginState = {
@@ -160,18 +166,23 @@ export const addPlugins = async (
 };
 
 /** Patch Locator prototype to run middleware. Safe to call multiple times. */
-const patchLocatorPrototype = (page: Page) => {
+const patchLocatorPrototype = (
+  page: Page,
+  boxedStackPrefixes?: (defaults: string[]) => string[],
+) => {
   if (prototypePatched) return;
   prototypePatched = true;
 
   // Exclude this file from stack traces in Playwright reports
   if (!process.env.PLAYWRIGHT_PLUGIN_DEBUG) {
-    setBoxedStackPrefixes([
+    const getPrefixes = boxedStackPrefixes ?? ((defaults) => defaults);
+    const prefixes = getPrefixes([
       path.dirname(require.resolve("@playwright/test/package.json")),
       path.dirname(require.resolve("playwright/package.json")),
       path.dirname(require.resolve("playwright-core/package.json")),
       import.meta.filename,
     ]);
+    setBoxedStackPrefixes(prefixes);
   }
 
   const dummyLocator = page.locator("body");

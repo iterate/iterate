@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -27,9 +27,11 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/new-project"
   loader: ({ context, params }) => {
     // Non-blocking prefetch - component will suspend if data not ready
     context.queryClient.prefetchQuery(
-      trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
+      orpc.organization.withProjects.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
-    context.queryClient.prefetchQuery(trpc.project.getAvailableSandboxProviders.queryOptions());
+    context.queryClient.prefetchQuery(orpc.project.getAvailableSandboxProviders.queryOptions());
   },
 });
 
@@ -42,10 +44,12 @@ function NewProjectPage() {
 
   // Suspends if data not ready → shows ContentSpinner from parent layout
   const { data: org } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({ organizationSlug: params.organizationSlug }),
+    orpc.organization.withProjects.queryOptions({
+      input: { organizationSlug: params.organizationSlug },
+    }),
   );
   const { data: sandboxProviders } = useSuspenseQuery(
-    trpc.project.getAvailableSandboxProviders.queryOptions(),
+    orpc.project.getAvailableSandboxProviders.queryOptions(),
   );
   const enabledSandboxProviders = sandboxProviders.providers.filter(
     (provider) => !provider.disabledReason,
@@ -62,7 +66,7 @@ function NewProjectPage() {
 
   const createProject = useMutation({
     mutationFn: async (input: { projectName: string; sandboxProvider: ProjectSandboxProvider }) => {
-      return trpcClient.project.create.mutate({
+      return orpcClient.project.create({
         organizationSlug: params.organizationSlug,
         name: input.projectName,
         sandboxProvider: input.sandboxProvider,
@@ -70,8 +74,8 @@ function NewProjectPage() {
     },
     onSuccess: async (project) => {
       await queryClient.invalidateQueries({
-        queryKey: trpc.organization.withProjects.queryKey({
-          organizationSlug: params.organizationSlug,
+        queryKey: orpc.organization.withProjects.key({
+          input: { organizationSlug: params.organizationSlug },
         }),
       });
       toast.success("Project created");

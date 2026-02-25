@@ -75,6 +75,36 @@ describe("Process Schedule", () => {
     await expect.poll(() => proc?.state, { timeout: 5000 }).toMatch(/running|stopped/);
   });
 
+  it("should not trigger scheduled process when desiredState is stopped", async () => {
+    const logger = createMockLogger();
+    manager = new Manager(
+      {
+        logDir: tempDir,
+        processes: [
+          {
+            name: "scheduled-task",
+            definition: { command: "echo", args: ["hello"] },
+            options: { restartPolicy: "never" },
+            schedule: { cron: "* * * * *", runOnStart: true },
+            desiredState: "stopped",
+          },
+        ],
+      },
+      logger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getProcessByTarget("scheduled-task");
+    expect(proc?.state).toBe("idle");
+
+    // @ts-expect-error - accessing private method for testing
+    manager.triggerScheduledProcess("scheduled-task");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(proc?.state).toBe("idle");
+  });
+
   it("should trigger scheduled process when cron fires", async () => {
     // Use fake timers to control cron execution
     vi.useFakeTimers();

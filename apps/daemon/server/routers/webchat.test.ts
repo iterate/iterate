@@ -6,15 +6,17 @@ const getOrCreateAgentMock = vi.fn();
 const getAgentMock = vi.fn();
 const subscribeToAgentChangesMock = vi.fn();
 
-vi.mock("../trpc/router.ts", () => ({
-  trpcRouter: {
-    createCaller: vi.fn(() => ({
+vi.mock("@orpc/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@orpc/server")>();
+  return {
+    ...actual,
+    createRouterClient: vi.fn(() => ({
       getOrCreateAgent: getOrCreateAgentMock,
       getAgent: getAgentMock,
       subscribeToAgentChanges: subscribeToAgentChangesMock,
     })),
-  },
-}));
+  };
+});
 
 vi.mock("../db/index.ts", () => ({
   db: {
@@ -276,6 +278,15 @@ describe("webchat router", () => {
   });
 
   describe("/webhook — agent commands", () => {
+    beforeEach(() => {
+      vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
+      vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("handles !debug without forwarding to agent prompt", async () => {
       getOrCreateAgentMock.mockResolvedValue({
         wasNewlyCreated: false,

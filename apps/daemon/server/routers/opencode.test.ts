@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Event as OpencodeEvent } from "@opencode-ai/sdk";
+import type { Event as OpencodeEvent } from "@opencode-ai/sdk/v2";
 import { agentStatusFromOpencodeEvent } from "./opencode.ts";
 
 const SESSION_ID = "test-session";
@@ -175,6 +175,7 @@ describe("agentStatusFromOpencodeEvent", () => {
           id: "msg-1",
           sessionID: SESSION_ID,
           role: "assistant",
+          agent: "code",
           time: { created: 1, completed: 2 },
           mode: "normal",
           modelID: "test",

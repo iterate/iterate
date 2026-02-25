@@ -24,12 +24,14 @@ const skipProxy = process.env.ITERATE_SKIP_PROXY === "true";
 const proxyEnv: Record<string, string> = skipProxy
   ? {}
   : {
+      NODE_USE_ENV_PROXY: "1",
+      NODE_USE_SYSTEM_CA: "1",
       HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
       HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
       http_proxy: `http://127.0.0.1:${proxyPort}`,
       https_proxy: `http://127.0.0.1:${proxyPort}`,
-      NO_PROXY: "localhost,127.0.0.1",
-      no_proxy: "localhost,127.0.0.1",
+      NO_PROXY: "localhost,127.0.0.1,os.iterate.com",
+      no_proxy: "localhost,127.0.0.1,os.iterate.com",
       SSL_CERT_FILE: caCert,
       SSL_CERT_DIR: mitmproxyDir,
       REQUESTS_CA_BUNDLE: caCert,
@@ -77,6 +79,24 @@ export default defineConfig({
       },
     },
     {
+      name: "project-ingress-proxy",
+      definition: {
+        command: "tsx",
+        args: ["server.ts"],
+        cwd: `${iterateRepo}/apps/project-ingress-proxy`,
+        env: {
+          NODE_ENV: "production",
+        },
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+      },
+    },
+    {
       name: "daemon-backend",
       definition: {
         command: "tsx",
@@ -93,22 +113,9 @@ export default defineConfig({
         restartPolicy: "always",
       },
       envOptions: {
-        inheritGlobalEnv: false,
-        reloadDelay: false,
-      },
-    },
-    {
-      name: "daemon-discord",
-      definition: {
-        command: "tsx",
-        args: ["discord/index.ts"],
-        cwd: `${iterateRepo}/apps/daemon`,
-        env: {
-          NODE_ENV: "production",
-        },
-      },
-      options: {
-        restartPolicy: "on-failure",
+        // Reload after OS pushes ~/.iterate/.env (contains SLACK_BOT_TOKEN etc.)
+        // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
+        reloadDelay: 500,
       },
     },
     {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "anthropic/claude-opus-4-5",
+  "model": "anthropic/claude-opus-4-6",
   "autoupdate": false,
   "lsp": false,
   "provider": {

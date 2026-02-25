@@ -1,5 +1,10 @@
 export type QuietRunner = (command: string, args: string[]) => string;
 export type POCLogger = (message: string) => void;
+export type OrdersEventsProofRoutes = {
+  pidnapBaseUrl?: string;
+  eventsBaseUrl?: string;
+  ordersBaseUrl?: string;
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -9,6 +14,10 @@ function assertContains(haystack: string, needle: string, context: string): void
   if (!haystack.includes(needle)) {
     throw new Error(`Missing "${needle}" in ${context}`);
   }
+}
+
+function joinPath(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
 }
 
 function responseHasOk(value: string): boolean {
@@ -104,7 +113,7 @@ async function waitForOrdersPlacedEvent(params: {
         "-fsS",
         "--max-time",
         "4",
-        `${params.baseUrl}/_events/api/streams/orders`,
+        joinPath(params.baseUrl, "/api/streams/orders"),
       ]);
       if (eventsRaw.includes("orders/order-placed")) {
         return eventsRaw;
@@ -122,8 +131,12 @@ export async function runOrdersEventsProof(params: {
   run: QuietRunner;
   logger?: POCLogger;
   orderSku: string;
+  routes?: OrdersEventsProofRoutes;
 }): Promise<void> {
   const log = params.logger ?? (() => {});
+  const pidnapBaseUrl = params.routes?.pidnapBaseUrl ?? joinPath(params.baseUrl, "/_pidnap");
+  const eventsBaseUrl = params.routes?.eventsBaseUrl ?? joinPath(params.baseUrl, "/_events");
+  const ordersBaseUrl = params.routes?.ordersBaseUrl ?? joinPath(params.baseUrl, "/_orders");
   log("starting events and orders via public pidnap endpoint");
 
   const startOrRestart = (target: "events" | "orders") => {
@@ -131,7 +144,7 @@ export async function runOrdersEventsProof(params: {
       curlJson({
         run: params.run,
         method: "POST",
-        url: `${params.baseUrl}/_pidnap/rpc/processes/start`,
+        url: joinPath(pidnapBaseUrl, "/rpc/processes/start"),
         body: { target },
       });
     } catch {
@@ -139,7 +152,7 @@ export async function runOrdersEventsProof(params: {
       curlJson({
         run: params.run,
         method: "POST",
-        url: `${params.baseUrl}/_pidnap/rpc/processes/restart`,
+        url: joinPath(pidnapBaseUrl, "/rpc/processes/restart"),
         body: { target },
       });
     }
@@ -151,7 +164,7 @@ export async function runOrdersEventsProof(params: {
   const eventsWait = curlJson({
     run: params.run,
     method: "POST",
-    url: `${params.baseUrl}/_pidnap/rpc/processes/waitForRunning`,
+    url: joinPath(pidnapBaseUrl, "/rpc/processes/waitForRunning"),
     body: { target: "events", timeoutMs: 45_000, pollIntervalMs: 500 },
   });
   requireRunningState(eventsWait, "events");
@@ -159,20 +172,20 @@ export async function runOrdersEventsProof(params: {
   const ordersWait = curlJson({
     run: params.run,
     method: "POST",
-    url: `${params.baseUrl}/_pidnap/rpc/processes/waitForRunning`,
+    url: joinPath(pidnapBaseUrl, "/rpc/processes/waitForRunning"),
     body: { target: "orders", timeoutMs: 45_000, pollIntervalMs: 500 },
   });
   requireRunningState(ordersWait, "orders");
 
   await waitForServiceHealth({
     run: params.run,
-    url: `${params.baseUrl}/_events/healthz`,
+    url: joinPath(eventsBaseUrl, "/healthz"),
     timeoutMs: 45_000,
     label: "events",
   });
   await waitForServiceHealth({
     run: params.run,
-    url: `${params.baseUrl}/_orders/healthz`,
+    url: joinPath(ordersBaseUrl, "/healthz"),
     timeoutMs: 45_000,
     label: "orders",
   });
@@ -184,13 +197,13 @@ export async function runOrdersEventsProof(params: {
     "content-type: application/json",
     "--data",
     JSON.stringify({ sku: params.orderSku, quantity: 1 }),
-    `${params.baseUrl}/_orders/api/orders`,
+    joinPath(ordersBaseUrl, "/api/orders"),
   ]);
   assertContains(orderRaw, '"status":"accepted"', "order placement");
 
   const streamRaw = await waitForOrdersPlacedEvent({
     run: params.run,
-    baseUrl: params.baseUrl,
+    baseUrl: eventsBaseUrl,
     timeoutMs: 20_000,
   });
   assertContains(streamRaw, "orders/order-placed", "orders stream");

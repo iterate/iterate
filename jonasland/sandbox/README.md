@@ -52,6 +52,22 @@ Useful env vars:
 - `JONASLAND_FLY_VM_MEMORY_MB` (default `2048`)
 - `JONASLAND_FLY_IMAGE` (deploy a specific already-pushed image)
 - `JONASLAND_SKIP_BUILD=true` (skip build/push in deploy mode)
+- `JONASLAND_CF_PROXY_ENABLE=auto|true|false` (default `auto`)
+- `JONASLAND_CF_PROXY_RUN_ID=<vitest-id>` (default `<app>-<gitsha>`)
+- `JONASLAND_CF_PROXY_TTL_SECONDS=21600` (default 6h)
+- `CF_PROXY_WORKER_API_TOKEN` (required if cf proxy enabled)
+- `CF_PROXY_WORKER_BASE_URL` (default `https://admin.proxy.iterate.com`)
+
+When cf proxy is enabled, Fly PoC automatically registers exact routes:
+
+- exact routes:
+  - `registry__<runId>.proxy.iterate.com`
+  - `pidnap__<runId>.proxy.iterate.com`
+  - `events__<runId>.proxy.iterate.com`
+  - `orders__<runId>.proxy.iterate.com`
+  - `docs__<runId>.proxy.iterate.com`
+  - `home__<runId>.proxy.iterate.com`
+  - `outerbase__<runId>.proxy.iterate.com`
 
 ## Public control proof
 
@@ -75,3 +91,7 @@ Caddy public routes:
 - `/_pidnap/* -> 127.0.0.1:9876`
 - `/_events/* -> 127.0.0.1:19010`
 - `/_orders/* -> 127.0.0.1:19020`
+- `pidnap__<runId>.proxy.iterate.com -> 127.0.0.1:9876`
+- `events__<runId>.proxy.iterate.com -> 127.0.0.1:19010`
+- `orders__<runId>.proxy.iterate.com -> 127.0.0.1:19020`
+- `registry__<runId>.proxy.iterate.com -> 127.0.0.1:8777`

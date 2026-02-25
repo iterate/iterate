@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -7,18 +7,21 @@ import {
   Copy,
   ExternalLink,
   Globe,
+  List,
   RefreshCw,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
 import { DaemonStatus } from "../../components/daemon-status.tsx";
 import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { TypeId } from "../../components/type-id.tsx";
+import { buildProjectIngressLink } from "../../lib/project-ingress-link.ts";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug/machines/$machineId")({
   component: MachineDetailPage,
@@ -30,6 +33,7 @@ const PIDNAP_PROCESSES = [
   "daemon-frontend",
   "opencode",
   "egress-proxy",
+  "project-ingress-proxy",
   "trace-viewer",
 ] as const;
 
@@ -50,10 +54,6 @@ type MachineMetadata = {
   fly?: {
     machineId?: string;
   };
-  daemonStatus?: "ready" | "error" | "restarting" | "stopping" | "verifying" | "retrying";
-  daemonReadyAt?: string;
-  daemonStatusMessage?: string;
-  provisioningError?: string;
 } & Record<string, unknown>;
 
 type ProviderDetailLink = {
@@ -126,21 +126,29 @@ function MachineDetailPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const { user } = useSessionUser();
+  const isAdmin = user.role === "admin";
 
-  const machineQueryKey = trpc.machine.byId.queryKey({
-    projectSlug: params.projectSlug,
-    machineId: params.machineId,
+  const machineQueryKey = orpc.machine.byId.key({
+    input: {
+      projectSlug: params.projectSlug,
+      machineId: params.machineId,
+    },
   });
 
-  const machineListQueryKey = trpc.machine.list.queryKey({
-    projectSlug: params.projectSlug,
-    includeArchived: false,
+  const machineListQueryKey = orpc.machine.list.key({
+    input: {
+      projectSlug: params.projectSlug,
+      includeArchived: false,
+    },
   });
 
   const { data: machine } = useSuspenseQuery(
-    trpc.machine.byId.queryOptions({
-      projectSlug: params.projectSlug,
-      machineId: params.machineId,
+    orpc.machine.byId.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        machineId: params.machineId,
+      },
     }),
   );
 
@@ -149,7 +157,7 @@ function MachineDetailPage() {
 
   const restartMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.restart.mutate({
+      return orpcClient.machine.restart({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -165,7 +173,7 @@ function MachineDetailPage() {
 
   const restartDaemon = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.restartDaemon.mutate({
+      return orpcClient.machine.restartDaemon({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -181,7 +189,7 @@ function MachineDetailPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async () => {
-      return trpcClient.machine.delete.mutate({
+      return orpcClient.machine.delete({
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       });
@@ -202,16 +210,22 @@ function MachineDetailPage() {
   };
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(
-    trpc.machine.listAgents.queryOptions(
-      {
+    orpc.machine.listAgents.queryOptions({
+      input: {
         projectSlug: params.projectSlug,
         machineId: params.machineId,
       },
-      {
-        enabled: machine.state === "active" && metadata.daemonStatus === "ready",
-        refetchInterval: 10000,
-      },
-    ),
+      // TODO: this breaks after restart — lastEvent becomes machine:restart-requested
+      // or machine:daemon-status-reported, disabling the query permanently.
+      // Fix: fetch all events for the machine (not just lastEvent), then check
+      // events.has("machine:activated"). That way even detached machines still
+      // render their agents list, which is useful.
+      enabled:
+        machine.state === "active" &&
+        (machine.lastEvent?.name === "machine:activated" ||
+          machine.lastEvent?.name === "machine:probe-succeeded"),
+      refetchInterval: 10000,
+    }),
   );
 
   const agents = [...(agentsData?.agents ?? [])].sort(
@@ -267,12 +281,11 @@ function MachineDetailPage() {
 
   const buildTerminalUrl = (command: string) => {
     if (!daemonBaseUrl) return "#";
-    return `${daemonBaseUrl}/terminal?${new URLSearchParams({ command, autorun: "true" })}`;
-  };
-
-  const getServiceAccessLabel = (option: { label: string; url: string }) => {
-    if (option.label === "Open" && option.url.startsWith("/")) return "Proxy";
-    return option.label;
+    return buildProjectIngressLink({
+      baseUrl: daemonBaseUrl,
+      path: "/terminal",
+      query: { command, autorun: "true" },
+    });
   };
 
   const extractSessionId = (destination?: string | null) => {
@@ -295,7 +308,10 @@ function MachineDetailPage() {
   ): string | null => {
     if (!sessionId || !opencodeBaseUrl || !workingDirectory) return null;
     const encodedDir = btoa(workingDirectory).replace(/=+$/, "");
-    return `${opencodeBaseUrl}/${encodedDir}/session/${sessionId}`;
+    return buildProjectIngressLink({
+      baseUrl: opencodeBaseUrl,
+      path: `${encodedDir}/session/${sessionId}`,
+    });
   };
 
   const quoteShellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -369,16 +385,8 @@ function MachineDetailPage() {
     };
   })();
 
-  const issueMessage =
-    metadata.provisioningError ??
-    ((metadata.daemonStatus === "error" ||
-      metadata.daemonStatus === "retrying" ||
-      metadata.daemonStatus === "verifying") &&
-    metadata.daemonStatusMessage
-      ? metadata.daemonStatusMessage
-      : null);
-  const daemonStatusForDisplay =
-    metadata.daemonStatus === "retrying" ? "verifying" : metadata.daemonStatus;
+  const failedConsumer = machine.consumers?.find((c) => c.status === "failed");
+  const issueMessage = failedConsumer?.lastResult ?? null;
 
   const machineJson = JSON.stringify(machine, null, 2);
 
@@ -410,9 +418,8 @@ function MachineDetailPage() {
             <dd className="mt-1">
               <DaemonStatus
                 state={machine.state}
-                daemonStatus={daemonStatusForDisplay}
-                daemonReadyAt={metadata.daemonReadyAt}
-                daemonStatusMessage={metadata.daemonStatusMessage}
+                lastEvent={machine.lastEvent}
+                consumers={machine.consumers}
               />
             </dd>
           </div>
@@ -478,6 +485,17 @@ function MachineDetailPage() {
             <Trash2 className="h-4 w-4" />
             Delete
           </Button>
+          {isAdmin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link
+                to="/admin/outbox"
+                search={{ payload: JSON.stringify({ machineId: params.machineId }), sort: "asc" }}
+              >
+                <List className="h-4 w-4" />
+                Outbox Events
+              </Link>
+            </Button>
+          )}
         </div>
 
         <div>
@@ -486,10 +504,12 @@ function MachineDetailPage() {
             <p className="text-xs text-muted-foreground">No services available yet.</p>
           ) : (
             <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-              {services.flatMap((service) =>
-                service.options.map((option, index) => (
+              {services.map((service) => {
+                const option = service.options[0];
+                if (!option) return null;
+                return (
                   <a
-                    key={`${service.id}-${index}-${option.url}`}
+                    key={`${service.id}-${option.url}`}
                     href={option.url}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -497,16 +517,12 @@ function MachineDetailPage() {
                   >
                     <span>{service.name}</span>
                     <span className="text-xs text-muted-foreground"> :{service.port}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {" "}
-                      ({getServiceAccessLabel(option)})
-                    </span>
                   </a>
-                )),
-              )}
+                );
+              })}
               {daemonBaseUrl && (
                 <a
-                  href={`${daemonBaseUrl}/terminal`}
+                  href={buildProjectIngressLink({ baseUrl: daemonBaseUrl, path: "/terminal" })}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="truncate rounded-md border p-2 text-foreground hover:bg-accent"
@@ -554,7 +570,7 @@ function MachineDetailPage() {
 
         {!agentsLoading && agents.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            {machine.state === "active" && metadata.daemonStatus === "ready"
+            {machine.state === "active" && machine.lastEvent?.name === "machine:activated"
               ? "No agents found."
               : "Agents appear once the machine is active and daemon is ready."}
           </p>

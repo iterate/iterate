@@ -2,7 +2,7 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { Box, Plus, UserPlus, Mail, X, User } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
 import { HeaderActions } from "../../components/header-actions.tsx";
@@ -26,26 +26,32 @@ function OrgHomePage() {
   const params = useParams({ from: "/_auth/orgs/$organizationSlug/" });
 
   const { data: org } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.withProjects.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
   const { data: pendingInvites } = useSuspenseQuery(
-    trpc.organization.listInvites.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.listInvites.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
   const { data: members } = useSuspenseQuery(
-    trpc.organization.members.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.members.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
   const createInvite = useMutation({
     mutationFn: async (email: string) => {
-      return trpcClient.organization.createInvite.mutate({
+      return orpcClient.organization.createInvite({
         organizationSlug: params.organizationSlug,
         email,
       });
@@ -60,7 +66,7 @@ function OrgHomePage() {
 
   const cancelInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.cancelInvite.mutate({
+      return orpcClient.organization.cancelInvite({
         organizationSlug: params.organizationSlug,
         inviteId,
       });

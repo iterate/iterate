@@ -3,7 +3,7 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User, Mail, X } from "lucide-react";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
@@ -28,10 +28,14 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/team")({
   loader: ({ context, params }) => {
     // Non-blocking prefetch - speeds up perceived load time
     context.queryClient.prefetchQuery(
-      trpc.organization.members.queryOptions({ organizationSlug: params.organizationSlug }),
+      orpc.organization.members.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
     context.queryClient.prefetchQuery(
-      trpc.organization.bySlug.queryOptions({ organizationSlug: params.organizationSlug }),
+      orpc.organization.bySlug.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
   },
   component: OrgTeamPage,
@@ -43,20 +47,26 @@ function OrgTeamPage() {
   const [email, setEmail] = useState("");
 
   const { data: members } = useSuspenseQuery(
-    trpc.organization.members.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.members.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
   const { data: org } = useSuspenseQuery(
-    trpc.organization.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.bySlug.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
   const { data: pendingInvites } = useSuspenseQuery(
-    trpc.organization.listInvites.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.listInvites.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
@@ -68,7 +78,7 @@ function OrgTeamPage() {
       userId: string;
       role: "member" | "admin" | "owner";
     }) => {
-      return trpcClient.organization.updateMemberRole.mutate({
+      return orpcClient.organization.updateMemberRole({
         organizationSlug: params.organizationSlug,
         userId,
         role,
@@ -84,7 +94,7 @@ function OrgTeamPage() {
 
   const createInvite = useMutation({
     mutationFn: async (emailAddress: string) => {
-      return trpcClient.organization.createInvite.mutate({
+      return orpcClient.organization.createInvite({
         organizationSlug: params.organizationSlug,
         email: emailAddress,
       });
@@ -100,7 +110,7 @@ function OrgTeamPage() {
 
   const cancelInvite = useMutation({
     mutationFn: async (inviteId: string) => {
-      return trpcClient.organization.cancelInvite.mutate({
+      return orpcClient.organization.cancelInvite({
         organizationSlug: params.organizationSlug,
         inviteId,
       });
@@ -115,7 +125,7 @@ function OrgTeamPage() {
 
   const removeMember = useMutation({
     mutationFn: async (userId: string) => {
-      return trpcClient.organization.removeMember.mutate({
+      return orpcClient.organization.removeMember({
         organizationSlug: params.organizationSlug,
         userId,
       });

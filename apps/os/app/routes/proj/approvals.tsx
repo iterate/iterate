@@ -3,7 +3,7 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Circle, MailOpen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -69,13 +69,15 @@ function ProjectApprovalsPage() {
   const [generatingRuleForIds, setGeneratingRuleForIds] = useState<Set<string>>(new Set());
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
+    orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
   );
 
   useQueryInvalidation(project.organizationId);
 
-  const policiesQueryOptions = trpc.project.listEgressPolicies.queryOptions({
-    projectSlug: params.projectSlug,
+  const policiesQueryOptions = orpc.project.listEgressPolicies.queryOptions({
+    input: {
+      projectSlug: params.projectSlug,
+    },
   });
   const policiesQuery = useSuspenseQuery(policiesQueryOptions);
 
@@ -130,7 +132,7 @@ function ProjectApprovalsPage() {
   const summarizeMutation = useMutation({
     mutationFn: async (approvalId: string) => {
       setSummarizingIds((prev) => new Set(prev).add(approvalId));
-      const result = await trpcClient.project.summarizeEgressApproval.mutate({
+      const result = await orpcClient.project.summarizeEgressApproval({
         projectSlug: params.projectSlug,
         approvalId,
       });
@@ -163,7 +165,7 @@ function ProjectApprovalsPage() {
       instruction: string;
     }) => {
       if (approvalId) setGeneratingRuleForIds((prev) => new Set(prev).add(approvalId));
-      const result = await trpcClient.project.suggestEgressRule.mutate({
+      const result = await orpcClient.project.suggestEgressRule({
         projectSlug: params.projectSlug,
         approvalId,
         instruction,
@@ -195,7 +197,7 @@ function ProjectApprovalsPage() {
   const createPolicyMutation = useMutation({
     mutationFn: async () => {
       const priority = Number(newPolicyPriority || "100");
-      return trpcClient.project.createEgressPolicy.mutate({
+      return orpcClient.project.createEgressPolicy({
         projectSlug: params.projectSlug,
         rule: newPolicyRule,
         decision: newPolicyDecision,
@@ -218,7 +220,7 @@ function ProjectApprovalsPage() {
 
   const deletePolicyMutation = useMutation({
     mutationFn: async (policyId: string) =>
-      trpcClient.project.deleteEgressPolicy.mutate({
+      orpcClient.project.deleteEgressPolicy({
         projectSlug: params.projectSlug,
         policyId,
       }),
@@ -240,7 +242,7 @@ function ProjectApprovalsPage() {
     mutationFn: async () => {
       if (!editingPolicyId) throw new Error("No policy selected");
       const priority = Number(newPolicyPriority || "100");
-      return trpcClient.project.updateEgressPolicy.mutate({
+      return orpcClient.project.updateEgressPolicy({
         projectSlug: params.projectSlug,
         policyId: editingPolicyId,
         rule: newPolicyRule,

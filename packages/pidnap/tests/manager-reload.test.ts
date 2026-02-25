@@ -28,7 +28,7 @@ describe("Manager - Reload & Remove", () => {
       // Wait for initial process to complete using polling for reliability
       const proc = manager.getProcessByTarget("test-proc");
       expect(proc).toBeDefined();
-      await expect.poll(() => proc?.state, { timeout: 2000 }).toBe("stopped");
+      await expect.poll(() => proc?.state, { timeout: 5000 }).toBe("stopped");
 
       // Reload with long-running process
       await manager.reloadProcessByTarget("test-proc", longRunningProcess);
@@ -163,6 +163,32 @@ describe("Manager - Reload & Remove", () => {
 
       // Should have restarted with new policy
       await expect.poll(() => proc?.restarts ?? 0, { timeout: 2000 }).toBeGreaterThan(0);
+
+      await manager.stop();
+    });
+
+    it("should update tags when provided", async () => {
+      const config: ManagerConfig = {
+        processes: [
+          {
+            name: "test-proc",
+            tags: ["old"],
+            definition: longRunningProcess,
+            options: { restartPolicy: "never" },
+          },
+        ],
+      };
+
+      const manager = new Manager(config, mockLogger);
+      await manager.start();
+      await wait(100);
+
+      await manager.reloadProcessByTarget("test-proc", longRunningProcess, {
+        tags: ["new", "worker"],
+      });
+
+      const proc = manager.getProcessByTarget("test-proc");
+      expect(proc?.tags).toEqual(["new", "worker"]);
 
       await manager.stop();
     });

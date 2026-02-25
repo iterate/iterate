@@ -88,7 +88,7 @@ test("should eventually return expected value", async () => {
   await expect
     .poll(
       async () => {
-        const events = await trpcClient.getEvents.query();
+        const events = await orpcClient.getEvents();
         return events.some((e) => e.type === "COMPLETED");
       },
       { timeout: 5000, interval: 100 },

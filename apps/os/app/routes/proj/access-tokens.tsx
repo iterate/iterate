@@ -3,7 +3,7 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { KeyRound, Copy, CheckCheck } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
@@ -38,14 +38,16 @@ function ProjectAccessTokensPage() {
   const [copied, setCopied] = useState(false);
 
   const { data: tokens } = useSuspenseQuery(
-    trpc.accessToken.list.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.accessToken.list.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const createToken = useMutation({
     mutationFn: async (tokenName: string) => {
-      return trpcClient.accessToken.create.mutate({
+      return orpcClient.accessToken.create({
         projectSlug: params.projectSlug,
         name: tokenName,
       });
@@ -62,7 +64,7 @@ function ProjectAccessTokensPage() {
 
   const revokeToken = useMutation({
     mutationFn: async (tokenId: string) => {
-      return trpcClient.accessToken.revoke.mutate({
+      return orpcClient.accessToken.revoke({
         projectSlug: params.projectSlug,
         id: tokenId,
       });

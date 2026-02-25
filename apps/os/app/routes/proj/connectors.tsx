@@ -33,7 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog.tsx";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 
 const Search = z.object({ error: z.string().optional() });
 
@@ -53,14 +53,16 @@ function ProjectConnectorsPage() {
   }, [search.error]);
 
   const { data: slackConnection } = useSuspenseQuery(
-    trpc.project.getSlackConnection.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.getSlackConnection.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const startSlackOAuth = useMutation({
     mutationFn: () =>
-      trpcClient.project.startSlackOAuthFlow.mutate({
+      orpcClient.project.startSlackOAuthFlow({
         projectSlug: params.projectSlug,
       }),
     onSuccess: (data) => {
@@ -71,14 +73,16 @@ function ProjectConnectorsPage() {
 
   const disconnectSlack = useMutation({
     mutationFn: () =>
-      trpcClient.project.disconnectSlack.mutate({
+      orpcClient.project.disconnectSlack({
         projectSlug: params.projectSlug,
       }),
     onSuccess: () => {
       toast.success("Slack disconnected");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackConnection.queryKey({
-          projectSlug: params.projectSlug,
+        queryKey: orpc.project.getSlackConnection.key({
+          input: {
+            projectSlug: params.projectSlug,
+          },
         }),
       });
     },
@@ -86,14 +90,16 @@ function ProjectConnectorsPage() {
   });
 
   const { data: googleConnection } = useSuspenseQuery(
-    trpc.project.getGoogleConnection.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.getGoogleConnection.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
   const startGoogleOAuth = useMutation({
     mutationFn: () =>
-      trpcClient.project.startGoogleOAuthFlow.mutate({
+      orpcClient.project.startGoogleOAuthFlow({
         projectSlug: params.projectSlug,
       }),
     onSuccess: (data) => {
@@ -104,14 +110,16 @@ function ProjectConnectorsPage() {
 
   const disconnectGoogle = useMutation({
     mutationFn: () =>
-      trpcClient.project.disconnectGoogle.mutate({
+      orpcClient.project.disconnectGoogle({
         projectSlug: params.projectSlug,
       }),
     onSuccess: () => {
       toast.success("Google disconnected");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getGoogleConnection.queryKey({
-          projectSlug: params.projectSlug,
+        queryKey: orpc.project.getGoogleConnection.key({
+          input: {
+            projectSlug: params.projectSlug,
+          },
         }),
       });
     },
@@ -119,12 +127,14 @@ function ProjectConnectorsPage() {
   });
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
+    orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
   );
 
   const { data: githubConnection } = useSuspenseQuery(
-    trpc.project.getGithubConnection.queryOptions({
-      projectSlug: params.projectSlug,
+    orpc.project.getGithubConnection.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 
@@ -289,7 +299,7 @@ function ProjectConnectorsPage() {
 
 function GitHubConnect({ projectSlug }: { projectSlug: string }) {
   const startGithubInstall = useMutation({
-    mutationFn: () => trpcClient.project.startGithubInstallFlow.mutate({ projectSlug }),
+    mutationFn: () => orpcClient.project.startGithubInstallFlow({ projectSlug }),
     onSuccess: (data) => {
       window.location.href = data.installationUrl;
     },
@@ -324,32 +334,31 @@ function GitHubManagement({
   } | null>(null);
 
   const disconnectGithub = useMutation({
-    mutationFn: () => trpcClient.project.disconnectGithub.mutate({ projectSlug }),
+    mutationFn: () => orpcClient.project.disconnectGithub({ projectSlug }),
     onSuccess: () => {
       toast.success("GitHub disconnected");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({ projectSlug }),
+        queryKey: orpc.project.bySlug.key({ input: { projectSlug } }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getGithubConnection.queryKey({ projectSlug }),
+        queryKey: orpc.project.getGithubConnection.key({ input: { projectSlug } }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({ projectSlug }),
+        queryKey: orpc.project.listProjectRepos.key({ input: { projectSlug } }),
       });
     },
     onError: (error) => toast.error(`Failed to disconnect GitHub: ${error.message}`),
   });
 
   const removeRepo = useMutation({
-    mutationFn: (repoId: string) =>
-      trpcClient.project.removeProjectRepo.mutate({ projectSlug, repoId }),
+    mutationFn: (repoId: string) => orpcClient.project.removeProjectRepo({ projectSlug, repoId }),
     onSuccess: () => {
       toast.success("Repository removed");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({ projectSlug }),
+        queryKey: orpc.project.bySlug.key({ input: { projectSlug } }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({ projectSlug }),
+        queryKey: orpc.project.listProjectRepos.key({ input: { projectSlug } }),
       });
       setRepoToDelete(null);
     },
@@ -478,12 +487,12 @@ function RepoPicker({
   } | null>(null);
 
   const { data: reposData } = useSuspenseQuery(
-    trpc.project.listAvailableGithubRepos.queryOptions({ projectSlug }),
+    orpc.project.listAvailableGithubRepos.queryOptions({ input: { projectSlug } }),
   );
 
   const addProjectRepo = useMutation({
     mutationFn: (repo: { id: number; owner: string; name: string; defaultBranch: string }) =>
-      trpcClient.project.addProjectRepo.mutate({
+      orpcClient.project.addProjectRepo({
         projectSlug,
         repoId: repo.id,
         owner: repo.owner,
@@ -493,10 +502,10 @@ function RepoPicker({
     onSuccess: () => {
       toast.success("Repository added successfully");
       queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({ projectSlug }),
+        queryKey: orpc.project.bySlug.key({ input: { projectSlug } }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.listProjectRepos.queryKey({ projectSlug }),
+        queryKey: orpc.project.listProjectRepos.key({ input: { projectSlug } }),
       });
       onCancel?.();
     },
@@ -504,7 +513,7 @@ function RepoPicker({
   });
 
   const updateGithubPermissions = useMutation({
-    mutationFn: () => trpcClient.project.startGithubInstallFlow.mutate({ projectSlug }),
+    mutationFn: () => orpcClient.project.startGithubInstallFlow({ projectSlug }),
     onSuccess: (data) => {
       window.location.href = data.installationUrl;
     },

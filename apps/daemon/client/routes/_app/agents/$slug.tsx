@@ -2,8 +2,8 @@ import { lazy, Suspense, useMemo } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, LoaderIcon } from "lucide-react";
-import type { SerializedAgent } from "../../../../server/trpc/router.ts";
-import { useTRPC, trpcClient } from "@/integrations/tanstack-query/trpc-client.tsx";
+import type { SerializedAgent } from "../../../../server/routers/agents.ts";
+import { orpc, orpcClient } from "@/integrations/tanstack-query/orpc-client.tsx";
 
 const XtermTerminal = lazy(() =>
   import("@/components/xterm-terminal.tsx").then((mod) => ({
@@ -25,7 +25,7 @@ function getAgentCommand(agent: SerializedAgent): string | undefined {
 export const Route = createFileRoute("/_app/agents/$slug")({
   beforeLoad: async ({ params }) => {
     const agentPath = decodeURIComponent(params.slug);
-    const agent = await trpcClient.getAgent.query({ path: agentPath });
+    const agent = await orpcClient.daemon.getAgent({ path: agentPath });
     if (!agent) {
       throw redirect({
         to: "/agents/new",
@@ -39,9 +39,10 @@ export const Route = createFileRoute("/_app/agents/$slug")({
 function AgentPage() {
   const { slug } = Route.useParams();
   const agentPath = decodeURIComponent(slug);
-  const trpc = useTRPC();
 
-  const { data: agent } = useSuspenseQuery(trpc.getAgent.queryOptions({ path: agentPath }));
+  const { data: agent } = useSuspenseQuery(
+    orpc.daemon.getAgent.queryOptions({ input: { path: agentPath } }),
+  );
 
   const initialCommand = useMemo(() => {
     if (!agent) return undefined;

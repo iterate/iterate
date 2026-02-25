@@ -13,6 +13,7 @@ import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { stripMachineStateMetadata } from "../../utils/machine-metadata.ts";
 import { createMachineForProject } from "../../services/machine-creation.ts";
 import { trackWebhookEvent } from "../../lib/posthog.ts";
 import type { ProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
@@ -113,10 +114,8 @@ githubApp.get(
     const { projectId, userId, callbackURL } = stateData;
 
     if (c.var.session.user.id !== userId) {
-      logger.warn("GitHub callback user mismatch", {
-        sessionUserId: c.var.session.user.id,
-        stateUserId: userId,
-      });
+      logger.set({ user: { id: c.var.session.user.id }, stateUserId: userId });
+      logger.warn("GitHub callback user mismatch");
       return c.json({ error: "User mismatch - please restart the GitHub connection flow" }, 403);
     }
 
@@ -840,11 +839,12 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
   const headSha = workflow_run.head_sha;
   const shortSha = headSha.slice(0, 7);
 
-  logger.info("[GitHub Webhook] Processing CI completion", {
+  logger.set({
     workflowRunId: workflow_run.id,
     headSha,
     shortSha,
   });
+  logger.info("[GitHub Webhook] Processing CI completion");
 
   // Get all projects with active machines
   const projectsWithActiveMachines = await db.query.project.findMany({
@@ -859,10 +859,11 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
 
   const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
 
-  logger.info("[GitHub Webhook] Found projects to update", {
+  logger.set({
     total: projectsWithActiveMachines.length,
     withActiveMachines: projectsToUpdate.length,
   });
+  logger.info("[GitHub Webhook] Found projects to update");
 
   // Create new machines for each project
   let successCount = 0;
@@ -873,28 +874,24 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
       const activeMachine = project.machines[0];
       const machineName = `ci-${shortSha}`;
       const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
+      const carriedMetadata = stripMachineStateMetadata(
+        (activeMachine.metadata as Record<string, unknown>) ?? {},
+      );
 
-      const result = await createMachineForProject({
+      await createMachineForProject({
         db,
         env,
         projectId: project.id,
-        organizationId: project.organizationId,
-        organizationSlug: project.organization.slug,
-        projectSlug: project.slug,
         name: machineName,
         metadata: {
-          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          ...carriedMetadata,
           ...(snapshotName ? { snapshotName } : {}),
         },
       });
-      if (result.provisionPromise) {
-        waitUntil(result.provisionPromise);
-      }
 
-      logger.info("[GitHub Webhook] Created machine", {
-        projectId: project.id,
-        machineName,
-      });
+      logger.info(
+        `[GitHub Webhook] Created machine projectId=${project.id} machineName=${machineName}`,
+      );
       successCount++;
     } catch (err) {
       logger.error("[GitHub Webhook] Failed to create machine", {
@@ -905,10 +902,8 @@ async function handleWorkflowRun({ payload, db, env }: HandleWorkflowRunParams) 
     }
   }
 
-  logger.info("[GitHub Webhook] Completed machine recreation", {
-    successCount,
-    errorCount,
-  });
+  logger.set({ successCount, errorCount });
+  logger.info("[GitHub Webhook] Completed machine recreation");
 }
 
 // Schema to identify CI completion events we want to act on
@@ -963,12 +958,13 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
   const commitSha = comment.commit_id;
   const shortSha = commitSha.slice(0, 7);
 
-  logger.info("[GitHub Webhook] Processing [refresh] comment", {
+  logger.set({
     commentId: comment.id,
     user: comment.user.login,
     commitSha,
     shortSha,
   });
+  logger.info("[GitHub Webhook] Processing [refresh] comment");
 
   // Get all projects with active machines
   const projectsWithActiveMachines = await db.query.project.findMany({
@@ -983,10 +979,11 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
 
   const projectsToUpdate = projectsWithActiveMachines.filter((p) => p.machines.length > 0);
 
-  logger.info("[GitHub Webhook] Found projects to update from comment", {
+  logger.set({
     total: projectsWithActiveMachines.length,
     withActiveMachines: projectsToUpdate.length,
   });
+  logger.info("[GitHub Webhook] Found projects to update from comment");
 
   let successCount = 0;
   let errorCount = 0;
@@ -996,30 +993,26 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
       const activeMachine = project.machines[0];
       const machineName = `refresh-${shortSha}`;
       const snapshotName = snapshotNameForProvider(project.sandboxProvider, shortSha, env);
+      const carriedMetadata = stripMachineStateMetadata(
+        (activeMachine.metadata as Record<string, unknown>) ?? {},
+      );
 
-      const result = await createMachineForProject({
+      await createMachineForProject({
         db,
         env,
         projectId: project.id,
-        organizationId: project.organizationId,
-        organizationSlug: project.organization.slug,
-        projectSlug: project.slug,
         name: machineName,
         metadata: {
-          ...((activeMachine.metadata as Record<string, unknown>) ?? {}),
+          ...carriedMetadata,
           ...(snapshotName ? { snapshotName } : {}),
           triggeredBy: `commit_comment:${comment.id}`,
           triggeredByUser: comment.user.login,
         },
       });
-      if (result.provisionPromise) {
-        waitUntil(result.provisionPromise);
-      }
 
-      logger.info("[GitHub Webhook] Created machine from comment", {
-        projectId: project.id,
-        machineName,
-      });
+      logger.info(
+        `[GitHub Webhook] Created machine from comment projectId=${project.id} machineName=${machineName}`,
+      );
       successCount++;
     } catch (err) {
       logger.error("[GitHub Webhook] Failed to create machine from comment", {
@@ -1030,10 +1023,8 @@ async function handleCommitComment({ payload, db, env }: HandleCommitCommentPara
     }
   }
 
-  logger.info("[GitHub Webhook] Completed machine recreation from comment", {
-    successCount,
-    errorCount,
-  });
+  logger.set({ successCount, errorCount });
+  logger.info("[GitHub Webhook] Completed machine recreation from comment");
 }
 
 // #endregion ========== Webhook Handler ==========

@@ -5,7 +5,7 @@ Use this when users report "bot is unresponsive" in production.
 ## Scope
 
 - Slack-triggered bot flows
-- Machines running on Daytona sandboxes
+- Machines running in sandbox providers (Fly primary; Daytona optional/manual)
 - Hop sequence: Slack -> OS backend -> machine daemon -> OpenCode -> Slack reply
 
 ## Required inputs
@@ -22,11 +22,11 @@ Use this when users report "bot is unresponsive" in production.
 
 2. **Forward to machine succeeded?**
    - Look for `[Slack Webhook] Forwarded to machine` vs `Forward failed` / `Forward error`.
-   - `HTTP 400` from Daytona often means sandbox not started.
+   - `HTTP 400` often means machine not ready/stopped.
    - `HTTP 401` means auth/preview token issues.
 
 3. **Sandbox healthy?**
-   - In Daytona dashboard, check sandbox state + error reason.
+   - In provider dashboard, check machine/sandbox state + error reason.
    - In sandbox terminal:
      - `pidnap status`
      - `curl -s http://localhost:3000/api/health`
@@ -71,7 +71,7 @@ Forwarding path:
 
 ## Common root causes
 
-- Daytona sandbox auto-stopped before webhook arrived.
+- Machine auto-stopped before webhook arrived.
 - Daemon unhealthy/restarting in sandbox.
 - OpenCode session create/prompt timing out.
 - Slack token/env drift inside sandbox.
@@ -106,4 +106,4 @@ Forwarding path:
 - `apps/os/backend/integrations/slack/slack.ts`
 - `apps/daemon/server/routers/slack.ts`
 - `apps/daemon/server/agents/opencode.ts`
-- `apps/os/backend/providers/daytona.ts`
+- `apps/os/backend/routes/machine-proxy.ts`

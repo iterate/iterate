@@ -78,7 +78,7 @@ Stripe customers are linked to PostHog persons via:
 | `apps/os/backend/auth/auth.ts`                             | User signup event tracking               |
 | `apps/os/backend/integrations/stripe/webhook.ts`           | Billing event tracking                   |
 | `apps/os/backend/lib/posthog.ts`                           | Server-side event capture                |
-| `apps/os/backend/trpc/routers/billing.ts`                  | Stripe customer creation with metadata   |
+| `apps/os/backend/orpc/routers/billing.ts`                  | Stripe customer creation with metadata   |
 
 ## Verification
 

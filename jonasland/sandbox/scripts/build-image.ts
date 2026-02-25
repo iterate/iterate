@@ -16,7 +16,8 @@ const isDirty = (() => {
   }
 })();
 
-const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
+const tagSuffix =
+  process.env.JONASLAND_SANDBOX_TAG_SUFFIX ?? `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 const buildPlatform = process.env.JONASLAND_SANDBOX_BUILD_PLATFORM ?? "linux/amd64,linux/arm64";
 const skipLoad = process.env.JONASLAND_SANDBOX_SKIP_LOAD === "true";
 const explicitLocalImage = process.env.JONASLAND_SANDBOX_IMAGE;

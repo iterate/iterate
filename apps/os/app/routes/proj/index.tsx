@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { z } from "zod/v4";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { EmptyState } from "../../components/empty-state.tsx";
@@ -126,17 +126,19 @@ function ProjectHomePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: projectData } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({ projectSlug: params.projectSlug }),
+    orpc.project.bySlug.queryOptions({ input: { projectSlug: params.projectSlug } }),
   );
   const orgSlug = projectData.organization?.slug ?? "";
 
   const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({ projectSlug: params.projectSlug, includeArchived: false }),
+    orpc.machine.list.queryOptions({
+      input: { projectSlug: params.projectSlug, includeArchived: false },
+    }),
   );
   const activeMachine = machines.find((m) => m.state === "active") ?? null;
 
   const { data: threadsData } = useSuspenseQuery(
-    trpc.webchat.listThreads.queryOptions({ projectSlug: params.projectSlug }),
+    orpc.webchat.listThreads.queryOptions({ input: { projectSlug: params.projectSlug } }),
   );
 
   const isCreatingThread = search.thread === "new";
@@ -145,9 +147,11 @@ function ProjectHomePage() {
     : (search.thread ?? threadsData.threads[0]?.threadId);
 
   const { data: messagesData } = useQuery({
-    ...trpc.webchat.getThreadMessages.queryOptions({
-      projectSlug: params.projectSlug,
-      threadId: selectedThreadId,
+    ...orpc.webchat.getThreadMessages.queryOptions({
+      input: {
+        projectSlug: params.projectSlug,
+        threadId: selectedThreadId,
+      },
     }),
     refetchInterval: selectedThreadId ? 3000 : false,
   });
@@ -207,7 +211,7 @@ function ProjectHomePage() {
 
   const sendMessage = useMutation({
     mutationFn: async (input: { text: string; attachments?: FileAttachment[] }) =>
-      trpcClient.webchat.sendMessage.mutate({
+      orpcClient.webchat.sendMessage({
         projectSlug: params.projectSlug,
         threadId: selectedThreadId,
         text: input.text,
@@ -220,7 +224,7 @@ function ProjectHomePage() {
         void navigate({ search: { thread: result.threadId }, replace: true });
       }
       await queryClient.invalidateQueries({
-        queryKey: trpc.webchat.listThreads.queryKey({ projectSlug: params.projectSlug }),
+        queryKey: orpc.webchat.listThreads.key({ input: { projectSlug: params.projectSlug } }),
       });
     },
     onError: (error) => {

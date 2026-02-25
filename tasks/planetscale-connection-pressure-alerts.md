@@ -10,7 +10,7 @@ tags:
 
 # Alert on PlanetScale connection pressure in building channel
 
-We need proactive alerts in the building channel when PlanetScale connection pressure spikes so we can react before it causes user-facing errors (`08P01`, session fetch failures, or broad tRPC 5xx).
+We need proactive alerts in the building channel when PlanetScale connection pressure spikes so we can react before it causes user-facing errors (`08P01`, session fetch failures, or broad oRPC 5xx).
 
 Scope:
 

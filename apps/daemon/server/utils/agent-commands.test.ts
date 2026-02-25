@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SerializedAgent } from "../trpc/router.ts";
-import { runAgentCommand } from "./agent-commands.ts";
+import type { SerializedAgent } from "../routers/agents.ts";
+import { looksLikeAgentCommand, runAgentCommand } from "./agent-commands.ts";
 
 function buildAgent(overrides: Partial<SerializedAgent> = {}): SerializedAgent {
   const base: SerializedAgent = {
@@ -31,10 +31,7 @@ function buildAgent(overrides: Partial<SerializedAgent> = {}): SerializedAgent {
 
 describe("runAgentCommand", () => {
   beforeEach(() => {
-    vi.stubEnv("ITERATE_OS_BASE_URL", "https://os.example.com");
-    vi.stubEnv("ITERATE_ORG_SLUG", "my-org");
-    vi.stubEnv("ITERATE_PROJECT_SLUG", "my-proj");
-    vi.stubEnv("ITERATE_MACHINE_ID", "machine-123");
+    vi.stubEnv("ITERATE_PROJECT_BASE_URL", "https://my-proj.iterate.app");
     vi.stubEnv("ITERATE_CUSTOMER_REPO_PATH", "/workspace/repo");
   });
 
@@ -42,7 +39,7 @@ describe("runAgentCommand", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns renderer-agnostic debug markdown with plain links", async () => {
+  it("returns structured debug result with canonical ingress URLs", async () => {
     const agent = buildAgent();
     const result = await runAgentCommand({
       message: "!debug",
@@ -54,12 +51,69 @@ describe("runAgentCommand", () => {
     expect(result?.command).toBe("debug");
     expect(result?.result).toEqual(
       expect.objectContaining({
+        agentPath: agent.path,
+        agentHarness: "opencode",
+        sessionSource: "route.metadata",
         agent,
       }),
     );
+
+    const r = result?.result as { webUrl: string; terminalUrl: string };
+    expect(r.webUrl).toContain("4096__my-proj.iterate.app");
+    expect(r.terminalUrl).toContain("my-proj.iterate.app");
     expect(result?.resultMarkdown).toContain("Harness Web UI (direct proxy): https://");
     expect(result?.resultMarkdown).toContain("Open Terminal UI: https://");
-    expect(result?.resultMarkdown).not.toContain("|Open session>");
-    expect(result?.resultMarkdown).not.toContain("|Open terminal attach>");
+  });
+
+  it("recognizes /debug alias", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "/debug",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result?.command).toBe("debug");
+  });
+
+  it("returns null for non-command messages", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "hello world",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("strips @mention prefixes before matching", async () => {
+    const agent = buildAgent();
+    const result = await runAgentCommand({
+      message: "<@U123ABC> !debug",
+      agentPath: agent.path,
+      agent,
+    });
+    expect(result?.command).toBe("debug");
+  });
+});
+
+describe("looksLikeAgentCommand", () => {
+  it("returns true for !debug", () => {
+    expect(looksLikeAgentCommand("!debug")).toBe(true);
+  });
+
+  it("returns true for /debug", () => {
+    expect(looksLikeAgentCommand("/debug")).toBe(true);
+  });
+
+  it("returns true with @mention prefix", () => {
+    expect(looksLikeAgentCommand("<@U123ABC> !debug")).toBe(true);
+  });
+
+  it("returns false for regular messages", () => {
+    expect(looksLikeAgentCommand("hello world")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(looksLikeAgentCommand("")).toBe(false);
   });
 });

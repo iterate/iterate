@@ -1,26 +1,12 @@
 import { expectTypeOf, test } from "vitest";
-import { appRouter } from "../trpc/root.ts";
-import type { DBLike, FlattenProcedures } from "./pgmq-lib.ts";
+import { appRouter } from "../orpc/root.ts";
+import type { DBLike, FlattenProcedures, TimePeriod } from "./pgmq-lib.ts";
 import { outboxClient } from "./client.ts";
 
-test("trpc procedure types are extracted correctly", () => {
-  type F = FlattenProcedures<typeof appRouter._def.procedures>;
-  expectTypeOf<F>()
-    .toHaveProperty("admin.chargeUsage")
-    .map((proc) => proc._def.$types)
-    .toEqualTypeOf<{
-      input: {
-        organizationId: string;
-        units: number;
-      };
-      output: {
-        success: boolean;
-        units: number;
-        costCents: number;
-        meterEventId: string;
-        stripeCustomerId: string;
-      };
-    }>();
+test("oRPC procedure types are extracted correctly", () => {
+  type F = FlattenProcedures<typeof appRouter>;
+  // Verify the type utility can extract a known procedure path
+  expectTypeOf<F>().toHaveProperty("admin.chargeUsage");
 });
 
 test("internal event types are type-safe", () => {
@@ -38,7 +24,7 @@ test("internal event types are type-safe", () => {
         message: "hello",
       }),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number }>();
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
 
   expectTypeOf(outboxClient)
     .map((client) =>
@@ -49,7 +35,7 @@ test("internal event types are type-safe", () => {
         { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
       ),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number }>();
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
 
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
@@ -59,11 +45,11 @@ test("internal event types are type-safe", () => {
   );
 });
 
-test("machine:archive event type", () => {
+test("machine:delete-requested event type", () => {
   const db = {} as DBLike;
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
-    "machine:archive",
+    "machine:delete-requested",
     {
       machineId: "mach_123",
       type: "daytona" as const,

@@ -1,5 +1,6 @@
 import { execFileSync, execSync } from "node:child_process";
 import { join } from "node:path";
+import { registerCfProxyRoutes, resolveCfProxyRunId } from "./cf-proxy-routes.ts";
 import { createProjectDeploymentProvider, runProjectDeployment } from "./project-deployment.ts";
 import { runOrdersEventsProof, waitForHttpOk } from "./project-proof.ts";
 
@@ -25,6 +26,8 @@ const skipBuild = process.env.JONASLAND_SKIP_BUILD === "true";
 const vmCpuKind = process.env.JONASLAND_FLY_VM_CPU_KIND ?? "shared";
 const vmCpus = process.env.JONASLAND_FLY_VM_CPUS ?? "2";
 const vmMemory = process.env.JONASLAND_FLY_VM_MEMORY_MB ?? "2048";
+const cfProxyMode = process.env.JONASLAND_CF_PROXY_ENABLE ?? "auto";
+const cfProxyTtlSeconds = Number(process.env.JONASLAND_CF_PROXY_TTL_SECONDS ?? "21600");
 
 const gitShaFull = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
 const gitShaShort = gitShaFull.slice(0, 7);
@@ -32,9 +35,11 @@ const isDirty = execSync("git status --porcelain", { cwd: repoRoot, encoding: "u
   .length
   ? true
   : false;
-const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
+const tagSuffix =
+  process.env.JONASLAND_SANDBOX_TAG_SUFFIX ?? `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 const imageTag = process.env.JONASLAND_FLY_IMAGE ?? `registry.fly.io/${appName}:${tagSuffix}`;
 const baseUrl = `https://${appName}.fly.dev`;
+const defaultCfRunId = `${appName}-${gitShaShort}`;
 
 function run(
   command: string,
@@ -189,7 +194,19 @@ async function main(): Promise<void> {
   console.log(`app=${appName} org=${org} region=${region}`);
   console.log(`image=${imageTag}`);
   console.log(`url=${baseUrl}`);
+  if (!Number.isFinite(cfProxyTtlSeconds) || cfProxyTtlSeconds <= 0) {
+    throw new Error(`Invalid JONASLAND_CF_PROXY_TTL_SECONDS: ${String(cfProxyTtlSeconds)}`);
+  }
+
   const runQuiet = (command: string, args: string[]): string => run(command, args, { quiet: true });
+  const hasCfProxyToken = Boolean(process.env.CF_PROXY_WORKER_API_TOKEN);
+  const useCfProxy =
+    cfProxyMode === "true" || (cfProxyMode === "auto" && hasCfProxyToken);
+  if (cfProxyMode === "true" && !hasCfProxyToken) {
+    throw new Error("JONASLAND_CF_PROXY_ENABLE=true but CF_PROXY_WORKER_API_TOKEN is missing");
+  }
+  const cfProxyRunId = resolveCfProxyRunId(defaultCfRunId);
+
   const flyProvider = createProjectDeploymentProvider({
     createDeployment: async () => ({
       type: "fly" as const,
@@ -227,12 +244,61 @@ async function main(): Promise<void> {
     }),
   });
 
+  let cfProxyUrls:
+    | {
+        runId: string;
+        registryUrl: string;
+        pidnapUrl: string;
+        eventsUrl: string;
+        ordersUrl: string;
+      }
+    | undefined;
+
   const { baseUrl: resolvedBaseUrl } = await runProjectDeployment({
     mode,
     provider: flyProvider,
     runProof: async ({ baseUrl: deploymentBaseUrl }) => {
+      let proofBaseUrl = deploymentBaseUrl;
+      let proofRoutes:
+        | {
+            pidnapBaseUrl: string;
+            eventsBaseUrl: string;
+            ordersBaseUrl: string;
+          }
+        | undefined;
+
+      if (useCfProxy) {
+        const routeSet = await registerCfProxyRoutes({
+          targetBaseUrl: deploymentBaseUrl,
+          runId: cfProxyRunId,
+          ttlSeconds: cfProxyTtlSeconds,
+          logger: console.log,
+        });
+        await waitForHttpOk({
+          url: `${routeSet.urls.registry}/healthz`,
+          timeoutMs: 45_000,
+          pollMs: 1_000,
+        });
+        proofBaseUrl = routeSet.urls.registry;
+        proofRoutes = {
+          pidnapBaseUrl: routeSet.urls.pidnap,
+          eventsBaseUrl: routeSet.urls.events,
+          ordersBaseUrl: routeSet.urls.orders,
+        };
+        cfProxyUrls = {
+          runId: routeSet.runId,
+          registryUrl: routeSet.urls.registry,
+          pidnapUrl: routeSet.urls.pidnap,
+          eventsUrl: routeSet.urls.events,
+          ordersUrl: routeSet.urls.orders,
+        };
+      } else if (cfProxyMode === "auto") {
+        console.log("cf-proxy skipped (CF_PROXY_WORKER_API_TOKEN not set)");
+      }
+
       await runOrdersEventsProof({
-        baseUrl: deploymentBaseUrl,
+        baseUrl: proofBaseUrl,
+        routes: proofRoutes,
         run: runQuiet,
         logger: console.log,
         orderSku: `fly-poc-${gitShaShort}`,
@@ -240,18 +306,35 @@ async function main(): Promise<void> {
     },
   });
 
+  const publicBaseUrl = cfProxyUrls?.registryUrl ?? resolvedBaseUrl;
+  const publicControlBase = cfProxyUrls?.pidnapUrl ?? `${resolvedBaseUrl}/_pidnap`;
+  const publicEventsHealth = cfProxyUrls?.eventsUrl
+    ? `${cfProxyUrls.eventsUrl}/healthz`
+    : `${resolvedBaseUrl}/_events/healthz`;
+  const publicOrdersHealth = cfProxyUrls?.ordersUrl
+    ? `${cfProxyUrls.ordersUrl}/healthz`
+    : `${resolvedBaseUrl}/_orders/healthz`;
+
   console.log("");
   console.log("POC ready:");
-  console.log(`base_url=${resolvedBaseUrl}`);
+  console.log(`fly_base_url=${resolvedBaseUrl}`);
+  console.log(`base_url=${publicBaseUrl}`);
   console.log(`image=${imageTag}`);
+  if (cfProxyUrls) {
+    console.log(`cf_proxy_run_id=${cfProxyUrls.runId}`);
+    console.log(`cf_proxy_registry_url=${cfProxyUrls.registryUrl}`);
+    console.log(`cf_proxy_pidnap_url=${cfProxyUrls.pidnapUrl}`);
+    console.log(`cf_proxy_events_url=${cfProxyUrls.eventsUrl}`);
+    console.log(`cf_proxy_orders_url=${cfProxyUrls.ordersUrl}`);
+  }
   console.log(
-    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"events\"}}' ${resolvedBaseUrl}/_pidnap/rpc/processes/restart`,
+    `control_events=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"events\"}}' ${publicControlBase}/rpc/processes/restart`,
   );
   console.log(
-    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"orders\"}}' ${resolvedBaseUrl}/_pidnap/rpc/processes/restart`,
+    `control_orders=curl -fsS -X POST -H 'content-type: application/json' --data '{\"json\":{\"target\":\"orders\"}}' ${publicControlBase}/rpc/processes/restart`,
   );
-  console.log(`events_health=curl -fsS ${resolvedBaseUrl}/_events/healthz`);
-  console.log(`orders_health=curl -fsS ${resolvedBaseUrl}/_orders/healthz`);
+  console.log(`events_health=curl -fsS ${publicEventsHealth}`);
+  console.log(`orders_health=curl -fsS ${publicOrdersHealth}`);
 }
 
 await main();

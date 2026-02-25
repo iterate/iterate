@@ -1,0 +1,14 @@
+{
+  "configs": {
+    "default": {
+      "osBaseUrl": "https://os.iterate.com",
+      "daemonBaseUrl": "http://localhost:3000",
+      "auth": {
+        "strategy": "superadmin",
+        "adminPasswordEnvVarName": "SORRY_NO",
+        "userEmail": "nobody@nustom.com"
+      }
+    }
+  },
+  "default": "default"
+}

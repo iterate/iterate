@@ -1,12 +1,17 @@
 packages:
+  - apps/cf-proxy-worker
+  - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon
   - apps/iterate-com
   - apps/os
   - sandbox
+  - jonasland/sandbox
+  - jonasland/e2e
+  - services/*
   - packages/*
   - packages/pidnap/docker
-  - repo-templates/*
+  - repo-templates/**/*
   - .github/ts-workflows
 
 minimumReleaseAge: 1440
@@ -25,6 +30,8 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
   - pidnap
+  - schematch
+  - trpc-cli
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"

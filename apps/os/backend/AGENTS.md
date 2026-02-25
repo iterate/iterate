@@ -72,12 +72,13 @@ await db.insert(organization).values({...});
 ```ts
 import { logger } from "./tag-logger.ts";
 
-logger.info("User created", { userId: user.id });
-logger.error("Failed to process", { error });
+logger.set({ user: { id: user.id, email: user.email } });
+logger.info("User created");
+logger.error("Failed to process", error);
 ```
 
-## tRPC Routers
+## oRPC Routers
 
-- Routers are in `trpc/routers/`
+- Routers are in `orpc/routers/`
 - Prefer authenticated procedures over `publicProcedure`
 - Use Zod schemas for input validation

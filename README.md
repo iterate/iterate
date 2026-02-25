@@ -48,10 +48,7 @@ DEV_TUNNEL=bob pnpm dev      # → bob.dev.iterate.com (custom, no stage/app suf
 DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 ```
 
-## Daytona snapshots
+## Sandbox Providers
 
-Build a daytona snapshot and write DAYTONA_DEFAULT_SNAPSHOT to your daytona config (needs `brew install daytonaio/cli/daytona`)
-
-```bash
-pnpm sandbox daytona:push
-```
+See `sandbox/README.md` for provider strategy, image tagging, and CI flow.
+Fly is the primary deployment provider; Daytona is supported for one-off manual testing only.

@@ -104,47 +104,26 @@ jobs:
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
-          script: |-
-            github.log = {
-              ...console,
-              debug: () => {},
-            };
-
+          script: |
+            github.log = { ...console, debug: () => {} };
             // write a shimmed module of "fs" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
             require("fs").writeFileSync(
               ".github/ts-workflows/workflows/release.ts.fs-bc7b36fe4d2924e49800d9b3dc4a325c-tsx-shim.cjs",
-              "module.exports.load = () => import(\"fs\")",
+              'module.exports.load = () => import("fs")',
             );
-
-            const vars = {
-              github,
-              context,
-              core,
-              glob,
-              io,
-              require,
-            };
-
-            const __handler = async function create_release(
-              {
-                github,
-                context,
-              },
-            ) {
-              const {
-                promises: fs,
-              } = await require(
-                ".github/ts-workflows/workflows/release.ts.fs-bc7b36fe4d2924e49800d9b3dc4a325c-tsx-shim.cjs" /* <-- shimmed module of "fs" that actions/github-script can require */,
-              ).load();
-
+            const vars = { github, context, core, glob, io, require };
+            const __handler = async function create_release({ github, context }) {
+              const { promises: fs } =
+                await require(".github/ts-workflows/workflows/release.ts.fs-bc7b36fe4d2924e49800d9b3dc4a325c-tsx-shim.cjs" /* <-- shimmed module of "fs" that actions/github-script can require */).load();
               await github.rest.repos.createRelease({
                 ...context.repo,
                 tag_name: "${{ steps.release_info.outputs.release_name }}",
                 name: "${{ steps.release_info.outputs.release_name }}",
-
-                body: ["${{ steps.context.outputs.release_title }}", //
-                "", await fs.readFile("changelog.md", "utf8")].join("\n"),
+                body: [
+                  "${{ steps.context.outputs.release_title }}",
+                  "", //
+                  await fs.readFile("changelog.md", "utf8"),
+                ].join("\n"),
               });
             };
-
             return __handler(vars);

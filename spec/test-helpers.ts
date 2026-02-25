@@ -1,6 +1,7 @@
+import * as path from "node:path";
 import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- ok here
 import { addPlugins } from "./playwright-plugin.ts";
-import { hydrationWaiter, spinnerWaiter, videoMode, toastErrorReporter } from "./plugins/index.ts";
+import { hydrationWaiter, spinnerWaiter, videoMode, uiErrorReporter } from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
 
@@ -8,12 +9,20 @@ export const baseTest = base;
 
 export const test = base.extend({
   page: async ({ page: basePage }, use, testInfo) => {
-    await using page = await addPlugins(basePage, testInfo, [
-      hydrationWaiter(),
-      spinnerWaiter(),
-      toastErrorReporter(),
-      !!process.env.VIDEO_MODE && videoMode(),
-    ]);
+    await using page = await addPlugins({
+      page: basePage,
+      testInfo,
+      plugins: [
+        hydrationWaiter(),
+        uiErrorReporter(),
+        spinnerWaiter(),
+        !!process.env.VIDEO_MODE && videoMode(),
+      ],
+      boxedStackPrefixes: (defaults) => [
+        ...defaults,
+        path.join(import.meta.dirname, "plugins"), // don't show plugin source files in stack traces
+      ],
+    });
 
     await use(page);
   },

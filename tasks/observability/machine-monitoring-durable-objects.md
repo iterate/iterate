@@ -197,7 +197,7 @@ class Project extends DurableObject {
 ## Related
 
 - `apps/os/backend/providers/` - existing machine provider implementations
-- `apps/daemon/server/` - daemon tRPC router
+- `apps/daemon/server/` - daemon oRPC router
 - `packages/pidnap/` - process management
 - Task: `machine-health-metrics-clickhouse.md` - metrics storage
 - Task: `machine-code-refresh.md` - code refresh mechanism

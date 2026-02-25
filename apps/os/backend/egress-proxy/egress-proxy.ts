@@ -343,10 +343,7 @@ async function resolveSecret(
           },
         };
       } catch (err) {
-        logger.error("Failed to build connect URL", {
-          connector: connector.name,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        logger.error(`Failed to build connect URL for ${connector.name}`, err);
         return {
           ok: false,
           error: {
@@ -370,11 +367,8 @@ async function resolveSecret(
   if (secret.egressProxyRule) {
     const allowed = await matchesEgressRule(context.originalUrl, secret.egressProxyRule);
     if (!allowed) {
-      logger.warn("Egress rule rejected request", {
-        secretKey,
-        rule: secret.egressProxyRule,
-        url: context.originalUrl,
-      });
+      logger.set({ url: context.originalUrl });
+      logger.warn(`Egress rule rejected request for secret ${secretKey}`);
       return {
         ok: false,
         error: {
@@ -433,7 +427,7 @@ async function replaceMagicStrings(
     const parsed = parseMagicString(fullMatch);
 
     if (!parsed) {
-      logger.warn("Invalid magic string format", { match: fullMatch });
+      logger.warn("Invalid magic string format");
       continue;
     }
 
@@ -568,7 +562,8 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
   const db = c.get("db");
   const apiKeyContext = apiKey ? await validateAndGetContext(db, apiKey) : null;
   if (!apiKeyContext) {
-    logger.warn("Egress proxy request with invalid API key", { originalURL });
+    logger.set({ url: originalURL });
+    logger.warn("Egress proxy request with invalid API key");
     return c.json({ error: "Invalid or missing API key" }, 401);
   }
 
@@ -604,11 +599,11 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     );
 
     if (validationError) {
-      logger.warn("Resend email blocked", {
+      logger.set({
         url: originalURL,
-        organizationId: apiKeyContext.organizationId,
-        error: validationError.error,
+        organization: { id: apiKeyContext.organizationId },
       });
+      logger.error("Resend email blocked", new Error(validationError.error));
       return c.json({ error: validationError.error }, 403);
     }
   }
@@ -854,10 +849,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
       headers: responseHeaders,
     });
   } catch (err) {
-    logger.error("Egress proxy error", {
-      url: originalURL,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    logger.error("Egress proxy error", err, { url: originalURL });
 
     return c.json(
       {
@@ -1000,7 +992,7 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   // Parse the token ID from the API key
   const tokenId = parseTokenIdFromApiKey(apiKey);
   if (!tokenId) {
-    logger.warn("Invalid API key format", { apiKey: apiKey.slice(0, 20) + "..." });
+    logger.warn("Invalid API key format");
     return null;
   }
 
@@ -1017,19 +1009,22 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   });
 
   if (!accessToken) {
-    logger.warn("Access token not found", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Access token not found");
     return null;
   }
 
   if (accessToken.revokedAt) {
-    logger.warn("Access token revoked", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Access token revoked");
     return null;
   }
 
   // Decrypt the stored token and compare with the provided API key
   const storedToken = await decrypt(accessToken.encryptedToken);
   if (apiKey !== storedToken) {
-    logger.warn("Invalid API key for token", { tokenId });
+    logger.set({ token: { id: tokenId } });
+    logger.warn("Invalid API key for token");
     return null;
   }
 

@@ -15,7 +15,7 @@ const isAgent =
 
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {
-  "*": ["prettier --write --ignore-unknown"],
+  "*": ["oxfmt --no-error-on-unmatched-pattern"],
   "skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
     "git add apps/iterate-com/backend/generated/skills-registry.ts",
@@ -30,7 +30,7 @@ const agentConfig = {
     () => "pnpm typecheck",
     // if tests prove slow, we could do smart dependency tracking to only run tests for changed files
     () => "pnpm test",
-    "eslint --fix --max-warnings 0 --no-warn-ignored", // suppress warnings for ignored files
+    () => "pnpm lint:fix",
   ],
 };
 

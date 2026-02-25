@@ -1,27 +1,176 @@
-import { eq, and, lt } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
-import { probeMachineReadiness } from "../services/machine-readiness-probe.ts";
-import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+import {
+  buildMachineFetcher,
+  sendProbeMessage,
+  pollForProbeAnswer,
+} from "../services/machine-readiness-probe.ts";
+import { buildMachineEnvVars } from "../services/machine-creation.ts";
+import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
 
-  // Step 1: Verify a machine actually works before activating it
+  // ── Provisioning pipeline ──────────────────────────────────────────────
+  //
+  // machine:created → provisionMachine
+  // (daemon reports status via reportStatus → machine:daemon-status-reported → setup + probe pipeline)
+
   cc.registerConsumer({
-    name: "verifyMachineReadiness",
-    on: "machine:verify-readiness",
-    visibilityTimeout: 200, // send(60s) + poll(120s) + margin
+    name: "provisionMachine",
+    on: "machine:created",
+    visibilityTimeout: "300s", // provisioning can take minutes (Daytona snapshot, etc.)
     retry: (job) => {
-      // The probe itself already polls for up to 120s, so retries here
-      // cover transient infra failures (e.g. worker restarted mid-probe).
-      // Allow 2 retries with generous delays.
-      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe", delay: 30 };
-      return { retry: false, reason: "probe failed after retries" };
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying provisioning", delay: "10s" };
+      return { retry: false, reason: "provisioning failed after retries" };
+    },
+    async handler(params) {
+      const { machineId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+        with: { project: { with: { organization: true } } },
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[provisionMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      if (!machine.externalId) throw new Error(`Machine ${machineId} has no externalId`);
+
+      const { apiKey } = await import("../services/machine-creation.ts").then((mod) =>
+        mod.getOrCreateProjectMachineToken(db, machine.projectId),
+      );
+      const fullEnvVars = await buildMachineEnvVars({
+        db,
+        env,
+        projectId: machine.projectId,
+        organizationId: machine.project.organizationId,
+        organizationSlug: machine.project.organization.slug,
+        projectSlug: machine.project.slug,
+        machineId,
+        name: machine.name,
+        apiKey,
+        customDomain: machine.project.customDomain,
+      });
+
+      const initialMetadata = stripMachineStateMetadata(
+        (machine.metadata as Record<string, unknown>) ?? {},
+      );
+
+      const runtime = await createMachineStub({
+        type: machine.type,
+        env,
+        externalId: machine.externalId,
+        metadata: initialMetadata,
+      });
+      const runtimeResult = await runtime.create({
+        machineId,
+        externalId: machine.externalId,
+        name: machine.name,
+        envVars: fullEnvVars,
+      });
+
+      // Merge provider metadata with any metadata written while provisioning ran
+      const latestMachine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      const latestMetadata = (latestMachine?.metadata as Record<string, unknown>) ?? {};
+      const mergedMetadata = {
+        ...stripMachineStateMetadata(latestMetadata),
+        ...(runtimeResult.metadata ?? {}),
+      };
+
+      await db
+        .update(schema.machine)
+        .set({ metadata: mergedMetadata })
+        .where(eq(schema.machine.id, machineId));
+
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[provisionMachine] Machine provisioned type=${machine.type}`);
+      return `provisioned machine ${machineId}`;
+    },
+  });
+
+  // ── Setup + readiness probe pipeline ────────────────────────────────
+  //
+  // daemon-status-reported → pushMachineSetup → (setup-pushed)
+  //   → sendReadinessProbe → (probe-sent) → pollProbeResponse
+  //     → (probe-succeeded) → activateMachine → (activated)
+  //     (probe failure handled by outbox retry → status="failed" in queue)
+
+  // Stage 0: Daemon reported ready — push env vars and clone repos.
+  cc.registerConsumer({
+    name: "pushMachineSetup",
+    on: "machine:daemon-status-reported",
+    when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
+    visibilityTimeout: "120s", // env write + repo clones can take a while
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying setup push", delay: "10s" };
+      return { retry: false, reason: "setup push failed after retries" };
+    },
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      logger.set({ machine: { id: machineId } });
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[pushMachineSetup] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const { getPushMachineSetupInput, pushSetupToMachine } =
+        await import("../services/machine-setup.ts");
+
+      const input = await getPushMachineSetupInput(db, env, machine);
+      if (!input) {
+        logger.info("[pushMachineSetup] Sentinel matches, skipping setup + probe");
+        return `skipped: setup already done for ${machineId}`;
+      }
+
+      const writeSentinel = await pushSetupToMachine(machine, input);
+
+      // Emit setup-pushed so the readiness probe can begin
+      await cc.send({ transaction: db, parent: db }, "machine:setup-pushed", {
+        machineId,
+        projectId,
+      });
+
+      await writeSentinel();
+
+      logger.info("[pushMachineSetup] Setup pushed to machine");
+      return `setup pushed to ${machineId}`;
+    },
+  });
+
+  // Stage 1: Setup pushed — wait for services to restart, then send readiness probe.
+  cc.registerConsumer({
+    name: "sendReadinessProbe",
+    on: "machine:setup-pushed",
+    visibilityTimeout: "45s", // send retries up to 30s + margin
+    delay: () => "5s", // brief pause for env vars to take effect
+    retry: (job) => {
+      if (job.read_ct <= 2) return { retry: true, reason: "retrying probe send", delay: "5s" };
+      return { retry: false, reason: "probe send failed after retries" };
     },
     async handler(params) {
       const { machineId, projectId } = params.payload;
@@ -32,130 +181,169 @@ export const registerConsumers = () => {
       });
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
-      // Guard against duplicate probes — only probe machines still in "starting" state.
-      // A concurrent reportStatus or a duplicate outbox delivery could fire this again
-      // after the machine has already been activated or archived.
       if (machine.state !== "starting") {
-        logger.info("[outbox] Skipping readiness probe, machine no longer starting", {
-          machineId,
-          state: machine.state,
-        });
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[sendReadinessProbe] Skipping, machine no longer starting state=${machine.state}`,
+        );
         return `skipped: machine state is ${machine.state}`;
       }
 
-      const probeResult = await probeMachineReadiness(machine, env);
-
-      if (!probeResult.ok) {
-        logger.error("[outbox] Machine readiness probe failed", {
-          machineId,
-          attempt: params.job.attempt,
-          detail: probeResult.detail,
-        });
-
-        // Update metadata so the UI reflects current status.
-        // On retry this gets overwritten; on final failure it sticks as "error".
-        const isLastAttempt = params.job.attempt >= 3;
-        const currentMetadata = (machine.metadata as Record<string, unknown>) ?? {};
-        await db
-          .update(schema.machine)
-          .set({
-            metadata: {
-              ...currentMetadata,
-              daemonStatus: isLastAttempt ? "error" : "retrying",
-              daemonStatusMessage: isLastAttempt
-                ? `Readiness probe failed: ${probeResult.detail}`
-                : `Readiness probe attempt ${params.job.attempt} failed, retrying...`,
-            },
-          })
-          .where(eq(schema.machine.id, machineId));
-
-        await broadcastInvalidation(env).catch(() => {});
-
-        // Throw so the outbox retry machinery kicks in (or DLQs on final attempt)
-        throw new Error(`probe failed: ${probeResult.detail}`);
+      const fetcher = await buildMachineFetcher(machine, env);
+      if (!fetcher) {
+        throw new Error(`Could not build fetcher for machine ${machineId}`);
       }
 
-      logger.info("[outbox] Machine readiness probe passed", {
+      const sendResult = await sendProbeMessage(fetcher);
+      if (!sendResult.ok) {
+        throw new Error(`probe send failed: ${sendResult.detail}`);
+      }
+
+      // Probe message sent successfully — emit probe-sent so polling begins
+      await cc.send({ transaction: db, parent: db }, "machine:probe-sent", {
         machineId,
-        detail: probeResult.detail,
+        projectId,
+        threadId: sendResult.threadId,
+        messageId: sendResult.messageId,
       });
 
-      // Probe passed — activate the machine via the existing machine:activated flow
-      const readyMetadata = {
-        ...((machine.metadata as Record<string, unknown>) ?? {}),
-        daemonStatus: "ready",
-        daemonStatusMessage: "Daemon ready",
-        daemonReadyAt: new Date().toISOString(),
-      };
+      logger.set({ machine: { id: machineId }, threadId: sendResult.threadId });
+      logger.info(`[sendReadinessProbe] Probe message sent messageId=${sendResult.messageId}`);
+      return `probe sent, messageId=${sendResult.messageId}`;
+    },
+  });
 
-      // Re-check state before activating — the machine may have been detached
-      // by a newer machine creation while the probe was running.
-      const freshMachine = await db.query.machine.findFirst({
+  // Stage 2: Probe message was sent — poll for a valid response.
+  cc.registerConsumer({
+    name: "pollProbeResponse",
+    on: "machine:probe-sent",
+    visibilityTimeout: "75s", // poll runs up to 60s + margin
+    retry: (job) => {
+      // Polling runs up to 60s internally, or fails immediately on wrong answer.
+      // Outbox retry covers worker-level failures (e.g. worker restarted mid-poll).
+      if (job.read_ct <= 1) return { retry: true, reason: "retrying poll", delay: "5s" };
+      return { retry: false, reason: "poll failed after retry" };
+    },
+    async handler(params) {
+      const { machineId, projectId, threadId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
       });
-      if (freshMachine?.state !== "starting") {
-        logger.info("[outbox] Skipping activation, machine state changed during probe", {
-          machineId,
-          state: freshMachine?.state,
-        });
-        return `skipped activation: machine state is "${freshMachine?.state}", not "starting"`;
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[pollProbeResponse] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
       }
 
-      await cc.sendTx(db, "machine:activated", async (tx) => {
-        // Re-check state inside the transaction to close the TOCTOU window.
-        // If a concurrent creation detached this machine, skip everything.
+      const fetcher = await buildMachineFetcher(machine, env);
+      if (!fetcher) {
+        throw new Error(`Could not build fetcher for machine ${machineId}`);
+      }
+
+      const responseText = await pollForProbeAnswer(fetcher, threadId);
+
+      await cc.send({ transaction: db, parent: db }, "machine:probe-succeeded", {
+        machineId,
+        projectId,
+        responseText,
+      });
+
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[pollProbeResponse] Probe succeeded responseText=${responseText}`);
+      return `probe succeeded: "${responseText}"`;
+    },
+  });
+
+  // Stage 3a: Probe succeeded — activate the machine.
+  cc.registerConsumer({
+    name: "activateMachine",
+    on: "machine:probe-succeeded",
+    async handler(params) {
+      const { machineId, projectId } = params.payload;
+      const db = getDb();
+
+      const machine = await db.query.machine.findFirst({
+        where: eq(schema.machine.id, machineId),
+      });
+      if (!machine) throw new Error(`Machine ${machineId} not found`);
+
+      if (machine.state !== "starting") {
+        logger.set({ machine: { id: machineId } });
+        logger.info(
+          `[activateMachine] Skipping, machine no longer starting state=${machine.state}`,
+        );
+        return `skipped: machine state is ${machine.state}`;
+      }
+
+      const activated = await db.transaction(async (tx) => {
+        // Re-check state inside the transaction (TOCTOU protection)
         const current = await tx.query.machine.findFirst({
           where: eq(schema.machine.id, machineId),
         });
         if (current?.state !== "starting") {
-          logger.info("[outbox] Skipping activation inside tx, state changed", {
-            machineId,
-            state: current?.state,
-          });
-          return { payload: { machineId, projectId } };
+          logger.set({ machine: { id: machineId } });
+          logger.info(
+            `[activateMachine] Skipping inside tx, state changed state=${current?.state}`,
+          );
+          return false;
         }
 
         // Bulk-detach all active machines for this project
-        await tx
+        const detached = await tx
           .update(schema.machine)
           .set({ state: "detached" })
-          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")));
+          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
+          .returning({ id: schema.machine.id });
 
         // Promote this machine to active
         await tx
           .update(schema.machine)
-          .set({ state: "active", metadata: readyMetadata })
+          .set({ state: "active" })
           .where(eq(schema.machine.id, machineId));
 
-        logger.info("[outbox] Machine activated after readiness probe", { machineId });
+        // Emit activated event inside the transaction for atomicity
+        await cc.send({ transaction: tx, parent: db }, "machine:activated", {
+          machineId,
+          projectId,
+          detachedMachineIds: detached.map((m) => m.id),
+        });
 
-        return { payload: { machineId, projectId } };
+        return true;
       });
 
-      await broadcastInvalidation(env).catch(() => {});
-      return `probe passed, machine activated`;
+      logger.set({ machine: { id: machineId } });
+      logger.info(`[activateMachine] Machine activated:${activated}`);
+      return `machine activated:${activated}`;
     },
   });
 
-  // Step 2: When a machine is activated, find stale detached machines and fan out archive events
+  // ── Post-activation pipeline ──────────────────────────────────────────
+
+  // When a machine is activated, find detached machines and fan out delete events
   cc.registerConsumer({
-    name: "archiveStaleDetachedMachines",
+    name: "deleteDetachedMachines",
     on: "machine:activated",
+    delay: () => "4h",
     async handler(params) {
-      const { projectId, machineId } = params.payload;
+      const { projectId, machineId, detachedMachineIds } = params.payload;
       const db = getDb();
 
-      const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-      const staleDetached = await db.query.machine.findMany({
-        where: and(
-          eq(schema.machine.projectId, projectId),
-          eq(schema.machine.state, "detached"),
-          lt(schema.machine.updatedAt, detachedCleanupCutoff),
-        ),
+      if (detachedMachineIds.length === 0) {
+        return "no detached machines to delete";
+      }
+
+      const detached = await db.query.machine.findMany({
+        where: inArray(schema.machine.id, detachedMachineIds),
       });
 
-      for (const m of staleDetached) {
-        await cc.send({ transaction: db, parent: db }, "machine:archive", {
+      for (const m of detached) {
+        await cc.send({ transaction: db, parent: db }, "machine:delete-requested", {
           machineId: m.id,
           type: m.type,
           externalId: m.externalId,
@@ -163,19 +351,16 @@ export const registerConsumers = () => {
         });
       }
 
-      logger.info("[outbox] Fan-out archival for stale detached machines", {
-        activatedMachineId: machineId,
-        projectId,
-        enqueuedCount: staleDetached.length,
-      });
-      return `enqueued ${staleDetached.length} machine:archive events`;
+      logger.set({ machine: { id: machineId }, project: { id: projectId } });
+      logger.info(`[deleteDetachedMachines] Fan-out delete enqueuedCount=${detached.length}`);
+      return `enqueued ${detached.length} delete-requested events`;
     },
   });
 
-  // Step 3: Archive a single machine via the provider SDK (e.g. Daytona)
+  // Delete a single machine via the provider SDK
   cc.registerConsumer({
-    name: "archiveMachineViaProvider",
-    on: "machine:archive",
+    name: "deleteMachineViaProvider",
+    on: "machine:delete-requested",
     async handler(params) {
       const { machineId, type, externalId, metadata } = params.payload;
       const db = getDb();
@@ -186,15 +371,16 @@ export const registerConsumers = () => {
         externalId,
         metadata,
       });
-      await runtime.archive();
+      await runtime.delete();
 
       await db
         .update(schema.machine)
         .set({ state: "archived" })
         .where(eq(schema.machine.id, machineId));
 
-      logger.info("[outbox] Archived machine via provider", { machineId });
-      return `archived machine ${machineId}`;
+      logger.set({ machine: { id: machineId } });
+      logger.info("[deleteMachineViaProvider] Deleted machine");
+      return `deleted machine ${machineId}`;
     },
   });
 };
@@ -212,7 +398,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "logGreeting",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
     handler: (params) => {
       logger.info(
@@ -224,7 +410,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "unstableConsumer",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("unstable"),
     handler: (params) => {
       if (params.job.attempt > 2) {
@@ -236,9 +422,9 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "badConsumer",
-    on: "trpc:admin.outbox.poke",
+    on: "rpc:admin.outbox.poke",
     retry: (job) => {
-      if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: 1 };
+      if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: "1s" };
       return { retry: false, reason: "max retries reached" };
     },
     when: (params) => params.payload.input.message.includes("fail"),

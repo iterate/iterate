@@ -4,12 +4,12 @@ This folder contains the React frontend application.
 
 ## Dev Server
 
-`pnpm dev` runs vite. Use `DEV_TUNNEL=1` for Cloudflare tunnel (→ `os-dev-{ITERATE_USER}.dev.iterate.com`).
+`pnpm dev` runs vite. Use explicit `DEV_TUNNEL` (e.g. `DEV_TUNNEL=dev-$ITERATE_USER-os`) for Cloudflare tunnel.
 
 Key Doppler env vars:
 
-- `ITERATE_USER` — used in alchemy stage (`dev-$ITERATE_USER`) → determines `DAYTONA_SNAPSHOT_PREFIX`
-- `VITE_PUBLIC_URL` — auto-set to tunnel URL when `DEV_TUNNEL=1`
+- `ITERATE_USER` — used in alchemy stage (`dev-$ITERATE_USER`)
+- `VITE_PUBLIC_URL` — auto-set to tunnel URL when `DEV_TUNNEL` is set
 
 ## Browser Testing
 
@@ -21,7 +21,7 @@ Skip signup: request OTP to any `+test@nustom.com` email, enter `424242` as OTP.
 
 Prefer alternatives:
 
-- **Data fetching**: Use `useSuspenseQuery` with tRPC
+- **Data fetching**: Use `useSuspenseQuery` with oRPC
 - **Derived state**: Compute during render
 - **Event responses**: Handle in event handlers
 - **Reset state**: Use a key prop
@@ -34,14 +34,14 @@ useEffect IS appropriate for:
 
 **Never use useEffect for data fetching.**
 
-### Data Fetching with tRPC
+### Data Fetching with oRPC
 
 Always use `useSuspenseQuery` with proper Suspense boundaries:
 
 ```tsx
 const { data } = useSuspenseQuery(
-  trpc.agent.conversation.getConversation.queryOptions({
-    conversationId: "123",
+  orpc.agent.conversation.getConversation.queryOptions({
+    input: { conversationId: "123" },
   }),
 );
 ```

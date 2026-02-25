@@ -23,7 +23,7 @@ Add version info to machines:
 
 - **OS version**: Git SHA at deployment time, passed via env var (e.g., `ITERATE_GIT_SHA`) from GitHub Actions
 - **Daemon version**: Git SHA read at runtime via `git rev-parse HEAD`
-- Add `getVersion` to daemon tRPC router returning current git SHA
+- Add `getVersion` to daemon oRPC router returning current git SHA
 - OS can compare its SHA to daemon's to show "update available" indicator
 
 ### 2. Machine Provider `refreshCode` Method
@@ -49,7 +49,7 @@ Implementation per provider:
 
 ### 3. Daemon Endpoint
 
-Add `selfUpdate` mutation to daemon tRPC router:
+Add `selfUpdate` mutation to daemon oRPC router:
 
 ```typescript
 selfUpdate: publicProcedure
@@ -61,7 +61,7 @@ selfUpdate: publicProcedure
   });
 ```
 
-### 4. OS tRPC Procedure
+### 4. OS oRPC Procedure
 
 Add `machine.refreshCode` mutation that:
 
@@ -86,7 +86,7 @@ Add `machine.refreshCode` mutation that:
 
 ## Related
 
-- `apps/daemon/server/trpc/router.ts` - daemon tRPC router
+- `apps/daemon/server/orpc/router.ts` - daemon oRPC router
 - `apps/os/backend/providers/` - machine provider implementations
 - `apps/os/sandbox/entry.sh` - shows local-docker rsync flow
 - `.github/workflows/` - where to add ITERATE_GIT_SHA to deployment

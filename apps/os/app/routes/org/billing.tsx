@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { CreditCard, ExternalLink } from "lucide-react";
 import { z } from "zod/v4";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
   Card,
@@ -27,7 +27,9 @@ export const Route = createFileRoute("/_auth/orgs/$organizationSlug/billing")({
   loader: ({ context, params }) => {
     // Non-blocking prefetch - speeds up perceived load time
     context.queryClient.prefetchQuery(
-      trpc.billing.getBillingAccount.queryOptions({ organizationSlug: params.organizationSlug }),
+      orpc.billing.getBillingAccount.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
+      }),
     );
   },
   component: BillingPage,
@@ -44,8 +46,10 @@ function BillingPage() {
   }, [search.success]);
 
   const { data: billingAccount } = useSuspenseQuery(
-    trpc.billing.getBillingAccount.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.billing.getBillingAccount.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+      },
     }),
   );
 
@@ -53,7 +57,7 @@ function BillingPage() {
     mutationFn: () => {
       const baseUrl = window.location.origin;
       const billingPath = `/orgs/${params.organizationSlug}/billing`;
-      return trpcClient.billing.createCheckoutSession.mutate({
+      return orpcClient.billing.createCheckoutSession({
         organizationSlug: params.organizationSlug,
         successUrl: `${baseUrl}${billingPath}?success=true`,
         cancelUrl: `${baseUrl}${billingPath}?canceled=true`,
@@ -69,7 +73,7 @@ function BillingPage() {
 
   const createPortal = useMutation({
     mutationFn: () =>
-      trpcClient.billing.createPortalSession.mutate({
+      orpcClient.billing.createPortalSession({
         organizationSlug: params.organizationSlug,
       }),
     onSuccess: (data) => {

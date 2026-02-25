@@ -6,7 +6,7 @@ import { z } from "zod/v4";
 import { Button } from "../components/ui/button.tsx";
 import { CenteredLayout } from "../components/centered-layout.tsx";
 import { Spinner } from "../components/ui/spinner.tsx";
-import { trpc, trpcClient } from "../lib/trpc.tsx";
+import { orpc, orpcClient } from "../lib/orpc.tsx";
 
 const Search = z.object({
   teamId: z.string(),
@@ -30,14 +30,16 @@ function SlackConflictPage() {
 
   // Get the new project's info (slug, org slug) for navigation
   const { data: newProject } = useSuspenseQuery(
-    trpc.project.getProjectInfoById.queryOptions({
-      projectId: search.newProjectId,
+    orpc.project.getProjectInfoById.queryOptions({
+      input: {
+        projectId: search.newProjectId,
+      },
     }),
   );
 
   const transferConnection = useMutation({
     mutationFn: () =>
-      trpcClient.project.transferSlackConnection.mutate({
+      orpcClient.project.transferSlackConnection({
         projectSlug: newProject.slug,
         slackTeamId: search.teamId,
       }),
@@ -45,13 +47,13 @@ function SlackConflictPage() {
       toast.success(`Slack workspace connected to ${newProject.slug}`);
       // Invalidate both projects' Slack connection queries
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackConnection.queryKey({
-          projectSlug: newProject.slug,
+        queryKey: orpc.project.getSlackConnection.key({
+          input: { projectSlug: newProject.slug },
         }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.project.getSlackConnection.queryKey({
-          projectSlug: search.existingProjectSlug,
+        queryKey: orpc.project.getSlackConnection.key({
+          input: { projectSlug: search.existingProjectSlug },
         }),
       });
       navigate({

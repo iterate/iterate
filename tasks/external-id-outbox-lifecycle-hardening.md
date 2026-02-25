@@ -40,7 +40,7 @@ Observed in prod:
 1. `apps/os/backend/services/machine-creation.ts`
 2. `apps/os/backend/outbox/consumers.ts`
 3. `apps/os/backend/orpc/router.ts`
-4. `apps/os/backend/trpc/routers/machine.ts`
+4. `apps/os/backend/orpc/routers/machine.ts`
 5. `apps/os/backend/routes/machine-proxy.ts`
 6. `apps/os/backend/integrations/github/github.ts`
 7. `apps/os/backend/db/schema.ts` + migration
@@ -54,7 +54,7 @@ Observed in prod:
    - insert machine row (`starting`, `externalId=""`)
    - enqueue `machine:provision` tx
    - return immediately
-   - remove provisioning `waitUntil` usage in tRPC and GitHub webhook paths
+   - remove provisioning `waitUntil` usage in oRPC and GitHub webhook paths
 4. Implement provision consumer:
    - skip if machine no longer `starting`
    - create provider resource

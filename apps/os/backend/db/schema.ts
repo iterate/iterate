@@ -36,7 +36,6 @@ export const MachineState = ["starting", "active", "detached", "archived"] as co
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-// Note: "docker" replaces "local-docker" (migration 0020).
 export const MachineType = [...SandboxMachineType] as const;
 export type MachineType = (typeof MachineType)[number];
 
@@ -111,23 +110,27 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable("better_auth_account", (t) => ({
-  id: iterateId("acc"),
-  accountId: t.text().notNull(),
-  providerId: t.text().notNull(), // google, slack, slack-bot
-  userId: t
-    .text()
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  accessToken: t.text(),
-  refreshToken: t.text(),
-  idToken: t.text(),
-  accessTokenExpiresAt: t.timestamp(),
-  refreshTokenExpiresAt: t.timestamp(),
-  scope: t.text(),
-  password: t.text(),
-  ...withTimestamps,
-}));
+export const account = pgTable(
+  "better_auth_account",
+  (t) => ({
+    id: iterateId("acc"),
+    accountId: t.text().notNull(),
+    providerId: t.text().notNull(), // google, slack, slack-bot
+    userId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    accessToken: t.text(),
+    refreshToken: t.text(),
+    idToken: t.text(),
+    accessTokenExpiresAt: t.timestamp(),
+    refreshTokenExpiresAt: t.timestamp(),
+    scope: t.text(),
+    password: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.accountId, t.providerId)],
+);
 
 export const accountRelations = relations(account, ({ one }) => ({
   user: one(user, {
@@ -141,6 +144,18 @@ export const verification = pgTable("better_auth_verification", (t) => ({
   identifier: t.text().notNull(),
   value: t.text().notNull(),
   expiresAt: t.timestamp().notNull(),
+  ...withTimestamps,
+}));
+export const deviceCode = pgTable("device_code", (t) => ({
+  id: iterateId("dvc"),
+  deviceCode: t.text().notNull(),
+  userCode: t.text().notNull(),
+  userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+  expiresAt: t.timestamp().notNull(),
+  status: t.text().notNull(), // pending, approved, denied
+  lastPolledAt: t.timestamp(),
+  pollingInterval: t.integer(),
+  clientId: t.text(),
   ...withTimestamps,
 }));
 // #endregion ========== Better Auth Schema ==========
@@ -244,10 +259,9 @@ export const project = pgTable(
       .text()
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    sandboxProvider: t
-      .text({ enum: [...PROJECT_SANDBOX_PROVIDER] })
-      .notNull()
-      .default("daytona"),
+    sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
+    customDomain: t.text().unique(),
+    defaultPort: t.integer(),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
@@ -479,10 +493,7 @@ export const machine = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     name: t.text().notNull(),
-    type: t
-      .text({ enum: [...MachineType] })
-      .notNull()
-      .default("daytona"),
+    type: t.text({ enum: [...MachineType] }).notNull(),
     state: t
       .text({ enum: [...MachineState] })
       .notNull()
@@ -631,10 +642,33 @@ export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
 // #endregion ========== Billing ==========
 
 // #region ========== Outbox ==========
-export const outboxEvent = pgTable("outbox_event", (t) => ({
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  name: t.text().notNull(),
-  payload: jsonb().$type<Record<string, unknown>>().notNull(),
-  ...withTimestamps,
-}));
+export type OutboxEventContext = {
+  causedBy?: {
+    eventId: number;
+    consumerName: string;
+    jobId: number | string;
+  };
+};
+
+export const outboxEvent = pgTable(
+  "outbox_event",
+  (t) => ({
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    name: t.text().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    context: jsonb().$type<OutboxEventContext>().notNull().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    index("outbox_event_machine_id_name_id_idx").using(
+      "btree",
+      sql`(${t.payload}->>'machineId')`,
+      t.name,
+      t.id,
+    ),
+  ],
+);
+
+// NOTE: pgmq.q_consumer_job_queue is managed by pgmq.create() in migration 0017/0018.
+// Its JSONB index is added as raw SQL in migration 0022.
 // #endregion ========== Outbox ==========

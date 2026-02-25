@@ -2,9 +2,9 @@ import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-route
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, BotIcon } from "lucide-react";
 
-import type { SerializedAgent } from "@server/trpc/router.ts";
+import type { SerializedAgent } from "@server/routers/agents.ts";
 import { ThemeSwitcher } from "./theme-switcher.tsx";
-import { useTRPC } from "@/integrations/tanstack-query/trpc-client.tsx";
+import { orpc } from "@/integrations/tanstack-query/orpc-client.tsx";
 
 import {
   Sidebar,
@@ -29,13 +29,12 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
   const selectedSlug = "slug" in params ? (params.slug as string) : null;
   const selectedPath = selectedSlug ? decodeURIComponent(selectedSlug) : null;
   const currentPath = location.pathname;
-  const trpc = useTRPC();
   const queryClient = useQueryClient();
 
   const archiveAgentMutation = useMutation(
-    trpc.archiveAgent.mutationOptions({
+    orpc.daemon.archiveAgent.mutationOptions({
       onSuccess: (_data, variables) => {
-        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        queryClient.invalidateQueries({ queryKey: orpc.daemon.listAgents.key() });
         if (variables.path === selectedPath) {
           navigate({ to: "/agents" });
         }
