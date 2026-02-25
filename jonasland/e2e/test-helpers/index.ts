@@ -2,6 +2,16 @@ import { request as httpRequest } from "node:http";
 import { PassThrough } from "node:stream";
 import { CaddyClient } from "@accelerated-software-development/caddy-api-client";
 import { DockerClient } from "@docker/node-sdk";
+import type { AnyContractRouter, ContractRouterClient } from "@orpc/contract";
+import {
+  eventBusContract,
+  serviceManifest as eventsServiceManifest,
+} from "@iterate-com/events-contract";
+import { ordersContract, ordersServiceManifest } from "@iterate-com/orders-contract";
+import {
+  createOrpcRpcServiceClient,
+  type ServiceManifestLike,
+} from "@iterate-com/shared/jonasland";
 import {
   createRegistryClient,
   type RegistryClient,
@@ -332,95 +342,36 @@ async function waitForDirectHttpViaContainer(params: {
   throw new Error(`timed out waiting for direct http ${params.url}`);
 }
 
-async function requestOrpc<T>(params: {
+function createOrpcRpcHostClient<TContract extends AnyContractRouter>(params: {
   ingressBaseUrl: string;
   host: string;
-  procedurePath: string;
-  input?: unknown;
-  method?: "GET" | "POST";
-}): Promise<T> {
-  const response = await ingressRequest({
-    ingressBaseUrl: params.ingressBaseUrl,
-    host: params.host,
-    path: `/orpc${params.procedurePath}`,
-    method: params.method ?? "POST",
-    ...(params.input === undefined ? {} : { json: { json: params.input } }),
+  manifest: ServiceManifestLike<TContract>;
+}): ContractRouterClient<TContract> {
+  return createOrpcRpcServiceClient({
+    env: {},
+    manifest: params.manifest,
+    url: `${params.ingressBaseUrl}/orpc`,
+    fetch: createHostRoutedFetch({
+      ingressBaseUrl: params.ingressBaseUrl,
+      hostHeader: params.host,
+    }),
   });
-
-  if (!response.ok) {
-    throw new Error(`oRPC request failed (${response.status}) ${params.procedurePath}`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const rawPayload = (await response.json()) as unknown;
-  if (rawPayload && typeof rawPayload === "object" && "json" in rawPayload) {
-    return (rawPayload as { json: T }).json;
-  }
-  return rawPayload as T;
 }
 
 function createOrdersClient(params: { ingressBaseUrl: string }): OrdersClient {
-  const host = "orders.iterate.localhost";
-  return {
-    service: {
-      health: async () =>
-        await requestOrpc({
-          ingressBaseUrl: params.ingressBaseUrl,
-          host,
-          procedurePath: "/service/health",
-          method: "GET",
-        }),
-    },
-    orders: {
-      place: async (input) =>
-        await requestOrpc({
-          ingressBaseUrl: params.ingressBaseUrl,
-          host,
-          procedurePath: "/orders/place",
-          input,
-        }),
-      find: async (input) =>
-        await requestOrpc({
-          ingressBaseUrl: params.ingressBaseUrl,
-          host,
-          procedurePath: "/orders/find",
-          input,
-        }),
-    },
-  };
+  return createOrpcRpcHostClient({
+    ingressBaseUrl: params.ingressBaseUrl,
+    host: "orders.iterate.localhost",
+    manifest: ordersServiceManifest,
+  });
 }
 
 function createEventsClient(params: { ingressBaseUrl: string }): EventsClient {
-  const host = "events.iterate.localhost";
-  return {
-    service: {
-      health: async () =>
-        await requestOrpc({
-          ingressBaseUrl: params.ingressBaseUrl,
-          host,
-          procedurePath: "/service/health",
-          method: "GET",
-        }),
-    },
-    append: async (input) => {
-      await requestOrpc({
-        ingressBaseUrl: params.ingressBaseUrl,
-        host,
-        procedurePath: "/append",
-        input,
-      });
-    },
-    listStreams: async (input = {}) =>
-      await requestOrpc({
-        ingressBaseUrl: params.ingressBaseUrl,
-        host,
-        procedurePath: "/listStreams",
-        input,
-      }),
-  };
+  return createOrpcRpcHostClient({
+    ingressBaseUrl: params.ingressBaseUrl,
+    host: "events.iterate.localhost",
+    manifest: eventsServiceManifest,
+  });
 }
 
 export async function dockerContainerFixture(params: {
@@ -607,43 +558,8 @@ async function waitForHostRouteViaContainer(params: {
   throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
 }
 
-export interface OrdersClient {
-  service: {
-    health: (_input?: Record<string, never>) => Promise<{ ok: boolean; service: string }>;
-  };
-  orders: {
-    place: (input: { sku: string; quantity: number }) => Promise<{
-      id: string;
-      sku: string;
-      quantity: number;
-      status: "accepted";
-      eventId: string;
-    }>;
-    find: (input: { id: string }) => Promise<{
-      id: string;
-      sku: string;
-      quantity: number;
-      status: "accepted";
-      eventId: string;
-    }>;
-  };
-}
-
-export interface EventsClient {
-  service: {
-    health: (_input?: Record<string, never>) => Promise<{ ok: boolean; service: string }>;
-  };
-  append: (input: {
-    path: string;
-    events: Array<{
-      type: string;
-      payload: unknown;
-    }>;
-  }) => Promise<void>;
-  listStreams: (
-    _input?: Record<string, never>,
-  ) => Promise<Array<{ path: string; eventCount: number }>>;
-}
+export type OrdersClient = ContractRouterClient<typeof ordersContract>;
+export type EventsClient = ContractRouterClient<typeof eventBusContract>;
 
 export interface ProjectDeployment {
   ports: {
