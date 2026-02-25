@@ -73,6 +73,7 @@ Note: Domain Connect can only set CNAME records for us. The DCV TXT records are 
 ### DNS provider support
 
 Domain Connect is supported by these DNS providers (confirmed live):
+
 - **Cloudflare** (sync flow only, requires template onboarding via email to `domain-connect@cloudflare.com`)
 - **GoDaddy** (sync + async, largest Domain Connect adopter)
 - **IONOS** (1&1)
@@ -137,22 +138,23 @@ The custom domain section in project settings (`apps/os/app/routes/proj/settings
 Two paths, shown as tabs or auto-detected:
 
 **Path A: Domain Connect (automatic)**
+
 - If `checkDomainConnectSupport` returns supported:
   - Show: "Your DNS provider ({providerName}) supports automatic setup"
   - Button: "Configure DNS automatically" → redirects to Domain Connect apply URL
   - On redirect back with `?domain_connect=success` → show success state, trigger DNS check
 
 **Path B: Manual DNS setup (fallback)**
+
 - Always available, default if Domain Connect not supported
 - Show a table/card of required DNS records:
 
-  | Type  | Name                           | Value                    | Status |
-  |-------|--------------------------------|--------------------------|--------|
-  | CNAME | `kaletsky.com`                 | `cname.iterate.app`      | --     |
-  | CNAME | `*.kaletsky.com`               | `cname.iterate.app`      | --     |
-  | TXT   | `_cf-custom-hostname.kaletsky.com` | `ca3-abcdef...`      | --     |
-  | TXT   | `_acme-challenge.kaletsky.com` | `xyz123...`              | --     |
-
+  | Type  | Name                               | Value               | Status |
+  | ----- | ---------------------------------- | ------------------- | ------ |
+  | CNAME | `kaletsky.com`                     | `cname.iterate.app` | --     |
+  | CNAME | `*.kaletsky.com`                   | `cname.iterate.app` | --     |
+  | TXT   | `_cf-custom-hostname.kaletsky.com` | `ca3-abcdef...`     | --     |
+  | TXT   | `_acme-challenge.kaletsky.com`     | `xyz123...`         | --     |
   - TXT records: only shown if needed (non-Cloudflare DNS). Values fetched from CF API after custom hostname registration.
   - Each row has a copy button for the value
   - Note about Namecheap/registrar host field format (just `@`, `*`, `_cf-custom-hostname`, `_acme-challenge` — not the full FQDN)
@@ -184,6 +186,7 @@ Two paths, shown as tabs or auto-detected:
 ### DNS-over-HTTPS for validation
 
 We can't do DNS queries from a CF Worker directly. Use fetch to Cloudflare's DoH endpoint:
+
 ```
 https://cloudflare-dns.com/dns-query?name=kaletsky.com&type=CNAME
 Accept: application/dns-json
@@ -192,6 +195,7 @@ Accept: application/dns-json
 ### Domain Connect signing
 
 Synchronous Domain Connect requests must be digitally signed (RSA-SHA256). Libraries:
+
 - [domain-connect-dnsutils](https://github.com/domain-connect/python-domain-connect-dnsutils) (Python reference)
 - We'd implement signing in TypeScript using Web Crypto API (available in Workers)
 
