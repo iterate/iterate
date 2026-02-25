@@ -13,7 +13,7 @@ test.describe("service load checks", () => {
     const docsHomeResponse = await page.goto(`${docsBaseUrl}/`);
     expect(docsHomeResponse).not.toBeNull();
     expect(docsHomeResponse?.status()).toBe(200);
-    await expect(page.getByText("jonasland API Docs")).toBeVisible();
+    await expect(page).toHaveTitle("jonasland API Docs");
 
     await expect
       .poll(async () => {
