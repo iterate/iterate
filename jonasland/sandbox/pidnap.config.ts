@@ -72,6 +72,26 @@ export default {
       },
     },
     {
+      name: "daemon",
+      definition: {
+        command: "/opt/pidnap/node_modules/.bin/tsx",
+        args: ["/opt/services/daemon/src/server.ts"],
+        env: {
+          DAEMON_SERVICE_PORT: "19060",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
+          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
+          OTEL_PROPAGATORS: "tracecontext,baggage",
+        },
+      },
+      options: {
+        restartPolicy: "always",
+      },
+      envOptions: {
+        reloadDelay: false,
+      },
+    },
+    {
       name: "orders",
       definition: {
         command: "/opt/pidnap/node_modules/.bin/tsx",

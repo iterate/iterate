@@ -507,7 +507,7 @@ export async function projectDeployment(params: {
       url: `${ingressBaseUrl}/`,
       timeoutMs: 45_000,
     });
-    for (const processName of ["caddy", "registry", "events"] as const) {
+    for (const processName of ["caddy", "registry", "events", "daemon"] as const) {
       await waitForPidnapProcessRunning({
         client: pidnap,
         target: processName,

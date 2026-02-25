@@ -1395,6 +1395,103 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.0.10)(jiti@2.6.1)(jsdom@27.4.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(lightningcss@1.31.1)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
+  services/agents:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.12.2)
+      '@iterate-com/agents-contract':
+        specifier: workspace:*
+        version: link:../agents-contract
+      hono:
+        specifier: ^4.11.10
+        version: 4.12.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/agents-contract:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/daemon:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.12.2)
+      '@hono/node-ws':
+        specifier: ^1.1.1
+        version: 1.3.0(@hono/node-server@1.19.9(hono@4.12.2))(bufferutil@4.0.9)(hono@4.12.2)(utf-8-validate@5.0.10)
+      '@iterate-com/daemon-contract':
+        specifier: workspace:*
+        version: link:../daemon-contract
+      '@lydell/node-pty':
+        specifier: ^1.0.1
+        version: 1.1.0
+      '@xterm/addon-serialize':
+        specifier: 0.15.0-beta.103
+        version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
+      '@xterm/headless':
+        specifier: 6.1.0-beta.103
+        version: 6.1.0-beta.103
+      hono:
+        specifier: ^4.11.10
+        version: 4.12.2
+      schematch:
+        specifier: 0.2.1
+        version: 0.2.1
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/daemon-contract:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   services/docs-service:
     dependencies:
       '@iterate-com/registry-service':
@@ -1563,6 +1660,44 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/opencode-wrapper:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.12.2)
+      '@iterate-com/opencode-wrapper-contract':
+        specifier: workspace:*
+        version: link:../opencode-wrapper-contract
+      hono:
+        specifier: ^4.11.10
+        version: 4.12.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/opencode-wrapper-contract:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
@@ -1776,6 +1911,44 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/slack:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.12.2)
+      '@iterate-com/slack-contract':
+        specifier: workspace:*
+        version: link:../slack-contract
+      hono:
+        specifier: ^4.11.10
+        version: 4.12.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  services/slack-contract:
+    dependencies:
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      zod:
+        specifier: ^4.1.11
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -15800,6 +15973,15 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@hono/node-ws@1.3.0(@hono/node-server@1.19.9(hono@4.12.2))(bufferutil@4.0.9)(hono@4.12.2)(utf-8-validate@5.0.10)':
+    dependencies:
+      '@hono/node-server': 1.19.9(hono@4.12.2)
+      hono: 4.12.2
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@hono/vite-dev-server@0.24.0(hono@4.11.3)(miniflare@4.20260205.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.64.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
     dependencies:
       '@hono/node-server': 1.19.6(hono@4.11.3)
@@ -20079,7 +20261,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 24.10.1
+      '@types/node': 25.0.10
 
   '@types/yargs-parser@21.0.3': {}
 

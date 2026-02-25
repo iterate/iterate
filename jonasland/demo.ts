@@ -83,6 +83,66 @@ const processes: ProcessConfig[] = [
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz", timeoutMs: 60_000 },
   },
   {
+    slug: "opencode",
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/jonasland-sandbox/scripts/opencode-mock.ts"],
+      env: {
+        ...OTEL_SERVICE_ENV,
+        OPENCODE_PORT: "4096",
+      },
+    },
+    directHttpCheck: { url: "http://127.0.0.1:4096/healthz", timeoutMs: 60_000 },
+  },
+  {
+    slug: "agents",
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/agents/src/server.ts"],
+      env: {
+        ...OTEL_SERVICE_ENV,
+        AGENTS_SERVICE_PORT: "19061",
+        OPENCODE_WRAPPER_BASE_URL: "http://127.0.0.1:19062",
+      },
+    },
+    routeCheck: { host: "agents.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+  },
+  {
+    slug: "opencode-wrapper",
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/opencode-wrapper/src/server.ts"],
+      env: {
+        ...OTEL_SERVICE_ENV,
+        OPENCODE_WRAPPER_SERVICE_PORT: "19062",
+        OPENCODE_BASE_URL: "http://127.0.0.1:4096",
+        OPENAI_BASE_URL: "http://api.openai.com",
+        SLACK_API_BASE_URL: "http://slack.com",
+        OPENAI_MODEL: "gpt-4o-mini",
+        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
+        DAEMON_SERVICE_BASE_URL: "http://127.0.0.1:19060",
+      },
+    },
+    routeCheck: {
+      host: "opencode-wrapper.iterate.localhost",
+      path: "/healthz",
+      timeoutMs: 60_000,
+    },
+  },
+  {
+    slug: "slack",
+    definition: {
+      command: "/opt/pidnap/node_modules/.bin/tsx",
+      args: ["/opt/services/slack/src/server.ts"],
+      env: {
+        ...OTEL_SERVICE_ENV,
+        SLACK_SERVICE_PORT: "19063",
+        AGENTS_SERVICE_BASE_URL: "http://127.0.0.1:19061",
+      },
+    },
+    routeCheck: { host: "slack.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
+  },
+  {
     slug: "openobserve",
     definition: {
       command: "/usr/local/bin/openobserve",
@@ -324,6 +384,8 @@ async function main(): Promise<void> {
   }
 
   const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+  const demoEgressProxy =
+    process.env.JONASLAND_DEMO_EGRESS_PROXY || "http://host.docker.internal:19099";
   const containerName = `jonasland-demo-${randomUUID().slice(0, 8)}`;
 
   logLine(`building image: ${image}`);
@@ -335,10 +397,13 @@ async function main(): Promise<void> {
     name: containerName,
     capAdd: ["NET_ADMIN", "SYS_ADMIN"],
     extraHosts: ["host.docker.internal:host-gateway"],
+    env: {
+      ITERATE_EXTERNAL_EGRESS_PROXY: demoEgressProxy,
+    },
   });
 
   logLine("ensuring baseline processes");
-  for (const processSlug of ["caddy", "registry", "events"] as const) {
+  for (const processSlug of ["caddy", "registry", "events", "daemon"] as const) {
     await deployment.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
   }
 
@@ -396,6 +461,33 @@ async function main(): Promise<void> {
   );
   const traceId = traceIdMatches.at(-1);
 
+  let slackDemoResult: { ok?: boolean; status?: number; body?: string; error?: string } = {};
+  try {
+    const slackResponse = await hostRequest(ingressUrl, "slack.iterate.localhost", "/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        event: {
+          type: "app_mention",
+          user: "U_DEMO",
+          text: "<@BOT> what is 50 minus 8",
+          channel: "C_DEMO",
+          ts: "1730000000.000100",
+          thread_ts: "1730000000.000100",
+        },
+      }),
+    });
+    slackDemoResult = {
+      ok: slackResponse.ok,
+      status: slackResponse.status,
+      body: await slackResponse.text(),
+    };
+  } catch (error) {
+    slackDemoResult = { error: errorMessage(error) };
+  }
+
   const homeObservability = await hostJson<{
     otel?: {
       tracesEndpoint?: string | null;
@@ -421,6 +513,21 @@ async function main(): Promise<void> {
   process.stdout.write(`- docs: ${toHostUrl("docs.iterate.localhost", ingressPort, "/")}\n`);
   process.stdout.write(`- orders: ${toHostUrl("orders.iterate.localhost", ingressPort, "/")}\n`);
   process.stdout.write(`- events: ${toHostUrl("events.iterate.localhost", ingressPort, "/")}\n`);
+  process.stdout.write(
+    `- daemon: ${toHostUrl("daemon.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- agents: ${toHostUrl("agents.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- opencode-wrapper: ${toHostUrl("opencode-wrapper.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- slack: ${toHostUrl("slack.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- opencode: ${toHostUrl("opencode.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
   process.stdout.write(
     `- outerbase: ${toHostUrl("outerbase.iterate.localhost", ingressPort, "/")}\n`,
   );
@@ -454,6 +561,8 @@ async function main(): Promise<void> {
     `- home OTEL endpoint: ${homeObservability.otel?.tracesEndpoint ?? "n/a"}\n`,
   );
   process.stdout.write(`- registry route count: ${String(registryRouteCount.total)}\n`);
+  process.stdout.write(`- demo egress proxy: ${demoEgressProxy}\n`);
+  process.stdout.write(`- slack webhook smoke: ${JSON.stringify(slackDemoResult)}\n`);
   process.stdout.write("\n");
 
   process.stdout.write("trace links\n");
@@ -475,6 +584,15 @@ async function main(): Promise<void> {
 
   process.stdout.write("stuff to try\n");
   process.stdout.write(
+    "- start local mock egress (separate terminal):\n  pnpm tsx jonasland/mock-egress-proxy-demo.ts\n",
+  );
+  process.stdout.write(
+    `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{\"event\":{\"type\":\"app_mention\",\"user\":\"U1\",\"text\":\"<@BOT> what is 50 minus 8\",\"channel\":\"C1\",\"ts\":\"1730000000.000100\",\"thread_ts\":\"1730000000.000100\"}}' ${ingressUrl}/webhook\n`,
+  );
+  process.stdout.write(
+    `- list pidnap processes:\n  curl -sS -H 'Host: pidnap.iterate.localhost' -H 'content-type: application/json' --data '{}' ${ingressUrl}/rpc/processes/list\n`,
+  );
+  process.stdout.write(
     `- create another order:\n  curl -sS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{"sku":"demo-2","quantity":3}' ${ingressUrl}/api/orders\n`,
   );
   process.stdout.write(
@@ -485,6 +603,9 @@ async function main(): Promise<void> {
   );
   process.stdout.write(
     `- inspect registry routes:\n  curl -sS -H 'Host: registry.iterate.localhost' ${ingressUrl}/api/routes\n`,
+  );
+  process.stdout.write(
+    `- inspect mock egress records:\n  curl -sS http://127.0.0.1:19099/records | jq\n`,
   );
   process.stdout.write("\n");
 

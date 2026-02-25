@@ -1,0 +1,29 @@
+{
+  "name": "@iterate-com/daemon-service",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "@hono/node-ws": "^1.1.1",
+    "@iterate-com/daemon-contract": "workspace:*",
+    "@lydell/node-pty": "^1.0.1",
+    "@xterm/addon-serialize": "0.15.0-beta.103",
+    "@xterm/headless": "6.1.0-beta.103",
+    "hono": "^4.11.10",
+    "schematch": "0.2.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.9.3"
+  }
+}
