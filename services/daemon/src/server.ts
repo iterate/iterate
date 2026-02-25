@@ -13,6 +13,7 @@ import { ptyRouter } from "./routers/pty.ts";
 const env = daemonServiceManifest.envVars.parse(process.env);
 const execFileAsync = promisify(execFile);
 const DEFAULT_EXPORT_PATTERN = /^\s*export\s+default\b/m;
+const EXEC_TS_TIMEOUT_MS = 30_000;
 const TSX_BINARIES = [process.env.TSX_BINARY, "/opt/pidnap/node_modules/.bin/tsx", "tsx"].filter(
   (value): value is string => typeof value === "string" && value.trim().length > 0,
 );
@@ -54,6 +55,7 @@ async function runTsxFile(scriptPath: string): Promise<{ stdout: string; stderr:
     try {
       const { stdout, stderr } = await execFileAsync(tsxBinary, [scriptPath], {
         maxBuffer: 1024 * 1024 * 5,
+        timeout: EXEC_TS_TIMEOUT_MS,
       });
       return { stdout, stderr };
     } catch (error) {
