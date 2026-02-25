@@ -217,6 +217,11 @@ async function main(): Promise<void> {
           timeoutMs: 120_000,
           pollMs: 1_500,
         });
+        await waitForHttpOk({
+          url: `${baseUrl}/`,
+          timeoutMs: 120_000,
+          pollMs: 1_500,
+        });
         console.log("ingress healthy");
       },
     }),

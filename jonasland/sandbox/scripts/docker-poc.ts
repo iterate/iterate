@@ -159,6 +159,7 @@ async function main(): Promise<void> {
         assertContainerRunning();
         const baseUrl = resolveBaseUrl();
         await waitForHttpOk({ url: `${baseUrl}/healthz`, timeoutMs: 60_000, pollMs: 750 });
+        await waitForHttpOk({ url: `${baseUrl}/`, timeoutMs: 60_000, pollMs: 750 });
         validateIptablesRules();
       },
     }),

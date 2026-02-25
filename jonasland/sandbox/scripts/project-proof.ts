@@ -24,7 +24,7 @@ function curlJson(params: {
   url: string;
   body?: unknown;
 }): unknown {
-  const args = ["-fsS", "-X", params.method ?? "GET"];
+  const args = ["--http1.1", "-fsS", "-X", params.method ?? "GET"];
   if (params.body !== undefined) {
     args.push(
       "-H",
@@ -79,7 +79,7 @@ async function waitForServiceHealth(params: {
   const deadline = Date.now() + params.timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const body = params.run("curl", ["-fsS", params.url]);
+      const body = params.run("curl", ["--http1.1", "-fsS", params.url]);
       if (responseHasOk(body)) {
         return;
       }
@@ -100,6 +100,7 @@ async function waitForOrdersPlacedEvent(params: {
   while (Date.now() < deadline) {
     try {
       const eventsRaw = params.run("curl", [
+        "--http1.1",
         "-fsS",
         "--max-time",
         "4",
@@ -177,6 +178,7 @@ export async function runOrdersEventsProof(params: {
   });
 
   const orderRaw = params.run("curl", [
+    "--http1.1",
     "-fsS",
     "-H",
     "content-type: application/json",
