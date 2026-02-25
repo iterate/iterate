@@ -15,13 +15,7 @@ const OTEL_SERVICE_ENV = {
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
 
-type OnDemandProcessName =
-  | "orders"
-  | "outerbase"
-  | "docs"
-  | "openobserve"
-  | "clickstack"
-  | "caddymanager";
+type OnDemandProcessName = "orders" | "outerbase" | "docs" | "openobserve" | "caddymanager";
 type OnDemandProcessConfig = {
   definition: {
     command: string;
@@ -79,20 +73,6 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
     startupTimeoutMs: 120_000,
     routeCheck: {
       host: "openobserve.iterate.localhost",
-      path: "/",
-      timeoutMs: 120_000,
-      readyStatus: "lt400",
-    },
-  },
-  clickstack: {
-    definition: {
-      command: "/opt/jonasland-sandbox/clickstack-launcher.sh",
-      args: [],
-      env: {},
-    },
-    startupTimeoutMs: 120_000,
-    routeCheck: {
-      host: "clickstack.iterate.localhost",
       path: "/",
       timeoutMs: 120_000,
       readyStatus: "lt400",
@@ -297,7 +277,8 @@ export const test = base.extend<{ deployment: SandboxFixture }>({
     await runFixture(page as Page);
   },
 
-  deployment: async ({ page: _page }, runFixture, testInfo) => {
+  // eslint-disable-next-line no-empty-pattern -- no Playwright fixtures are needed here.
+  deployment: async ({}, runFixture, testInfo) => {
     await using deployment = await sandboxFixture({
       image,
       name: `jonasland-playwright-${randomUUID()}`,

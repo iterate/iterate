@@ -78,8 +78,22 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Setup Doppler
+        run: doppler setup --config dev --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Docker info
         run: docker version && docker info
+      - name: Login to Fly registry
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          set -euo pipefail
+          doppler run -- sh -c 'echo "$FLY_API_TOKEN" | docker login registry.fly.io -u x --password-stdin'
       - name: Pull jonasland image
         env:
           JONASLAND_SANDBOX_IMAGE: ${{ needs.build-image.outputs.image }}

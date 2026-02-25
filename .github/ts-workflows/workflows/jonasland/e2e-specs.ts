@@ -43,9 +43,20 @@ export default workflow({
       "timeout-minutes": 45,
       steps: [
         ...utils.getSetupRepo({ ref: checkoutRefExpression }),
+        ...utils.setupDoppler({ config: "dev" }),
         {
           name: "Docker info",
           run: "docker version && docker info",
+        },
+        {
+          name: "Login to Fly registry",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: [
+            "set -euo pipefail",
+            "doppler run -- sh -c 'echo \"$FLY_API_TOKEN\" | docker login registry.fly.io -u x --password-stdin'",
+          ].join("\n"),
         },
         {
           name: "Pull jonasland image",

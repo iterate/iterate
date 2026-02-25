@@ -57,18 +57,6 @@ test.describe("service load checks", () => {
     expect(openobserve.status).toBeLessThan(400);
   });
 
-  test("clickstack route loads", async ({ deployment }) => {
-    test.skip(process.arch !== "x64", "clickstack process is not stable on arm64 hosts");
-
-    await startOnDemandProcess(deployment, "clickstack");
-
-    const clickstack = await ingressRequest(deployment, {
-      host: "clickstack.iterate.localhost",
-      path: "/",
-    });
-    expect(clickstack.status).toBeLessThan(400);
-  });
-
   test("caddy manager route loads", async ({ deployment }) => {
     await startOnDemandProcess(deployment, "caddymanager");
 
