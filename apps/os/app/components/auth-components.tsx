@@ -269,7 +269,11 @@ export function LoginCard({
     <div className="w-full max-w-md space-y-6">
       {EMAIL_OTP_ENABLED && (
         <>
-          <EmailOtpSignIn redirectUrl={redirectUrl} initialEmail={initialEmail} initialStep={initialStep} />
+          <EmailOtpSignIn
+            redirectUrl={redirectUrl}
+            initialEmail={initialEmail}
+            initialStep={initialStep}
+          />
           <OrDivider />
         </>
       )}
