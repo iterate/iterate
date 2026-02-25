@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import * as path from "node:path";
-import { type Page, test as base } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- fixture extension only
-import { type SandboxFixture, sandboxFixture } from "../test-helpers/index.ts";
-import { addPlugins } from "./playwright-plugin.ts";
-import { hydrationWaiter, spinnerWaiter, uiErrorReporter, videoMode } from "./plugins/index.ts";
+import { test } from "../../../spec/test-helpers.ts";
+import {
+  type SandboxFixture,
+  projectDeployment as createProjectDeployment,
+} from "../test-helpers/index.ts";
 
-const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const sandboxImage = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+
+export { test };
 
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -258,42 +260,9 @@ export async function startOnDemandProcess(
   });
 }
 
-export const baseTest = base;
-
-export const test = base.extend<{ deployment: SandboxFixture }>({
-  page: async ({ page: basePage }, runFixture, testInfo) => {
-    await using page = await addPlugins({
-      page: basePage,
-      testInfo,
-      plugins: [
-        hydrationWaiter(),
-        uiErrorReporter(),
-        spinnerWaiter(),
-        !!process.env.VIDEO_MODE && videoMode(),
-      ],
-      boxedStackPrefixes: (defaults) => [...defaults, path.join(import.meta.dirname, "plugins")],
-    });
-
-    await runFixture(page as Page);
-  },
-
-  // eslint-disable-next-line no-empty-pattern -- no Playwright fixtures are needed here.
-  deployment: async ({}, runFixture, testInfo) => {
-    await using deployment = await sandboxFixture({
-      image,
-      name: `jonasland-playwright-${randomUUID()}`,
-    });
-
-    try {
-      await runFixture(deployment);
-    } finally {
-      if (testInfo.status !== testInfo.expectedStatus) {
-        const logs = await deployment.logs().catch(() => "(container logs unavailable)");
-        await testInfo.attach("container-logs", {
-          body: logs,
-          contentType: "text/plain",
-        });
-      }
-    }
-  },
-});
+export async function projectDeployment(params?: { name?: string }): Promise<SandboxFixture> {
+  return await createProjectDeployment({
+    image: sandboxImage,
+    name: params?.name ?? `jonasland-playwright-${randomUUID()}`,
+  });
+}

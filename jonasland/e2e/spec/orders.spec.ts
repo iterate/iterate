@@ -1,8 +1,10 @@
+/* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { expect } from "@playwright/test";
-import { ingressRequest, startOnDemandProcess, test } from "./test-helpers.ts";
+import { ingressRequest, projectDeployment, startOnDemandProcess, test } from "./test-helpers.ts";
 
 test.describe("orders service", () => {
-  test("supports place + find order and emits order stream events", async ({ deployment }) => {
+  test("supports place + find order and emits order stream events", async ({}) => {
+    await using deployment = await projectDeployment();
     await startOnDemandProcess(deployment, "orders");
 
     const healthResponse = await ingressRequest(deployment, {

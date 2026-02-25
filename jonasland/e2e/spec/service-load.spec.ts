@@ -1,10 +1,16 @@
+/* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { expect } from "@playwright/test";
-import { ingressRequest, startOnDemandProcess, test, waitForDocsSources } from "./test-helpers.ts";
+import {
+  ingressRequest,
+  projectDeployment,
+  startOnDemandProcess,
+  test,
+  waitForDocsSources,
+} from "./test-helpers.ts";
 
 test.describe("service load checks", () => {
-  test("docs service loads and discovers events + orders OpenAPI sources", async ({
-    deployment,
-  }) => {
+  test("docs service loads and discovers events + orders OpenAPI sources", async ({}) => {
+    await using deployment = await projectDeployment();
     await startOnDemandProcess(deployment, "orders");
     await startOnDemandProcess(deployment, "docs");
 
@@ -35,7 +41,8 @@ test.describe("service load checks", () => {
     ).toBe(true);
   });
 
-  test("outerbase service route loads", async ({ deployment }) => {
+  test("outerbase service route loads", async ({}) => {
+    await using deployment = await projectDeployment();
     await startOnDemandProcess(deployment, "outerbase");
 
     const response = await ingressRequest(deployment, {
@@ -47,7 +54,8 @@ test.describe("service load checks", () => {
     expect(await response.text()).toContain('"ok":true');
   });
 
-  test("openobserve route loads", async ({ deployment }) => {
+  test("openobserve route loads", async ({}) => {
+    await using deployment = await projectDeployment();
     await startOnDemandProcess(deployment, "openobserve");
 
     const openobserve = await ingressRequest(deployment, {
@@ -57,7 +65,8 @@ test.describe("service load checks", () => {
     expect(openobserve.status).toBeLessThan(400);
   });
 
-  test("caddy manager route loads", async ({ deployment }) => {
+  test("caddy manager route loads", async ({}) => {
+    await using deployment = await projectDeployment();
     await startOnDemandProcess(deployment, "caddymanager");
 
     const health = await ingressRequest(deployment, {

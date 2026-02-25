@@ -1,9 +1,11 @@
+/* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
-import { ingressRequest, test } from "./test-helpers.ts";
+import { ingressRequest, projectDeployment, test } from "./test-helpers.ts";
 
 test.describe("events service", () => {
-  test("supports health + append/list streams from outside container", async ({ deployment }) => {
+  test("supports health + append/list streams from outside container", async ({}) => {
+    await using deployment = await projectDeployment();
     const healthResponse = await ingressRequest(deployment, {
       host: "events.iterate.localhost",
       path: "/api/service/health",
