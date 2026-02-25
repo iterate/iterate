@@ -27,6 +27,7 @@ interface ConnectionStatus {
 
 const DEFAULT_STREAM_PATH = "/demo/stream";
 const META_STREAM_PATH = "/events/_meta";
+const FIREHOSE_PAGE_PATH = "/firehose";
 const TRANSPORT_QUERY_PARAM = "transport";
 
 const runtimeServicePort = Number.parseInt(location.port, 10);
@@ -59,6 +60,9 @@ const normalizePath = (value: string): string => {
   return withSlash.replaceAll(/\/+/g, "/");
 };
 
+const isFirehoseLocation = (path: string): boolean =>
+  path === FIREHOSE_PAGE_PATH || path === `${FIREHOSE_PAGE_PATH}/`;
+
 const isReservedPath = (path: string): boolean =>
   path === "/api" ||
   path.startsWith("/api/") ||
@@ -66,6 +70,8 @@ const isReservedPath = (path: string): boolean =>
   path.startsWith("/@id/") ||
   path.startsWith("/@fs/") ||
   path.startsWith("/node_modules/") ||
+  path === FIREHOSE_PAGE_PATH ||
+  path.startsWith(`${FIREHOSE_PAGE_PATH}/`) ||
   path === "/docs" ||
   path.startsWith("/docs/") ||
   path === "/openapi.json";
@@ -208,7 +214,12 @@ const openLiveIterator = async (
   return { iterator: stream[Symbol.asyncIterator]() };
 };
 
-export function App() {
+const openFirehoseIterator = async (): Promise<{ iterator: AsyncIterator<EventStreamEvent> }> => {
+  const stream = await httpClient.firehose({});
+  return { iterator: stream[Symbol.asyncIterator]() };
+};
+
+function StreamInspectorApp() {
   const [transport, setTransport] = useState<StreamTransport>("websocket");
   const [selectedStreamPath, setSelectedStreamPath] = useState<string>(DEFAULT_STREAM_PATH);
   const [streamPathInput, setStreamPathInput] = useState<string>(DEFAULT_STREAM_PATH);
@@ -766,6 +777,10 @@ export function App() {
           Open Stream
         </Button>
 
+        <a className="text-xs underline" href={FIREHOSE_PAGE_PATH}>
+          Open Firehose Page
+        </a>
+
         <div className="space-y-2">
           <Label>Streams</Label>
           <Input
@@ -907,4 +922,158 @@ export function App() {
       </div>
     </main>
   );
+}
+
+function FirehosePage() {
+  const [status, setStatus] = useState<ConnectionStatus>({
+    text: "Connecting via SSE to firehose",
+    tone: "neutral",
+  });
+  const [statusText, setStatusText] = useState<string>("");
+  const [statusTone, setStatusTone] = useState<"neutral" | "error">("neutral");
+  const [events, setEvents] = useState<EventStreamEvent[]>([]);
+
+  const firehoseTokenRef = useRef<number>(0);
+  const firehoseIteratorRef = useRef<AsyncIterator<EventStreamEvent> | undefined>(undefined);
+
+  const disconnectFirehose = useCallback(async (): Promise<void> => {
+    firehoseTokenRef.current += 1;
+    const iterator = firehoseIteratorRef.current;
+    firehoseIteratorRef.current = undefined;
+    await closeIterator(iterator);
+    setStatus({
+      text: "Disconnected from firehose",
+      tone: "neutral",
+    });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const connect = async (): Promise<void> => {
+      await disconnectFirehose();
+
+      const token = firehoseTokenRef.current + 1;
+      firehoseTokenRef.current = token;
+      setStatus({
+        text: "Connecting via SSE to firehose",
+        tone: "neutral",
+      });
+
+      try {
+        const opened = await openFirehoseIterator();
+        firehoseIteratorRef.current = opened.iterator;
+        setStatus({
+          text: "Connected via SSE to firehose",
+          tone: "connected",
+        });
+        setStatusText("");
+        setStatusTone("neutral");
+
+        void (async () => {
+          try {
+            while (token === firehoseTokenRef.current) {
+              const next = await opened.iterator.next();
+              if (next.done) break;
+              setEvents((previous) => [next.value, ...previous].slice(0, 500));
+            }
+
+            if (token === firehoseTokenRef.current) {
+              setStatus({
+                text: "Firehose connection closed",
+                tone: "error",
+              });
+            }
+          } catch (error) {
+            if (token !== firehoseTokenRef.current) return;
+            setStatus({
+              text: "Firehose connection error",
+              tone: "error",
+            });
+            setStatusText(errorMessage(error));
+            setStatusTone("error");
+          }
+        })();
+      } catch (error) {
+        if (disposed) return;
+        setStatus({
+          text: "Firehose connection error",
+          tone: "error",
+        });
+        setStatusText(errorMessage(error));
+        setStatusTone("error");
+      }
+    };
+
+    void connect();
+
+    return () => {
+      disposed = true;
+      void disconnectFirehose();
+    };
+  }, [disconnectFirehose]);
+
+  return (
+    <main className="mx-auto w-full max-w-7xl space-y-4 p-4 md:p-6">
+      <section className="rounded-lg border p-4">
+        <header className="space-y-1">
+          <h2 className="text-base font-semibold">Firehose</h2>
+          <p className="text-xs text-muted-foreground">
+            Live-only SSE stream of all events across all stream paths.
+          </p>
+          <p className={statusToneClass(status.tone)}>{status.text}</p>
+          {statusTone === "error" && statusText.length > 0 ? (
+            <p className="text-xs text-destructive">{statusText}</p>
+          ) : null}
+        </header>
+        <div className="mt-3">
+          <a href="/" className="text-xs underline">
+            Open Stream Inspector
+          </a>
+        </div>
+      </section>
+
+      <section className="rounded-lg border p-4">
+        <h2 className="mb-3 text-base font-semibold">Live Events</h2>
+        <ul className="divide-y divide-border">
+          {events.length === 0 ? (
+            <li className="py-2 text-xs text-muted-foreground">No firehose events yet</li>
+          ) : null}
+          {events.map((event) => (
+            <li key={`${event.path}:${event.offset}:${event.createdAt}`} className="py-2">
+              <details className="group">
+                <summary
+                  className="flex w-full list-none cursor-pointer items-center gap-3 py-1 text-xs [&::-webkit-details-marker]:hidden"
+                  aria-label={`Toggle raw data for ${event.type} at offset ${event.offset}`}
+                >
+                  <span className="min-w-0 truncate">{event.type}</span>
+                  <span className="ml-auto flex flex-col items-end text-right">
+                    <span className="font-mono">{event.path}</span>
+                    <span className="font-mono">{event.offset}</span>
+                    <span className="text-muted-foreground" title={event.createdAt}>
+                      {formatRelativeTime(event.createdAt)}
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground transition-transform group-open:rotate-90">
+                    ▸
+                  </span>
+                </summary>
+                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-muted p-2 text-[11px]">
+                  {JSON.stringify(event, null, 2) ?? "null"}
+                </pre>
+              </details>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+export function App() {
+  if (isFirehoseLocation(location.pathname)) {
+    return <FirehosePage />;
+  }
+
+  return <StreamInspectorApp />;
 }
