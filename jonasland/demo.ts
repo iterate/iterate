@@ -587,7 +587,7 @@ async function main(): Promise<void> {
     "- start local mock egress (separate terminal):\n  pnpm tsx jonasland/mock-egress-proxy-demo.ts\n",
   );
   process.stdout.write(
-    `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{\"event\":{\"type\":\"app_mention\",\"user\":\"U1\",\"text\":\"<@BOT> what is 50 minus 8\",\"channel\":\"C1\",\"ts\":\"1730000000.000100\",\"thread_ts\":\"1730000000.000100\"}}' ${ingressUrl}/webhook\n`,
+    `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{"event":{"type":"app_mention","user":"U1","text":"<@BOT> what is 50 minus 8","channel":"C1","ts":"1730000000.000100","thread_ts":"1730000000.000100"}}' ${ingressUrl}/webhook\n`,
   );
   process.stdout.write(
     `- list pidnap processes:\n  curl -sS -H 'Host: pidnap.iterate.localhost' -H 'content-type: application/json' --data '{}' ${ingressUrl}/rpc/processes/list\n`,

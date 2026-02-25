@@ -1,7 +1,7 @@
+import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import { agentsServiceManifest } from "@iterate-com/agents-contract";
 import { Hono } from "hono";
-import { pathToFileURL } from "node:url";
 
 interface AgentRecord {
   path: string;

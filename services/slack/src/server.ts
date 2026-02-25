@@ -1,7 +1,7 @@
+import { pathToFileURL } from "node:url";
 import { createAdaptorServer } from "@hono/node-server";
 import { slackServiceManifest } from "@iterate-com/slack-contract";
 import { Hono } from "hono";
-import { pathToFileURL } from "node:url";
 
 const env = slackServiceManifest.envVars.parse(process.env);
 const app = new Hono();
