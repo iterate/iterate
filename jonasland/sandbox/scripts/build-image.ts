@@ -37,7 +37,7 @@ function readDepotProjectId(): string {
 }
 
 const depotProjectId = readDepotProjectId();
-const localImageTag = `jonasland-sandbox:${tagSuffix}`;
+const localImageTag = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 const flyImageTag = configuredFlyRegistryApp
   ? `registry.fly.io/${configuredFlyRegistryApp}:${tagSuffix}`
   : null;
