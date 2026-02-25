@@ -40,6 +40,7 @@ export type InternalEventTypes = {
   "machine:activated": {
     machineId: string;
     projectId: string;
+    detachedMachineIds: string[];
   };
   /** OS pushed setup data (env vars, repos) to the daemon via tool.writeFile/execCommand. */
   "machine:setup-pushed": {

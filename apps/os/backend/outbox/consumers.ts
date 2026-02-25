@@ -1,4 +1,4 @@
-import { eq, and, lt } from "drizzle-orm";
+import { eq, and, lt, inArray } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -294,10 +294,11 @@ export const registerConsumers = () => {
         }
 
         // Bulk-detach all active machines for this project
-        await tx
+        const detached = await tx
           .update(schema.machine)
           .set({ state: "detached" })
-          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")));
+          .where(and(eq(schema.machine.projectId, projectId), eq(schema.machine.state, "active")))
+          .returning({ id: true });
 
         // Promote this machine to active
         await tx
@@ -309,6 +310,7 @@ export const registerConsumers = () => {
         await cc.send({ transaction: tx, parent: db }, "machine:activated", {
           machineId,
           projectId,
+          detachedMachineIds: detached.map((m) => m.id),
         });
 
         return true;
@@ -326,17 +328,13 @@ export const registerConsumers = () => {
   cc.registerConsumer({
     name: "archiveStaleDetachedMachines",
     on: "machine:activated",
+    delay: () => "4h",
     async handler(params) {
-      const { projectId, machineId } = params.payload;
+      const { projectId, machineId, detachedMachineIds } = params.payload;
       const db = getDb();
 
-      const detachedCleanupCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
       const staleDetached = await db.query.machine.findMany({
-        where: and(
-          eq(schema.machine.projectId, projectId),
-          eq(schema.machine.state, "detached"),
-          lt(schema.machine.updatedAt, detachedCleanupCutoff),
-        ),
+        where: inArray(schema.machine.id, detachedMachineIds),
       });
 
       for (const m of staleDetached) {

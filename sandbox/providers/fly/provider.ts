@@ -578,6 +578,15 @@ export class FlySandbox extends Sandbox {
       // best effort cleanup
     }
   }
+
+  async archive(): Promise<void> {
+    const machineId = await this.resolveMachineId();
+    await flyApi({
+      env: this.env,
+      method: "POST",
+      path: `/v1/apps/${encodeURIComponent(this.appName)}/machines/${encodeURIComponent(machineId)}/archive`,
+    });
+  }
 }
 
 export class FlyProvider extends SandboxProvider {
