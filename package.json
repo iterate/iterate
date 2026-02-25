@@ -44,6 +44,8 @@
     "super-reset": "pnpm i && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm -r --parallel super-reset"
   },
   "devDependencies": {
+    "@clack/prompts": "^1.0.0",
+    "@orpc/server": "^1.13.4",
     "@playwright/test": "^1.57.0",
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@types/node": "^24.10.1",
@@ -62,6 +64,7 @@
     "playwright": "^1.57.0",
     "playwright-core": "1.57.0",
     "skills": "^1.3.7",
+    "trpc-cli": "0.12.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },

@@ -1,7 +1,11 @@
 #!/usr/bin/env tsx
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import * as prompts from "@clack/prompts";
+import { os } from "@orpc/server";
+import { createCli } from "trpc-cli";
 import { projectDeployment, type ProjectDeployment } from "./e2e/test-helpers/index.ts";
 import { ON_DEMAND_OTEL_SERVICE_ENV, ON_DEMAND_PROCESSES } from "./shared/on-demand-processes.ts";
 
@@ -25,6 +29,36 @@ type ProcessConfig = {
   };
   routeCheck?: RouteCheck;
   directHttpCheck?: DirectHttpCheck;
+};
+
+type ClickstackSource = {
+  id: string;
+  kind: string;
+  traceSourceId?: string;
+};
+
+type ClickstackTraceRow = {
+  TimestampIso: string;
+  TraceId: string;
+  SpanId: string;
+  ParentSpanId: string;
+  ServiceName: string;
+  StatusCode: string;
+  Duration: string | number;
+  SpanName: string;
+};
+
+type ClickstackTraceLink = {
+  url: string;
+  rowWhere?: string;
+  rowSource?: string;
+  eventRowWhere?: string;
+};
+
+type StreamTraceContext = {
+  traceId?: string;
+  spanId?: string;
+  createdAt?: string;
 };
 
 const OTEL_SERVICE_ENV = ON_DEMAND_OTEL_SERVICE_ENV;
@@ -127,14 +161,6 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function now(): string {
-  return new Date().toISOString().slice(11, 19);
-}
-
-function logLine(message: string): void {
-  process.stdout.write(`[${now()}] ${message}\n`);
-}
-
 function normalizePath(pathname: string): string {
   return pathname.startsWith("/") ? pathname : `/${pathname}`;
 }
@@ -145,6 +171,269 @@ function toHostUrl(host: string, port: number, pathname = "/"): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.stack || error.message : String(error);
+}
+
+function writeLine(line = ""): void {
+  process.stdout.write(`${line}\n`);
+}
+
+function padKeyValueRows(rows: Array<[string, string]>): string[] {
+  const maxWidth = rows.reduce((max, [key]) => Math.max(max, key.length), 0);
+  return rows.map(([key, value]) => `${key.padEnd(maxWidth)}  ${value}`);
+}
+
+function printSectionNote(title: string, lines: string[]): void {
+  const contentWidth = Math.max(title.length + 2, ...lines.map((line) => line.length), 24);
+
+  const horizontal = "─".repeat(contentWidth + 2);
+  writeLine(`┌${horizontal}┐`);
+  writeLine(`│ ${title.padEnd(contentWidth)} │`);
+  writeLine(`├${horizontal}┤`);
+  if (lines.length === 0) {
+    writeLine(`│ ${"".padEnd(contentWidth)} │`);
+  } else {
+    for (const line of lines) {
+      writeLine(`│ ${line.padEnd(contentWidth)} │`);
+    }
+  }
+  writeLine(`└${horizontal}┘`);
+  writeLine();
+}
+
+function escapeSqlString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("'", "''");
+}
+
+function nsToSecondsString(value: bigint): string {
+  const whole = value / 1_000_000_000n;
+  const fraction = value % 1_000_000_000n;
+  const fractionPart = fraction.toString().padStart(9, "0");
+  return `${whole.toString()}.${fractionPart}`.replace(/\.?0+$/, "");
+}
+
+function toRowWhere(row: ClickstackTraceRow): string {
+  const timestampExpr = `parseDateTime64BestEffort('${escapeSqlString(row.TimestampIso)}', +9)`;
+  const durationNs = BigInt(String(row.Duration));
+  const roundedMs = (durationNs + 500_000n) / 1_000_000n;
+  const status = row.StatusCode || "Unset";
+
+  return [
+    `Timestamp=${timestampExpr}`,
+    `ServiceName='${escapeSqlString(row.ServiceName)}'`,
+    `StatusCode='${escapeSqlString(status)}'`,
+    `round(divide(Duration, +1000000.))=${roundedMs.toString()}`,
+    `SpanName='${escapeSqlString(row.SpanName)}'`,
+  ].join(" AND ");
+}
+
+function toEventRowWhere(row: ClickstackTraceRow): string {
+  const timestampExpr = `parseDateTime64BestEffort('${escapeSqlString(row.TimestampIso)}', +9)`;
+  const durationNs = BigInt(String(row.Duration));
+  const status = row.StatusCode || "Unset";
+
+  return [
+    `SpanName='${escapeSqlString(row.SpanName)}'`,
+    `Timestamp=${timestampExpr}`,
+    `SpanId='${escapeSqlString(row.SpanId)}'`,
+    `ServiceName='${escapeSqlString(row.ServiceName)}'`,
+    `(Duration)/1e9=${nsToSecondsString(durationNs)}`,
+    `ParentSpanId='${escapeSqlString(row.ParentSpanId ?? "")}'`,
+    `StatusCode='${escapeSqlString(status)}'`,
+  ].join(" AND ");
+}
+
+async function fetchClickstackTraceRow(
+  deployment: ProjectDeployment,
+  context: StreamTraceContext,
+): Promise<ClickstackTraceRow | undefined> {
+  async function runSingleRowQuery(query: string): Promise<ClickstackTraceRow | undefined> {
+    const result = await deployment
+      .exec(["curl", "-sS", "http://127.0.0.1:8123/", "--data-binary", query])
+      .catch(() => ({ exitCode: 1, output: "" }));
+
+    if (result.exitCode !== 0) return undefined;
+    const firstLine = result.output.trim().split("\n")[0];
+    if (!firstLine || firstLine.startsWith("Code:")) return undefined;
+
+    try {
+      return JSON.parse(firstLine) as ClickstackTraceRow;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const baseSelect = [
+    "SELECT",
+    "concat(replaceOne(toString(Timestamp), ' ', 'T'), 'Z') AS TimestampIso,",
+    "TraceId,",
+    "SpanId,",
+    "ParentSpanId,",
+    "ServiceName,",
+    "StatusCode,",
+    "Duration,",
+    "SpanName",
+    "FROM default.otel_traces",
+  ];
+
+  const queries: string[] = [];
+  if (context.traceId) {
+    queries.push(
+      [
+        ...baseSelect,
+        `WHERE TraceId = '${escapeSqlString(context.traceId)}'`,
+        "ORDER BY Timestamp DESC",
+        "LIMIT 1",
+        "FORMAT JSONEachRow",
+      ].join(" "),
+    );
+  }
+
+  if (context.spanId) {
+    queries.push(
+      [
+        ...baseSelect,
+        `WHERE SpanId = '${escapeSqlString(context.spanId)}'`,
+        "ORDER BY Timestamp DESC",
+        "LIMIT 1",
+        "FORMAT JSONEachRow",
+      ].join(" "),
+    );
+  }
+
+  if (context.createdAt) {
+    const timestampExpr = `parseDateTime64BestEffort('${escapeSqlString(context.createdAt)}', 9)`;
+    queries.push(
+      [
+        ...baseSelect,
+        `WHERE Timestamp BETWEEN ${timestampExpr} - INTERVAL 30 SECOND AND ${timestampExpr} + INTERVAL 30 SECOND`,
+        "ORDER BY",
+        "(SpanName = 'caddy-events-http') DESC,",
+        `abs(toUnixTimestamp64Nano(Timestamp) - toUnixTimestamp64Nano(${timestampExpr})) ASC`,
+        "LIMIT 1",
+        "FORMAT JSONEachRow",
+      ].join(" "),
+    );
+  }
+
+  queries.push(
+    [
+      ...baseSelect,
+      "ORDER BY (SpanName = 'caddy-events-http') DESC, Timestamp DESC",
+      "LIMIT 1",
+      "FORMAT JSONEachRow",
+    ].join(" "),
+  );
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    for (const query of queries) {
+      const row = await runSingleRowQuery(query);
+      if (row) return row;
+    }
+    await sleep(500);
+  }
+
+  return undefined;
+}
+
+async function buildClickstackTraceLink(params: {
+  deployment: ProjectDeployment;
+  ingressUrl: string;
+  ingressPort: number;
+  traceId: string;
+  spanId?: string;
+  createdAt?: string;
+}): Promise<ClickstackTraceLink> {
+  const clickstackUrl = new URL(
+    toHostUrl("clickstack.iterate.localhost", params.ingressPort, "/search"),
+  );
+  const sources = await hostJson<ClickstackSource[]>(
+    params.ingressUrl,
+    "clickstack.iterate.localhost",
+    "/api/sources",
+  ).catch(() => [] as ClickstackSource[]);
+
+  const traceSource =
+    sources.find((entry) => entry.kind === "trace") ??
+    sources.find((entry) => entry.traceSourceId !== undefined);
+  const sourceId = traceSource?.id ?? "";
+
+  const queryParams = clickstackUrl.searchParams;
+  queryParams.set("query", params.traceId);
+  queryParams.set("source", sourceId);
+  queryParams.set("where", "");
+  queryParams.set("select", "");
+  queryParams.set("whereLanguage", "lucene");
+  queryParams.set("filters", "[]");
+  queryParams.set("orderBy", "Timestamp DESC");
+  queryParams.set("isLive", "false");
+
+  const row = await fetchClickstackTraceRow(params.deployment, {
+    traceId: params.traceId,
+    spanId: params.spanId,
+    createdAt: params.createdAt,
+  });
+  const rowTimestampMs = row ? Date.parse(row.TimestampIso) : Date.now();
+  const halfWindowMs = 7.5 * 60 * 1000;
+  queryParams.set("from", String(Math.max(0, Math.floor(rowTimestampMs - halfWindowMs))));
+  queryParams.set("to", String(Math.floor(rowTimestampMs + halfWindowMs)));
+
+  if (row && sourceId) {
+    const rowWhere = toRowWhere(row);
+    const eventRowWhere = toEventRowWhere(row);
+    queryParams.set("rowWhere", rowWhere);
+    queryParams.set("rowSource", sourceId);
+    queryParams.set(
+      "eventRowWhere",
+      JSON.stringify({
+        id: eventRowWhere,
+        type: "trace",
+        aliasWith: [],
+      }),
+    );
+    return {
+      url: clickstackUrl.toString(),
+      rowWhere,
+      rowSource: sourceId,
+      eventRowWhere,
+    };
+  }
+
+  return { url: clickstackUrl.toString() };
+}
+
+function parseStreamTraceContext(streamText: string): StreamTraceContext {
+  const contexts: StreamTraceContext[] = [];
+  for (const line of streamText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const jsonText = trimmed.slice("data:".length).trim();
+    if (!jsonText) continue;
+
+    try {
+      const payload = JSON.parse(jsonText) as {
+        createdAt?: string;
+        trace?: { traceId?: string; spanId?: string };
+      };
+      if (payload.trace?.traceId) {
+        contexts.push({
+          traceId: payload.trace.traceId,
+          spanId: payload.trace.spanId,
+          createdAt: payload.createdAt,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  const latest = contexts.at(-1);
+  if (latest) return latest;
+
+  const fallbackTraceId = [...streamText.matchAll(/"traceId"\s*:\s*"([0-9a-f]{32})"/gi)]
+    .map((match) => match[1])
+    .at(-1);
+  return { traceId: fallbackTraceId };
 }
 
 async function waitForHostRoute(
@@ -188,8 +477,6 @@ async function waitForDirectHttp(
 }
 
 async function startProcess(deployment: ProjectDeployment, config: ProcessConfig): Promise<void> {
-  logLine(`starting process: ${config.slug}`);
-
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: config.slug,
     definition: config.definition,
@@ -213,8 +500,6 @@ async function startProcess(deployment: ProjectDeployment, config: ProcessConfig
   if (config.directHttpCheck) {
     await waitForDirectHttp(deployment, config.directHttpCheck);
   }
-
-  logLine(`process ready: ${config.slug}`);
 }
 
 async function bodyInitToString(
@@ -317,21 +602,21 @@ async function hostJson<T>(
   return JSON.parse(text) as T;
 }
 
-async function main(): Promise<void> {
-  const subcommand = process.argv[2];
-  if (subcommand !== undefined && subcommand !== "demo") {
-    throw new Error(`unknown jonasland command: ${subcommand}`);
-  }
-
+async function runSandboxDemo(): Promise<void> {
   const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
   const demoEgressProxy =
     process.env.JONASLAND_DEMO_EGRESS_PROXY || "http://host.docker.internal:19099";
+  const demoUiUrl = process.env.JONASLAND_DEMO_UI_URL || "http://127.0.0.1:5173";
   const containerName = `jonasland-demo-${randomUUID().slice(0, 8)}`;
 
-  logLine(`building image: ${image}`);
-  execFileSync("pnpm", ["--filter", "./jonasland/sandbox", "build"], { stdio: "inherit" });
+  prompts.intro("Jonasland Demo");
+  const spinner = prompts.spinner();
 
-  logLine(`starting container: ${containerName}`);
+  spinner.start(`building image: ${image}`);
+  execFileSync("pnpm", ["--filter", "./jonasland/sandbox", "build"], { stdio: "inherit" });
+  spinner.stop(`built image: ${image}`);
+
+  spinner.start(`starting container: ${containerName}`);
   const deployment = await projectDeployment({
     image,
     name: containerName,
@@ -341,20 +626,26 @@ async function main(): Promise<void> {
       ITERATE_EXTERNAL_EGRESS_PROXY: demoEgressProxy,
     },
   });
+  spinner.stop(`container started: ${containerName}`);
 
-  logLine("ensuring baseline processes");
+  spinner.start("waiting for baseline services");
   for (const processSlug of ["caddy", "registry", "events", "daemon"] as const) {
     await deployment.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
   }
+  spinner.stop("baseline services ready");
 
+  spinner.start("starting demo services");
   for (const config of processes) {
+    spinner.message(`starting process: ${config.slug}`);
     await startProcess(deployment, config);
+    spinner.message(`process ready: ${config.slug}`);
   }
+  spinner.stop("demo services ready");
 
   const ingressUrl = await deployment.ingressUrl();
   const ingressPort = Number(new URL(ingressUrl).port || "80");
 
-  logLine("running sample API calls");
+  spinner.start("running sample API calls");
   const placedOrder = await hostJson<{
     id: string;
     sku: string;
@@ -396,10 +687,18 @@ async function main(): Promise<void> {
     "/api/streams/orders",
   );
   const streamText = await streamResponse.text();
-  const traceIdMatches = [...streamText.matchAll(/"traceId"\s*:\s*"([0-9a-f]{32})"/gi)].map(
-    (match) => match[1],
-  );
-  const traceId = traceIdMatches.at(-1);
+  const streamTrace = parseStreamTraceContext(streamText);
+  const traceId = streamTrace.traceId;
+  const clickstackTraceLink = traceId
+    ? await buildClickstackTraceLink({
+        deployment,
+        ingressUrl,
+        ingressPort,
+        traceId,
+        spanId: streamTrace.spanId,
+        createdAt: streamTrace.createdAt,
+      }).catch(() => undefined)
+    : undefined;
 
   let slackDemoResult: { ok?: boolean; status?: number; body?: string; error?: string } = {};
   try {
@@ -442,117 +741,185 @@ async function main(): Promise<void> {
     "/api/routes",
   );
 
-  process.stdout.write("\n");
-  process.stdout.write("jonasland demo is up\n");
-  process.stdout.write(`container: ${containerName}\n`);
-  process.stdout.write(`image: ${image}\n`);
-  process.stdout.write(`ingress: ${ingressUrl}\n`);
-  process.stdout.write("\n");
-  process.stdout.write("URLs to visit\n");
-  process.stdout.write(`- home: ${toHostUrl("home.iterate.localhost", ingressPort, "/")}\n`);
-  process.stdout.write(`- docs: ${toHostUrl("docs.iterate.localhost", ingressPort, "/")}\n`);
-  process.stdout.write(`- orders: ${toHostUrl("orders.iterate.localhost", ingressPort, "/")}\n`);
-  process.stdout.write(`- events: ${toHostUrl("events.iterate.localhost", ingressPort, "/")}\n`);
-  process.stdout.write(
-    `- daemon: ${toHostUrl("daemon.iterate.localhost", ingressPort, "/healthz")}\n`,
-  );
-  process.stdout.write(
-    `- agents: ${toHostUrl("agents.iterate.localhost", ingressPort, "/healthz")}\n`,
-  );
-  process.stdout.write(
-    `- opencode-wrapper: ${toHostUrl("opencode-wrapper.iterate.localhost", ingressPort, "/healthz")}\n`,
-  );
-  process.stdout.write(
-    `- slack: ${toHostUrl("slack.iterate.localhost", ingressPort, "/healthz")}\n`,
-  );
-  process.stdout.write(
-    `- opencode: ${toHostUrl("opencode.iterate.localhost", ingressPort, "/healthz")}\n`,
-  );
-  process.stdout.write(
-    `- outerbase: ${toHostUrl("outerbase.iterate.localhost", ingressPort, "/")}\n`,
-  );
-  process.stdout.write(
-    `- registry: ${toHostUrl("registry.iterate.localhost", ingressPort, "/")}\n`,
-  );
-  process.stdout.write(`- pidnap: ${toHostUrl("pidnap.iterate.localhost", ingressPort, "/")}\n`);
-  process.stdout.write(
-    `- openobserve: ${toHostUrl("openobserve.iterate.localhost", ingressPort, "/")}\n`,
-  );
-  process.stdout.write("  login: root@example.com / Complexpass#123\n");
-  process.stdout.write(
-    `- clickstack: ${toHostUrl("clickstack.iterate.localhost", ingressPort, "/")}\n`,
-  );
-  process.stdout.write(
-    `- caddymanager: ${toHostUrl("caddymanager.iterate.localhost", ingressPort, "/")}\n`,
-  );
-  process.stdout.write("\n");
+  const traceLinkFile = `/tmp/${containerName}-trace-link.txt`;
+  if (clickstackTraceLink?.url) {
+    writeFileSync(traceLinkFile, `${clickstackTraceLink.url}\n`);
+  }
 
-  process.stdout.write("sample API calls\n");
-  process.stdout.write(
-    `- placed order: ${JSON.stringify({ id: placedOrder.id, sku: placedOrder.sku, eventId: placedOrder.eventId })}\n`,
-  );
-  process.stdout.write(
-    `- fetched order: ${JSON.stringify({ id: foundOrder.id, quantity: foundOrder.quantity, status: foundOrder.status })}\n`,
-  );
-  process.stdout.write(
-    `- stream count: ${String(streamList.json.length)} (includes /orders stream: ${String(streamList.json.some((entry) => entry.path === "/orders"))})\n`,
-  );
-  process.stdout.write(
-    `- home OTEL endpoint: ${homeObservability.otel?.tracesEndpoint ?? "n/a"}\n`,
-  );
-  process.stdout.write(`- registry route count: ${String(registryRouteCount.total)}\n`);
-  process.stdout.write(`- demo egress proxy: ${demoEgressProxy}\n`);
-  process.stdout.write(`- slack webhook smoke: ${JSON.stringify(slackDemoResult)}\n`);
-  process.stdout.write("\n");
+  spinner.stop("sample calls complete");
 
-  process.stdout.write("trace links\n");
+  printSectionNote(
+    "Start Here",
+    padKeyValueRows([
+      ["demo UI", `${demoUiUrl} (run: pnpm jonasland:demo-ui)`],
+      ["sandbox demo app", toHostUrl("home.iterate.localhost", ingressPort, "/")],
+    ]),
+  );
+
+  printSectionNote(
+    "Jonasland Demo",
+    padKeyValueRows([
+      ["container", containerName],
+      ["image", image],
+      ["ingress", ingressUrl],
+    ]),
+  );
+
+  printSectionNote(
+    "URLs",
+    padKeyValueRows([
+      ["demo app", toHostUrl("home.iterate.localhost", ingressPort, "/")],
+      ["demo control UI", `${demoUiUrl} (run: pnpm jonasland:demo-ui)`],
+      ["home", toHostUrl("home.iterate.localhost", ingressPort, "/")],
+      ["docs", toHostUrl("docs.iterate.localhost", ingressPort, "/")],
+      ["orders", toHostUrl("orders.iterate.localhost", ingressPort, "/")],
+      ["events", toHostUrl("events.iterate.localhost", ingressPort, "/")],
+      ["daemon", toHostUrl("daemon.iterate.localhost", ingressPort, "/healthz")],
+      ["agents", toHostUrl("agents.iterate.localhost", ingressPort, "/healthz")],
+      [
+        "opencode-wrapper",
+        toHostUrl("opencode-wrapper.iterate.localhost", ingressPort, "/healthz"),
+      ],
+      ["slack", toHostUrl("slack.iterate.localhost", ingressPort, "/healthz")],
+      ["opencode", toHostUrl("opencode.iterate.localhost", ingressPort, "/healthz")],
+      ["outerbase", toHostUrl("outerbase.iterate.localhost", ingressPort, "/")],
+      ["registry", toHostUrl("registry.iterate.localhost", ingressPort, "/")],
+      ["pidnap", toHostUrl("pidnap.iterate.localhost", ingressPort, "/")],
+      ["openobserve", toHostUrl("openobserve.iterate.localhost", ingressPort, "/")],
+      ["openobserve login", "root@example.com / Complexpass#123"],
+      ["clickstack", toHostUrl("clickstack.iterate.localhost", ingressPort, "/")],
+      ["caddymanager", toHostUrl("caddymanager.iterate.localhost", ingressPort, "/")],
+    ]),
+  );
+
+  printSectionNote(
+    "Sample API Calls",
+    padKeyValueRows([
+      [
+        "placed order",
+        JSON.stringify({ id: placedOrder.id, sku: placedOrder.sku, eventId: placedOrder.eventId }),
+      ],
+      [
+        "fetched order",
+        JSON.stringify({
+          id: foundOrder.id,
+          quantity: foundOrder.quantity,
+          status: foundOrder.status,
+        }),
+      ],
+      [
+        "stream count",
+        `${String(streamList.json.length)} (includes /orders: ${String(streamList.json.some((entry) => entry.path === "/orders"))})`,
+      ],
+      ["home OTEL endpoint", homeObservability.otel?.tracesEndpoint ?? "n/a"],
+      ["registry route count", String(registryRouteCount.total)],
+      ["demo egress proxy", demoEgressProxy],
+      ["slack webhook smoke", JSON.stringify(slackDemoResult)],
+    ]),
+  );
+
+  const traceLines: string[] = [];
   if (traceId) {
-    process.stdout.write(`- trace id: ${traceId}\n`);
-    process.stdout.write(
-      `- clickstack trace query: ${toHostUrl("clickstack.iterate.localhost", ingressPort, `/?q=${encodeURIComponent(traceId)}`)}\n`,
-    );
-    process.stdout.write(
-      `- clickstack alt query: ${toHostUrl("clickstack.iterate.localhost", ingressPort, `/search?query=${encodeURIComponent(traceId)}`)}\n`,
-    );
+    traceLines.push(...padKeyValueRows([["trace id", traceId]]));
+    if (clickstackTraceLink?.url) {
+      traceLines.push(...padKeyValueRows([["trace link file", traceLinkFile]]));
+      traceLines.push("open the file to copy full clickstack deep-link");
+    } else {
+      traceLines.push(
+        ...padKeyValueRows([
+          [
+            "clickstack search",
+            toHostUrl(
+              "clickstack.iterate.localhost",
+              ingressPort,
+              `/search?query=${encodeURIComponent(traceId)}`,
+            ),
+          ],
+        ]),
+      );
+    }
   } else {
-    process.stdout.write("- no traceId parsed from /api/streams/orders yet\n");
-    process.stdout.write(
-      `- open clickstack and search for order event id: ${placedOrder.eventId}\n`,
+    traceLines.push(
+      ...padKeyValueRows([["trace", "no traceId parsed from /api/streams/orders yet"]]),
+    );
+    traceLines.push(
+      ...padKeyValueRows([["clickstack search hint", `order event id: ${placedOrder.eventId}`]]),
     );
   }
-  process.stdout.write("\n");
+  printSectionNote("Trace Links", traceLines);
 
-  process.stdout.write("stuff to try\n");
-  process.stdout.write(
-    "- start local mock egress (separate terminal):\n  pnpm tsx jonasland/mock-egress-proxy-demo.ts\n",
-  );
-  process.stdout.write(
-    `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{"event":{"type":"app_mention","user":"U1","text":"<@BOT> what is 50 minus 8","channel":"C1","ts":"1730000000.000100","thread_ts":"1730000000.000100"}}' ${ingressUrl}/webhook\n`,
-  );
-  process.stdout.write(
-    `- create another order:\n  curl -sS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{"sku":"demo-2","quantity":3}' ${ingressUrl}/api/orders\n`,
-  );
-  process.stdout.write(
-    `- inspect events stream:\n  curl -sS -H 'Host: events.iterate.localhost' ${ingressUrl}/api/streams/orders\n`,
-  );
-  process.stdout.write(
-    `- inspect pidnap processes:\n  curl -sS -H 'Host: pidnap.iterate.localhost' -H 'content-type: application/json' --data '{}' ${ingressUrl}/rpc/processes/list\n`,
-  );
-  process.stdout.write(
-    `- inspect registry routes:\n  curl -sS -H 'Host: registry.iterate.localhost' ${ingressUrl}/api/routes\n`,
-  );
-  process.stdout.write(
-    `- inspect mock egress records:\n  curl -sS http://127.0.0.1:19099/records | jq\n`,
-  );
-  process.stdout.write("\n");
+  printSectionNote("Stuff To Try", [
+    "start local mock egress (separate terminal)",
+    "  pnpm tsx jonasland/mock-egress-proxy-demo.ts",
+    "",
+    "send slack webhook",
+    `  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{"event":{"type":"app_mention","user":"U1","text":"<@BOT> what is 50 minus 8","channel":"C1","ts":"1730000000.000100","thread_ts":"1730000000.000100"}}' ${ingressUrl}/webhook`,
+    "",
+    "create another order",
+    `  curl -sS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{"sku":"demo-2","quantity":3}' ${ingressUrl}/api/orders`,
+    "",
+    "inspect events stream",
+    `  curl -sS -H 'Host: events.iterate.localhost' ${ingressUrl}/api/streams/orders`,
+    "",
+    "inspect pidnap processes",
+    `  curl -sS -H 'Host: pidnap.iterate.localhost' -H 'content-type: application/json' --data '{}' ${ingressUrl}/rpc/processes/list`,
+    "",
+    "inspect registry routes",
+    `  curl -sS -H 'Host: registry.iterate.localhost' ${ingressUrl}/api/routes`,
+    "",
+    "inspect mock egress records",
+    "  curl -sS http://127.0.0.1:19099/records | jq",
+  ]);
 
-  process.stdout.write("cleanup\n");
-  process.stdout.write(`- stop container: docker rm -f ${containerName}\n`);
-  process.stdout.write(`- tail logs: docker logs -f ${containerName}\n`);
-  process.stdout.write("\n");
+  printSectionNote(
+    "Cleanup",
+    padKeyValueRows([
+      ["stop container", `docker rm -f ${containerName}`],
+      ["tail logs", `docker logs -f ${containerName}`],
+    ]),
+  );
+
+  writeLine("Jonasland demo is ready.");
 }
 
-main().catch((error) => {
+async function runDemoUi(): Promise<void> {
+  const demoUiUrl = process.env.JONASLAND_DEMO_UI_URL || "http://127.0.0.1:5173";
+  prompts.intro("Jonasland Demo UI");
+  prompts.log.info(`Open ${demoUiUrl}`);
+  prompts.log.info("Starting demo UI + API (Ctrl+C to stop)");
+
+  execFileSync("pnpm", ["--filter", "@iterate-com/jonasland-demo", "dev"], {
+    stdio: "inherit",
+  });
+}
+
+const cliRouter = os.router({
+  demo: os.meta({ description: "Start Jonasland demo UI (default)." }).handler(async () => {
+    await runDemoUi();
+  }),
+  sandbox: os
+    .meta({ description: "Start sandbox directly and print local links (verbose)." })
+    .handler(async () => {
+      await runSandboxDemo();
+    }),
+});
+
+async function runCli(): Promise<void> {
+  if (process.argv.length <= 2) {
+    process.argv.push("demo");
+  }
+
+  const cli = createCli({
+    name: "jonasland",
+    version: "0.0.1",
+    description: "Jonasland demo helper",
+    router: cliRouter,
+  });
+
+  await cli.run();
+}
+
+runCli().catch((error) => {
   process.stderr.write(`${errorMessage(error)}\n`);
   process.exit(1);
 });
