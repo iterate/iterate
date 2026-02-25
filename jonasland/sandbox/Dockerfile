@@ -10,23 +10,29 @@ FROM ${CLICKSTACK_IMAGE} AS clickstack
 
 FROM node:24-trixie-slim
 
-ARG GIT_SHA=unknown
 ARG CADDY_VERSION=2.11.1
 ARG TARGETARCH
+ARG GIT_SHA=unknown
+
+ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
+    git \
     iptables \
+    libcap2-bin \
     procps \
+    sudo \
     tini \
     util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin caddy && \
-    chmod +x /usr/local/bin/caddy
+    chmod +x /usr/local/bin/caddy && \
+    setcap cap_net_bind_service=+ep /usr/local/bin/caddy
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
@@ -34,39 +40,43 @@ COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
 COPY --from=clickstack / /opt/clickstack-root
 
-WORKDIR /opt/pidnap
-COPY packages/pidnap/package.json /opt/pidnap/package.json
-COPY packages/pidnap/src /opt/pidnap/src
-RUN pnpm install --prod
+RUN groupadd -g 1001 iterate && \
+    useradd -m -u 1001 -g iterate -s /bin/bash iterate && \
+    echo 'iterate ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/iterate && \
+    chmod 0440 /etc/sudoers.d/iterate && \
+    mkdir -p \
+      "$ITERATE_REPO" \
+      /caddy-data \
+      /var/lib/jonasland \
+      /var/lib/openobserve \
+      /var/log/pidnap && \
+    chown -R iterate:iterate /home/iterate /caddy-data /var/lib/jonasland /var/lib/openobserve /var/log/pidnap
 
-WORKDIR /opt
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /opt/
-COPY services /opt/services
-COPY packages /opt/packages
-RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
-    --filter @iterate-com/registry-service \
-    --filter @iterate-com/events-service \
-    --filter @iterate-com/orders-service \
-    --filter @iterate-com/home-service \
-    --filter @iterate-com/docs-service \
-    --filter @iterate-com/outerbase-service \
-    --filter @iterate-com/egress-service \
-    --filter @iterate-com/registry-contract \
-    --filter @iterate-com/events-contract \
-    --filter @iterate-com/orders-contract \
-    --filter @iterate-com/shared \
-    --filter @iterate-com/ui
+USER iterate
+WORKDIR $ITERATE_REPO
+
+COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1001,gid=1001 \
+    pnpm fetch --prod
+
+COPY --chown=iterate:iterate . .
+RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1001,gid=1001 \
+    pnpm install --prod --frozen-lockfile --offline --ignore-scripts \
+      --filter pidnap \
+      --filter @iterate-com/registry-service \
+      --filter @iterate-com/events-service \
+      --filter @iterate-com/orders-service \
+      --filter @iterate-com/home-service \
+      --filter @iterate-com/docs-service \
+      --filter @iterate-com/outerbase-service \
+      --filter @iterate-com/egress-service \
+      --filter @iterate-com/registry-contract \
+      --filter @iterate-com/events-contract \
+      --filter @iterate-com/orders-contract \
+      --filter @iterate-com/shared \
+      --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs
-
-RUN mkdir -p \
-    /opt/jonasland-sandbox \
-    /caddy-data \
-    /var/lib/jonasland \
-    /var/lib/openobserve \
-    /var/log/pidnap
-
-COPY jonasland/sandbox /opt/jonasland-sandbox
-RUN chmod +x /opt/jonasland-sandbox/start.sh /opt/jonasland-sandbox/clickstack-launcher.sh
+RUN chmod +x "$ITERATE_REPO/jonasland/sandbox/start.sh" "$ITERATE_REPO/jonasland/sandbox/clickstack-launcher.sh"
 
 VOLUME ["/caddy-data"]
 EXPOSE 80
@@ -76,4 +86,4 @@ HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=20 \
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/opt/jonasland-sandbox/start.sh"]
+CMD ["/home/iterate/src/github.com/iterate/iterate/jonasland/sandbox/start.sh"]

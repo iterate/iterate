@@ -1,3 +1,6 @@
+const iterateRepo = process.env.ITERATE_REPO ?? "/home/iterate/src/github.com/iterate/iterate";
+const tsxPath = `${iterateRepo}/packages/pidnap/node_modules/.bin/tsx`;
+
 export default {
   http: {
     host: "0.0.0.0",
@@ -15,7 +18,7 @@ export default {
         args: [
           "run",
           "--config",
-          "/opt/jonasland-sandbox/caddy/Caddyfile",
+          `${iterateRepo}/jonasland/sandbox/caddy/Caddyfile`,
           "--adapter",
           "caddyfile",
         ],
@@ -34,8 +37,8 @@ export default {
     {
       name: "registry",
       definition: {
-        command: "/opt/pidnap/node_modules/.bin/tsx",
-        args: ["/opt/services/registry-service/src/server.ts"],
+        command: tsxPath,
+        args: [`${iterateRepo}/services/registry-service/src/server.ts`],
         env: {
           PORT: "19010",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -54,8 +57,8 @@ export default {
     {
       name: "events",
       definition: {
-        command: "/opt/pidnap/node_modules/.bin/tsx",
-        args: ["/opt/services/events-service/src/server.ts"],
+        command: tsxPath,
+        args: [`${iterateRepo}/services/events-service/src/server.ts`],
         env: {
           PORT: "19010",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -74,8 +77,8 @@ export default {
     {
       name: "orders",
       definition: {
-        command: "/opt/pidnap/node_modules/.bin/tsx",
-        args: ["/opt/services/orders-service/src/server.ts"],
+        command: tsxPath,
+        args: [`${iterateRepo}/services/orders-service/src/server.ts`],
         env: {
           EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -94,8 +97,8 @@ export default {
     {
       name: "docs",
       definition: {
-        command: "/opt/pidnap/node_modules/.bin/tsx",
-        args: ["/opt/services/docs-service/src/server.ts"],
+        command: tsxPath,
+        args: [`${iterateRepo}/services/docs-service/src/server.ts`],
         env: {
           OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
