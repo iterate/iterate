@@ -93,8 +93,10 @@ jobs:
         run: |-
           set -euo pipefail
           git_sha="$(git rev-parse HEAD)"
-          short_sha="$(git rev-parse --short=7 HEAD)"
-          tag_suffix="jonasland-sha-${short_sha}"
+          short_sha="${git_sha:0:7}"
+          dirty_suffix=""
+          if [ -n "$(git status --porcelain)" ]; then dirty_suffix="-dirty"; fi
+          tag_suffix="jonasland-sha-${short_sha}${dirty_suffix}"
           depot_project_id="$(node -e "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync('depot.json','utf8')); if(!c.id){process.exit(1)}; process.stdout.write(c.id)")"
           jonasland_fly_registry_app="$(doppler secrets get JONASLAND_SANDBOX_FLY_REGISTRY_APP --plain 2>/dev/null || true)"
           if [ -z "${jonasland_fly_registry_app}" ]; then jonasland_fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"; fi

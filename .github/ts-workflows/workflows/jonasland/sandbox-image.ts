@@ -1,36 +1,6 @@
-import { workflow, uses } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../../utils/index.ts";
-import { checkoutRefExpression } from "./paths.ts";
-
-const setupRepoWithoutPnpmAction = [
-  {
-    name: "Checkout code",
-    ...uses("actions/checkout@v4", {
-      ref: checkoutRefExpression,
-    }),
-  },
-  {
-    name: "Setup Node",
-    ...uses("actions/setup-node@v4", {
-      "node-version": 24,
-    }),
-  },
-  {
-    name: "Install pnpm",
-    run: [
-      "set -euo pipefail",
-      "export PNPM_VERSION=10.24.0",
-      "curl -fsSL https://get.pnpm.io/install.sh | sh -",
-      'echo "PNPM_HOME=$HOME/.local/share/pnpm" >> "$GITHUB_ENV"',
-      'echo "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"',
-      "$HOME/.local/share/pnpm/pnpm --version",
-    ].join("\n"),
-  },
-  {
-    name: "Install dependencies",
-    run: "pnpm install",
-  },
-] as const;
+import { setupRepoWithoutPnpmAction } from "./paths.ts";
 
 export default workflow({
   name: "jonasland-sandbox-image",
@@ -122,8 +92,10 @@ export default workflow({
           run: [
             "set -euo pipefail",
             'git_sha="$(git rev-parse HEAD)"',
-            'short_sha="$(git rev-parse --short=7 HEAD)"',
-            'tag_suffix="jonasland-sha-${short_sha}"',
+            'short_sha="${git_sha:0:7}"',
+            'dirty_suffix=""',
+            'if [ -n "$(git status --porcelain)" ]; then dirty_suffix="-dirty"; fi',
+            'tag_suffix="jonasland-sha-${short_sha}${dirty_suffix}"',
             "depot_project_id=\"$(node -e \"const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync('depot.json','utf8')); if(!c.id){process.exit(1)}; process.stdout.write(c.id)\")\"",
             'jonasland_fly_registry_app="$(doppler secrets get JONASLAND_SANDBOX_FLY_REGISTRY_APP --plain 2>/dev/null || true)"',
             'if [ -z "${jonasland_fly_registry_app}" ]; then jonasland_fly_registry_app="$(doppler secrets get SANDBOX_FLY_REGISTRY_APP --plain)"; fi',
