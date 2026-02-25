@@ -391,7 +391,9 @@ export const collectSseDataEvents = async (
       for (const chunk of chunks) {
         const lines = chunk.split("\n");
         const eventType = lines.find((line) => line.startsWith("event: "))?.slice(7);
-        if (eventType !== "data") continue;
+        if (eventType !== undefined && eventType !== "data" && eventType !== "message") {
+          continue;
+        }
         const dataLine = lines.find((line) => line.startsWith("data: "));
         if (dataLine === undefined) continue;
         events.push(JSON.parse(dataLine.slice(6)) as Record<string, unknown>);

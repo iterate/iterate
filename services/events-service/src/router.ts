@@ -54,6 +54,11 @@ export const eventsRouter = os.router({
     yield* ops.streamEvents(input, signal);
   }),
 
+  firehose: os.firehose.handler(async function* ({ signal }) {
+    const ops = await getOps();
+    yield* ops.firehoseEvents(signal);
+  }),
+
   listStreams: os.listStreams.handler(async () => {
     const ops = await getOps();
     return await ops.listStreams();
