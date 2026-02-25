@@ -52,7 +52,11 @@ function parseHost(raw: string | undefined, fallback: string): string {
 
 function parseUrl(raw: string | undefined, fallback: string, key: string): string {
   const value = raw?.trim() || fallback;
-  return new URL(value).toString();
+  try {
+    return new URL(value).toString();
+  } catch {
+    throw new Error(`Invalid ${key}: ${value}`);
+  }
 }
 
 function parsePath(raw: string | undefined, fallback: string): string {

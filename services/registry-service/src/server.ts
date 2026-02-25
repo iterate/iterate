@@ -48,6 +48,9 @@ interface RegistryContext {
 }
 
 type RegistryRouteChangedPayload = ReturnType<typeof registryRouteChangedPayloadSchema.parse>;
+type EventsClient = ReturnType<typeof createOrpcRpcServiceClient<typeof eventBusContract>>;
+type RouteUpsertInput = Parameters<ServicesStore["upsertRoute"]>[0];
+type RouteUpsertResult = Awaited<ReturnType<ServicesStore["upsertRoute"]>>;
 
 function buildCaddyLoadPayload(params: {
   routes: Array<{
@@ -104,6 +107,7 @@ function buildCaddyLoadPayload(params: {
 
 let storePromise: Promise<ServicesStore> | null = null;
 let envCache: RegistryEnv | null = null;
+const eventsClientByUrl = new Map<string, EventsClient>();
 
 function getEnv() {
   envCache ??= registryServiceEnvSchema.parse(process.env);
@@ -115,6 +119,21 @@ async function ensureStore(): Promise<ServicesStore> {
     storePromise = ServicesStore.open(getEnv().REGISTRY_DB_PATH);
   }
   return await storePromise;
+}
+
+function getEventsClient(url: string): EventsClient {
+  const cached = eventsClientByUrl.get(url);
+  if (cached) {
+    return cached;
+  }
+
+  const client = createOrpcRpcServiceClient<typeof eventBusContract>({
+    env: {},
+    manifest: eventsServiceManifest,
+    url,
+  });
+  eventsClientByUrl.set(url, client);
+  return client;
 }
 
 const serviceName = "jonasland-registry-service";
@@ -205,11 +224,7 @@ async function emitRegistryRouteChangedEvent(params: {
   context: RegistryContext;
 }): Promise<void> {
   const payload = registryRouteChangedPayloadSchema.parse(params.payload);
-  const eventsClient = createOrpcRpcServiceClient<typeof eventBusContract>({
-    env: {},
-    manifest: eventsServiceManifest,
-    url: params.context.env.EVENTS_SERVICE_ORPC_URL,
-  });
+  const eventsClient = getEventsClient(params.context.env.EVENTS_SERVICE_ORPC_URL);
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -233,6 +248,59 @@ async function emitRegistryRouteChangedEvent(params: {
     stream_path: REGISTRY_ROUTE_CHANGED_STREAM_PATH,
     message: lastError instanceof Error ? lastError.message : String(lastError),
   });
+}
+
+function normalizeRouteHost(host: string): string {
+  return host.trim().toLowerCase();
+}
+
+async function upsertRouteAndEmit(params: {
+  input: RouteUpsertInput;
+  context: RegistryContext;
+}): Promise<{ route: RouteUpsertResult; routeCount: number }> {
+  const route = await params.context.store.upsertRoute(params.input);
+  const routeCount = (await params.context.store.listRoutes()).length;
+  await emitRegistryRouteChangedEvent({
+    payload: {
+      action: "upsert",
+      route,
+      routeCount,
+    },
+    context: params.context,
+  });
+  return { route, routeCount };
+}
+
+async function removeRouteAndEmit(params: {
+  host: string;
+  context: RegistryContext;
+}): Promise<{ host: string; removed: boolean; routeCount: number }> {
+  const host = normalizeRouteHost(params.host);
+  const removed = await params.context.store.removeRoute(host);
+  const routeCount = (await params.context.store.listRoutes()).length;
+  if (removed) {
+    await emitRegistryRouteChangedEvent({
+      payload: {
+        action: "remove",
+        host,
+        removed,
+        routeCount,
+      },
+      context: params.context,
+    });
+  }
+  return { host, removed, routeCount };
+}
+
+function toRouteUpsertInputFromBody(body: Record<string, unknown>): RouteUpsertInput {
+  return {
+    host: String(body.host ?? ""),
+    target: String(body.target ?? ""),
+    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+      ? { metadata: body.metadata as Record<string, string> }
+      : {}),
+    ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
+  };
 }
 
 function writeJsonResponse(
@@ -291,49 +359,21 @@ export const registryRouter = os.router({
   },
   routes: {
     upsert: os.routes.upsert.handler(async ({ input, context }) => {
-      const route = await context.store.upsertRoute(input);
-      const routes = await context.store.listRoutes();
-      await emitRegistryRouteChangedEvent({
-        payload: {
-          action: "upsert",
-          route,
-          routeCount: routes.length,
-        },
-        context,
-      });
+      const result = await upsertRouteAndEmit({ input, context });
       infoFromContext(context, "registry.routes.upsert", {
-        host: route.host,
-        route_count: routes.length,
+        host: result.route.host,
+        route_count: result.routeCount,
       });
-      return {
-        route,
-        routeCount: routes.length,
-      };
+      return result;
     }),
     remove: os.routes.remove.handler(async ({ input, context }) => {
-      const normalizedHost = input.host.trim().toLowerCase();
-      const removed = await context.store.removeRoute(normalizedHost);
-      const routes = await context.store.listRoutes();
-      if (removed) {
-        await emitRegistryRouteChangedEvent({
-          payload: {
-            action: "remove",
-            host: normalizedHost,
-            removed,
-            routeCount: routes.length,
-          },
-          context,
-        });
-      }
+      const result = await removeRouteAndEmit({ host: input.host, context });
       infoFromContext(context, "registry.routes.remove", {
-        host: normalizedHost,
-        removed,
-        route_count: routes.length,
+        host: result.host,
+        removed: result.removed,
+        route_count: result.routeCount,
       });
-      return {
-        removed,
-        routeCount: routes.length,
-      };
+      return { removed: result.removed, routeCount: result.routeCount };
     }),
     list: os.routes.list.handler(async ({ context }) => {
       const routes = await context.store.listRoutes();
@@ -475,46 +515,24 @@ export async function startRegistryService(options?: {
 
         if (req.method === "POST" && pathname === "/api/routes/upsert") {
           const body = await readJsonBody(req);
-          const route = await store.upsertRoute({
-            host: String(body.host ?? ""),
-            target: String(body.target ?? ""),
-            ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
-              ? { metadata: body.metadata as Record<string, string> }
-              : {}),
-            ...(Array.isArray(body.tags) ? { tags: body.tags.map((tag) => String(tag)) } : {}),
-          });
-          const routes = await store.listRoutes();
-          await emitRegistryRouteChangedEvent({
-            payload: {
-              action: "upsert",
-              route,
-              routeCount: routes.length,
-            },
+          const result = await upsertRouteAndEmit({
+            input: toRouteUpsertInputFromBody(body),
             context,
           });
-          writeJsonResponse(res, 200, { route, routeCount: routes.length });
+          writeJsonResponse(res, 200, result);
           return;
         }
 
         if (req.method === "POST" && pathname === "/api/routes/remove") {
           const body = await readJsonBody(req);
-          const host = String(body.host ?? "")
-            .trim()
-            .toLowerCase();
-          const removed = await store.removeRoute(host);
-          const routes = await store.listRoutes();
-          if (removed) {
-            await emitRegistryRouteChangedEvent({
-              payload: {
-                action: "remove",
-                host,
-                removed,
-                routeCount: routes.length,
-              },
-              context,
-            });
-          }
-          writeJsonResponse(res, 200, { removed, routeCount: routes.length });
+          const result = await removeRouteAndEmit({
+            host: String(body.host ?? ""),
+            context,
+          });
+          writeJsonResponse(res, 200, {
+            removed: result.removed,
+            routeCount: result.routeCount,
+          });
           return;
         }
 
