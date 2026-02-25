@@ -32,6 +32,28 @@ const MAX_PORT = 65_535;
 const PROJECT_SLUG_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_PROJECT_SLUGS = new Set(["prj", "org"]);
 
+/**
+ * Named service aliases — map friendly subdomain names to port numbers.
+ * e.g. `opencode.templestein.com` → port 4096
+ *
+ * Used for:
+ * - Parsing: `opencode.templestein.com` → port 4096
+ * - Generation: port 4096 → `opencode.templestein.com` (first alias wins)
+ */
+export const SERVICE_ALIASES: Record<string, number> = {
+  opencode: 4096,
+  daemon: 3000,
+};
+
+/**
+ * Reverse map: port → preferred alias name (first alias for each port wins).
+ * Used by URL builders to emit `opencode.templestein.com` instead of `4096.templestein.com`.
+ */
+export const PORT_TO_ALIAS: Record<number, string> = {};
+for (const [name, port] of Object.entries(SERVICE_ALIASES)) {
+  if (!(port in PORT_TO_ALIAS)) PORT_TO_ALIAS[port] = name;
+}
+
 // ---------------------------------------------------------------------------
 // 4a. Parse a project ingress hostname into project/machine + port
 // ---------------------------------------------------------------------------
@@ -94,6 +116,108 @@ export function parseProjectIngressHostname(hostname: string): ParsedIngressHost
 }
 
 // ---------------------------------------------------------------------------
+// 4a-bis. Parse a custom domain hostname into target + port
+// ---------------------------------------------------------------------------
+
+export type CustomDomainTarget =
+  | { kind: "project"; targetPort: number }
+  | { kind: "machine"; machineId: string; targetPort: number };
+
+export type ParsedCustomDomainHostname =
+  | { ok: true; target: CustomDomainTarget }
+  | { ok: false; error: "not_custom_domain" | "invalid_subdomain" };
+
+/**
+ * Parse a hostname against a known custom domain.
+ *
+ * Custom domain hostnames:
+ *   `templestein.com`                     → project, port 3000
+ *   `4096.templestein.com`                → project, port 4096
+ *   `opencode.templestein.com`            → project, port from SERVICE_ALIASES
+ *   `4096__mach_abc.templestein.com`      → machine mach_abc, port 4096
+ *   `mach_abc.templestein.com`            → machine mach_abc, port 3000
+ *
+ * Returns `{ ok: false, error: "not_custom_domain" }` if the hostname
+ * is not the custom domain or a subdomain of it.
+ */
+export function parseCustomDomainHostname(
+  hostname: string,
+  customDomain: string,
+): ParsedCustomDomainHostname {
+  const normalizedHostname = hostname.toLowerCase();
+  const normalizedCustomDomain = customDomain.toLowerCase();
+
+  // Exact match — root custom domain, port 3000
+  if (normalizedHostname === normalizedCustomDomain) {
+    return { ok: true, target: { kind: "project", targetPort: DEFAULT_TARGET_PORT } };
+  }
+
+  // Must be a subdomain of the custom domain
+  if (!normalizedHostname.endsWith(`.${normalizedCustomDomain}`)) {
+    return { ok: false, error: "not_custom_domain" };
+  }
+
+  // Extract the subdomain label (everything before the custom domain)
+  const subdomainPart = normalizedHostname.slice(
+    0,
+    normalizedHostname.length - normalizedCustomDomain.length - 1,
+  );
+
+  // Only support single-level subdomains (e.g. "4096" but not "a.b")
+  // Exception: machine-targeting with port (e.g. "4096__mach_abc")
+  if (!subdomainPart || subdomainPart.includes(".")) {
+    return { ok: false, error: "invalid_subdomain" };
+  }
+
+  // Check for machine target with port prefix: `4096__mach_abc`
+  const separatorIndex = subdomainPart.indexOf("__");
+  if (separatorIndex > 0) {
+    const rawPort = subdomainPart.slice(0, separatorIndex);
+    const identifier = subdomainPart.slice(separatorIndex + 2);
+    const port = parsePort(rawPort);
+    if (port && identifier.startsWith("mach_")) {
+      return { ok: true, target: { kind: "machine", machineId: identifier, targetPort: port } };
+    }
+    // Invalid format
+    return { ok: false, error: "invalid_subdomain" };
+  }
+
+  // Check for machine target without port: `mach_abc`
+  if (subdomainPart.startsWith("mach_")) {
+    return {
+      ok: true,
+      target: { kind: "machine", machineId: subdomainPart, targetPort: DEFAULT_TARGET_PORT },
+    };
+  }
+
+  // Check for service alias: `opencode`
+  const aliasPort = SERVICE_ALIASES[subdomainPart];
+  if (aliasPort !== undefined) {
+    return { ok: true, target: { kind: "project", targetPort: aliasPort } };
+  }
+
+  // Check for numeric port: `4096`
+  const port = parsePort(subdomainPart);
+  if (port) {
+    return { ok: true, target: { kind: "project", targetPort: port } };
+  }
+
+  return { ok: false, error: "invalid_subdomain" };
+}
+
+/**
+ * Check if a hostname is a custom domain or subdomain of one.
+ */
+export function isCustomDomainHostname(hostname: string, customDomain: string): boolean {
+  const normalizedHostname = hostname.toLowerCase();
+  const normalizedCustomDomain = customDomain.toLowerCase();
+  return (
+    normalizedHostname === normalizedCustomDomain ||
+    normalizedHostname.endsWith(`.${normalizedCustomDomain}`)
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 4b. Produce env vars for machines
 // ---------------------------------------------------------------------------
 
@@ -104,18 +228,31 @@ export function parseProjectIngressHostname(hostname: string): ParsedIngressHost
  *   - `ITERATE_PROJECT_BASE_URL`        — e.g. `https://my-proj.iterate.app`
  *   - `ITERATE_OS_BASE_URL`             — e.g. `https://os.iterate.com`
  *   - `ITERATE_PROJECT_INGRESS_DOMAIN`  — e.g. `iterate.app`
+ *
+ * When `customDomain` is set, the base URL and ingress domain use the custom
+ * domain instead of `<slug>.<ingressDomain>`.
  */
 export function buildMachineIngressEnvVars(params: {
   projectSlug: string;
   projectIngressDomain: string;
   osBaseUrl: string;
   scheme: "http" | "https";
+  customDomain?: string | null;
 }): {
   ITERATE_PROJECT_BASE_URL: string;
   ITERATE_OS_BASE_URL: string;
   ITERATE_PROJECT_INGRESS_DOMAIN: string;
 } {
-  const { projectSlug, projectIngressDomain, osBaseUrl, scheme } = params;
+  const { projectSlug, projectIngressDomain, osBaseUrl, scheme, customDomain } = params;
+
+  if (customDomain) {
+    return {
+      ITERATE_PROJECT_BASE_URL: `${scheme}://${customDomain}`,
+      ITERATE_OS_BASE_URL: osBaseUrl,
+      ITERATE_PROJECT_INGRESS_DOMAIN: customDomain,
+    };
+  }
+
   return {
     ITERATE_PROJECT_BASE_URL: `${scheme}://${projectSlug}.${projectIngressDomain}`,
     ITERATE_OS_BASE_URL: osBaseUrl,
@@ -130,16 +267,19 @@ export function buildMachineIngressEnvVars(params: {
 /**
  * Given ITERATE_PROJECT_BASE_URL and a port, return a publicly routable URL.
  *
- * The ingress system uses `<port>__<hostname>` to route to a specific port.
- * For the default port (3000), the prefix is omitted.
+ * For standard ingress domains (`*.iterate.app`), uses `<port>__<hostname>`.
+ * For custom domains, uses `<port>.<hostname>` (dot subdomain).
+ * For the default port (3000), the prefix is omitted in both cases.
  *
- * Example:
+ * Example (standard):
  *   projectBaseUrl = "https://my-proj.iterate.app"
  *   port = 4096
  *   → "https://4096__my-proj.iterate.app/"
  *
- *   port = 3000
- *   → "https://my-proj.iterate.app/"
+ * Example (custom domain):
+ *   projectBaseUrl = "https://templestein.com"
+ *   port = 4096
+ *   → "https://opencode.templestein.com/"  (uses SERVICE_ALIASES)
  */
 export function buildProjectPortUrl(params: {
   projectBaseUrl: string;
@@ -149,7 +289,14 @@ export function buildProjectPortUrl(params: {
   const { projectBaseUrl, port, path } = params;
   const url = new URL(projectBaseUrl);
   if (port !== DEFAULT_TARGET_PORT) {
-    url.hostname = `${port}__${url.hostname}`;
+    const isStandardIngress = isStandardIngressDomain(url.hostname);
+    if (isStandardIngress) {
+      url.hostname = `${port}__${url.hostname}`;
+    } else {
+      // Custom domains: prefer named alias (opencode) over numeric port (4096)
+      const alias = PORT_TO_ALIAS[port];
+      url.hostname = `${alias ?? port}.${url.hostname}`;
+    }
   }
   if (path) {
     url.pathname = path.startsWith("/") ? path : `/${path}`;
@@ -235,4 +382,31 @@ function isValidProjectSlug(slug: string): boolean {
     slug.length <= 50 &&
     !RESERVED_PROJECT_SLUGS.has(slug)
   );
+}
+
+/**
+ * Standard ingress domains end with `.iterate.app` (or dev variants like `.iterate.app.localhost`).
+ * Anything else is a custom domain that uses dot-separated subdomains for port routing.
+ */
+function isStandardIngressDomain(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return lower.endsWith(".iterate.app") || lower.endsWith(".iterate.app.localhost");
+}
+
+/**
+ * System domain suffixes that must never be used as custom domains.
+ * Prevents hijacking the control plane, ingress, or dev tunnel domains.
+ */
+const BLOCKED_DOMAIN_SUFFIXES = ["iterate.com", "iterate.app", "nustom.com", "nustom.app"];
+
+/**
+ * Check if a custom domain would conflict with system hostnames.
+ * Blocks exact matches and subdomains of reserved system domains.
+ */
+export function isBlockedCustomDomain(domain: string): boolean {
+  const lower = domain.toLowerCase();
+  for (const suffix of BLOCKED_DOMAIN_SUFFIXES) {
+    if (lower === suffix || lower.endsWith(`.${suffix}`)) return true;
+  }
+  return false;
 }
