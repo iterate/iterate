@@ -11,15 +11,15 @@ import * as v from "valibot";
 import Table from "cli-table3";
 import { os as osBase } from "@orpc/server";
 import { createCli, type TrpcCliMeta } from "trpc-cli";
-
-const require = createRequire(import.meta.url);
-const pkg = require("../package.json") as { version: string };
 import { router } from "./api/server.ts";
 import { Manager, ManagerConfig } from "./manager.ts";
 import { logger } from "./logger.ts";
 import { createClient, type Client } from "./api/client.ts";
 import { ProcessDefinition } from "./lazy-process.ts";
 import { tImport } from "./utils.ts";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
 
 const os = osBase.$context<{ client: Client }>().$meta<TrpcCliMeta>({});
 
