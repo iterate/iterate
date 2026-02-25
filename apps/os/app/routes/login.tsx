@@ -40,7 +40,7 @@ export const Route = createFileRoute("/login")({
   validateSearch: z.object({
     redirectUrl: z.string().optional(),
     error: z.string().optional(),
-    email: z.string().optional(),
+    email: z.string().email().optional().catch(undefined),
     step: z.enum(["email", "otp"]).optional(),
   }),
   loaderDeps: ({ search }) => ({ redirectUrl: search.redirectUrl }),
