@@ -5,62 +5,20 @@ import {
   type SandboxFixture,
   projectDeployment as createProjectDeployment,
 } from "../test-helpers/index.ts";
+import {
+  sharedOnDemandProcesses,
+  startOnDemandProcess as startOnDemandProcessShared,
+  type OnDemandProcessConfig,
+  waitForDocsSources as waitForDocsSourcesShared,
+  type DocsSourcesPayload,
+} from "../test-helpers/on-demand-processes.ts";
 
 const sandboxImage = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 
 export { test };
 
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
-
-type OnDemandProcessName = "orders" | "outerbase" | "docs" | "openobserve" | "caddymanager";
-type OnDemandProcessConfig = {
-  definition: {
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-  };
-  routeCheck: {
-    host: string;
-    path: string;
-    timeoutMs?: number;
-    readyStatus?: "ok" | "lt400";
-  };
-  startupTimeoutMs?: number;
-};
-
-const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
-  orders: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-      },
-    },
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
-  },
-  outerbase: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
-  },
-  docs: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
-  },
+const ON_DEMAND_PROCESSES: Record<string, OnDemandProcessConfig> = {
+  ...sharedOnDemandProcesses,
   openobserve: {
     definition: {
       command: "/usr/local/bin/openobserve",
@@ -89,6 +47,7 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
     routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
   },
 };
+type OnDemandProcessName = keyof typeof ON_DEMAND_PROCESSES;
 
 export type HostRequestParams = {
   host: string;
@@ -200,36 +159,18 @@ export async function waitForHostRoute(
 export async function waitForDocsSources(
   deployment: Pick<SandboxFixture, "ingressUrl">,
   expectedHosts: string[],
-): Promise<{ sources: Array<{ id: string; title: string; specUrl: string }>; total: number }> {
-  const deadline = Date.now() + 45_000;
-
-  while (Date.now() < deadline) {
-    const response = await ingressRequest(deployment, {
-      host: "docs.iterate.localhost",
-      path: "/api/openapi-sources",
-    }).catch(() => undefined);
-
-    if (response?.ok) {
-      const payload = (await response.json().catch(() => undefined)) as
-        | {
-            sources: Array<{ id: string; title: string; specUrl: string }>;
-            total: number;
-          }
-        | undefined;
-
-      if (payload) {
-        const ids = new Set(payload.sources.map((source) => source.id));
-        const allPresent = expectedHosts.every((expectedHost) => ids.has(expectedHost));
-        if (allPresent) {
-          return payload;
-        }
-      }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  throw new Error(`timed out waiting for docs sources: ${expectedHosts.join(", ")}`);
+): Promise<DocsSourcesPayload> {
+  return await waitForDocsSourcesShared({
+    expectedHosts,
+    fetchSources: async () => {
+      const response = await ingressRequest(deployment, {
+        host: "docs.iterate.localhost",
+        path: "/api/openapi-sources",
+      }).catch(() => undefined);
+      if (!response?.ok) return undefined;
+      return (await response.json().catch(() => undefined)) as DocsSourcesPayload | undefined;
+    },
+  });
 }
 
 export async function startOnDemandProcess(
@@ -237,26 +178,13 @@ export async function startOnDemandProcess(
   processName: OnDemandProcessName,
 ): Promise<void> {
   const processConfig = ON_DEMAND_PROCESSES[processName];
-
-  const updated = await deployment.pidnap.processes.updateConfig({
-    processSlug: processName,
-    definition: processConfig.definition,
-    options: { restartPolicy: "always" },
-    envOptions: { reloadDelay: false },
-  });
-
-  if (updated.state !== "running") {
-    await deployment.pidnap.processes.start({ target: processName });
-  }
-
-  await deployment.waitForPidnapProcessRunning({
-    target: processName,
-    timeoutMs: processConfig.startupTimeoutMs ?? 45_000,
-  });
-
-  await waitForHostRoute(deployment, {
-    ...processConfig.routeCheck,
-    timeoutMs: processConfig.routeCheck.timeoutMs ?? processConfig.startupTimeoutMs ?? 45_000,
+  await startOnDemandProcessShared({
+    deployment,
+    processName,
+    processConfig,
+    waitForHostRoute: async (params) => {
+      await waitForHostRoute(deployment, params);
+    },
   });
 }
 

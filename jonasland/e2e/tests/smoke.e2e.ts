@@ -5,44 +5,20 @@ import {
   projectDeployment,
   type ProjectDeployment,
 } from "../test-helpers/index.ts";
+import {
+  OTEL_SERVICE_ENV,
+  sharedOnDemandProcesses,
+  startOnDemandProcess as startOnDemandProcessShared,
+  type OnDemandProcessConfig,
+  waitForDocsSources as waitForDocsSourcesShared,
+  type DocsSourcesPayload,
+} from "../test-helpers/on-demand-processes.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
 
-type OnDemandProcessName = "orders" | "home" | "outerbase" | "egress-proxy" | "docs";
-type OnDemandProcessConfig = {
-  definition: {
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-  };
-  routeCheck?: {
-    host: string;
-    path: string;
-  };
-  directHttpCheck?: {
-    url: string;
-  };
-};
-
-const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
-  orders: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-      },
-    },
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
-  },
+const ON_DEMAND_PROCESSES: Record<string, OnDemandProcessConfig> = {
+  ...sharedOnDemandProcesses,
   home: {
     definition: {
       command: "/opt/pidnap/node_modules/.bin/tsx",
@@ -50,14 +26,6 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "home.iterate.localhost", path: "/" },
-  },
-  outerbase: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/outerbase-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
   },
   "egress-proxy": {
     definition: {
@@ -67,15 +35,8 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
     },
     directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
   },
-  docs: {
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/docs-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
-  },
 };
+type OnDemandProcessName = keyof typeof ON_DEMAND_PROCESSES;
 
 async function waitForHostRoute(
   deployment: ProjectDeployment,
@@ -114,57 +75,37 @@ async function startOnDemandProcess(
   processName: OnDemandProcessName,
 ): Promise<void> {
   const processConfig = ON_DEMAND_PROCESSES[processName];
-  const updated = await deployment.pidnap.processes.updateConfig({
-    processSlug: processName,
-    definition: processConfig.definition,
-    options: { restartPolicy: "always" },
-    envOptions: { reloadDelay: false },
+  await startOnDemandProcessShared({
+    deployment,
+    processName,
+    processConfig,
+    waitForHostRoute: async (params) => {
+      await waitForHostRoute(deployment, params);
+    },
+    waitForDirectHttp: async (params) => {
+      await waitForDirectHttp(deployment, params);
+    },
   });
-  if (updated.state !== "running") {
-    await deployment.pidnap.processes.start({ target: processName });
-  }
-  await deployment.waitForPidnapProcessRunning({
-    target: processName,
-    timeoutMs: 45_000,
-  });
-  if (processConfig.routeCheck) {
-    await waitForHostRoute(deployment, processConfig.routeCheck);
-  }
-  if (processConfig.directHttpCheck) {
-    await waitForDirectHttp(deployment, processConfig.directHttpCheck);
-  }
 }
 
 async function waitForDocsSources(
   deployment: ProjectDeployment,
   expectedHosts: string[],
-): Promise<{ sources: Array<{ id: string; title: string; specUrl: string }>; total: number }> {
-  const deadline = Date.now() + 45_000;
-  while (Date.now() < deadline) {
-    const response = await deployment
-      .exec("curl -fsS -H 'Host: docs.iterate.localhost' http://127.0.0.1/api/openapi-sources")
-      .catch(() => ({ exitCode: 1, output: "" }));
-
-    if (response.exitCode === 0) {
+): Promise<DocsSourcesPayload> {
+  return await waitForDocsSourcesShared({
+    expectedHosts,
+    fetchSources: async () => {
+      const response = await deployment
+        .exec("curl -fsS -H 'Host: docs.iterate.localhost' http://127.0.0.1/api/openapi-sources")
+        .catch(() => ({ exitCode: 1, output: "" }));
+      if (response.exitCode !== 0) return undefined;
       try {
-        const payload = JSON.parse(response.output) as {
-          sources: Array<{ id: string; title: string; specUrl: string }>;
-          total: number;
-        };
-        const ids = new Set(payload.sources.map((source) => source.id));
-        const allPresent = expectedHosts.every((expectedHost) => ids.has(expectedHost));
-        if (allPresent) {
-          return payload;
-        }
+        return (JSON.parse(response.output) as DocsSourcesPayload | undefined) ?? undefined;
       } catch {
-        // keep polling
+        return undefined;
       }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  throw new Error(`timed out waiting for docs sources: ${expectedHosts.join(", ")}`);
+    },
+  });
 }
 
 describe.runIf(RUN_E2E)("jonasland smoke", () => {
