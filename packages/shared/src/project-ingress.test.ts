@@ -162,6 +162,51 @@ describe("buildProjectPortUrl", () => {
   });
 });
 
+describe("buildProjectPortUrl with custom domain", () => {
+  it("uses dot separator for custom domain", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://templestein.com", port: 4096 }),
+    ).toBe("https://4096.templestein.com/");
+  });
+
+  it("default port 3000 omits prefix for custom domain", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://templestein.com", port: 3000 }),
+    ).toBe("https://templestein.com/");
+  });
+
+  it("uses dot separator for subdomain custom domain", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://iterate.templestein.com", port: 4096 }),
+    ).toBe("https://4096.iterate.templestein.com/");
+  });
+
+  it("uses __ separator for standard iterate.app domain", () => {
+    expect(
+      buildProjectPortUrl({ projectBaseUrl: "https://my-proj.iterate.app", port: 4096 }),
+    ).toBe("https://4096__my-proj.iterate.app/");
+  });
+
+  it("uses __ separator for localhost dev domain", () => {
+    expect(
+      buildProjectPortUrl({
+        projectBaseUrl: "https://my-proj.iterate.app.localhost",
+        port: 4096,
+      }),
+    ).toBe("https://4096__my-proj.iterate.app.localhost/");
+  });
+
+  it("includes path with custom domain", () => {
+    expect(
+      buildProjectPortUrl({
+        projectBaseUrl: "https://templestein.com",
+        port: 4096,
+        path: "/foo/bar",
+      }),
+    ).toBe("https://4096.templestein.com/foo/bar");
+  });
+});
+
 describe("buildMachinePortUrl", () => {
   it("builds machine URL with explicit port", () => {
     expect(

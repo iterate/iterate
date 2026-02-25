@@ -38,6 +38,13 @@ const HOP_BY_HOP_HEADERS = [
 
 const EXCLUDE_RESPONSE_HEADERS = ["transfer-encoding", "connection", "keep-alive"];
 
+/**
+ * Sentinel returned by handleCustomDomainRequest when the request is for a recognized
+ * custom domain but needs to be handled by the control plane (Hono routes), not proxied.
+ * The caller should fall through to `next()` instead of returning 404.
+ */
+export const FALL_THROUGH_TO_CONTROL_PLANE = Symbol.for("FALL_THROUGH_TO_CONTROL_PLANE");
+
 function jsonError(status: number, error: string, details?: Record<string, unknown>): Response {
   return Response.json(details ? { error, details } : { error }, { status });
 }
@@ -158,15 +165,19 @@ export function buildControlPlaneProjectIngressProxyBridgeStartUrl(params: {
   redirectPath: string;
 }): URL {
   const { controlPlanePublicUrl, projectIngressProxyHost, redirectPath } = params;
-  const [subdomain] = projectIngressProxyHost.split(".");
-  const controlPlaneBridgeStartPath = new URLSearchParams();
-  if (subdomain) controlPlaneBridgeStartPath.set("subdomain", subdomain);
-  controlPlaneBridgeStartPath.set("path", normalizeProjectIngressProxyRedirectPath(redirectPath));
   const controlPlaneBridgeStartUrl = new URL(
     PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH,
     controlPlanePublicUrl,
   );
-  controlPlaneBridgeStartUrl.search = controlPlaneBridgeStartPath.toString();
+  // Pass the full hostname for custom domains; extract subdomain for standard ingress
+  controlPlaneBridgeStartUrl.searchParams.set(
+    "projectIngressProxyHost",
+    projectIngressProxyHost,
+  );
+  controlPlaneBridgeStartUrl.searchParams.set(
+    "path",
+    normalizeProjectIngressProxyRedirectPath(redirectPath),
+  );
   return controlPlaneBridgeStartUrl;
 }
 
@@ -393,6 +404,8 @@ export async function handleProjectIngressRequest(
       env,
       session,
     );
+    // Sentinel: custom domain recognized but needs control plane handling (e.g. /_/exchange-token)
+    if (customDomainResponse === FALL_THROUGH_TO_CONTROL_PLANE) return null;
     if (customDomainResponse) return customDomainResponse;
 
     return jsonError(
@@ -533,7 +546,8 @@ export async function handleProjectIngressRequest(
 
 /**
  * Handle a request for a custom domain hostname.
- * Returns a Response if handled, or null if this hostname isn't a known custom domain.
+ * Returns a Response if handled, null if not a known custom domain,
+ * or FALL_THROUGH_TO_CONTROL_PLANE if the request needs control plane handling.
  */
 async function handleCustomDomainRequest(
   request: Request,
@@ -541,7 +555,7 @@ async function handleCustomDomainRequest(
   requestHostname: string,
   env: CloudflareEnv,
   session: AuthSession,
-): Promise<Response | null> {
+): Promise<Response | typeof FALL_THROUGH_TO_CONTROL_PLANE | null> {
   // Find the project by custom domain
   const project = await findProjectByCustomDomainHostname(requestHostname);
   if (!project || !project.customDomain) return null;
@@ -552,8 +566,10 @@ async function handleCustomDomainRequest(
     return jsonError(400, parsed.error, { hostname: requestHostname });
   }
 
+  // Control plane paths (e.g. /_/exchange-token) are handled by the Hono routes in worker.ts.
+  // Return a sentinel to tell the caller to fall through to Hono instead of returning 404.
   if (isAlwaysControlPlanePath(url.pathname)) {
-    return null;
+    return FALL_THROUGH_TO_CONTROL_PLANE;
   }
 
   // Auth bridge — redirect to control plane login if no session

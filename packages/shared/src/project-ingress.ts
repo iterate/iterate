@@ -254,16 +254,19 @@ export function buildMachineIngressEnvVars(params: {
 /**
  * Given ITERATE_PROJECT_BASE_URL and a port, return a publicly routable URL.
  *
- * The ingress system uses `<port>__<hostname>` to route to a specific port.
- * For the default port (3000), the prefix is omitted.
+ * For standard ingress domains (`*.iterate.app`), uses `<port>__<hostname>`.
+ * For custom domains, uses `<port>.<hostname>` (dot subdomain).
+ * For the default port (3000), the prefix is omitted in both cases.
  *
- * Example:
+ * Example (standard):
  *   projectBaseUrl = "https://my-proj.iterate.app"
  *   port = 4096
  *   → "https://4096__my-proj.iterate.app/"
  *
- *   port = 3000
- *   → "https://my-proj.iterate.app/"
+ * Example (custom domain):
+ *   projectBaseUrl = "https://templestein.com"
+ *   port = 4096
+ *   → "https://4096.templestein.com/"
  */
 export function buildProjectPortUrl(params: {
   projectBaseUrl: string;
@@ -273,7 +276,9 @@ export function buildProjectPortUrl(params: {
   const { projectBaseUrl, port, path } = params;
   const url = new URL(projectBaseUrl);
   if (port !== DEFAULT_TARGET_PORT) {
-    url.hostname = `${port}__${url.hostname}`;
+    // Custom domains use dot-separated subdomains; standard ingress uses `__` separator
+    const isStandardIngress = isStandardIngressDomain(url.hostname);
+    url.hostname = isStandardIngress ? `${port}__${url.hostname}` : `${port}.${url.hostname}`;
   }
   if (path) {
     url.pathname = path.startsWith("/") ? path : `/${path}`;
@@ -359,4 +364,13 @@ function isValidProjectSlug(slug: string): boolean {
     slug.length <= 50 &&
     !RESERVED_PROJECT_SLUGS.has(slug)
   );
+}
+
+/**
+ * Standard ingress domains end with `.iterate.app` (or dev variants like `.iterate.app.localhost`).
+ * Anything else is a custom domain that uses dot-separated subdomains for port routing.
+ */
+function isStandardIngressDomain(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return lower.endsWith(".iterate.app") || lower.endsWith(".iterate.app.localhost");
 }
