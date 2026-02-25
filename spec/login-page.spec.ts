@@ -24,8 +24,8 @@ test.describe("login page", () => {
     await page.getByText("Enter verification code").waitFor();
 
     // URL should now contain step=otp and the email
-    expect(page.url()).toContain("step=otp");
-    expect(page.url()).toContain(encodeURIComponent(email));
+    await expect.poll(() => page.url()).toContain("step=otp");
+    await expect.poll(() => page.url()).toContain(encodeURIComponent(email));
 
     // Reload the page
     await page.reload();
