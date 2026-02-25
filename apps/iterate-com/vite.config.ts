@@ -4,14 +4,25 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 
+const allowedHosts = [
+  "host.docker.internal",
+  ".localhost",
+  ".iterate.localhost",
+  ".local.iterate.town",
+  ".iterate.com",
+  ".iterate.app",
+  ".iterate-dev.com",
+  ".iterate-dev.app",
+];
+
 export default defineConfig({
   server: {
     port: 3000,
     strictPort: false,
-    allowedHosts: true,
+    allowedHosts,
   },
   preview: {
-    allowedHosts: true,
+    allowedHosts,
   },
   plugins: [
     viteTsConfigPaths({

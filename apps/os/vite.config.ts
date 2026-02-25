@@ -7,6 +7,17 @@ import { devtools } from "@tanstack/devtools-vite";
 import { vitePublicUrl } from "@iterate-com/shared/force-public-url-vite-plugin";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 
+const allowedHosts = [
+  "host.docker.internal",
+  ".localhost",
+  ".iterate.localhost",
+  ".local.iterate.town",
+  ".iterate.com",
+  ".iterate.app",
+  ".iterate-dev.com",
+  ".iterate-dev.app",
+];
+
 export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
@@ -22,11 +33,11 @@ export default defineConfig({
     host: "0.0.0.0",
     cors: false,
     strictPort: false,
-    allowedHosts: true,
+    allowedHosts,
   },
   preview: {
     host: "0.0.0.0",
-    allowedHosts: true,
+    allowedHosts,
   },
   plugins: [
     {
