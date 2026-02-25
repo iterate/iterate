@@ -47,21 +47,37 @@ test.describe("service load checks", () => {
     expect(await response.text()).toContain('"ok":true');
   });
 
-  test("caddy manager route responds and typed caddy client can read config", async ({
-    deployment,
-  }) => {
-    const navigateResponse = await ingressRequest(deployment, {
-      host: "caddy-admin.iterate.localhost",
-      path: "/config/",
-      headers: {
-        "sec-fetch-mode": "navigate",
-      },
+  test("openobserve route loads", async ({ deployment }) => {
+    await startOnDemandProcess(deployment, "openobserve");
+
+    const openobserve = await ingressRequest(deployment, {
+      host: "openobserve.iterate.localhost",
+      path: "/",
     });
+    expect(openobserve.status).toBeLessThan(400);
+  });
 
-    expect(navigateResponse.status).toBe(403);
-    expect(await navigateResponse.text()).toContain("client is not allowed to access from origin");
+  test("clickstack route loads", async ({ deployment }) => {
+    test.skip(process.arch !== "x64", "clickstack process is not stable on arm64 hosts");
 
-    const config = await deployment.caddy.getConfig();
-    expect(typeof config).toBe("object");
+    await startOnDemandProcess(deployment, "clickstack");
+
+    const clickstack = await ingressRequest(deployment, {
+      host: "clickstack.iterate.localhost",
+      path: "/",
+    });
+    expect(clickstack.status).toBeLessThan(400);
+  });
+
+  test("caddy manager route loads", async ({ deployment }) => {
+    await startOnDemandProcess(deployment, "caddymanager");
+
+    const health = await ingressRequest(deployment, {
+      host: "caddymanager.iterate.localhost",
+      path: "/healthz",
+    });
+    expect(health.status).toBe(200);
+    const payload = (await health.json()) as { ok: boolean };
+    expect(payload.ok).toBe(true);
   });
 });

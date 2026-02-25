@@ -15,7 +15,13 @@ const OTEL_SERVICE_ENV = {
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
 
-type OnDemandProcessName = "orders" | "outerbase" | "docs";
+type OnDemandProcessName =
+  | "orders"
+  | "outerbase"
+  | "docs"
+  | "openobserve"
+  | "clickstack"
+  | "caddymanager";
 type OnDemandProcessConfig = {
   definition: {
     command: string;
@@ -25,7 +31,10 @@ type OnDemandProcessConfig = {
   routeCheck: {
     host: string;
     path: string;
+    timeoutMs?: number;
+    readyStatus?: "ok" | "lt400";
   };
+  startupTimeoutMs?: number;
 };
 
 const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
@@ -55,6 +64,47 @@ const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = 
       env: OTEL_SERVICE_ENV,
     },
     routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
+  },
+  openobserve: {
+    definition: {
+      command: "/usr/local/bin/openobserve",
+      args: [],
+      env: {
+        ZO_ROOT_USER_EMAIL: "root@example.com",
+        ZO_ROOT_USER_PASSWORD: "Complexpass#123",
+        ZO_LOCAL_MODE: "true",
+        ZO_DATA_DIR: "/var/lib/openobserve",
+      },
+    },
+    startupTimeoutMs: 120_000,
+    routeCheck: {
+      host: "openobserve.iterate.localhost",
+      path: "/",
+      timeoutMs: 120_000,
+      readyStatus: "lt400",
+    },
+  },
+  clickstack: {
+    definition: {
+      command: "/opt/jonasland-sandbox/clickstack-launcher.sh",
+      args: [],
+      env: {},
+    },
+    startupTimeoutMs: 120_000,
+    routeCheck: {
+      host: "clickstack.iterate.localhost",
+      path: "/",
+      timeoutMs: 120_000,
+      readyStatus: "lt400",
+    },
+  },
+  caddymanager: {
+    definition: {
+      command: "node",
+      args: ["/opt/jonasland-sandbox/caddymanager/server.mjs"],
+      env: {},
+    },
+    routeCheck: { host: "caddymanager.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
   },
 };
 
@@ -140,10 +190,11 @@ export async function ingressRequest(
 
 export async function waitForHostRoute(
   deployment: Pick<SandboxFixture, "ingressUrl">,
-  params: { host: string; path: string; timeoutMs?: number },
+  params: { host: string; path: string; timeoutMs?: number; readyStatus?: "ok" | "lt400" },
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const deadline = Date.now() + timeoutMs;
+  const readyStatus = params.readyStatus ?? "ok";
 
   while (Date.now() < deadline) {
     const response = await ingressRequest(deployment, {
@@ -151,7 +202,10 @@ export async function waitForHostRoute(
       path: params.path,
     }).catch(() => undefined);
 
-    if (response?.ok) {
+    if (
+      response &&
+      ((readyStatus === "ok" && response.ok) || (readyStatus === "lt400" && response.status < 400))
+    ) {
       return;
     }
 
@@ -215,16 +269,19 @@ export async function startOnDemandProcess(
 
   await deployment.waitForPidnapProcessRunning({
     target: processName,
-    timeoutMs: 45_000,
+    timeoutMs: processConfig.startupTimeoutMs ?? 45_000,
   });
 
-  await waitForHostRoute(deployment, processConfig.routeCheck);
+  await waitForHostRoute(deployment, {
+    ...processConfig.routeCheck,
+    timeoutMs: processConfig.routeCheck.timeoutMs ?? processConfig.startupTimeoutMs ?? 45_000,
+  });
 }
 
 export const baseTest = base;
 
 export const test = base.extend<{ deployment: SandboxFixture }>({
-  page: async ({ page: basePage }, use, testInfo) => {
+  page: async ({ page: basePage }, runFixture, testInfo) => {
     await using page = await addPlugins({
       page: basePage,
       testInfo,
@@ -237,17 +294,17 @@ export const test = base.extend<{ deployment: SandboxFixture }>({
       boxedStackPrefixes: (defaults) => [...defaults, path.join(import.meta.dirname, "plugins")],
     });
 
-    await use(page as Page);
+    await runFixture(page as Page);
   },
 
-  deployment: async ({}, use, testInfo) => {
+  deployment: async ({ page: _page }, runFixture, testInfo) => {
     await using deployment = await sandboxFixture({
       image,
       name: `jonasland-playwright-${randomUUID()}`,
     });
 
     try {
-      await use(deployment);
+      await runFixture(deployment);
     } finally {
       if (testInfo.status !== testInfo.expectedStatus) {
         const logs = await deployment.logs().catch(() => "(container logs unavailable)");
