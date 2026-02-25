@@ -1,5 +1,6 @@
 import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
+import { getSlackClient, slackChannelIds } from "../utils/slack.ts";
 
 /**
  * Production rollout strategy (main branch):
@@ -11,7 +12,7 @@ import * as utils from "../utils/index.ts";
  * This keeps the worker rollout fast while still gating env-var promotion
  * and final deploy on post-build sandbox verification.
  */
-export default {
+const baseWorkflow = {
   name: "CI",
   permissions: {
     contents: "read",
@@ -63,7 +64,6 @@ export default {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
@@ -74,7 +74,6 @@ export default {
       uses: "./.github/workflows/build-sandbox-image.yml",
       needs: ["variables", "deploy-os-early"],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
@@ -87,7 +86,6 @@ export default {
       needs: ["variables", "build-sandbox-image"],
       if: "needs.variables.outputs.stage == 'prd'",
       uses: "./.github/workflows/sandbox-test-fly.yml",
-      // @ts-expect-error - reusable workflow supports secrets: inherit
       secrets: "inherit",
       with: {
         doppler_config: "prd",
@@ -126,7 +124,6 @@ export default {
         "promote-fly-default-image",
       ],
       if: "needs.variables.outputs.stage == 'prd'",
-      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
@@ -167,3 +164,115 @@ export default {
     },
   },
 } satisfies Workflow;
+
+export default await addSlackNotifications(baseWorkflow, "#misha-test");
+
+async function addSlackNotifications(
+  workflow: Workflow,
+  channel: import("../utils/slack.ts").SlackChannelName,
+) {
+  const jobs = Object.entries(workflow.jobs);
+  const newJobs: typeof jobs = [];
+  newJobs.push([
+    "notification_init",
+    {
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      steps: [
+        {
+          id: "notification_init",
+          name: "Initialize notification thread",
+          ...(await utils.githubScript(import.meta, async function notification_init() {
+            const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+            const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+            let message = `Starting ${workflow.name}`;
+            message +=
+              " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
+            const response = await slack.chat.postMessage({
+              channel: slackChannelIds[channel],
+              text: message,
+            });
+            return { thread_ts: response.ts };
+          })),
+        },
+      ],
+      outputs: {
+        thread_ts: "${{ steps.notification_init.outputs.thread_ts }}",
+      },
+    },
+  ]);
+
+  for (const [name, job] of jobs) {
+    newJobs.push([
+      `${name}_notification_before`,
+      {
+        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        needs: ["notification_init"],
+        env: { NEEDS: "${{ toJson(needs) }}" },
+        steps: [
+          {
+            id: `${name}_notification_before`,
+            ...(await utils.githubScript(import.meta, async function notification_before() {
+              console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
+              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              await slack.chat.postMessage({
+                channel: slackChannelIds[channel],
+                text: `Starting ${name}`,
+                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+              });
+            })),
+          },
+        ],
+      },
+    ]);
+    newJobs.push([name, job]);
+    newJobs.push([
+      `${name}_notification_after_success`,
+      {
+        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        needs: ["notification_init", `${name}_notification_before`, name],
+        if: `needs.${name}.result == 'success'`,
+        steps: [
+          {
+            id: `${name}_notification_after`,
+            ...(await utils.githubScript(import.meta, async function notification_after() {
+              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              await slack.chat.postMessage({
+                channel: slackChannelIds[channel],
+                text: `✅ Finished ${name}`,
+                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+              });
+            })),
+          },
+        ],
+      },
+    ]);
+    newJobs.push([
+      `${name}_notification_after_failure`,
+      {
+        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        needs: ["notification_init", `${name}_notification_before`, name],
+        if: `always() && needs.${name}.result != 'success'`,
+        steps: [
+          {
+            id: `${name}_notification_failure`,
+            ...(await utils.githubScript(import.meta, async function notification_after() {
+              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              await slack.chat.postMessage({
+                channel: slackChannelIds[channel],
+                text: `❌ Failed ${name}`,
+                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+              });
+            })),
+          },
+        ],
+      },
+    ]);
+  }
+  return {
+    ...workflow,
+    jobs: Object.fromEntries(newJobs),
+  };
+}

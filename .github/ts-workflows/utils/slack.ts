@@ -24,6 +24,7 @@ export const slackChannelIds = {
   "#error-pulse": "C09K1CTN4M7",
   "#building": "C06LU7PGK0S",
 };
+export type SlackChannelName = keyof typeof slackChannelIds;
 
 export const slackUsers = [
   {
