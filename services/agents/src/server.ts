@@ -34,6 +34,15 @@ function routeToAbsolute(baseUrl: string, destination: string): string {
   return `${baseUrl}${destination.startsWith("/") ? destination : `/${destination}`}`;
 }
 
+function pruneSubscription(agentPath: string, callbackUrl: string): void {
+  const urls = subscriptions.get(agentPath);
+  if (!urls) return;
+  urls.delete(callbackUrl);
+  if (urls.size === 0) {
+    subscriptions.delete(agentPath);
+  }
+}
+
 async function createDestination(agentPath: string): Promise<string> {
   const response = await fetch(`${env.OPENCODE_WRAPPER_BASE_URL}/new`, {
     method: "POST",
@@ -137,7 +146,15 @@ app.post("/api/agents/update", async (c) => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: callbackBody,
-    }).catch(() => {});
+    })
+      .then((response) => {
+        if (!response.ok) {
+          pruneSubscription(path, callbackUrl);
+        }
+      })
+      .catch(() => {
+        pruneSubscription(path, callbackUrl);
+      });
   }
 
   return c.json({ ok: true as const, agent: updated });
@@ -158,6 +175,18 @@ app.post("/api/agents/subscribe", async (c) => {
   }
   urls.add(callbackUrl);
 
+  return c.json({ ok: true as const });
+});
+
+app.post("/api/agents/unsubscribe", async (c) => {
+  const body = (await c.req.json()) as { agentPath?: string; callbackUrl?: string };
+  const agentPath = body.agentPath?.trim();
+  const callbackUrl = body.callbackUrl?.trim();
+  if (!agentPath || !callbackUrl) {
+    return c.json({ error: "agentPath and callbackUrl are required" }, 400);
+  }
+
+  pruneSubscription(agentPath, callbackUrl);
   return c.json({ ok: true as const });
 });
 
