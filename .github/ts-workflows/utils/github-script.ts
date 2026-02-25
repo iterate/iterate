@@ -50,7 +50,7 @@ export async function githubScript(
   meta: GithubScriptMeta,
   ...args: [GithubScriptHandler] | [GithubScriptOptions, GithubScriptHandler]
 ): Promise<Step> {
-  const [handler, options]: [GithubScriptHandler, GithubScriptOptions] =
+  const [handler, { params, ...options }]: [GithubScriptHandler, GithubScriptOptions] =
     typeof args[0] === "function" ? [args[0], {}] : [args[1]!, args[0]];
 
   const sourceFilepath = typeof meta === "string" ? meta : meta.filename;
@@ -82,7 +82,7 @@ export async function githubScript(
     ...Object.values(importShims),
     "const vars = {github, context, core, glob, io, require}",
 
-    ...Object.entries(options.params || {}).map(([name, param]) => {
+    ...Object.entries(params || {}).map(([name, param]) => {
       return `const ${name} = ${JSON.stringify(param)}`;
     }),
     "const __handler = " + fnString, // create a temp function that contextual vars will be passed into
