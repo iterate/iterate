@@ -57,15 +57,30 @@ async function callModel(prompt: string): Promise<string> {
   return textFromOutput ?? "No response text returned.";
 }
 
-async function execTs(code: string): Promise<void> {
-  const response = await fetch(`${env.DAEMON_SERVICE_BASE_URL}/api/tools/exec-ts`, {
+async function postSlackMessage(payload: {
+  channel: string;
+  thread_ts: string;
+  text: string;
+}): Promise<void> {
+  const response = await fetch(`${env.SLACK_API_BASE_URL}/api/chat.postMessage`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code }),
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`,
+    },
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`daemon exec-ts failed: ${response.status} ${await response.text()}`);
+    throw new Error(`slack failed: ${response.status} ${await response.text()}`);
+  }
+
+  const payloadJson = (await response.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+  } | null;
+  if (payloadJson?.ok === false) {
+    throw new Error(`slack failed: ${payloadJson.error ?? "unknown error"}`);
   }
 }
 
@@ -121,23 +136,7 @@ app.post("/sessions/:sessionId", async (c) => {
         thread_ts: body.slack.threadTs,
         text: modelResponse,
       };
-
-      const code = [
-        "export default async () => {",
-        `  const payload = ${JSON.stringify(slackPayload)};`,
-        `  const response = await fetch(${JSON.stringify(`${env.SLACK_API_BASE_URL}/api/chat.postMessage`)}, {`,
-        "    method: 'POST',",
-        "    headers: {",
-        "      'content-type': 'application/json',",
-        '      authorization: `Bearer ${process.env.SLACK_BOT_TOKEN ?? "xoxb-test"}`',
-        "    },",
-        "    body: JSON.stringify(payload)",
-        "  });",
-        "  return await response.text();",
-        "};",
-      ].join("\n");
-
-      await execTs(code);
+      await postSlackMessage(slackPayload);
     }
   } finally {
     await fetch(`${env.AGENTS_SERVICE_BASE_URL}/api/agents/update`, {
