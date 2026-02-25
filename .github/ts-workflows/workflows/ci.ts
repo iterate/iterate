@@ -184,7 +184,7 @@ async function addSlackNotifications(
           name: "Initialize notification thread",
           ...(await utils.githubScript(
             import.meta,
-            { params: { workflow: { name: workflow.name } } },
+            { params: { workflow: { name: workflow.name }, channel } },
             async function notification_init() {
               const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
@@ -217,16 +217,20 @@ async function addSlackNotifications(
           ...utils.setupRepo,
           {
             id: `${name}_notification_before`,
-            ...(await utils.githubScript(import.meta, async function notification_before() {
-              console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
-              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-              await slack.chat.postMessage({
-                channel: slackChannelIds[channel],
-                text: `Starting ${name}`,
-                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
-              });
-            })),
+            ...(await utils.githubScript(
+              import.meta,
+              { params: { name, channel } },
+              async function notification_before() {
+                console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
+                const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                await slack.chat.postMessage({
+                  channel: slackChannelIds[channel],
+                  text: `Starting ${name}`,
+                  thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+                });
+              },
+            )),
           },
         ],
       },
@@ -242,15 +246,19 @@ async function addSlackNotifications(
           ...utils.setupRepo,
           {
             id: `${name}_notification_after`,
-            ...(await utils.githubScript(import.meta, async function notification_after() {
-              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-              await slack.chat.postMessage({
-                channel: slackChannelIds[channel],
-                text: `✅ Finished ${name}`,
-                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
-              });
-            })),
+            ...(await utils.githubScript(
+              import.meta,
+              { params: { name, channel } },
+              async function notification_after() {
+                const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                await slack.chat.postMessage({
+                  channel: slackChannelIds[channel],
+                  text: `✅ Finished ${name}`,
+                  thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+                });
+              },
+            )),
           },
         ],
       },
@@ -265,15 +273,19 @@ async function addSlackNotifications(
           ...utils.setupRepo,
           {
             id: `${name}_notification_failure`,
-            ...(await utils.githubScript(import.meta, async function notification_after() {
-              const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
-              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-              await slack.chat.postMessage({
-                channel: slackChannelIds[channel],
-                text: `❌ Failed ${name}`,
-                thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
-              });
-            })),
+            ...(await utils.githubScript(
+              import.meta,
+              { params: { name, channel } },
+              async function notification_after() {
+                const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                await slack.chat.postMessage({
+                  channel: slackChannelIds[channel],
+                  text: `❌ Failed ${name}`,
+                  thread_ts: "${{ needs.notification_init.outputs.thread_ts }}",
+                });
+              },
+            )),
           },
         ],
       },

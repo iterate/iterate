@@ -46,6 +46,7 @@ jobs:
             );
             const vars = { github, context, core, glob, io, require };
             const workflow = { name: "CI" };
+            const channel = "#misha-test";
             const __handler = async function notification_init() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -94,6 +95,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "variables";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -156,6 +159,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "variables";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -200,6 +205,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "variables";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -243,6 +250,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy-os-early";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -297,6 +306,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy-os-early";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -341,6 +352,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy-os-early";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -384,6 +397,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "build-sandbox-image";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -441,6 +456,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "build-sandbox-image";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -485,6 +502,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "build-sandbox-image";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -528,6 +547,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "test-sandbox-fly";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -583,6 +604,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "test-sandbox-fly";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -627,6 +650,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "test-sandbox-fly";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -670,6 +695,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "promote-fly-default-image";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -741,6 +768,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "promote-fly-default-image";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -785,6 +814,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "promote-fly-default-image";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -828,6 +859,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -885,6 +918,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -929,6 +964,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "deploy";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -972,6 +1009,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "slack_failure";
+            const channel = "#misha-test";
             const __handler = async function notification_before() {
               console.log("${{ needs.notification_init.outputs.thread_ts }}", process.env.NEEDS);
               const { getSlackClient, slackChannelIds } =
@@ -1074,6 +1113,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "slack_failure";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -1118,6 +1159,8 @@ jobs:
               'module.exports.load = () => require("tsx/esm/api").tsImport("../utils/slack.ts", __filename);',
             );
             const vars = { github, context, core, glob, io, require };
+            const name = "slack_failure";
+            const channel = "#misha-test";
             const __handler = async function notification_after() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
