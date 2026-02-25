@@ -90,6 +90,20 @@ http://clickstack.iterate.localhost {
     @health path /healthz
     respond @health "ok" 200
 
+    handle_path /_pidnap/* {
+        reverse_proxy 127.0.0.1:9876
+    }
+
+    handle_path /_events/* {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19010
+    }
+
+    handle_path /_orders/* {
+        import iterate_cors_openapi
+        reverse_proxy 127.0.0.1:19020
+    }
+
     @local host 127.0.0.1 localhost
     handle @local {
         respond "caddy ok" 200
