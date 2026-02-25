@@ -42,8 +42,8 @@ async function startOrdersProcess(deployment: DeploymentRuntime): Promise<void> 
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "orders",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/orders-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
       env: {
         ...OTEL_SERVICE_ENV,
         EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",

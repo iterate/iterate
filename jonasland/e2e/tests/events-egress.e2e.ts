@@ -37,8 +37,8 @@ async function startEgressProxyProcess(deployment: DeploymentRuntime): Promise<v
   const updated = await deployment.pidnap.processes.updateConfig({
     processSlug: "egress-proxy",
     definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
+      command: PIDNAP_TSX_PATH,
+      args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
       env: OTEL_SERVICE_ENV,
     },
     options: { restartPolicy: "always" },
