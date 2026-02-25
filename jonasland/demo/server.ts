@@ -295,6 +295,7 @@ async function hostRequest(
       },
       (response) => {
         const chunks: Buffer[] = [];
+        response.on("error", reject);
         response.on("data", (chunk) => {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         });
