@@ -176,13 +176,9 @@ function ProjectSettingsPage() {
                         <>
                           Add these DNS records:
                           <br />
-                          <code className="text-xs">
-                            *.{sub} CNAME &rarr; cname.iterate.app
-                          </code>
+                          <code className="text-xs">*.{sub} CNAME &rarr; cname.iterate.app</code>
                           <br />
-                          <code className="text-xs">
-                            {sub} CNAME &rarr; cname.iterate.app
-                          </code>
+                          <code className="text-xs">{sub} CNAME &rarr; cname.iterate.app</code>
                         </>
                       );
                     }

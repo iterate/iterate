@@ -170,10 +170,7 @@ export function buildControlPlaneProjectIngressProxyBridgeStartUrl(params: {
     controlPlanePublicUrl,
   );
   // Pass the full hostname for custom domains; extract subdomain for standard ingress
-  controlPlaneBridgeStartUrl.searchParams.set(
-    "projectIngressProxyHost",
-    projectIngressProxyHost,
-  );
+  controlPlaneBridgeStartUrl.searchParams.set("projectIngressProxyHost", projectIngressProxyHost);
   controlPlaneBridgeStartUrl.searchParams.set(
     "path",
     normalizeProjectIngressProxyRedirectPath(redirectPath),
