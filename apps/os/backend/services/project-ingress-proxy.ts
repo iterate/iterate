@@ -8,7 +8,6 @@ import {
   parseCustomDomainHostname,
   type IngressTarget,
   type ParsedIngressHostname,
-  type CustomDomainTarget,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
 import type { AuthSession } from "../auth/auth.ts";
@@ -610,7 +609,7 @@ async function handleCustomDomainRequest(
   } else {
     // Machine target — resolve directly
     const resolved = await resolveMachineForIngress(
-      target as unknown as IngressTarget,
+      { ...target, isPortExplicit: true },
       session.user.id,
       session.user.role === "admin",
     );
