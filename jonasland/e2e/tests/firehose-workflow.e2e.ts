@@ -118,7 +118,7 @@ async function collectMatchingSseEvents(params: {
               .map((line) => line.trimEnd())
               .filter((line) => line.length > 0);
             const eventType = lines.find((line) => line.startsWith("event: "))?.slice(7);
-            if (eventType !== undefined && eventType !== "data" && eventType !== "message") {
+            if (eventType !== undefined && eventType !== "message") {
               continue;
             }
             const dataLine = lines.find((line) => line.startsWith("data: "));

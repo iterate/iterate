@@ -391,7 +391,7 @@ export const collectSseDataEvents = async (
       for (const chunk of chunks) {
         const lines = chunk.split("\n");
         const eventType = lines.find((line) => line.startsWith("event: "))?.slice(7);
-        if (eventType !== undefined && eventType !== "data" && eventType !== "message") {
+        if (eventType !== undefined && eventType !== "message") {
           continue;
         }
         const dataLine = lines.find((line) => line.startsWith("data: "));
