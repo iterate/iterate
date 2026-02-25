@@ -166,9 +166,9 @@ export function parseTargetUrl(target: string): URL {
 
 export function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
-  if (!headerValue.startsWith("Bearer ")) return null;
-
-  const token = headerValue.slice("Bearer ".length).trim();
+  const match = /^bearer\s+(.+)$/i.exec(headerValue);
+  if (!match) return null;
+  const token = match[1]?.trim() ?? "";
   return token.length > 0 ? token : null;
 }
 
@@ -339,12 +339,13 @@ export async function resolveRoute(
 
   if (exactRow) {
     const exact = rowToRouteRecord(exactRow);
-    if (exact.status === "expired" || exact.status === "disabled") return null;
-    if (isTtlExpired(exact, nowSql)) {
-      await markRouteExpired(db, exact.route, nowSql);
-      return null;
+    if (exact.status !== "expired" && exact.status !== "disabled") {
+      if (isTtlExpired(exact, nowSql)) {
+        await markRouteExpired(db, exact.route, nowSql);
+      } else {
+        return { ...exact, targetUrl: parseTargetUrl(exact.target) };
+      }
     }
-    return { ...exact, targetUrl: parseTargetUrl(exact.target) };
   }
 
   const wildcardRows = await db

@@ -131,9 +131,49 @@ describe("route table", () => {
     expect(row?.expired_at).not.toBeNull();
   });
 
+  test("falls back to wildcard when exact route is expired", async () => {
+    await setRoute(env.DB, {
+      route: "*.cf-ingress-worker.com",
+      target: "https://wildcard.fly.dev",
+      metadata: { kind: "wildcard" },
+    });
+
+    await setRoute(env.DB, {
+      route: "app5__someapp.cf-ingress-worker.com",
+      target: "https://exact.fly.dev",
+      ttlSeconds: 60,
+      metadata: { kind: "exact" },
+    });
+
+    await env.DB.prepare(`
+        UPDATE routes
+        SET status = 'active', expires_at = datetime('now', '-1 second'), expired_at = NULL
+        WHERE route = ?1
+      `)
+      .bind("app5__someapp.cf-ingress-worker.com")
+      .run();
+
+    const request = new Request("https://app5__someapp.cf-ingress-worker.com/path", {
+      headers: {
+        host: "app5__someapp.cf-ingress-worker.com",
+      },
+    });
+
+    const resolved = await resolveRoute(env.DB, request);
+    expect(resolved?.route).toBe("*.cf-ingress-worker.com");
+    expect(resolved?.metadata.kind).toBe("wildcard");
+
+    const row = await env.DB.prepare(`SELECT status, expired_at FROM routes WHERE route = ?1`)
+      .bind("app5__someapp.cf-ingress-worker.com")
+      .first<{ status: string; expired_at: string | null }>();
+
+    expect(row?.status).toBe("expired");
+    expect(row?.expired_at).not.toBeNull();
+  });
+
   test("bearer token parsing", () => {
     expect(readBearerToken("Bearer abc123")).toBe("abc123");
-    expect(readBearerToken("bearer abc123")).toBeNull();
+    expect(readBearerToken("bearer abc123")).toBe("abc123");
     expect(readBearerToken("Token abc123")).toBeNull();
     expect(readBearerToken(null)).toBeNull();
   });
