@@ -657,7 +657,11 @@ async function handleCustomDomainRequest(
     });
     const fetcher = await runtime.getFetcher(SANDBOX_INGRESS_PORT);
     const pathWithQuery = `${url.pathname}${url.search}`;
-    return await proxyWithFetcher(request, pathWithQuery, fetcher, requestHostname);
+    // Custom domain hostnames (e.g. "opencode.templestein.com") don't use the __
+    // separator that the sandbox proxy expects. Send "localhost:<port>" so the
+    // sandbox proxy routes to the correct upstream port.
+    const targetHost = `localhost:${target.targetPort}`;
+    return await proxyWithFetcher(request, pathWithQuery, fetcher, targetHost);
   } catch (error) {
     logger.error("[project-ingress] Failed to proxy custom domain request", error, {
       host: requestHostname,
