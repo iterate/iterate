@@ -13,7 +13,6 @@ const setupRepoWithoutPnpmAction = [
     name: "Setup Node",
     ...uses("actions/setup-node@v4", {
       "node-version": 24,
-      cache: "pnpm",
     }),
   },
   {
