@@ -23,7 +23,7 @@ function getBuildxDriver(): string | null {
 }
 
 const buildxDriver = getBuildxDriver();
-const supportsLocalCacheExport = buildxDriver !== "docker";
+const supportsLocalCacheExport = buildxDriver !== null && buildxDriver !== "docker";
 const gitSha = (() => {
   try {
     return execSync("git rev-parse --short HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
