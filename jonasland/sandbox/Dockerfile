@@ -40,7 +40,8 @@ COPY --from=openobserve /openobserve /usr/local/bin/openobserve
 COPY --from=otelcol /otelcol-contrib /usr/local/bin/otelcol-contrib
 COPY --from=clickstack / /opt/clickstack-root
 
-RUN useradd -m -s /bin/bash iterate && \
+RUN groupadd -g 1001 iterate && \
+    useradd -m -u 1001 -g iterate -s /bin/bash iterate && \
     echo 'iterate ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/iterate && \
     chmod 0440 /etc/sudoers.d/iterate && \
     mkdir -p \
@@ -55,11 +56,11 @@ USER iterate
 WORKDIR $ITERATE_REPO
 
 COPY --chown=iterate:iterate package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1000,gid=1000 \
-    pnpm fetch --prod --frozen-lockfile
+RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1001,gid=1001 \
+    pnpm fetch --prod
 
 COPY --chown=iterate:iterate . .
-RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1000,gid=1000 \
+RUN --mount=type=cache,target=/home/iterate/.local/share/pnpm/store,uid=1001,gid=1001 \
     pnpm install --prod --frozen-lockfile --offline --ignore-scripts \
       --filter pidnap \
       --filter @iterate-com/registry-service \
