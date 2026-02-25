@@ -139,6 +139,7 @@ http://clickstack.iterate.localhost {
 
     import iterate_proxy_hosts
 
+    # Host-side control path used by PoC scripts to start/restart/check pidnap-managed services.
     handle_path /_pidnap/* {
         reverse_proxy 127.0.0.1:9876
     }

@@ -60,7 +60,7 @@ function ensureFlyAuth(token: string | undefined): void {
     execFileSync("flyctl", args, {
       cwd: repoRoot,
       stdio: "inherit",
-      env: { ...process.env, FLY_ACCESS_TOKEN: token },
+      env: token ? { ...process.env, FLY_ACCESS_TOKEN: token } : process.env,
     });
   } catch {
     if (!token) throw new Error("flyctl auth docker failed and FLY_API_TOKEN is not set");

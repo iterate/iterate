@@ -1,6 +1,7 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
-import { createProjectDeploymentProvider, runProjectDeployment } from "./project-deployment.ts";
+import { createCommandRunner } from "./command-runner.ts";
+import { runProjectDeployment } from "./project-deployment.ts";
 import { runOrdersEventsProof, waitForHttpOk } from "./project-proof.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
@@ -22,30 +23,7 @@ const isDirty = execSync("git status --porcelain", { cwd: repoRoot, encoding: "u
   : false;
 const tagSuffix = `sha-${gitShaShort}${isDirty ? "-dirty" : ""}`;
 const imageTag = process.env.JONASLAND_SANDBOX_IMAGE ?? `jonasland-sandbox:${tagSuffix}`;
-
-function run(
-  command: string,
-  args: string[],
-  options?: { quiet?: boolean; env?: NodeJS.ProcessEnv },
-): string {
-  if (options?.quiet) {
-    return execFileSync(command, args, {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  }
-
-  execFileSync(command, args, {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: options?.env ?? process.env,
-    stdio: "inherit",
-  });
-  return "";
-}
-const runQuiet = (command: string, args: string[]): string => run(command, args, { quiet: true });
+const { run, runQuiet } = createCommandRunner(repoRoot);
 
 function parseHostPortFromDockerPort(raw: string): number {
   const lines = raw
@@ -138,31 +116,29 @@ async function main(): Promise<void> {
     resolvedBaseUrl = `http://127.0.0.1:${String(ingressPort)}`;
     return resolvedBaseUrl;
   };
-  const dockerProvider = createProjectDeploymentProvider({
-    createDeployment: async () => ({
-      type: "docker" as const,
-      providerId: containerName,
-      imageTag,
-      async getBaseUrl(): Promise<string> {
-        return resolveBaseUrl();
-      },
-      async deploy(): Promise<void> {
-        if (skipBuild) {
-          console.log("skipping build (JONASLAND_SKIP_BUILD=true)");
-        } else {
-          buildImageForDocker();
-        }
-        removeContainerIfExists();
-        startContainer();
-      },
-      async check(): Promise<void> {
-        assertContainerRunning();
-        const baseUrl = resolveBaseUrl();
-        await waitForHttpOk({ url: `${baseUrl}/healthz`, timeoutMs: 60_000, pollMs: 750 });
-        await waitForHttpOk({ url: `${baseUrl}/`, timeoutMs: 60_000, pollMs: 750 });
-        validateIptablesRules();
-      },
-    }),
+  const dockerProvider = async () => ({
+    type: "docker" as const,
+    providerId: containerName,
+    imageTag,
+    async getBaseUrl(): Promise<string> {
+      return resolveBaseUrl();
+    },
+    async deploy(): Promise<void> {
+      if (skipBuild) {
+        console.log("skipping build (JONASLAND_SKIP_BUILD=true)");
+      } else {
+        buildImageForDocker();
+      }
+      removeContainerIfExists();
+      startContainer();
+    },
+    async check(): Promise<void> {
+      assertContainerRunning();
+      const baseUrl = resolveBaseUrl();
+      await waitForHttpOk({ url: `${baseUrl}/healthz`, timeoutMs: 60_000, pollMs: 750 });
+      await waitForHttpOk({ url: `${baseUrl}/`, timeoutMs: 60_000, pollMs: 750 });
+      validateIptablesRules();
+    },
   });
 
   const { baseUrl } = await runProjectDeployment({
@@ -172,6 +148,7 @@ async function main(): Promise<void> {
       await runOrdersEventsProof({
         baseUrl: deploymentBaseUrl,
         run: runQuiet,
+        logger: console.log,
         orderSku: `docker-poc-${gitShaShort}`,
       });
     },

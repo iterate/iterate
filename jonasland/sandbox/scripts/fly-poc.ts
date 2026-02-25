@@ -1,7 +1,8 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
+import { createCommandRunner } from "./command-runner.ts";
 import { registerCfProxyRoutes, resolveCfProxyRunId } from "./cf-proxy-routes.ts";
-import { createProjectDeploymentProvider, runProjectDeployment } from "./project-deployment.ts";
+import { runProjectDeployment } from "./project-deployment.ts";
 import { runOrdersEventsProof, waitForHttpOk } from "./project-proof.ts";
 
 type FlyMachine = {
@@ -40,34 +41,7 @@ const tagSuffix =
 const imageTag = process.env.JONASLAND_FLY_IMAGE ?? `registry.fly.io/${appName}:${tagSuffix}`;
 const baseUrl = `https://${appName}.fly.dev`;
 const defaultCfRunId = `${appName}-${gitShaShort}`;
-
-function run(
-  command: string,
-  args: string[],
-  options?: { quiet?: boolean; env?: NodeJS.ProcessEnv },
-): string {
-  if (options?.quiet) {
-    return execFileSync(command, args, {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  }
-
-  execFileSync(command, args, {
-    cwd: repoRoot,
-    encoding: "utf-8",
-    env: options?.env ?? process.env,
-    stdio: "inherit",
-  });
-  return "";
-}
-
-function runJson<T>(command: string, args: string[]): T {
-  const out = run(command, args, { quiet: true });
-  return JSON.parse(out) as T;
-}
+const { run, runQuiet, runJson } = createCommandRunner(repoRoot);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -198,7 +172,6 @@ async function main(): Promise<void> {
     throw new Error(`Invalid JONASLAND_CF_PROXY_TTL_SECONDS: ${String(cfProxyTtlSeconds)}`);
   }
 
-  const runQuiet = (command: string, args: string[]): string => run(command, args, { quiet: true });
   const hasCfProxyToken = Boolean(process.env.CF_PROXY_WORKER_API_TOKEN);
   const useCfProxy = cfProxyMode === "true" || (cfProxyMode === "auto" && hasCfProxyToken);
   if (cfProxyMode === "true" && !hasCfProxyToken) {
@@ -206,41 +179,39 @@ async function main(): Promise<void> {
   }
   const cfProxyRunId = resolveCfProxyRunId(defaultCfRunId);
 
-  const flyProvider = createProjectDeploymentProvider({
-    createDeployment: async () => ({
-      type: "fly" as const,
-      providerId: appName,
-      imageTag,
-      async getBaseUrl(): Promise<string> {
-        return baseUrl;
-      },
-      async deploy(): Promise<void> {
-        ensureAppExists();
-        ensureSharedIpv4();
-        if (skipBuild) {
-          console.log("skipping build and push (JONASLAND_SKIP_BUILD=true)");
-        } else {
-          buildAndPushImage();
-        }
-        destroyExistingMachines();
-        await runMachine();
-        const machineId = await waitForMachineStarted(120_000);
-        console.log(`machine started: ${machineId}`);
-      },
-      async check(): Promise<void> {
-        await waitForHttpOk({
-          url: `${baseUrl}/healthz`,
-          timeoutMs: 120_000,
-          pollMs: 1_500,
-        });
-        await waitForHttpOk({
-          url: `${baseUrl}/`,
-          timeoutMs: 120_000,
-          pollMs: 1_500,
-        });
-        console.log("ingress healthy");
-      },
-    }),
+  const flyProvider = async () => ({
+    type: "fly" as const,
+    providerId: appName,
+    imageTag,
+    async getBaseUrl(): Promise<string> {
+      return baseUrl;
+    },
+    async deploy(): Promise<void> {
+      ensureAppExists();
+      ensureSharedIpv4();
+      if (skipBuild) {
+        console.log("skipping build and push (JONASLAND_SKIP_BUILD=true)");
+      } else {
+        buildAndPushImage();
+      }
+      destroyExistingMachines();
+      await runMachine();
+      const machineId = await waitForMachineStarted(120_000);
+      console.log(`machine started: ${machineId}`);
+    },
+    async check(): Promise<void> {
+      await waitForHttpOk({
+        url: `${baseUrl}/healthz`,
+        timeoutMs: 120_000,
+        pollMs: 1_500,
+      });
+      await waitForHttpOk({
+        url: `${baseUrl}/`,
+        timeoutMs: 120_000,
+        pollMs: 1_500,
+      });
+      console.log("ingress healthy");
+    },
   });
 
   let cfProxyUrls:

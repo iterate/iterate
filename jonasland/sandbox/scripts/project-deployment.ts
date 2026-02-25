@@ -19,15 +19,6 @@ export interface ProjectDeploymentHandle<
 export type ProjectDeploymentProvider<TType extends ProjectDeploymentType = ProjectDeploymentType> =
   (opts: CreateProjectDeploymentOptions) => Promise<ProjectDeploymentHandle<TType>>;
 
-export function createProjectDeploymentProvider<TType extends ProjectDeploymentType>(params: {
-  createDeployment: (
-    opts: CreateProjectDeploymentOptions,
-  ) => Promise<ProjectDeploymentHandle<TType>>;
-}): ProjectDeploymentProvider<TType> {
-  const { createDeployment } = params;
-  return async (opts: CreateProjectDeploymentOptions) => await createDeployment(opts);
-}
-
 export async function runProjectDeployment<TType extends ProjectDeploymentType>(params: {
   mode: ProjectDeploymentMode;
   provider: ProjectDeploymentProvider<TType>;
