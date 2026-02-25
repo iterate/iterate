@@ -6,6 +6,7 @@ import {
 } from "../test-helpers/index.ts";
 
 const sandboxImage = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+export const runE2E = process.env.RUN_JONASLAND_E2E === "true";
 
 export { test };
 

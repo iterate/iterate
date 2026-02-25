@@ -1,7 +1,9 @@
 /* eslint-disable no-empty-pattern -- Playwright requires object-destructured fixture args. */
 import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
-import { projectDeployment, test } from "./test-helpers.ts";
+import { projectDeployment, runE2E, test } from "./test-helpers.ts";
+
+test.skip(!runE2E, "Set RUN_JONASLAND_E2E=true to run Playwright e2e specs");
 
 test.describe("events service", () => {
   test("supports health + append/list streams from outside container", async ({}) => {

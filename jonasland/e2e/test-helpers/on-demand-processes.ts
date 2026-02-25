@@ -1,4 +1,4 @@
-export const OTEL_SERVICE_ENV = {
+const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
@@ -24,7 +24,7 @@ export type OnDemandProcessConfig = {
   startupTimeoutMs?: number;
 };
 
-export const sharedOnDemandProcesses = {
+const sharedOnDemandProcesses = {
   orders: {
     definition: {
       command: "/opt/pidnap/node_modules/.bin/tsx",
