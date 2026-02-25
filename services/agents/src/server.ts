@@ -76,11 +76,13 @@ async function getOrCreateAgentRecord(
       return created;
     })();
     inFlightAgentCreations.set(agentPath, pending);
-    void pending.finally(() => {
-      if (inFlightAgentCreations.get(agentPath) === pending) {
-        inFlightAgentCreations.delete(agentPath);
-      }
-    });
+    void pending
+      .finally(() => {
+        if (inFlightAgentCreations.get(agentPath) === pending) {
+          inFlightAgentCreations.delete(agentPath);
+        }
+      })
+      .catch(() => {});
 
     const created = await pending;
     return { agent: created, wasNewlyCreated: true };
