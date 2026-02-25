@@ -60,7 +60,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agent, request } from "undici";
-import { test as baseTest } from "vitest";
+import { test as baseTest, type TestContext } from "vitest";
 import { DockerProvider, DockerSandbox } from "../providers/docker/provider.ts";
 import { DaytonaProvider, DaytonaSandbox } from "../providers/daytona/provider.ts";
 import { FlyProvider, FlySandbox } from "../providers/fly/provider.ts";
@@ -345,9 +345,10 @@ export function createTestProvider(envOverrides?: Record<string, string>): Sandb
 export async function withSandbox<T>(params: {
   envOverrides?: Record<string, string | undefined>;
   sandboxOptions?: CreateSandboxOptions;
+  skip?: TestContext["skip"];
   fn: (sandbox: Sandbox) => Promise<T>;
 }): Promise<T> {
-  const { envOverrides, sandboxOptions, fn } = params;
+  const { envOverrides, sandboxOptions, skip, fn } = params;
   const provider = createTestProvider(envOverrides as Record<string, string> | undefined);
 
   // Use default options if none provided
@@ -358,7 +359,16 @@ export async function withSandbox<T>(params: {
     envVars: {},
   };
 
-  const sandbox = await provider.create(opts);
+  let sandbox: Sandbox;
+  try {
+    sandbox = await provider.create(opts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (TEST_CONFIG.provider === "fly" && skip && message.includes("reached its machine limit")) {
+      skip(`Skipping Fly sandbox test: organization machine limit reached. ${message}`);
+    }
+    throw error;
+  }
   console.log(`[sandbox] provider=${TEST_CONFIG.provider} id=${sandbox.providerId}`);
 
   try {
@@ -392,7 +402,7 @@ export const test = baseTest.extend<{
 }>({
   envOverrides: {},
   sandboxOptions: undefined,
-  sandbox: async ({ envOverrides, sandboxOptions }, use) => {
-    await withSandbox({ envOverrides, sandboxOptions, fn: use });
+  sandbox: async ({ envOverrides, sandboxOptions, skip }, use) => {
+    await withSandbox({ envOverrides, sandboxOptions, skip, fn: use });
   },
 });

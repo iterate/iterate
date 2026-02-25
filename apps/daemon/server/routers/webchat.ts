@@ -223,7 +223,9 @@ webchatRouter.post("/webhook", async (c) => {
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message: formattedMessage }),
+    body: JSON.stringify({
+      events: [{ type: "iterate:agent:prompt-added", message: formattedMessage }],
+    }),
   }).catch((error) => {
     logger.error(
       `[webchat] failed to post prompt event for ${webchatThreadId}/${messageId}`,
@@ -472,7 +474,7 @@ function formatIncomingMessage(params: {
 
   return [
     intro,
-    "Refer to WEBCHAT.md for how to respond via `iterate tool exec-js`. Do not use the assistant message to respond to the end-user, they will not see it.",
+    "Refer to WEBCHAT.md for how to respond via `iterate tool exec-ts`. Do not use the assistant message to respond to the end-user, they will not see it.",
     "",
     `From: ${sender}`,
     ...(payload.text ? [`Message: ${payload.text}`] : []),

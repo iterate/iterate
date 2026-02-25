@@ -183,6 +183,34 @@
       "when": 1771799253438,
       "tag": "0025_swift_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1771974134510,
+      "tag": "0026_amusing_chimera",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1771978000000,
+      "tag": "0027_custom_domain_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1772020418684,
+      "tag": "0028_add_default_port",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1772023135177,
+      "tag": "0029_last_scarecrow",
+      "breakpoints": true
     }
   ]
 }

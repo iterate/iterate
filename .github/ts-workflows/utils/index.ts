@@ -15,33 +15,37 @@ export const runsOnDepotUbuntuForContainerThings = {
   "runs-on": `\${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}`,
 };
 
-/** checkout, setup pnpm, setup node, install dependencies */
-export const setupRepo = [
-  {
-    name: "Checkout code",
-    ...uses("actions/checkout@v4", {
-      // Use PR head SHA instead of synthetic merge commit for better cache hits
-      ref: "${{ github.event.pull_request.head.sha || github.sha }}",
-    }),
-  },
-  // Note: Doppler CLI is installed by setupDoppler - don't duplicate here
-  {
-    name: "Setup pnpm",
-    uses: "pnpm/action-setup@v4",
-  },
-  {
-    name: "Setup Node",
-    uses: "actions/setup-node@v4",
-    with: {
-      "node-version": 24,
-      cache: "pnpm",
+/** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
+export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>
+  [
+    {
+      name: "Checkout code",
+      ...uses("actions/checkout@v4", {
+        // Use PR head SHA instead of synthetic merge commit for better cache hits
+        ref: ref ?? "${{ github.event.pull_request.head.sha || github.sha }}",
+      }),
     },
-  },
-  {
-    name: "Install dependencies",
-    run: "pnpm install",
-  },
-] as const satisfies Step[];
+    // Note: Doppler CLI is installed by setupDoppler - don't duplicate here
+    {
+      name: "Setup pnpm",
+      uses: "pnpm/action-setup@v4",
+    },
+    {
+      name: "Setup Node",
+      uses: "actions/setup-node@v4",
+      with: {
+        "node-version": 24,
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install",
+    },
+  ] as const satisfies Step[];
+
+/** checkout, setup pnpm, setup node, install dependencies */
+export const setupRepo = getSetupRepo();
 
 type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
 export const installDopplerCli = {

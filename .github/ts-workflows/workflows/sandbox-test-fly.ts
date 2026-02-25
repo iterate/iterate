@@ -10,6 +10,12 @@ export default workflow({
   on: {
     workflow_call: {
       inputs: {
+        ref: {
+          description: "Git ref to test (branch, tag, or SHA). Uses caller ref if empty.",
+          required: false,
+          type: "string",
+          default: "",
+        },
         fly_image_tag: {
           description: "Fly image tag to test (e.g. registry.fly.io/iterate-sandbox:sha-abc1234)",
           required: true,
@@ -25,6 +31,12 @@ export default workflow({
     },
     workflow_dispatch: {
       inputs: {
+        ref: {
+          description: "Git ref to test (branch, tag, or SHA). Leave empty for current branch.",
+          required: false,
+          type: "string",
+          default: "",
+        },
         fly_image_tag: {
           description: "Fly image tag to test (e.g. registry.fly.io/iterate-sandbox:sha-abc1234)",
           required: true,
@@ -43,7 +55,9 @@ export default workflow({
     "test-sandbox-fly": {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        ...utils.setupRepo,
+        ...utils.getSetupRepo({
+          ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+        }),
         ...utils.setupDoppler({ config: "${{ inputs.doppler_config }}" }),
         {
           name: "Run Fly sandbox tests",
@@ -71,6 +85,14 @@ export default workflow({
             path: "sandbox/test-results",
             "retention-days": 7,
           }),
+        },
+        {
+          name: "Cleanup leftover Fly test machines",
+          if: "always()",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-base-image-test --all",
         },
       ],
     },

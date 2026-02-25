@@ -24,10 +24,10 @@ export default defineConfig({
     strictPort: false,
     allowedHosts: [
       "host.docker.internal",
-      ".local.iterate.app",
-      ".local.iterate.com",
-      ".dev.iterate.com",
+      ".iterate.com",
       ".iterate.app",
+      ".iterate-dev.com",
+      ".iterate-dev.app",
     ],
   },
   plugins: [

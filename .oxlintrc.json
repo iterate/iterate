@@ -1,0 +1,254 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "env": {
+    "builtin": true,
+    "node": true
+  },
+  "ignorePatterns": [
+    "**/.cache/",
+    "**/.corepack/",
+    "**/.turbo/",
+    "**/.claude/",
+    "**/.cursor/",
+    "**/.alchemy/",
+    "**/.husky/",
+    "**/components/ui/",
+    "**/components/ai-elements/",
+    "**/logs.json",
+    "**/worker-configuration.d.ts",
+    "**/routeTree.gen.ts",
+    "**/db/migrations/",
+    "**/*.d.ts",
+    "**/node_modules/",
+    "**/dist/",
+    "**/build/",
+    "pnpm-lock.yaml",
+    "opensrc/**",
+    "test-results/**",
+    "**/evalite-export/**",
+    ".tmp-ci-build*",
+    "**/*ignoreme*"
+  ],
+  "jsPlugins": [
+    "./eslint.config.js",
+    "@tanstack/eslint-plugin-router",
+    "eslint-plugin-codegen",
+    "eslint-plugin-eslint-comments",
+    {
+      "name": "import-js",
+      "specifier": "eslint-plugin-import"
+    },
+    {
+      "name": "unicorn-js",
+      "specifier": "eslint-plugin-unicorn"
+    }
+  ],
+  "rules": {
+    "constructor-super": "error",
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-class-assign": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-const-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": "error",
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-class-members": "error",
+    "no-dupe-else-if": "error",
+    "no-dupe-keys": "error",
+    "no-duplicate-case": "error",
+    "no-empty": "error",
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-func-assign": "error",
+    "no-global-assign": "error",
+    "no-import-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-new-native-nonconstructor": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-obj-calls": "error",
+    "no-prototype-builtins": "error",
+    "no-redeclare": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": "error",
+    "no-setter-return": "error",
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-this-before-super": "error",
+    "no-unexpected-multiline": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-negation": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-unused-vars": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "no-with": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+    "@tanstack/router/create-route-property-order": "warn",
+    "iterate/import-rules": "warn",
+    "iterate/zod-schema-naming": "error",
+    "iterate/drizzle-conventions": "error",
+    "iterate/no-implied-eval": "error",
+    "prefer-const": "off",
+    "iterate/prefer-const": "error",
+    "unicorn-js/template-indent": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs"],
+      "rules": {
+        "no-unused-vars": [
+          "warn",
+          {
+            "args": "all",
+            "argsIgnorePattern": "^_",
+            "caughtErrors": "all",
+            "caughtErrorsIgnorePattern": "^_",
+            "destructuredArrayIgnorePattern": "^_",
+            "varsIgnorePattern": "^_",
+            "ignoreRestSiblings": true
+          }
+        ],
+        "no-console": "off",
+        "no-empty": "off",
+        "no-var": "error",
+        "no-redeclare": "off",
+        "no-param-reassign": "off",
+        "@typescript-eslint/no-non-null-assertion": "off",
+        "@typescript-eslint/prefer-literal-enum-member": "error",
+        "@typescript-eslint/prefer-as-const": "error",
+        "@typescript-eslint/prefer-enum-initializers": "error",
+        "@typescript-eslint/no-inferrable-types": "error",
+        "@typescript-eslint/consistent-type-imports": "off",
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/ban-types": "off",
+        "default-param-last": "error",
+        "no-else-return": "off",
+        "curly": "off",
+        "import/extensions": ["error", "ignorePackages"],
+        "import-js/order": "warn",
+        "eslint-comments/require-description": "error",
+        "no-sequences": "error",
+        "radix": "off",
+        "prefer-numeric-literals": "error",
+        "no-new-func": "error",
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn",
+        "jsx-a11y/click-events-have-key-events": "off",
+        "codegen/codegen": "error",
+        "react/only-export-components": [
+          "warn",
+          {
+            "allowConstantExport": true
+          }
+        ]
+      },
+      "plugins": ["typescript", "import", "react", "jsx-a11y"]
+    },
+    {
+      "files": [
+        "startups/**",
+        "**/test/**",
+        "**/*.test.ts",
+        "**/*.e2e.ts",
+        "**/*.test.tsx",
+        "**/test-setup.ts",
+        "**/test-utils.ts"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["spec/**/*"],
+      "rules": {
+        "react-hooks/rules-of-hooks": "off",
+        "no-console": "off",
+        "no-restricted-imports": [
+          "error",
+          {
+            "name": "@playwright/test",
+            "importNames": ["test"],
+            "message": "Use import { test } from './test-helpers.ts' instead. It has some opinionated conventions like adding a spinner waiter to the waitFor/click etc.."
+          }
+        ],
+        "iterate/spec-restricted-syntax": "error"
+      },
+      "plugins": ["react"]
+    },
+    {
+      "files": ["**/routes/**", "**/app/root.tsx"],
+      "rules": {
+        "react/only-export-components": "off"
+      },
+      "plugins": ["react"]
+    },
+    {
+      "files": ["apps/os/app/routes/**/*.ts", "apps/os/app/routes/**/*.tsx"],
+      "plugins": ["typescript", "import", "react", "jsx-a11y"],
+      "rules": {
+        "jsx-a11y/no-autofocus": "off",
+        "jsx-a11y/label-has-associated-control": "off",
+        "jsx-a11y/click-events-have-key-events": "off"
+      }
+    },
+    {
+      "files": ["apps/daemon/client/routes/**/*.ts", "apps/daemon/client/routes/**/*.tsx"],
+      "plugins": ["typescript", "import", "react", "jsx-a11y"],
+      "rules": {
+        "jsx-a11y/no-autofocus": "off",
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/click-events-have-key-events": "off"
+      }
+    },
+    {
+      "files": ["apps/os/**/*.ts", "apps/os/**/*.tsx"],
+      "rules": {
+        "iterate/no-direct-waituntil-import": "error"
+      }
+    },
+    {
+      "files": ["apps/*/backend/**/*.ts"],
+      "rules": {
+        "no-console": "error"
+      }
+    },
+    {
+      "files": [
+        "apps/*/backend/**/*test*/**",
+        "apps/*/backend/**/*.test.ts",
+        "apps/*/backend/**/*.test.tsx",
+        "apps/*/backend/**/spec/**/*"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ]
+}

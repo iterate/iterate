@@ -26,12 +26,12 @@ You will receive one of two message types:
 
 ## Sending Replies
 
-Use the `iterate tool exec-js` CLI command to send email replies. The `resend` client (Resend SDK) is available as a global.
+Use the `iterate tool exec-ts` CLI command to send email replies. The `resend` client (Resend SDK) is available as a global.
 
 **Reply to an email:**
 
 ```bash
-iterate tool exec-js 'await resend.emails.send({
+iterate tool exec-ts 'await resend.emails.send({
   from: "Agent <agent@alpha.iterate.com>",
   to: ["sender@example.com"],
   subject: "Re: Original Subject",
@@ -42,7 +42,7 @@ iterate tool exec-js 'await resend.emails.send({
 **Reply with HTML formatting:**
 
 ```bash
-iterate tool exec-js 'await resend.emails.send({
+iterate tool exec-ts 'await resend.emails.send({
   from: "Agent <agent@alpha.iterate.com>",
   to: ["sender@example.com"],
   subject: "Re: Original Subject",

@@ -43,6 +43,8 @@
  * Structurally symmetric with webchat.ts and email.ts — if you change the
  * pattern in one, update the others to match.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { eq } from "drizzle-orm";
@@ -64,7 +66,11 @@ import { createRouterClient } from "@orpc/server";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { daemonRouter } from "../orpc/router.ts";
-import { runAgentCommand, type AgentCommandMatch } from "../utils/agent-commands.ts";
+import {
+  runAgentCommand,
+  looksLikeAgentCommand,
+  type AgentCommandMatch,
+} from "../utils/agent-commands.ts";
 
 const logger = console;
 
@@ -116,6 +122,55 @@ const DAEMON_PORT = process.env.PORT || "3001";
 const DAEMON_BASE_URL = `http://localhost:${DAEMON_PORT}`;
 const AGENT_ROUTER_BASE_URL = `${DAEMON_BASE_URL}/api/agents`;
 const SLACK_AGENT_CHANGE_CALLBACK_URL = `${DAEMON_BASE_URL}/api/integrations/slack/agent-change-callback`;
+
+// ──────────────────────── System prompt helpers ─────────────────────────────
+
+/**
+ * Read SLACK.md from the repo at sandbox/home-skeleton/.config/opencode/SLACK.md.
+ * Cached after first read. Returns empty string if the file doesn't exist.
+ */
+let cachedSlackMd: string | null = null;
+
+function readSlackMd(): string {
+  if (cachedSlackMd !== null) return cachedSlackMd;
+  const repoPath = process.env.ITERATE_CUSTOMER_REPO_PATH;
+  if (!repoPath) {
+    cachedSlackMd = "";
+    return cachedSlackMd;
+  }
+  try {
+    cachedSlackMd = readFileSync(
+      join(repoPath, "sandbox", "home-skeleton", ".config", "opencode", "SLACK.md"),
+      "utf8",
+    );
+  } catch {
+    cachedSlackMd = "";
+  }
+  return cachedSlackMd;
+}
+
+type PromptEvent = { type: "iterate:agent:prompt-added"; message: string };
+
+/**
+ * Build the { events: [...] } payload for the agent router.
+ * On first message (wasNewlyCreated), prepends a system prompt event with SLACK.md.
+ */
+function buildAgentEventsPayload(
+  message: string,
+  wasNewlyCreated: boolean,
+): { events: PromptEvent[] } {
+  const events: PromptEvent[] = [];
+
+  if (wasNewlyCreated) {
+    const slackMd = readSlackMd();
+    if (slackMd) {
+      events.push({ type: "iterate:agent:prompt-added", message: slackMd });
+    }
+  }
+
+  events.push({ type: "iterate:agent:prompt-added", message });
+  return { events };
+}
 
 /**
  * We consume `iterate:agent-updated` events delivered to the callback URL.
@@ -271,11 +326,11 @@ slackRouter.post("/webhook", async (c) => {
 
     const message = formatReactionMessage(parsed.event, parsed.case, threadTs, eventId);
 
-    // Fire-and-forget prompt to the agent.
+    // Fire-and-forget prompt to the agent. Reactions never create agents, so wasNewlyCreated=false.
     void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+      body: JSON.stringify(buildAgentEventsPayload(message, false)),
     }).catch((error) => {
       logger.error(`[slack] failed to post reaction prompt for thread_ts=${threadTs}`, error);
     });
@@ -447,10 +502,11 @@ slackRouter.post("/webhook", async (c) => {
     parsed.case === "new_thread_mention" && !wasNewlyCreated ? "mid_thread_mention" : parsed.case;
 
   // Fire-and-forget prompt to the agent, just like webchat.ts.
+  // On first message (wasNewlyCreated), prepends SLACK.md as a system prompt event.
   void fetch(`${AGENT_ROUTER_BASE_URL}${agentPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "iterate:agent:prompt-added", message }),
+    body: JSON.stringify(buildAgentEventsPayload(message, wasNewlyCreated)),
   }).catch((error) => {
     logger.error(`[slack] failed to post prompt for thread_ts=${threadTs}`, error);
   });
@@ -813,19 +869,27 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   }
 
   // ── Self-message guard ──
-  // Always ignore our own bot's messages to prevent feedback loops.
-  if ("user" in event && event.user === botUserId) {
+  // Ignore our own bot's messages to prevent feedback loops, UNLESS the
+  // message looks like an agent command (e.g. "!debug"). Commands from the
+  // bot itself are useful when another agent sends them on its behalf.
+  const isSelfMessage = "user" in event && event.user === botUserId;
+  const selfMessageText =
+    isSelfMessage && "text" in event ? (event.text as string | undefined) : undefined;
+  const isSelfCommand =
+    isSelfMessage && !!selfMessageText && looksLikeAgentCommand(selfMessageText);
+
+  if (isSelfMessage && !isSelfCommand) {
     return { case: "ignored", reason: "Ignored: bot's own message" };
   }
 
   // ── Bot messages ──
   // Ignore bot messages UNLESS they @mention our bot (another bot asking
-  // us to do something).
+  // us to do something) or it's our own command message (already checked above).
   const isBotMessage =
     ("bot_profile" in event && event.bot_profile) ||
     ("subtype" in event && event.subtype === "bot_message");
 
-  if (isBotMessage && !textMentionsUser(event.text, botUserId)) {
+  if (isBotMessage && !isSelfCommand && !textMentionsUser(event.text, botUserId)) {
     return { case: "ignored", reason: "Ignored: bot message" };
   }
 
@@ -945,7 +1009,7 @@ function formatNewThreadMentionMessage(
 
   return [
     `[Agent Path: ${agentPath}] New Slack thread started.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,
@@ -968,7 +1032,7 @@ function formatMidThreadMentionMessage(
 
   const lines = [
     `[Agent Path: ${agentPath}] You've been @mentioned in thread ${threadTs}.`,
-    "Refer to SLACK.md for how to respond via `iterate tool exec-js`.",
+    "Refer to SLACK.md for how to respond via `iterate tool exec-ts`.",
     "",
     `From: ${user}`,
     `Message: ${text}`,

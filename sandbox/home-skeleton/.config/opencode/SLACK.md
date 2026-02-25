@@ -2,17 +2,17 @@
 
 ## Hard Rule: CLI Shape
 
-`iterate tool exec-js` takes one arg: JS code.
+`iterate tool exec-ts` takes one arg: TypeScript code.
 `slack` is a `@slack/web-api` `WebClient`.
 
 ```bash
 # valid
-iterate tool exec-js 'await slack.chat.postMessage({ channel: "C123", thread_ts: "1234.5678", text: "hi" })'
+iterate tool exec-ts 'await slack.chat.postMessage({ channel: "C123", thread_ts: "1234.5678", text: "hi" })'
 
 # invalid! ERROR!!!!
-iterate tool exec-js send --channel C123 --thread_ts 1234.5678 --text "hi"
-iterate tool exec-js --channel C123
-iterate tool exec-js postMessage ...
+iterate tool exec-ts send --channel C123 --thread_ts 1234.5678 --text "hi"
+iterate tool exec-ts --channel C123
+iterate tool exec-ts postMessage ...
 ```
 
 ## Message Types
@@ -28,7 +28,7 @@ iterate tool exec-js postMessage ...
 Reply:
 
 ```bash
-iterate tool exec-js 'await slack.chat.postMessage({
+iterate tool exec-ts 'await slack.chat.postMessage({
   channel: "CHANNEL_ID",
   thread_ts: "THREAD_TS",
   text: "Your response",
@@ -38,7 +38,7 @@ iterate tool exec-js 'await slack.chat.postMessage({
 Add reaction:
 
 ```bash
-iterate tool exec-js 'await slack.reactions.add({
+iterate tool exec-ts 'await slack.reactions.add({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "thumbsup",
@@ -48,7 +48,7 @@ iterate tool exec-js 'await slack.reactions.add({
 Remove reaction:
 
 ```bash
-iterate tool exec-js 'await slack.reactions.remove({
+iterate tool exec-ts 'await slack.reactions.remove({
   channel: "CHANNEL_ID",
   timestamp: "MESSAGE_TS",
   name: "thumbsup",
@@ -58,7 +58,7 @@ iterate tool exec-js 'await slack.reactions.remove({
 Thread history:
 
 ```bash
-iterate tool exec-js 'await slack.conversations.replies({
+iterate tool exec-ts 'await slack.conversations.replies({
   channel: "CHANNEL_ID",
   ts: "THREAD_TS",
 })'
@@ -79,7 +79,7 @@ pnpm --dir "${ITERATE_REPO:-$PWD}/apps/os" exec node -p "require.resolve('@slack
 List replies while posting a "searching" response:
 
 ```bash
-iterate tool exec-js 'const [replies, sent] = await Promise.all([
+iterate tool exec-ts 'const [replies, sent] = await Promise.all([
   slack.conversations.replies({ channel: "CHANNEL_ID", ts: "THREAD_TS" }),
   slack.chat.postMessage({
     channel: "CHANNEL_ID",
@@ -92,7 +92,7 @@ iterate tool exec-js 'const [replies, sent] = await Promise.all([
 Post response and remove reaction at same time:
 
 ```bash
-iterate tool exec-js 'await Promise.all([
+iterate tool exec-ts 'await Promise.all([
   slack.chat.postMessage({
     channel: "CHANNEL_ID",
     thread_ts: "THREAD_TS",
@@ -108,7 +108,7 @@ iterate tool exec-js 'await Promise.all([
 
 ## Files
 
-You can't download and view files using the JS sdk. If there's a file attachment you need to read, use `curl` to download using the "private_url" field, for example:
+You can't download and view files using the Slack SDK. If there's a file attachment you need to read, use `curl` to download using the "private_url" field, for example:
 
 ```sh
 curl -D /dev/stdout -H "Authorization: Bearer $SLACK_BOT_TOKEN" "https://files.slack.com/files-pri/T0123456789-F0123456789/something.jpg" -o /tmp/test_download.jpg

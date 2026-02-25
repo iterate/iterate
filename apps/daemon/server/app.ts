@@ -137,7 +137,7 @@ app.all("/api/orpc/*", async (c) => {
 });
 
 // Streaming variant: same as /api/orpc/* but wraps the response in SSE so that
-// console.log calls inside execJs (or any procedure that emits to the log
+// console.log calls inside execTs/execJs (or any procedure that emits to the log
 // emitter) are streamed to the caller in real-time.
 // Uses AsyncLocalStorage so concurrent requests each get their own emitter.
 app.all("/api/orpc-stream/*", async (c) => {
@@ -160,7 +160,7 @@ app.all("/api/orpc-stream/*", async (c) => {
       }) as EventListener);
 
       // Run the oRPC handler inside the AsyncLocalStorage context so that
-      // execJs (and any other procedure) can read the emitter via getStore().
+      // execTs/execJs (and any other procedure) can read the emitter via getStore().
       logEmitterStorage
         .run(emitter, async () => {
           const { response } = await orpcHandler.handle(rewrittenReq, {
