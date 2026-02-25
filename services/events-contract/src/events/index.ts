@@ -137,6 +137,8 @@ const EventStreamQuery = z.object({
   live: z.boolean().optional(),
 });
 
+const FirehoseQuery = z.object({}).optional().default({});
+
 const eventStreamEventInputExample = EventStreamEventInput.parse({
   type: "https://events.iterate.com/events/example/value-recorded",
   payload: { value: 42 },
@@ -290,6 +292,18 @@ export const eventBusContract = oc.router({
       tags: ["Streams"],
     })
     .input(EventStreamQuery)
+    .output(eventIterator(EventStreamEvent)),
+  firehose: oc
+    .route({
+      operationId: "streamFirehoseEvents",
+      method: "GET",
+      path: "/firehose",
+      summary: "Read live events across all streams",
+      description:
+        "Pull-only firehose stream of live events from every stream path. No offset tracking.",
+      tags: ["Streams"],
+    })
+    .input(FirehoseQuery)
     .output(eventIterator(EventStreamEvent)),
   listStreams: oc
     .route({

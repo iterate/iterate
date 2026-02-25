@@ -23,6 +23,23 @@ export const ListOrdersInput = z.object({
   offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
+export const KickoffOrderWorkflowInput = z.object({
+  sku: z.string().min(1),
+  quantity: z.coerce.number().int().min(1).max(100).optional().default(1),
+  streamPath: z.string().min(1).optional().default("/orders"),
+  delayMs: z.coerce.number().int().min(1).max(60_000).optional().default(10_000),
+});
+
+export const KickoffOrderWorkflowOutput = z.object({
+  accepted: z.literal(true),
+  workflowId: z.string(),
+  orderId: z.string(),
+  streamPath: z.string().min(1),
+  delayMs: z.number().int().min(1),
+  createdEventId: z.string(),
+  createdAt: z.string(),
+});
+
 const serviceSubRouter = createServiceSubRouterContract({
   healthSummary: "Orders service health metadata",
   sqlSummary: "Execute SQL against orders-service sqlite database",
@@ -40,6 +57,16 @@ export const ordersContract = oc.router({
       })
       .input(CreateOrderInput)
       .output(Order),
+
+    kickoffWorkflow: oc
+      .route({
+        method: "POST",
+        path: "/orders/kickoff-workflow",
+        summary: "Kick off synthetic work and emit delayed workflow events",
+        tags: ["orders"],
+      })
+      .input(KickoffOrderWorkflowInput)
+      .output(KickoffOrderWorkflowOutput),
 
     list: oc
       .route({
@@ -149,6 +176,8 @@ export {
   Order as orderSchema,
   CreateOrderInput as createOrderInputSchema,
   ListOrdersInput as listOrdersInputSchema,
+  KickoffOrderWorkflowInput as kickoffOrderWorkflowInputSchema,
+  KickoffOrderWorkflowOutput as kickoffOrderWorkflowOutputSchema,
   OrdersServiceEnv as ordersServiceEnvSchema,
 };
 

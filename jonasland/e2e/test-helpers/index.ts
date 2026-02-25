@@ -612,7 +612,7 @@ export async function waitForPidnapHostRoute(params: {
 export async function assertIptablesRedirect(params: {
   deployment: Pick<ProjectDeployment, "exec">;
 }): Promise<void> {
-  const natRules = await params.deployment.exec("iptables -t nat -S OUTPUT");
+  const natRules = await params.deployment.exec("sudo iptables -t nat -S OUTPUT");
   if (natRules.exitCode !== 0) {
     throw new Error(`failed to inspect iptables nat rules:\n${natRules.output}`);
   }

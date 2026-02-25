@@ -67,6 +67,9 @@ export const eventsService = async (env: EventsServiceEnv) => {
     stream: eventBus.stream.handler(async function* ({ input, signal }) {
       yield* ops.streamEvents(input, signal);
     }),
+    firehose: eventBus.firehose.handler(async function* ({ signal }) {
+      yield* ops.firehoseEvents(signal);
+    }),
     listStreams: eventBus.listStreams.handler(async () => ops.listStreams()),
   });
 

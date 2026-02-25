@@ -1,6 +1,6 @@
 import { expectTypeOf, test } from "vitest";
 import { appRouter } from "../orpc/root.ts";
-import type { DBLike, FlattenProcedures } from "./pgmq-lib.ts";
+import type { DBLike, FlattenProcedures, TimePeriod } from "./pgmq-lib.ts";
 import { outboxClient } from "./client.ts";
 
 test("oRPC procedure types are extracted correctly", () => {
@@ -17,8 +17,6 @@ test("internal event types are type-safe", () => {
     { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
   );
 
-  type Seconds = `${number}s`; // outbox only supports seconds for now, test will need updating if we add other units
-
   expectTypeOf(outboxClient)
     .map((client) =>
       client.send({ transaction: db, parent: db }, "testing:poke", {
@@ -26,7 +24,7 @@ test("internal event types are type-safe", () => {
         message: "hello",
       }),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: Seconds[] }>();
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
 
   expectTypeOf(outboxClient)
     .map((client) =>
@@ -37,7 +35,7 @@ test("internal event types are type-safe", () => {
         { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
       ),
     )
-    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: Seconds[] }>();
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number; delays: TimePeriod[] }>();
 
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
@@ -47,11 +45,11 @@ test("internal event types are type-safe", () => {
   );
 });
 
-test("machine:archive-requested event type", () => {
+test("machine:delete-requested event type", () => {
   const db = {} as DBLike;
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
-    "machine:archive-requested",
+    "machine:delete-requested",
     {
       machineId: "mach_123",
       type: "daytona" as const,

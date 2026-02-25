@@ -27,6 +27,7 @@ interface ConnectionStatus {
 
 const DEFAULT_STREAM_PATH = "/demo/stream";
 const META_STREAM_PATH = "/events/_meta";
+const FIREHOSE_PAGE_PATH = "/firehose";
 const TRANSPORT_QUERY_PARAM = "transport";
 
 const runtimeServicePort = Number.parseInt(location.port, 10);
@@ -59,6 +60,9 @@ const normalizePath = (value: string): string => {
   return withSlash.replaceAll(/\/+/g, "/");
 };
 
+const isFirehoseLocation = (path: string): boolean =>
+  path === FIREHOSE_PAGE_PATH || path === `${FIREHOSE_PAGE_PATH}/`;
+
 const isReservedPath = (path: string): boolean =>
   path === "/api" ||
   path.startsWith("/api/") ||
@@ -66,6 +70,8 @@ const isReservedPath = (path: string): boolean =>
   path.startsWith("/@id/") ||
   path.startsWith("/@fs/") ||
   path.startsWith("/node_modules/") ||
+  path === FIREHOSE_PAGE_PATH ||
+  path.startsWith(`${FIREHOSE_PAGE_PATH}/`) ||
   path === "/docs" ||
   path.startsWith("/docs/") ||
   path === "/openapi.json";
@@ -106,6 +112,7 @@ const parseJsonObject = (
 const streamPathFromLocation = (): string => {
   const raw = decodeURIComponent(location.pathname);
   if (raw === "/" || raw.trim().length === 0) return DEFAULT_STREAM_PATH;
+  if (isFirehoseLocation(raw)) return DEFAULT_STREAM_PATH;
   return normalizePath(raw);
 };
 
@@ -133,6 +140,17 @@ const setLocationStreamPath = (path: string, replace = false): void => {
   if (location.pathname === normalizedPath) return;
   const url = new URL(location.href);
   url.pathname = normalizedPath;
+  const nextURL = `${url.pathname}${url.search}${url.hash}`;
+  if (replace) {
+    history.replaceState({}, "", nextURL);
+    return;
+  }
+  history.pushState({}, "", nextURL);
+};
+
+const setLocationFirehose = (replace = false): void => {
+  const url = new URL(location.href);
+  url.pathname = FIREHOSE_PAGE_PATH;
   const nextURL = `${url.pathname}${url.search}${url.hash}`;
   if (replace) {
     history.replaceState({}, "", nextURL);
@@ -208,7 +226,13 @@ const openLiveIterator = async (
   return { iterator: stream[Symbol.asyncIterator]() };
 };
 
-export function App() {
+const openFirehoseIterator = async (): Promise<{ iterator: AsyncIterator<EventStreamEvent> }> => {
+  const stream = await httpClient.firehose({});
+  return { iterator: stream[Symbol.asyncIterator]() };
+};
+
+function StreamInspectorApp() {
+  const [activePane, setActivePane] = useState<"stream" | "firehose">("stream");
   const [transport, setTransport] = useState<StreamTransport>("websocket");
   const [selectedStreamPath, setSelectedStreamPath] = useState<string>(DEFAULT_STREAM_PATH);
   const [streamPathInput, setStreamPathInput] = useState<string>(DEFAULT_STREAM_PATH);
@@ -242,6 +266,9 @@ export function App() {
   const streamTokenRef = useRef<number>(0);
   const streamIteratorRef = useRef<AsyncIterator<EventStreamEvent> | undefined>(undefined);
   const openStreamPathRef = useRef<string | undefined>(undefined);
+  const firehoseTokenRef = useRef<number>(0);
+  const firehoseIteratorRef = useRef<AsyncIterator<EventStreamEvent> | undefined>(undefined);
+  const activePaneRef = useRef<"stream" | "firehose">("stream");
   const refreshIntervalRef = useRef<number | undefined>(undefined);
 
   const setStatus = useCallback((message: string, isError = false): void => {
@@ -383,6 +410,15 @@ export function App() {
     });
   }, []);
 
+  const disconnectFirehose = useCallback(async (): Promise<void> => {
+    firehoseTokenRef.current += 1;
+
+    const iterator = firehoseIteratorRef.current;
+    firehoseIteratorRef.current = undefined;
+
+    await closeIterator(iterator);
+  }, []);
+
   const connectMetadata = useCallback(async (): Promise<void> => {
     await disconnectMetadata();
 
@@ -463,6 +499,76 @@ export function App() {
     updateStreamSummaryFromEvent,
   ]);
 
+  const connectFirehose = useCallback(
+    async (
+      options: { readonly syncHistory: boolean; readonly replaceHistory?: boolean } = {
+        syncHistory: true,
+      },
+    ): Promise<void> => {
+      await disconnectStream();
+      await disconnectFirehose();
+      setEvents([]);
+
+      activePaneRef.current = "firehose";
+      setActivePane("firehose");
+
+      if (options.syncHistory) {
+        setLocationFirehose(options.replaceHistory === true);
+      }
+
+      const token = firehoseTokenRef.current + 1;
+      firehoseTokenRef.current = token;
+
+      setStreamStatus({
+        text: "Connecting via SSE to /firehose",
+        tone: "neutral",
+      });
+
+      try {
+        const opened = await openFirehoseIterator();
+        firehoseIteratorRef.current = opened.iterator;
+
+        setStreamStatus({
+          text: "Connected via SSE to /firehose",
+          tone: "connected",
+        });
+        setStatus("");
+
+        void (async () => {
+          try {
+            while (token === firehoseTokenRef.current) {
+              const next = await opened.iterator.next();
+              if (next.done) break;
+              setEvents((previous) => [next.value, ...previous].slice(0, 500));
+              updateStreamSummaryFromEvent(next.value);
+            }
+
+            if (token === firehoseTokenRef.current) {
+              setStreamStatus({
+                text: "Connection closed via SSE to /firehose",
+                tone: "error",
+              });
+            }
+          } catch (error) {
+            if (token !== firehoseTokenRef.current) return;
+            setStreamStatus({
+              text: "Connection error via SSE to /firehose",
+              tone: "error",
+            });
+            setStatus(`Firehose error: ${errorMessage(error)}`, true);
+          }
+        })();
+      } catch (error) {
+        setStreamStatus({
+          text: "Connection error via SSE to /firehose",
+          tone: "error",
+        });
+        setStatus(errorMessage(error), true);
+      }
+    },
+    [disconnectStream, disconnectFirehose, setStatus, updateStreamSummaryFromEvent],
+  );
+
   const connectStream = useCallback(
     async (
       streamPath: string,
@@ -484,9 +590,12 @@ export function App() {
       }
 
       await disconnectStream();
+      await disconnectFirehose();
       setEvents([]);
       ensureKnownStream(normalizedPath);
       applySelectedStreamMetadata();
+      activePaneRef.current = "stream";
+      setActivePane("stream");
 
       const token = streamTokenRef.current + 1;
       streamTokenRef.current = token;
@@ -548,6 +657,7 @@ export function App() {
     },
     [
       applySelectedStreamMetadata,
+      disconnectFirehose,
       disconnectStream,
       ensureKnownStream,
       refreshStreams,
@@ -558,8 +668,12 @@ export function App() {
 
   const reconnectAll = useCallback(async (): Promise<void> => {
     await connectMetadata();
+    if (activePaneRef.current === "firehose") {
+      await connectFirehose({ syncHistory: false });
+      return;
+    }
     await connectStream(selectedStreamPathRef.current, { syncHistory: false });
-  }, [connectMetadata, connectStream]);
+  }, [connectMetadata, connectFirehose, connectStream]);
 
   const sortedStreams = useMemo(() => {
     return [...streamListState.values()].sort(
@@ -578,6 +692,10 @@ export function App() {
   const onOpenStream = useCallback(async (): Promise<void> => {
     await connectStream(streamPathInput, { syncHistory: true });
   }, [connectStream, streamPathInput]);
+
+  const onOpenFirehose = useCallback(async (): Promise<void> => {
+    await connectFirehose({ syncHistory: true });
+  }, [connectFirehose]);
 
   const onTransportChange = useCallback(
     async (nextTransport: StreamTransport): Promise<void> => {
@@ -642,17 +760,22 @@ export function App() {
         transportRef.current = initialTransport;
         setTransport(initialTransport);
         setTransportInLocation(initialTransport, true);
+        const locationIsFirehose = isFirehoseLocation(location.pathname);
         const locationPath = streamPathFromLocation();
         selectedStreamPathRef.current = locationPath;
         setSelectedStreamPath(locationPath);
         setStreamPathInput(locationPath);
+        activePaneRef.current = locationIsFirehose ? "firehose" : "stream";
+        setActivePane(locationIsFirehose ? "firehose" : "stream");
         setMetadataInput("{}");
         setMetaStatus({
           text: `Connecting via ${transportLabel(initialTransport)} to ${META_STREAM_PATH}`,
           tone: "neutral",
         });
         setStreamStatus({
-          text: `Disconnected via ${transportLabel(initialTransport)} to ${locationPath}`,
+          text: locationIsFirehose
+            ? "Disconnected via SSE to /firehose"
+            : `Disconnected via ${transportLabel(initialTransport)} to ${locationPath}`,
           tone: "neutral",
         });
 
@@ -662,7 +785,9 @@ export function App() {
 
         if (disposed) return;
 
-        if (location.pathname === "/") {
+        if (locationIsFirehose) {
+          await connectFirehose({ syncHistory: false });
+        } else if (location.pathname === "/") {
           await connectStream(locationPath, { syncHistory: true, replaceHistory: true });
         } else {
           await connectStream(locationPath, { syncHistory: false });
@@ -681,7 +806,11 @@ export function App() {
             setTransport(locationTransport);
             await connectMetadata();
           }
-          await connectStream(streamPathFromLocation(), { syncHistory: false });
+          if (isFirehoseLocation(location.pathname)) {
+            await connectFirehose({ syncHistory: false });
+          } else {
+            await connectStream(streamPathFromLocation(), { syncHistory: false });
+          }
         } catch (error) {
           setStatus(errorMessage(error), true);
         }
@@ -705,14 +834,17 @@ export function App() {
       }
       void disconnectMetadata();
       void disconnectStream();
+      void disconnectFirehose();
       if (metadataReconnectTimerRef.current !== undefined) {
         clearTimeout(metadataReconnectTimerRef.current);
         metadataReconnectTimerRef.current = undefined;
       }
     };
   }, [
+    connectFirehose,
     connectMetadata,
     connectStream,
+    disconnectFirehose,
     disconnectMetadata,
     disconnectStream,
     ensureKnownStream,
@@ -767,7 +899,30 @@ export function App() {
         </Button>
 
         <div className="space-y-2">
-          <Label>Streams</Label>
+          <Label>Special Stream</Label>
+          <button
+            type="button"
+            className={cn(
+              "w-full rounded-md border px-3 py-2 text-left text-xs",
+              activePane === "firehose"
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-accent hover:text-accent-foreground",
+            )}
+            onClick={() => {
+              void onOpenFirehose().catch((error) => {
+                setStatus(errorMessage(error), true);
+              });
+            }}
+          >
+            <div className="truncate font-mono">/firehose</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              Live firehose · this is a special case stream
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Search streams</Label>
           <Input
             value={streamSearchInput}
             placeholder="Search streams"
@@ -787,7 +942,7 @@ export function App() {
                   type="button"
                   className={cn(
                     "w-full rounded-md border px-3 py-2 text-left text-xs",
-                    stream.path === selectedStreamPath
+                    activePane === "stream" && stream.path === selectedStreamPath
                       ? "bg-accent text-accent-foreground"
                       : "hover:bg-accent hover:text-accent-foreground",
                   )}
@@ -812,71 +967,86 @@ export function App() {
       <div className="space-y-4">
         <section className="space-y-5 rounded-lg border p-4">
           <header className="space-y-1">
-            <h2 className="text-base font-semibold">Active Stream</h2>
+            <h2 className="text-base font-semibold">
+              {activePane === "firehose" ? "Firehose" : "Active Stream"}
+            </h2>
             <p className={statusToneClass(streamStatus.tone)}>{streamStatus.text}</p>
             {statusTone === "error" && statusText.length > 0 ? (
               <p className="text-xs text-destructive">{statusText}</p>
             ) : null}
           </header>
 
-          <div className="space-y-2">
-            <Label>Stream metadata</Label>
-            <Textarea
-              rows={4}
-              className="font-mono text-xs"
-              value={metadataInput}
-              onChange={(event) => {
-                setMetadataInput(event.currentTarget.value);
-              }}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                void onSetMetadata().catch((error) => {
-                  setStatus(errorMessage(error), true);
-                });
-              }}
-            >
-              Update Metadata
-            </Button>
-          </div>
+          {activePane === "firehose" ? (
+            <p className="text-xs text-muted-foreground">
+              Live-only SSE firehose across all streams. No offsets, no historic catch-up, no
+              metadata controls.
+            </p>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label>Stream metadata</Label>
+                <Textarea
+                  rows={4}
+                  className="font-mono text-xs"
+                  value={metadataInput}
+                  onChange={(event) => {
+                    setMetadataInput(event.currentTarget.value);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    void onSetMetadata().catch((error) => {
+                      setStatus(errorMessage(error), true);
+                    });
+                  }}
+                >
+                  Update Metadata
+                </Button>
+              </div>
 
-          <div className="space-y-2">
-            <Label>Append event</Label>
-            <Input
-              value={eventType}
-              className="font-mono text-xs"
-              onChange={(event) => {
-                setEventType(event.currentTarget.value);
-              }}
-            />
-            <Textarea
-              rows={4}
-              className="font-mono text-xs"
-              value={eventPayload}
-              onChange={(event) => {
-                setEventPayload(event.currentTarget.value);
-              }}
-            />
-            <Button
-              type="button"
-              onClick={() => {
-                void onAppendEvent().catch((error) => {
-                  setStatus(errorMessage(error), true);
-                });
-              }}
-            >
-              Send JSON Event
-            </Button>
-          </div>
+              <div className="space-y-2">
+                <Label>Append event</Label>
+                <Input
+                  value={eventType}
+                  className="font-mono text-xs"
+                  onChange={(event) => {
+                    setEventType(event.currentTarget.value);
+                  }}
+                />
+                <Textarea
+                  rows={4}
+                  className="font-mono text-xs"
+                  value={eventPayload}
+                  onChange={(event) => {
+                    setEventPayload(event.currentTarget.value);
+                  }}
+                />
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void onAppendEvent().catch((error) => {
+                      setStatus(errorMessage(error), true);
+                    });
+                  }}
+                >
+                  Send JSON Event
+                </Button>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="rounded-lg border p-4">
-          <h2 className="mb-3 text-base font-semibold">Live Events</h2>
+          <h2 className="mb-3 text-base font-semibold">
+            {activePane === "firehose" ? "Firehose Events" : "Live Events"}
+          </h2>
           <ul className="divide-y divide-border">
             {events.length === 0 ? (
-              <li className="py-2 text-xs text-muted-foreground">No live events yet</li>
+              <li className="py-2 text-xs text-muted-foreground">
+                {activePane === "firehose" ? "No firehose events yet" : "No live events yet"}
+              </li>
             ) : null}
             {events.map((event) => (
               <li key={`${event.path}:${event.offset}`} className="py-2">
@@ -887,6 +1057,9 @@ export function App() {
                   >
                     <span className="min-w-0 truncate">{event.type}</span>
                     <span className="ml-auto flex flex-col items-end text-right">
+                      {activePane === "firehose" ? (
+                        <span className="font-mono">{event.path}</span>
+                      ) : null}
                       <span className="font-mono">{event.offset}</span>
                       <span className="text-muted-foreground" title={event.createdAt}>
                         {formatRelativeTime(event.createdAt)}
@@ -907,4 +1080,8 @@ export function App() {
       </div>
     </main>
   );
+}
+
+export function App() {
+  return <StreamInspectorApp />;
 }

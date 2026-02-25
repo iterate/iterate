@@ -95,6 +95,8 @@ export interface EventOperations {
     signal?: AbortSignal,
   ) => AsyncGenerator<EventStreamEvent>;
 
+  readonly firehoseEvents: (signal?: AbortSignal) => AsyncGenerator<EventStreamEvent>;
+
   readonly listStreams: () => Promise<Array<EventStreamSummary>>;
 }
 
@@ -142,6 +144,29 @@ const createOperations = (manager: StreamManager): EventOperations => ({
     const iterator = Stream.toAsyncIterable(source.pipe(Stream.map(toContractEvent)))[
       Symbol.asyncIterator
     ]();
+
+    const onAbort = () => {
+      void iterator.return?.();
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      while (!signal?.aborted) {
+        const result = await iterator.next();
+        if (result.done) return;
+        yield result.value;
+      }
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      await iterator.return?.();
+    }
+  },
+
+  async *firehoseEvents(signal) {
+    const iterator = Stream.toAsyncIterable(
+      manager.subscribe({}).pipe(Stream.map(toContractEvent)),
+    )[Symbol.asyncIterator]();
 
     const onAbort = () => {
       void iterator.return?.();

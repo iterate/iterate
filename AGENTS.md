@@ -40,13 +40,12 @@ doppler run --config dev -- <command>
 
 # Examples
 doppler run --config dev -- pnpm test
-doppler run --config dev -- pnpm sandbox daytona:push
 
 # Check available vars
 doppler run --config dev -- env | grep SOME_VAR
 ```
 
-For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
+For tests needing credentials (Fly, Stripe, etc.), wrap with `doppler run`.
 
 ## Critical rules
 
@@ -134,26 +133,6 @@ When a machine shows `status=error` in the dashboard:
 - Query the local dev DB (`machine`, `outbox_event` tables) to find recent machines, check state and event history. The postgres port is docker-mapped — use `docker port` to find it. DB name is `os`.
 - For fly machines, `doppler run --config dev -- fly logs -a <external_id> --no-tail` shows daemon/pidnap logs. The `external_id` column on the machine row is the fly app name.
 - The `pgmq.q_consumer_job_queue` and `pgmq.a_consumer_job_queue` tables show pending/archived outbox jobs.
-
-### Getting logs from Daytona machines (production)
-
-No `docker logs` for Daytona. Use the Daytona SDK to exec commands in the sandbox:
-
-```bash
-# Get daemon logs from a Daytona sandbox (run from apps/os/)
-doppler run --config prd -- node -e "
-const { Daytona } = require('@daytonaio/sdk');
-(async () => {
-  const d = new Daytona({ apiKey: process.env.DAYTONA_API_KEY, organizationId: process.env.DAYTONA_ORG_ID });
-  const sb = await d.get('<sandbox-name>');  // e.g. 'prd--nustom--ci-c87d181'
-  const r = await sb.process.executeCommand('tail -200 /var/log/pidnap/process/daemon-backend.log');
-  console.log(r.result);
-})();
-"
-# Other useful log files: opencode.log, env-manager.log (all under /var/log/pidnap/process/)
-```
-
-Sandbox name is visible on the machine detail page in the dashboard, or via the Daytona dashboard at app.daytona.io.
 
 ### Cloudflare Worker logs (control plane)
 

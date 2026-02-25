@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
+import { useState, useRef, useCallback, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -173,19 +173,12 @@ function EmailOtpSignIn({
     setError(null);
   };
 
-  // Auto-resend OTP when restoring step=otp from URL (e.g. after page reload)
-  const didAutoResend = useRef(false);
-  useEffect(() => {
-    if (initialStep === "otp" && initialEmail && !didAutoResend.current) {
-      didAutoResend.current = true;
-      void authClient.emailOtp
-        .sendVerificationOtp({ email: initialEmail, type: "sign-in" })
-        .then(() => toast.success("Code resent to your email"))
-        .catch(() => {
-          /* user can manually resend */
-        });
-    }
-  }, [initialStep, initialEmail]);
+  // We intentionally do NOT auto-send an OTP when restoring step=otp from
+  // the URL (e.g. after page reload or crafted link). The user can click
+  // "Resend code" manually. This prevents abuse via URLs like
+  // /login?step=otp&email=victim@example.com triggering unsolicited emails,
+  // and also prevents duplicate sends during the normal login flow (where
+  // handleEmailSubmit already sent the OTP before updating the URL).
 
   if (step === "otp") {
     return (
