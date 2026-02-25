@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
+    ".": "./src/server.ts",
     "./server": "./src/server.ts"
   },
   "scripts": {

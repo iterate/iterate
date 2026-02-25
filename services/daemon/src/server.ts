@@ -1,14 +1,20 @@
+import { execFile, type ExecFileException } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { createAdaptorServer } from "@hono/node-server";
 import { daemonServiceManifest } from "@iterate-com/daemon-contract";
 import { baseApp, injectWebSocket } from "./utils/hono.ts";
 import { ptyRouter } from "./routers/pty.ts";
 
 const env = daemonServiceManifest.envVars.parse(process.env);
+const execFileAsync = promisify(execFile);
+const TSX_BINARIES = [process.env.TSX_BINARY, "/opt/pidnap/node_modules/.bin/tsx", "tsx"].filter(
+  (value): value is string => typeof value === "string" && value.trim().length > 0,
+);
 
 baseApp.get("/healthz", (c) => c.text("ok"));
 baseApp.route("/api/pty", ptyRouter);
@@ -16,6 +22,57 @@ baseApp.route("/api/pty", ptyRouter);
 function ensureModuleSource(code: string): string {
   if (code.includes("export default")) return code;
   return `export default async () => {\n${code}\n};\n`;
+}
+
+function buildRunnerSource(scriptPath: string): string {
+  const scriptUrl = pathToFileURL(scriptPath).href;
+  return [
+    `import run from ${JSON.stringify(scriptUrl)};`,
+    "",
+    "async function main() {",
+    "  if (typeof run !== 'function') {",
+    "    throw new Error('code must export default async function');",
+    "  }",
+    "  const result = await run();",
+    "  process.stdout.write(JSON.stringify({ result }));",
+    "}",
+    "",
+    "void main().catch((error) => {",
+    "  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);",
+    "  process.stderr.write(message);",
+    "  process.exitCode = 1;",
+    "});",
+    "",
+  ].join("\n");
+}
+
+async function runTsxFile(scriptPath: string): Promise<{ stdout: string; stderr: string }> {
+  let notFoundError: Error | null = null;
+  for (const tsxBinary of TSX_BINARIES) {
+    try {
+      const { stdout, stderr } = await execFileAsync(tsxBinary, [scriptPath], {
+        maxBuffer: 1024 * 1024 * 5,
+      });
+      return { stdout, stderr };
+    } catch (error) {
+      const maybeErrno = error as NodeJS.ErrnoException;
+      if (maybeErrno.code === "ENOENT") {
+        notFoundError = maybeErrno;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw notFoundError ?? new Error("tsx binary not found");
+}
+
+function getExecErrorDetails(error: unknown): { stderr: string; stdout: string; message: string } {
+  const execError = error as ExecFileException & { stderr?: string; stdout?: string };
+  return {
+    stderr: typeof execError.stderr === "string" ? execError.stderr.trim() : "",
+    stdout: typeof execError.stdout === "string" ? execError.stdout.trim() : "",
+    message: error instanceof Error ? error.message : String(error),
+  };
 }
 
 baseApp.post("/api/tools/exec-ts", async (c) => {
@@ -27,21 +84,27 @@ baseApp.post("/api/tools/exec-ts", async (c) => {
 
   const dir = join(tmpdir(), "jonasland-daemon-exec");
   await mkdir(dir, { recursive: true });
-  const scriptPath = join(dir, `script-${randomUUID()}.mts`);
+  const runId = randomUUID();
+  const scriptPath = join(dir, `script-${runId}.mts`);
+  const runnerPath = join(dir, `runner-${runId}.mts`);
 
   try {
     await writeFile(scriptPath, ensureModuleSource(code), "utf8");
-    const mod = (await import(`${pathToFileURL(scriptPath).href}?v=${Date.now()}`)) as {
-      default?: () => Promise<unknown>;
-    };
-    if (typeof mod.default !== "function") {
-      return c.json({ error: "code must export default async function" }, 400);
+    await writeFile(runnerPath, buildRunnerSource(scriptPath), "utf8");
+    try {
+      const { stdout } = await runTsxFile(runnerPath);
+      const parsed = stdout.trim().length > 0 ? (JSON.parse(stdout) as { result?: unknown }) : {};
+      const result = parsed.result;
+      return c.json({ ok: true as const, result });
+    } catch (error) {
+      const details = getExecErrorDetails(error);
+      const errorMessage = details.stderr || details.stdout || details.message;
+      const status = errorMessage.includes("code must export default async function") ? 400 : 500;
+      return c.json({ error: errorMessage }, status);
     }
-
-    const result = await mod.default();
-    return c.json({ ok: true as const, result });
   } finally {
     await rm(scriptPath, { force: true }).catch(() => {});
+    await rm(runnerPath, { force: true }).catch(() => {});
   }
 });
 
