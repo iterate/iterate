@@ -215,7 +215,8 @@ export const projectRouter = {
       }
 
       const previousCustomDomain = ctx.project.customDomain;
-      const newCustomDomain = input.customDomain !== undefined ? input.customDomain : previousCustomDomain;
+      const newCustomDomain =
+        input.customDomain !== undefined ? input.customDomain : previousCustomDomain;
       const customDomainChanged =
         input.customDomain !== undefined && input.customDomain !== previousCustomDomain;
 

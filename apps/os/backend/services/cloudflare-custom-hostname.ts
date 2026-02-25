@@ -54,7 +54,10 @@ export interface CloudflareCustomHostnameConfig {
   zoneId: string;
 }
 
-function getConfig(env: { CF_CUSTOM_HOSTNAME_API_TOKEN?: string; CF_CUSTOM_HOSTNAME_ZONE_ID?: string }): CloudflareCustomHostnameConfig | null {
+function getConfig(env: {
+  CF_CUSTOM_HOSTNAME_API_TOKEN?: string;
+  CF_CUSTOM_HOSTNAME_ZONE_ID?: string;
+}): CloudflareCustomHostnameConfig | null {
   const apiToken = env.CF_CUSTOM_HOSTNAME_API_TOKEN;
   const zoneId = env.CF_CUSTOM_HOSTNAME_ZONE_ID;
   if (!apiToken || !zoneId) return null;
@@ -136,9 +139,7 @@ export async function findCustomHostname(
 
   const data = (await response.json()) as CFApiResponse<CustomHostnameResult[]>;
   if (!data.success) {
-    throw new Error(
-      `Failed to find custom hostname '${hostname}': ${JSON.stringify(data.errors)}`,
-    );
+    throw new Error(`Failed to find custom hostname '${hostname}': ${JSON.stringify(data.errors)}`);
   }
 
   return data.result.find((r) => r.hostname === hostname) ?? null;
@@ -191,7 +192,11 @@ export async function deleteCustomHostname(
 export async function getCustomHostnameStatus(
   config: CloudflareCustomHostnameConfig,
   hostname: string,
-): Promise<{ status: string; sslStatus: string; validationRecords: CustomHostnameSSL["validation_records"] } | null> {
+): Promise<{
+  status: string;
+  sslStatus: string;
+  validationRecords: CustomHostnameSSL["validation_records"];
+} | null> {
   const result = await findCustomHostname(config, hostname);
   if (!result) return null;
   return {

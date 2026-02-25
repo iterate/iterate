@@ -427,9 +427,7 @@ export const registerConsumers = () => {
         return `registered ${customDomain} (id=${result.id}, status=${result.status})`;
       }
 
-      logger.info(
-        `[registerCustomHostname] CF for SaaS not configured, skipped ${customDomain}`,
-      );
+      logger.info(`[registerCustomHostname] CF for SaaS not configured, skipped ${customDomain}`);
       return `skipped: CF for SaaS not configured`;
     },
   });
