@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { eq, ne, and, isNull, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import * as arctic from "arctic";
+import { isBlockedCustomDomain } from "@iterate-com/shared/project-ingress";
 import {
   publicProcedure,
   protectedProcedure,
@@ -28,7 +29,6 @@ import {
 import { decrypt } from "../../utils/encryption.ts";
 import { callClaudeHaiku } from "../../services/claude-haiku.ts";
 import { validateJsonataExpression } from "../../egress-proxy/egress-rules.ts";
-import { isBlockedCustomDomain } from "@iterate-com/shared/project-ingress";
 import { linkExternalIdToGroups } from "../../lib/posthog.ts";
 import { pokeRunningMachinesToRefresh } from "../../utils/poke-machines.ts";
 import {
