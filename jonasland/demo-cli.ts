@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { projectDeployment, type ProjectDeployment } from "./e2e/test-helpers/index.ts";
+import { ON_DEMAND_OTEL_SERVICE_ENV, ON_DEMAND_PROCESSES } from "./shared/on-demand-processes.ts";
 
 type RouteCheck = {
   host: string;
@@ -26,12 +27,18 @@ type ProcessConfig = {
   directHttpCheck?: DirectHttpCheck;
 };
 
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
+const OTEL_SERVICE_ENV = ON_DEMAND_OTEL_SERVICE_ENV;
+
+const onDemandProcesses: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfig) => ({
+  slug: processConfig.slug,
+  definition: processConfig.definition,
+  ...(processConfig.routeCheck
+    ? { routeCheck: { ...processConfig.routeCheck, timeoutMs: 60_000 } }
+    : {}),
+  ...(processConfig.directHttpCheck
+    ? { directHttpCheck: { ...processConfig.directHttpCheck, timeoutMs: 60_000 } }
+    : {}),
+}));
 
 const processes: ProcessConfig[] = [
   {
@@ -73,15 +80,7 @@ const processes: ProcessConfig[] = [
     },
     routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz", timeoutMs: 60_000 },
   },
-  {
-    slug: "egress-proxy",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
-      env: OTEL_SERVICE_ENV,
-    },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz", timeoutMs: 60_000 },
-  },
+  ...onDemandProcesses,
   {
     slug: "openobserve",
     definition: {
@@ -324,6 +323,8 @@ async function main(): Promise<void> {
   }
 
   const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+  const demoEgressProxy =
+    process.env.JONASLAND_DEMO_EGRESS_PROXY || "http://host.docker.internal:19099";
   const containerName = `jonasland-demo-${randomUUID().slice(0, 8)}`;
 
   logLine(`building image: ${image}`);
@@ -335,10 +336,13 @@ async function main(): Promise<void> {
     name: containerName,
     capAdd: ["NET_ADMIN", "SYS_ADMIN"],
     extraHosts: ["host.docker.internal:host-gateway"],
+    env: {
+      ITERATE_EXTERNAL_EGRESS_PROXY: demoEgressProxy,
+    },
   });
 
   logLine("ensuring baseline processes");
-  for (const processSlug of ["caddy", "registry", "events"] as const) {
+  for (const processSlug of ["caddy", "registry", "events", "daemon"] as const) {
     await deployment.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
   }
 
@@ -396,6 +400,33 @@ async function main(): Promise<void> {
   );
   const traceId = traceIdMatches.at(-1);
 
+  let slackDemoResult: { ok?: boolean; status?: number; body?: string; error?: string } = {};
+  try {
+    const slackResponse = await hostRequest(ingressUrl, "slack.iterate.localhost", "/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        event: {
+          type: "app_mention",
+          user: "U_DEMO",
+          text: "<@BOT> what is 50 minus 8",
+          channel: "C_DEMO",
+          ts: "1730000000.000100",
+          thread_ts: "1730000000.000100",
+        },
+      }),
+    });
+    slackDemoResult = {
+      ok: slackResponse.ok,
+      status: slackResponse.status,
+      body: await slackResponse.text(),
+    };
+  } catch (error) {
+    slackDemoResult = { error: errorMessage(error) };
+  }
+
   const homeObservability = await hostJson<{
     otel?: {
       tracesEndpoint?: string | null;
@@ -421,6 +452,21 @@ async function main(): Promise<void> {
   process.stdout.write(`- docs: ${toHostUrl("docs.iterate.localhost", ingressPort, "/")}\n`);
   process.stdout.write(`- orders: ${toHostUrl("orders.iterate.localhost", ingressPort, "/")}\n`);
   process.stdout.write(`- events: ${toHostUrl("events.iterate.localhost", ingressPort, "/")}\n`);
+  process.stdout.write(
+    `- daemon: ${toHostUrl("daemon.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- agents: ${toHostUrl("agents.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- opencode-wrapper: ${toHostUrl("opencode-wrapper.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- slack: ${toHostUrl("slack.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
+  process.stdout.write(
+    `- opencode: ${toHostUrl("opencode.iterate.localhost", ingressPort, "/healthz")}\n`,
+  );
   process.stdout.write(
     `- outerbase: ${toHostUrl("outerbase.iterate.localhost", ingressPort, "/")}\n`,
   );
@@ -454,6 +500,8 @@ async function main(): Promise<void> {
     `- home OTEL endpoint: ${homeObservability.otel?.tracesEndpoint ?? "n/a"}\n`,
   );
   process.stdout.write(`- registry route count: ${String(registryRouteCount.total)}\n`);
+  process.stdout.write(`- demo egress proxy: ${demoEgressProxy}\n`);
+  process.stdout.write(`- slack webhook smoke: ${JSON.stringify(slackDemoResult)}\n`);
   process.stdout.write("\n");
 
   process.stdout.write("trace links\n");
@@ -475,6 +523,12 @@ async function main(): Promise<void> {
 
   process.stdout.write("stuff to try\n");
   process.stdout.write(
+    "- start local mock egress (separate terminal):\n  pnpm tsx jonasland/mock-egress-proxy-demo.ts\n",
+  );
+  process.stdout.write(
+    `- send slack webhook:\n  curl -sS -H 'Host: slack.iterate.localhost' -H 'content-type: application/json' --data '{"event":{"type":"app_mention","user":"U1","text":"<@BOT> what is 50 minus 8","channel":"C1","ts":"1730000000.000100","thread_ts":"1730000000.000100"}}' ${ingressUrl}/webhook\n`,
+  );
+  process.stdout.write(
     `- create another order:\n  curl -sS -H 'Host: orders.iterate.localhost' -H 'content-type: application/json' --data '{"sku":"demo-2","quantity":3}' ${ingressUrl}/api/orders\n`,
   );
   process.stdout.write(
@@ -485,6 +539,9 @@ async function main(): Promise<void> {
   );
   process.stdout.write(
     `- inspect registry routes:\n  curl -sS -H 'Host: registry.iterate.localhost' ${ingressUrl}/api/routes\n`,
+  );
+  process.stdout.write(
+    `- inspect mock egress records:\n  curl -sS http://127.0.0.1:19099/records | jq\n`,
   );
   process.stdout.write("\n");
 

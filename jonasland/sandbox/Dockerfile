@@ -51,9 +51,17 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts \
     --filter @iterate-com/docs-service \
     --filter @iterate-com/outerbase-service \
     --filter @iterate-com/egress-service \
+    --filter @iterate-com/daemon-service \
+    --filter @iterate-com/agents-service \
+    --filter @iterate-com/slack-service \
+    --filter @iterate-com/opencode-wrapper-service \
     --filter @iterate-com/registry-contract \
     --filter @iterate-com/events-contract \
     --filter @iterate-com/orders-contract \
+    --filter @iterate-com/daemon-contract \
+    --filter @iterate-com/agents-contract \
+    --filter @iterate-com/slack-contract \
+    --filter @iterate-com/opencode-wrapper-contract \
     --filter @iterate-com/shared \
     --filter @iterate-com/ui
 RUN pnpm -r rebuild better-sqlite3 esbuild protobufjs

@@ -1,0 +1,25 @@
+{
+  "name": "@iterate-com/jonasland-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx ./scripts/dev.ts",
+    "dev:api": "tsx ./server.ts",
+    "dev:ui": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@types/react": "^19.2.3",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

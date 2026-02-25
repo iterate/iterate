@@ -4,6 +4,7 @@ import { addPlugins } from "./playwright-plugin.ts";
 import { hydrationWaiter, spinnerWaiter, videoMode, uiErrorReporter } from "./plugins/index.ts";
 
 const TEST_OTP = "424242";
+const LOGIN_WAIT_TIMEOUT_MS = 10_000;
 
 export const baseTest = base;
 
@@ -32,15 +33,15 @@ export async function login(page: Page, email: string) {
   await page.goto("/login");
 
   const emailInput = page.getByTestId("email-input");
-  await emailInput.waitFor();
+  await emailInput.waitFor({ timeout: LOGIN_WAIT_TIMEOUT_MS });
   // Wait for hydration to complete - input is disabled until then
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
-  await submitButton.waitFor();
+  await submitButton.waitFor({ timeout: LOGIN_WAIT_TIMEOUT_MS });
   await submitButton.click();
 
-  await page.getByText("Enter verification code").waitFor();
+  await page.getByText("Enter verification code").waitFor({ timeout: LOGIN_WAIT_TIMEOUT_MS });
 
   const firstOtpInput = page.locator('input[inputmode="numeric"]').first();
   await firstOtpInput.focus();
@@ -86,7 +87,7 @@ export function sidebarButton(page: Page, text: string | RegExp) {
 export async function logout(page: Page) {
   await page.locator(`[data-slot="sidebar-footer"] button`).click();
   await page.getByRole("menuitem", { name: "Log out" }).click();
-  await page.getByTestId("email-input").waitFor();
+  await page.getByTestId("email-input").waitFor({ timeout: LOGIN_WAIT_TIMEOUT_MS });
 }
 
 function toastLocator(page: Page, type: "error" | "success", text?: string | RegExp) {
