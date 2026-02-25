@@ -3,9 +3,10 @@ import { expect } from "@playwright/test";
 import { projectDeployment, test } from "./test-helpers.ts";
 
 test.describe("orders service", () => {
-  test("supports place + find order and emits order stream events", async ({}) => {
+  test("supports place + find order and emits order stream events", async ({ page }) => {
     await using deployment = await projectDeployment();
     await deployment.startOnDemandProcess("orders");
+    const ingressUrl = new URL(await deployment.ingressUrl());
 
     const health = await deployment.orders.service.health({});
     expect(health.ok).toBe(true);
@@ -33,11 +34,10 @@ test.describe("orders service", () => {
     expect(found.id).toBe(placed.id);
     expect(found.eventId).toBe(placed.eventId);
 
-    const streamResponse = await deployment.request({
-      host: "events.iterate.localhost",
-      path: "/api/streams/orders",
-    });
-    expect(streamResponse.status).toBe(200);
+    const streamResponse = await page.request.get(
+      `http://events.iterate.localhost:${ingressUrl.port}/api/streams/orders`,
+    );
+    expect(streamResponse.ok()).toBe(true);
 
     const streamText = await streamResponse.text();
     expect(streamText).toContain("https://events.iterate.com/orders/order-placed");

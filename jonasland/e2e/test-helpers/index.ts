@@ -532,32 +532,6 @@ async function waitForRegistryReady(params: {
   throw new Error("timed out waiting for registry service");
 }
 
-async function waitForHostRouteViaContainer(params: {
-  containerId: string;
-  host: string;
-  path: string;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const result = await execInContainer({
-      containerId: params.containerId,
-      cmd: [
-        "sh",
-        "-ec",
-        `curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${params.path}' >/dev/null`,
-      ],
-    }).catch(() => ({ exitCode: 1, output: "" }));
-
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
-}
-
 export type OrdersClient = ContractRouterClient<typeof ordersContract>;
 export type EventsClient = ContractRouterClient<typeof eventBusContract>;
 
@@ -711,8 +685,8 @@ export async function projectDeployment(params: {
       timeoutMs: 90_000,
     });
 
-    await waitForHostRouteViaContainer({
-      containerId: container.containerId,
+    await waitForHostRouteViaIngress({
+      ingressBaseUrl,
       host: "events.iterate.localhost",
       path: "/healthz",
       timeoutMs: 60_000,
