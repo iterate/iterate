@@ -66,7 +66,9 @@ class RetryPool extends Pool {
         }
 
         const delay = BASE_DELAY_MS * 2 ** attempt;
-        logger.warn(`Retrying transient DB error (attempt ${attempt + 1}/${MAX_RETRIES}): ${lastError.message}`);
+        logger.warn(
+          `Retrying transient DB error (attempt ${attempt + 1}/${MAX_RETRIES}): ${lastError.message}`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -75,7 +77,8 @@ class RetryPool extends Pool {
   }
 }
 
-const createPool = (databaseUrl: string) => new RetryPool({ connectionString: databaseUrl, max: 3 } as PoolConfig);
+const createPool = (databaseUrl: string) =>
+  new RetryPool({ connectionString: databaseUrl, max: 3 } as PoolConfig);
 
 export const getDb = () =>
   drizzle({ client: createPool(env.DATABASE_URL), schema, casing: "snake_case" });

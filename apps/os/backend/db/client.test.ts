@@ -23,7 +23,9 @@ describe("isTransientError", () => {
   });
 
   it("returns true for WebSocket errors", () => {
-    expect(isTransientError(new Error("WebSocket was closed before the connection was established"))).toBe(true);
+    expect(
+      isTransientError(new Error("WebSocket was closed before the connection was established")),
+    ).toBe(true);
   });
 
   it("returns true for fetch failed errors", () => {
@@ -35,7 +37,9 @@ describe("isTransientError", () => {
   });
 
   it("returns true for Postgres admin_shutdown (57P01)", () => {
-    expect(isTransientError(new Error("57P01: terminating connection due to administrator command"))).toBe(true);
+    expect(
+      isTransientError(new Error("57P01: terminating connection due to administrator command")),
+    ).toBe(true);
   });
 
   it("returns true for Postgres too_many_connections (53300)", () => {
@@ -47,7 +51,9 @@ describe("isTransientError", () => {
   });
 
   it("returns false for constraint violations", () => {
-    expect(isTransientError(new Error("duplicate key value violates unique constraint"))).toBe(false);
+    expect(isTransientError(new Error("duplicate key value violates unique constraint"))).toBe(
+      false,
+    );
   });
 
   it("returns false for non-Error values", () => {
