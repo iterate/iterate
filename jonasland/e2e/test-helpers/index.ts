@@ -15,16 +15,6 @@ export {
 } from "./docker-project-deployment.ts";
 
 export { flyProjectDeployment } from "./fly-project-deployment.ts";
-export {
-  startChiselReverseTunnel,
-  type ChiselTunnelHandle,
-  type StartChiselReverseTunnelParams,
-} from "./chisel-tunnel.ts";
-export {
-  createCfProxyWorkerClient,
-  type CfProxyWorkerClient,
-  type CfProxyWorkerRoute,
-} from "./cf-proxy-worker-client.ts";
 export { startFlyFrpEgressBridge, type FlyFrpEgressBridge } from "./frp-egress-bridge.ts";
 
 export {
