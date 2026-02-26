@@ -16,29 +16,40 @@ neonConfig.wsProxy = (host, port) =>
 const MAX_RETRIES = 2;
 const BASE_DELAY_MS = 50;
 
+/** Postgres SQLSTATE codes that indicate transient/retryable failures. */
+const TRANSIENT_PG_CODES = new Set([
+  "08006", // connection_failure
+  "08001", // sqlclient_unable_to_establish_sqlconnection
+  "08003", // connection_does_not_exist
+  "57P01", // admin_shutdown
+  "53300", // too_many_connections
+]);
+
 /**
  * Determines if a query error is transient and safe to retry.
- * Covers Neon connection drops, WebSocket failures, and Postgres transient error codes.
+ * Covers Neon connection drops, WebSocket failures, and Postgres transient SQLSTATE codes.
+ * Also walks the `cause` chain (e.g. DrizzleQueryError wrapping a DatabaseError).
  */
 export function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  const msg = err.message;
 
-  // Neon/WebSocket connection errors
-  if (msg.includes("Connection terminated")) return true;
-  if (msg.includes("connection timeout")) return true;
-  if (msg.includes("ECONNRESET")) return true;
-  if (msg.includes("ECONNREFUSED")) return true;
-  if (msg.includes("socket hang up")) return true;
-  if (msg.includes("WebSocket")) return true;
-  if (msg.includes("fetch failed")) return true;
+  // Check the error itself and any wrapped cause
+  for (let current: unknown = err; current instanceof Error; current = (current as { cause?: unknown }).cause) {
+    const msg = current.message;
 
-  // Postgres transient error codes (Class 08 = connection exceptions, 57P01 = admin shutdown, 53300 = too many connections)
-  if (msg.includes("08006")) return true; // connection_failure
-  if (msg.includes("08001")) return true; // sqlclient_unable_to_establish_sqlconnection
-  if (msg.includes("08003")) return true; // connection_does_not_exist
-  if (msg.includes("57P01")) return true; // admin_shutdown
-  if (msg.includes("53300")) return true; // too_many_connections
+    // Neon/WebSocket connection errors (always in the message)
+    if (msg.includes("Connection terminated")) return true;
+    if (msg.includes("connection timeout")) return true;
+    if (msg.includes("ECONNRESET")) return true;
+    if (msg.includes("ECONNREFUSED")) return true;
+    if (msg.includes("socket hang up")) return true;
+    if (msg.includes("WebSocket")) return true;
+    if (msg.includes("fetch failed")) return true;
+
+    // Postgres SQLSTATE codes live on DatabaseError.code (from pg-protocol), not in the message
+    const code = (current as { code?: string }).code;
+    if (typeof code === "string" && TRANSIENT_PG_CODES.has(code)) return true;
+  }
 
   return false;
 }
