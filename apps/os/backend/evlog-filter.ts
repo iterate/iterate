@@ -1,4 +1,4 @@
-import jsonata from "jsonata";
+import jsonata from "@mmkal/jsonata/sync";
 
 /**
  * JSONata-based log filter for evlog wide events.
@@ -23,10 +23,10 @@ import jsonata from "jsonata";
 const DEFAULT_KEEP_EXPRESSION =
   "level != 'info' or request.status >= 400 or request.duration >= 500";
 
-let compiledFilter: jsonata.Expression | undefined;
+let compiledFilter: ReturnType<typeof jsonata> | undefined;
 let filterInitialized = false;
 
-function getFilter(): jsonata.Expression | undefined {
+function getFilter(): ReturnType<typeof jsonata> | undefined {
   if (!filterInitialized) {
     filterInitialized = true;
     const expr = process.env.EVLOG_KEEP ?? DEFAULT_KEEP_EXPRESSION;
@@ -42,18 +42,20 @@ function getFilter(): jsonata.Expression | undefined {
 }
 
 /**
- * Evaluate whether a log event should be kept (emitted).
+ * Synchronously evaluate whether a log event should be kept (emitted).
  * Returns `true` to keep, `false` to drop.
  *
- * JSONata v2 is async, so this returns a Promise.
- * When no filter is configured (or expression is invalid), resolves to `true`.
+ * Uses `@mmkal/jsonata/sync` so this can be called directly inside
+ * `flushRequestEvlog()` without needing async middleware coordination.
+ *
+ * When no filter is configured (or expression is invalid), returns `true`.
  */
-export async function shouldKeepEvent(context: Record<string, unknown>): Promise<boolean> {
+export function shouldKeepEvent(context: Record<string, unknown>): boolean {
   const filter = getFilter();
   if (!filter) return true;
 
   try {
-    const result = await filter.evaluate(context);
+    const result = filter.evaluate(context);
     return Boolean(result);
   } catch {
     // On eval error, keep the log to be safe

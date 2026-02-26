@@ -33,7 +33,6 @@ import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import {
-  evaluateLogFilter,
   flushRequestEvlog,
   log as evlog,
   setRequestEvlogFlushHandler,
@@ -174,7 +173,6 @@ app.use("*", async (c, next) => {
           },
           user,
         });
-        await evaluateLogFilter();
         flushRequestEvlog();
       }
     },
