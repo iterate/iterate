@@ -4,6 +4,8 @@ import { shouldKeepEvent } from "./evlog-filter.ts";
 
 export type RequestEvlogEvent = Record<string, unknown>;
 
+type RequestEvlogLevel = "info" | "warn" | "error";
+
 type RequestMetadata = {
   requestId: string;
   method: string;
@@ -25,6 +27,7 @@ export type RequestEvlogContext = {
   executionCtx?: WaitUntilExecutionContext;
   flushed: boolean;
   errors: Error[];
+  level: RequestEvlogLevel;
 };
 
 export type RequestEvlogFlushPayload = {
@@ -51,6 +54,20 @@ function getStore(): RequestEvlogContext | undefined {
   return requestStorage.getStore();
 }
 
+const LEVEL_PRIORITY: Record<RequestEvlogLevel, number> = {
+  info: 1,
+  warn: 2,
+  error: 3,
+};
+
+function setRequestEvlogLevel(level: RequestEvlogLevel): void {
+  const store = getStore();
+  if (!store || store.flushed) return;
+  if (LEVEL_PRIORITY[level] > LEVEL_PRIORITY[store.level]) {
+    store.level = level;
+  }
+}
+
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -60,11 +77,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const log: RequestLogger<RequestEvlogEvent> = {
-  set: (...args) => getLogger().set(...args),
-  error: (...args) => getLogger().error(...args),
-  info: (...args) => getLogger().info(...args),
-  warn: (...args) => getLogger().warn(...args),
-  emit: (...args) => getLogger().emit(...args),
+  set: (...args: Parameters<RequestLogger<RequestEvlogEvent>["set"]>) => getLogger().set(...args),
+  error: (...args: Parameters<RequestLogger<RequestEvlogEvent>["error"]>) => {
+    setRequestEvlogLevel("error");
+    getLogger().error(...args);
+  },
+  info: (...args: Parameters<RequestLogger<RequestEvlogEvent>["info"]>) => {
+    setRequestEvlogLevel("info");
+    getLogger().info(...args);
+  },
+  warn: (...args: Parameters<RequestLogger<RequestEvlogEvent>["warn"]>) => {
+    setRequestEvlogLevel("warn");
+    getLogger().warn(...args);
+  },
+  emit: (...args: Parameters<RequestLogger<RequestEvlogEvent>["emit"]>) => getLogger().emit(...args),
   getContext: () => getLogger().getContext(),
 };
 
@@ -94,6 +120,7 @@ export function withRequestEvlogContext<T>(
       executionCtx: options.executionCtx,
       flushed: false,
       errors: [],
+      level: "info",
     },
     () => logStorage.run(options.logger, callback),
   );
@@ -125,13 +152,10 @@ export function flushRequestEvlog(): RequestEvlogFlushPayload | undefined {
 
   store.flushed = true;
 
-  // Evaluate the log filter synchronously. Errors always pass through.
+  // Evaluate the log filter synchronously.
   const context = log.getContext();
-  const hasErrors = store.errors.length > 0 || Boolean(context.error);
-  if (!hasErrors) {
-    const level = "info";
-    if (!shouldKeepEvent({ ...context, level })) return undefined;
-  }
+  const level = store.errors.length > 0 || Boolean(context.error) ? "error" : store.level;
+  if (!shouldKeepEvent({ ...context, level })) return undefined;
 
   const event = log.emit();
   if (!event) return undefined;
