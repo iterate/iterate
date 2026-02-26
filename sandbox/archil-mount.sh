@@ -73,6 +73,9 @@ sudo mkdir -p "$STAGING"
 
 # Post-mount tasks run in background since --no-fork blocks the main thread.
 (
+  set +e  # Don't exit on errors — we need to complete setup even if individual steps fail
+  trap 'echo "[archil] Background task error on line $LINENO: $BASH_COMMAND (exit $?)"' ERR
+
   # Wait for archil to mount at the staging dir
   while ! grep -q "$STAGING" /proc/mounts 2>/dev/null; do sleep 1; done
   echo "[archil] Archil mounted at ${STAGING}"
