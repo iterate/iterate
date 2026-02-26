@@ -36,9 +36,15 @@ fi
 
 # Archil persistent home: when configured, archil mounts over ~ so the entire
 # home directory persists. The repo at ~/src/... becomes invisible under the mount,
-# so point ITERATE_REPO to the hard-linked copy at /opt/iterate-repo (baked into image).
-if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ -d /opt/iterate-repo ]]; then
-  echo "[entry] Archil mode: using /opt/iterate-repo"
+# so we move it to /opt/iterate-repo where pidnap can access it.
+# rename(2) is O(1) on ext4 (same filesystem). The repo has 100k+ files but
+# mv only updates one directory entry.
+if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ ! -d /opt/iterate-repo ]]; then
+  echo "[entry] Archil mode: moving repo to /opt"
+  sudo mv "${ITERATE_REPO}" /opt/iterate-repo
+  ITERATE_REPO="/opt/iterate-repo"
+elif [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ -d /opt/iterate-repo ]]; then
+  # Subsequent boots: repo already moved on a previous boot
   ITERATE_REPO="/opt/iterate-repo"
 fi
 

@@ -220,18 +220,6 @@ RUN bash "$ITERATE_REPO/sandbox/after-repo-sync-steps.sh"
 
 
 
-# Hard-link the repo to /opt/iterate-repo for archil persistence mode.
-# When archil mounts over ~, the original ~/src/... becomes invisible.
-# /opt/iterate-repo provides an immutable copy so pidnap and managed processes
-# can still access the repo. Hard links (cp -al) use zero extra disk space.
-RUN sudo cp -al "$ITERATE_REPO" /opt/iterate-repo
-
-# Snapshot home dir dotfiles/configs (excluding the repo) for archil first-boot seeding.
-# When archil mounts an empty disk at ~, we seed from this snapshot so the user gets
-# the standard shell config, tool configs, etc. The repo is excluded (symlinked separately).
-RUN sudo mkdir -p /opt/home-seed && \
-    sudo rsync -a --exclude='src/' /home/iterate/ /opt/home-seed/
-
 ARG GIT_SHA=unknown
 # Keep a functional git repo inside the image for tools/tests that call git.
 RUN git init && \
