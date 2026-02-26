@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "pidnap";
@@ -7,9 +6,6 @@ const home = homedir();
 const iterateRepo =
   process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const sandboxDir = join(iterateRepo, "sandbox");
-// /opt/sandbox has copies of sandbox scripts, used when archil hasn't yet
-// extracted the tarball (i.e. repo not at ~/src/... yet).
-const optSandboxDir = existsSync("/opt/sandbox") ? "/opt/sandbox" : sandboxDir;
 const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
@@ -90,7 +86,7 @@ export default defineConfig({
       name: "archil-mount",
       definition: {
         command: "bash",
-        args: [`${optSandboxDir}/archil-mount.sh`],
+        args: [`${sandboxDir}/archil-mount.sh`],
       },
       envOptions: {
         // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
@@ -125,9 +121,8 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      // In archil mode, repo isn't available until archil-mount extracts the tarball.
-      // Depend on archil-mount so we wait for the mount to start, then retry until
-      // the tarball extraction completes and the repo cwd becomes available.
+      // In archil mode, repo isn't available until archil-mount clones + installs it.
+      // Depend on archil-mount so we wait for the mount, then retry until repo exists.
       dependsOn: ["archil-mount"],
     },
     {

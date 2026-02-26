@@ -227,15 +227,7 @@ RUN git init && \
     git commit -m "snapshot ${GIT_SHA}" && \
     git branch -M main
 
-# Archil persistence: package the entire home dir into a compressed tarball.
-# When archil mounts at ~, the first-boot script extracts this to populate the disk.
-# Using gzip to keep image size reasonable (~500MB vs ~2GB uncompressed).
-# Also copy sandbox scripts to /opt/sandbox/ so entry.sh + archil-mount.sh are
-# accessible before the tarball is extracted.
-RUN sudo tar czf /opt/home.tar.gz -C /home/iterate . && \
-    sudo cp -a "$ITERATE_REPO/sandbox" /opt/sandbox
-
 ENV GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 
-ENTRYPOINT ["/opt/sandbox/entry.sh"]
+ENTRYPOINT ["/home/iterate/src/github.com/iterate/iterate/sandbox/entry.sh"]

@@ -3,20 +3,22 @@
 # Mounts the project's Archil disk at ~ so the entire home directory
 # persists across machine reprovisioning.
 #
-# First boot: extracts /opt/home.tar (baked into image) into the empty archil disk.
-# Subsequent boots: archil already has everything, extraction is skipped.
+# First boot (empty disk): copies dotfiles from image, clones iterate repo, pnpm install.
+# Subsequent boots: archil already has everything from a previous machine's session.
 #
 # Env vars (from process env, set by Fly from project env vars):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
 #   ARCHIL_MOUNT_TOKEN — auth token for mount
 #   ARCHIL_REGION      — region (e.g. us-east-1, auto-prefixed to aws-us-east-1)
+#   GIT_SHA            — image git sha, used to clone the correct version on first boot
 set -euo pipefail
 
 MOUNT_POINT="/home/iterate"
+ITERATE_REPO="${ITERATE_REPO:-${MOUNT_POINT}/src/github.com/iterate/iterate}"
 
 # Source env vars from .env files if not already set via process env
-if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f /home/iterate/.iterate/.env ]]; then
-  eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' /home/iterate/.iterate/.env)"
+if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "${MOUNT_POINT}/.iterate/.env" ]]; then
+  eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' "${MOUNT_POINT}/.iterate/.env")"
 fi
 
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
@@ -41,24 +43,72 @@ export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
-# Post-mount tasks run in background since --no-fork blocks the main thread:
-# 1. Seed from /opt/home.tar on first boot (empty disk)
-# 2. Fix ownership so iterate user can write
+# Snapshot dotfiles from image BEFORE mount hides them. The image's home dir has
+# dotfiles, tool configs, etc. that we want on first boot.
+# Exclude src/ (the baked-in repo — we'll clone a fresh one).
+if [[ ! -d /tmp/home-seed ]]; then
+  rsync -a --exclude='src/' "${MOUNT_POINT}/" /tmp/home-seed/ 2>/dev/null || true
+  echo "[archil] Saved home-seed snapshot"
+fi
+
+# Post-mount tasks run in background since --no-fork blocks the main thread.
 (
   while ! grep -q "archil" /proc/mounts 2>/dev/null; do sleep 1; done
+  echo "[archil] Mount detected"
 
   sudo chown iterate:iterate "${MOUNT_POINT}"
 
-  # First boot: if the disk has no .bashrc, it's empty — extract image snapshot.
-  # The tarball contains the full ~ from build time: repo, dotfiles, node_modules, etc.
-  if [[ ! -f "${MOUNT_POINT}/.bashrc" ]] && [[ -f /opt/home.tar.gz ]]; then
-    echo "[archil] First boot — extracting home tarball into persistent disk"
-    tar xzf /opt/home.tar.gz -C "${MOUNT_POINT}"
-    sudo chown -R iterate:iterate "${MOUNT_POINT}"
-    echo "[archil] Extraction complete ($(du -sh "${MOUNT_POINT}" | cut -f1))"
+  # First boot: if the disk has no .bashrc, it's a fresh/empty disk.
+  if [[ ! -f "${MOUNT_POINT}/.bashrc" ]]; then
+    echo "[archil] First boot — setting up persistent home directory"
+
+    # 1. Seed dotfiles/configs from image snapshot
+    if [[ -d /tmp/home-seed ]]; then
+      cp -a /tmp/home-seed/. "${MOUNT_POINT}/"
+      echo "[archil] Dotfiles seeded"
+    fi
+
+    # 2. Clone iterate repo and install deps
+    REPO_DIR="${MOUNT_POINT}/src/github.com/iterate/iterate"
+    mkdir -p "$(dirname "$REPO_DIR")"
+
+    REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
+    REPO_REF="${GIT_SHA:-main}"
+
+    echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
+    git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1 || {
+      # If branch clone fails, try cloning then checking out the sha
+      git clone "$REPO_URL" "$REPO_DIR" 2>&1
+    }
+
+    # Checkout the specific sha if it's not 'main' or 'unknown'
+    if [[ "$REPO_REF" != "main" ]] && [[ "$REPO_REF" != "unknown" ]]; then
+      cd "$REPO_DIR"
+      git fetch origin "$REPO_REF" 2>/dev/null || true
+      git checkout "$REPO_REF" 2>/dev/null || echo "[archil] Warning: could not checkout ${REPO_REF}, staying on main"
+    fi
+
+    # 3. Install dependencies
+    echo "[archil] Installing dependencies (pnpm install)"
+    cd "$REPO_DIR"
+    pnpm install --frozen-lockfile 2>&1
+
+    # 4. Run post-sync steps (builds daemon frontend, runs migrations, etc.)
+    echo "[archil] Running post-sync steps"
+    bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
+
+    # 5. Init git repo for tools that need it
+    git add . 2>/dev/null || true
+    git commit -m "archil first boot" 2>/dev/null || true
+
+    echo "[archil] First boot setup complete"
+  else
+    echo "[archil] Existing home directory found, skipping setup"
   fi
 
-  echo "[archil] Mount ready"
+  # Signal that the home directory is ready for other processes
+  touch /tmp/archil-home-ready
+  echo "[archil] Home directory ready"
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.
