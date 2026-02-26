@@ -100,7 +100,7 @@ sudo mkdir -p "$STAGING"
     # Wait for egress proxy (port 8888) — .gitconfig routes through it
     echo "[archil] Waiting for egress proxy on port 8888..."
     for i in $(seq 1 60); do
-      if nc -z 127.0.0.1 8888 2>/dev/null; then
+      if bash -c 'echo > /dev/tcp/127.0.0.1/8888' 2>/dev/null; then
         echo "[archil] Egress proxy ready"
         break
       fi
