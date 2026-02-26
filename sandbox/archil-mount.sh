@@ -80,7 +80,7 @@ sudo mkdir -p "$STAGING"
   while ! grep -q "$STAGING" /proc/mounts 2>/dev/null; do sleep 1; done
   echo "[archil] Archil mounted at ${STAGING}"
 
-  sudo chown iterate:iterate "$STAGING"
+  sudo chown -R iterate:iterate "$STAGING"
 
   # First boot: check for the repo as the signal that setup completed successfully.
   # (Using .bashrc was unreliable — shared R2 buckets can have stale dotfiles.)
