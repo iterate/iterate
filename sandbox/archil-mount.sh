@@ -110,34 +110,45 @@ sudo mkdir -p "$STAGING"
       sleep 1
     done
 
+    # Git clone may fail early if GitHub auth isn't ready yet (egress proxy needs
+    # the control plane to provision credentials). Retry with backoff.
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
-    git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1 || {
-      # If branch clone fails, try cloning then checking out the sha
+    CLONE_OK=false
+    for attempt in $(seq 1 10); do
+      if git clone --depth 1 --branch main "$REPO_URL" "$REPO_DIR" 2>&1; then
+        CLONE_OK=true
+        break
+      fi
       rm -rf "$REPO_DIR"
-      git clone "$REPO_URL" "$REPO_DIR" 2>&1
-    }
+      echo "[archil] Clone attempt $attempt failed, retrying in ${attempt}0s..."
+      sleep $((attempt * 10))
+    done
 
-    # Checkout the specific sha if it's not 'main' or 'unknown'
-    if [[ "$REPO_REF" != "main" ]] && [[ "$REPO_REF" != "unknown" ]]; then
+    if [[ "$CLONE_OK" != "true" ]]; then
+      echo "[archil] ERROR: All clone attempts failed. Skipping repo setup."
+    else
+      # Checkout the specific sha if it's not 'main' or 'unknown'
+      if [[ "$REPO_REF" != "main" ]] && [[ "$REPO_REF" != "unknown" ]]; then
+        cd "$REPO_DIR"
+        git fetch origin "$REPO_REF" 2>/dev/null || true
+        git checkout "$REPO_REF" 2>/dev/null || echo "[archil] Warning: could not checkout ${REPO_REF}, staying on main"
+      fi
+
+      # 3. Install dependencies
+      echo "[archil] Installing dependencies (pnpm install)"
       cd "$REPO_DIR"
-      git fetch origin "$REPO_REF" 2>/dev/null || true
-      git checkout "$REPO_REF" 2>/dev/null || echo "[archil] Warning: could not checkout ${REPO_REF}, staying on main"
+      pnpm install --frozen-lockfile 2>&1
+
+      # 4. Run post-sync steps (builds daemon frontend, runs migrations, etc.)
+      echo "[archil] Running post-sync steps"
+      bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
+
+      # 5. Init git repo for tools that need it
+      git add . 2>/dev/null || true
+      git commit -m "archil first boot" 2>/dev/null || true
+
+      echo "[archil] First boot setup complete"
     fi
-
-    # 3. Install dependencies
-    echo "[archil] Installing dependencies (pnpm install)"
-    cd "$REPO_DIR"
-    pnpm install --frozen-lockfile 2>&1
-
-    # 4. Run post-sync steps (builds daemon frontend, runs migrations, etc.)
-    echo "[archil] Running post-sync steps"
-    bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
-
-    # 5. Init git repo for tools that need it
-    git add . 2>/dev/null || true
-    git commit -m "archil first boot" 2>/dev/null || true
-
-    echo "[archil] First boot setup complete"
   else
     echo "[archil] Existing home directory found, updating dotfiles"
     # Always re-seed dotfiles from image (picks up config updates from new images)
