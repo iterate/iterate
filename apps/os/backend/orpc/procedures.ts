@@ -92,7 +92,7 @@ export const orgProtectedProcedure = protectedProcedure.use(
 );
 
 // Organization admin procedure that requires admin or owner role
-export const orgAdminProcedure = orgProtectedProcedure.use(async ({ context, next, path }) => {
+const orgAdminProcedure = orgProtectedProcedure.use(async ({ context, next, path }) => {
   // System admins always have access
   if (context.user.role === "admin") {
     return next({ context: {} });
@@ -202,7 +202,7 @@ const withPostHogTracking = base.middleware(async ({ context, next, path }, inpu
   // Wrap analytics in try-catch to prevent analytics errors from affecting the response
   try {
     // Get user ID for distinct_id
-    const userId = (context as any).user?.id;
+    const userId = context.user?.id;
     if (!userId) {
       return result;
     }
@@ -263,11 +263,6 @@ export const publicMutation = publicProcedure.use(withQueryInvalidation).use(wit
 
 /** Protected mutation procedure - invalidates queries after successful mutation */
 export const protectedMutation = protectedProcedure
-  .use(withQueryInvalidation)
-  .use(withPostHogTracking);
-
-/** Org protected mutation procedure - invalidates queries after successful mutation */
-export const orgProtectedMutation = orgProtectedProcedure
   .use(withQueryInvalidation)
   .use(withPostHogTracking);
 

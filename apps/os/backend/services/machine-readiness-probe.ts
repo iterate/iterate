@@ -15,10 +15,12 @@ const MAX_WAIT_MS = 60_000;
 
 /**
  * Build a fetcher that can reach the daemon HTTP server inside the sandbox.
+ * Used by the readiness probe, integration webhook forwarding, and outbox consumers.
  */
 export async function buildMachineFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
+  tag = "readiness-probe",
 ): Promise<SandboxFetcher | null> {
   try {
     const runtime = await createMachineStub({
@@ -31,7 +33,7 @@ export async function buildMachineFetcher(
   } catch (err) {
     logger.set({ machine: { id: machine.id } });
     logger.warn(
-      `[readiness-probe] Failed to build machine fetcher error=${err instanceof Error ? err.message : String(err)}`,
+      `[${tag}] Failed to build machine fetcher type=${machine.type} error=${err instanceof Error ? err.message : String(err)}`,
     );
     return null;
   }
