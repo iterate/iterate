@@ -1,78 +1,102 @@
-import { execFileSync, execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
+import { computeImageRefs } from "./image-refs.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
 
-const imageTag = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const buildPlatform = process.env.JONASLAND_SANDBOX_BUILD_PLATFORM;
-const skipLoad = process.env.JONASLAND_SANDBOX_SKIP_LOAD === "true";
-const cacheDir =
-  process.env.JONASLAND_SANDBOX_CACHE_DIR ||
-  join(repoRoot, ".cache", "buildx", "jonasland-sandbox");
-const cacheMode = process.env.JONASLAND_SANDBOX_CACHE_MODE || "max";
+const { depotImageTag, flyImageTag, gitShaFull, isDirty, localImageTag, tagSuffix } =
+  computeImageRefs();
 
-function getBuildxDriver(): string | null {
-  try {
-    const inspect = execSync("docker buildx inspect", { cwd: repoRoot, encoding: "utf-8" });
-    const match = inspect.match(/^Driver:\s+(\S+)/m);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-const buildxDriver = getBuildxDriver();
-const supportsLocalCacheExport = buildxDriver !== null && buildxDriver !== "docker";
-const gitSha = (() => {
-  try {
-    return execSync("git rev-parse --short HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
-  } catch {
-    return "unknown";
-  }
-})();
-
-mkdirSync(cacheDir, { recursive: true });
-
-console.log(`Building ${imageTag} (git=${gitSha})`);
-if (supportsLocalCacheExport) {
-  console.log(`Build cache dir: ${cacheDir}`);
-} else {
-  console.log(
-    `Skipping explicit local cache export (buildx driver=${buildxDriver ?? "unknown"} does not support --cache-to type=local).`,
+const buildPlatform = process.env.JONASLAND_BUILD_PLATFORM || "linux/amd64,linux/arm64";
+const skipLoad = process.env.JONASLAND_SKIP_LOAD === "true";
+const flyApiToken = process.env.FLY_API_TOKEN;
+const configuredFlyRegistryApp =
+  process.env.JONASLAND_SANDBOX_FLY_REGISTRY_APP || process.env.SANDBOX_FLY_REGISTRY_APP;
+const pushFlyRegistryEnv = process.env.JONASLAND_PUSH_FLY_REGISTRY;
+const shouldPushFlyRegistry =
+  pushFlyRegistryEnv === "false" ? false : pushFlyRegistryEnv === "true" || Boolean(flyApiToken);
+if (shouldPushFlyRegistry && !configuredFlyRegistryApp) {
+  throw new Error(
+    "JONASLAND_SANDBOX_FLY_REGISTRY_APP (or SANDBOX_FLY_REGISTRY_APP) is required when Fly push is enabled",
   );
 }
-if (buildPlatform) {
-  console.log(`Build platform: ${buildPlatform}`);
+
+function ensureFlyAuth(token: string): void {
+  try {
+    execFileSync("flyctl", ["auth", "docker", "-t", token], {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: { ...process.env, FLY_ACCESS_TOKEN: token },
+    });
+  } catch {
+    execFileSync("docker", ["login", "registry.fly.io", "-u", "x", "--password-stdin"], {
+      cwd: repoRoot,
+      input: `${token}\n`,
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  }
 }
 
-const baseArgs = [
-  "buildx",
-  "build",
-  "--progress=plain",
-  "-f",
-  "jonasland/sandbox/Dockerfile",
-  "-t",
-  imageTag,
-  "--build-arg",
-  `GIT_SHA=${gitSha}`,
-  ...(buildPlatform ? ["--platform", buildPlatform] : []),
-  ...(skipLoad ? [] : ["--load"]),
-  ".",
-];
+const pushTags: string[] = [];
+if (shouldPushFlyRegistry) {
+  if (!flyApiToken) {
+    if (pushFlyRegistryEnv === "true") {
+      throw new Error("JONASLAND_PUSH_FLY_REGISTRY=true but FLY_API_TOKEN is not set");
+    }
+    console.warn("Skipping Fly registry push: FLY_API_TOKEN not set");
+  } else if (!flyImageTag) {
+    throw new Error("Fly registry app is required when Fly push is enabled");
+  } else {
+    ensureFlyAuth(flyApiToken);
+    pushTags.push(flyImageTag);
+  }
+}
 
-const cacheArgs = supportsLocalCacheExport
-  ? [
-      "--cache-from",
-      `type=local,src=${cacheDir}`,
-      "--cache-to",
-      `type=local,dest=${cacheDir},mode=${cacheMode}`,
-    ]
-  : [];
+const wantsLoad = !skipLoad;
+const wantsPush = pushTags.length > 0;
+const outputArgs: string[] = ["--save", "--save-tag", tagSuffix];
 
-execFileSync("docker", [...baseArgs.slice(0, -1), ...cacheArgs, baseArgs.at(-1)!], {
-  cwd: repoRoot,
-  stdio: "inherit",
-});
+if (wantsLoad && wantsPush) {
+  outputArgs.push("--load", "--push", ...pushTags.flatMap((tag) => ["-t", tag]));
+} else if (wantsLoad) {
+  outputArgs.push("--load", "-t", localImageTag);
+} else if (wantsPush) {
+  outputArgs.push("--push", ...pushTags.flatMap((tag) => ["-t", tag]));
+}
 
-console.log(`Built image: ${imageTag}`);
+console.log(`Tag suffix: ${tagSuffix}${isDirty ? " (dirty)" : ""}`);
+console.log(`Platform: ${buildPlatform}`);
+console.log(`Local image: ${localImageTag}`);
+console.log(`Depot registry: ${depotImageTag}`);
+if (pushTags.length > 0) console.log(`Push tags: ${pushTags.join(", ")}`);
+if (wantsLoad) console.log("Loading into local Docker daemon");
+
+execFileSync(
+  "depot",
+  [
+    "build",
+    "--platform",
+    buildPlatform,
+    "--progress=plain",
+    ...outputArgs,
+    "-f",
+    "jonasland/sandbox/Dockerfile",
+    "--build-arg",
+    `GIT_SHA=${gitShaFull}`,
+    ".",
+  ],
+  {
+    cwd: repoRoot,
+    stdio: "inherit",
+    timeout: 15 * 60 * 1000,
+  },
+);
+
+if (wantsLoad && wantsPush) {
+  const loadedTag = pushTags[0];
+  execFileSync("docker", ["tag", loadedTag, localImageTag], { cwd: repoRoot, stdio: "inherit" });
+}
+
+console.log(`image_tag=${localImageTag}`);
+console.log(`fly_image_tag=${flyImageTag ?? ""}`);
+console.log(`depot_image_tag=${depotImageTag}`);

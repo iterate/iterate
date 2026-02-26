@@ -1087,9 +1087,27 @@ importers:
       '@docker/node-sdk':
         specifier: ^0.0.17
         version: 0.0.17
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../../services/events-contract
+      '@iterate-com/orders-contract':
+        specifier: workspace:*
+        version: link:../../services/orders-contract
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@orpc/contract':
+        specifier: ^1.13.5
+        version: 1.13.5(@opentelemetry/api@1.9.0)
+      '@playwright/test':
+        specifier: ^1.57.0
+        version: 1.57.0
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      emittery:
+        specifier: 1.2.0
+        version: 1.2.0
       mockttp:
         specifier: ^4.2.1
         version: 4.2.1(bufferutil@4.0.9)(utf-8-validate@5.0.10)

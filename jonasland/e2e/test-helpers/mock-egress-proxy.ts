@@ -314,7 +314,8 @@ export async function mockEgressProxy(options?: MockEgressProxyOptions): Promise
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(options?.port ?? 0, "127.0.0.1", () => resolve());
+    // Bind to all interfaces so containerized tests can reach the proxy via host-gateway.
+    server.listen(options?.port ?? 0, "0.0.0.0", () => resolve());
   });
 
   const address = server.address();

@@ -29,7 +29,9 @@ type WorkflowEntry = {
 async function loadWorkflowsContext(input: z.infer<typeof WorkflowsInput>) {
   const tsWorkflowsDir = path.join(import.meta.dirname, "workflows");
   const yamlWorkflowsDir = path.join(import.meta.dirname, "../workflows");
-  const tsWorkflowFileNames = await fs.readdir(tsWorkflowsDir);
+  const tsWorkflowFileNames = (await fs.readdir(tsWorkflowsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+    .map((entry) => entry.name);
   const yamlWorkflowFileNames = await fs.readdir(yamlWorkflowsDir);
 
   const tsWorkflowsList = await Promise.all(

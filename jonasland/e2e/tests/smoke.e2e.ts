@@ -1,173 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import {
-  mockEgressProxy,
-  projectDeployment,
-  type ProjectDeployment,
-} from "../test-helpers/index.ts";
+import { mockEgressProxy, projectDeployment } from "../test-helpers/index.ts";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
-const ITERATE_REPO = process.env.ITERATE_REPO || "/home/iterate/src/github.com/iterate/iterate";
-const PIDNAP_TSX_PATH = `${ITERATE_REPO}/packages/pidnap/node_modules/.bin/tsx`;
-const OTEL_SERVICE_ENV = {
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
-  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
-  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
-  OTEL_PROPAGATORS: "tracecontext,baggage",
-};
-
-type OnDemandProcessName = "orders" | "home" | "outerbase" | "egress-proxy" | "docs";
-type OnDemandProcessConfig = {
-  definition: {
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-  };
-  routeCheck?: {
-    host: string;
-    path: string;
-  };
-  directHttpCheck?: {
-    url: string;
-  };
-};
-
-const ON_DEMAND_PROCESSES: Record<OnDemandProcessName, OnDemandProcessConfig> = {
-  orders: {
-    definition: {
-      command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/orders-service/src/server.ts`],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        EVENTS_SERVICE_BASE_URL: "http://127.0.0.1:19010/orpc",
-      },
-    },
-    routeCheck: { host: "orders.iterate.localhost", path: "/healthz" },
-  },
-  home: {
-    definition: {
-      command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/home-service/src/server.ts`],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "home.iterate.localhost", path: "/" },
-  },
-  outerbase: {
-    definition: {
-      command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/outerbase-service/src/server.ts`],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "outerbase.iterate.localhost", path: "/healthz" },
-  },
-  "egress-proxy": {
-    definition: {
-      command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/egress-service/src/server.ts`],
-      env: OTEL_SERVICE_ENV,
-    },
-    directHttpCheck: { url: "http://127.0.0.1:19000/healthz" },
-  },
-  docs: {
-    definition: {
-      command: PIDNAP_TSX_PATH,
-      args: [`${ITERATE_REPO}/services/docs-service/src/server.ts`],
-      env: OTEL_SERVICE_ENV,
-    },
-    routeCheck: { host: "docs.iterate.localhost", path: "/healthz" },
-  },
-};
-
-async function waitForHostRoute(
-  deployment: ProjectDeployment,
-  params: { host: string; path: string; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await deployment
-      .exec(`curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${params.path}' >/dev/null`)
-      .catch(() => ({ exitCode: 1, output: "" }));
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
-}
-
-async function waitForDirectHttp(
-  deployment: ProjectDeployment,
-  params: { url: string; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await deployment
-      .exec(`curl -fsS '${params.url}' >/dev/null`)
-      .catch(() => ({ exitCode: 1, output: "" }));
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(`timed out waiting for direct http ${params.url}`);
-}
-
-async function startOnDemandProcess(
-  deployment: ProjectDeployment,
-  processName: OnDemandProcessName,
-): Promise<void> {
-  const processConfig = ON_DEMAND_PROCESSES[processName];
-  const updated = await deployment.pidnap.processes.updateConfig({
-    processSlug: processName,
-    definition: processConfig.definition,
-    options: { restartPolicy: "always" },
-    envOptions: { reloadDelay: false },
-  });
-  if (updated.state !== "running") {
-    await deployment.pidnap.processes.start({ target: processName });
-  }
-  await deployment.waitForPidnapProcessRunning({
-    target: processName,
-    timeoutMs: 45_000,
-  });
-  if (processConfig.routeCheck) {
-    await waitForHostRoute(deployment, processConfig.routeCheck);
-  }
-  if (processConfig.directHttpCheck) {
-    await waitForDirectHttp(deployment, processConfig.directHttpCheck);
-  }
-}
-
-async function waitForDocsSources(
-  deployment: ProjectDeployment,
-  expectedHosts: string[],
-): Promise<{ sources: Array<{ id: string; title: string; specUrl: string }>; total: number }> {
-  const deadline = Date.now() + 45_000;
-  while (Date.now() < deadline) {
-    const response = await deployment
-      .exec("curl -fsS -H 'Host: docs.iterate.localhost' http://127.0.0.1/api/openapi-sources")
-      .catch(() => ({ exitCode: 1, output: "" }));
-
-    if (response.exitCode === 0) {
-      try {
-        const payload = JSON.parse(response.output) as {
-          sources: Array<{ id: string; title: string; specUrl: string }>;
-          total: number;
-        };
-        const ids = new Set(payload.sources.map((source) => source.id));
-        const allPresent = expectedHosts.every((expectedHost) => ids.has(expectedHost));
-        if (allPresent) {
-          return payload;
-        }
-      } catch {
-        // keep polling
-      }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-
-  throw new Error(`timed out waiting for docs sources: ${expectedHosts.join(", ")}`);
-}
 
 describe.runIf(RUN_E2E)("jonasland smoke", () => {
   test("caddy admin is API-only and typed caddy client works", async () => {
@@ -194,8 +30,8 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
       image,
       name: `jonasland-e2e-home-outerbase-${randomUUID()}`,
     });
-    await startOnDemandProcess(deployment, "home");
-    await startOnDemandProcess(deployment, "outerbase");
+    await deployment.startOnDemandProcess("home");
+    await deployment.startOnDemandProcess("outerbase");
 
     const home = await deployment.exec(
       "curl -fsS -H 'Host: home.iterate.localhost' http://127.0.0.1/",
@@ -313,7 +149,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
       image,
       name: `jonasland-e2e-orders-${randomUUID()}`,
     });
-    await startOnDemandProcess(deployment, "orders");
+    await deployment.startOnDemandProcess("orders");
 
     const health = await deployment.exec(
       "curl -fsS -H 'Host: orders.iterate.localhost' http://127.0.0.1/healthz",
@@ -360,8 +196,8 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
       image,
       name: `jonasland-e2e-docs-${randomUUID()}`,
     });
-    await startOnDemandProcess(deployment, "orders");
-    await startOnDemandProcess(deployment, "docs");
+    await deployment.startOnDemandProcess("orders");
+    await deployment.startOnDemandProcess("docs");
 
     const docsHome = await deployment.exec(
       "curl -fsS -H 'Host: docs.iterate.localhost' http://127.0.0.1/",
@@ -369,7 +205,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
     expect(docsHome.exitCode).toBe(0);
     expect(docsHome.output).toContain("jonasland API Docs");
 
-    const sourcesPayload = await waitForDocsSources(deployment, [
+    const sourcesPayload = await deployment.waitForDocsSources([
       "events.iterate.localhost",
       "orders.iterate.localhost",
     ]);
@@ -518,7 +354,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
         ITERATE_EXTERNAL_EGRESS_PROXY: proxy.proxyUrl,
       },
     });
-    await startOnDemandProcess(deployment, "egress-proxy");
+    await deployment.startOnDemandProcess("egress-proxy");
 
     const curl = await deployment.exec(
       "curl -4 -k -sS -i -H 'x-iterate-from-container: yes' https://api.openai.com/v1/models",
@@ -558,7 +394,7 @@ describe.runIf(RUN_E2E)("jonasland smoke", () => {
       name: `jonasland-e2e-egress-direct-${randomUUID()}`,
       extraHosts: ["host.docker.internal:host-gateway"],
     });
-    await startOnDemandProcess(deployment, "egress-proxy");
+    await deployment.startOnDemandProcess("egress-proxy");
 
     const directTarget = `${proxy.proxyUrl}/direct-target`;
     const curl = await deployment.exec(
