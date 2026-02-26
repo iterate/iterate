@@ -4,27 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
-import type { CfProxyWorkerClient } from "./cf-proxy-worker-client.ts";
 import type { ProjectDeployment } from "./project-deployment.ts";
 
-const FRP_VERSION = "0.65.0";
-const FRP_CONTROL_HOST_HEADER = "frp-control.iterate.localhost";
-const FRP_DATA_HOST_SUFFIX = "frp-egress.iterate.localhost";
 const FRP_CONTROL_BIND_PORT = 27000;
-const FRP_DATA_VHOST_PORT = 27080;
-const ROUTE_TTL_SECONDS = 20 * 60;
+const FRP_DATA_REMOTE_PORT = 27180;
 const CONNECT_TIMEOUT_MS = 45_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function normalizeRouteDomainSuffix(input: string): string {
-  const normalized = input.trim().toLowerCase().replace(/\.$/, "");
-  if (!normalized || normalized.includes("/") || normalized.includes(":")) {
-    throw new Error(`Invalid cf-proxy-worker route domain: ${input}`);
-  }
-  return normalized;
 }
 
 function sanitizeRunId(input?: string): string {
@@ -44,18 +31,6 @@ function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
-function normalizeTargetBaseUrl(input: string): string {
-  const parsed = new URL(input);
-  parsed.pathname = "";
-  parsed.search = "";
-  parsed.hash = "";
-  return parsed.toString().replace(/\/$/, "");
-}
-
-async function deleteRouteBestEffort(client: CfProxyWorkerClient, route: string): Promise<void> {
-  await client.deleteRoute({ route }).catch(() => {});
-}
-
 async function configureFlyFrps(params: {
   deployment: ProjectDeployment;
   processSlug: string;
@@ -65,7 +40,7 @@ async function configureFlyFrps(params: {
   const config = [
     `bindAddr = ${tomlString("0.0.0.0")}`,
     `bindPort = ${String(FRP_CONTROL_BIND_PORT)}`,
-    `vhostHTTPPort = ${String(FRP_DATA_VHOST_PORT)}`,
+    `vhostHTTPPort = ${String(27080)}`,
     "",
     `auth.token = ${tomlString(params.token)}`,
     "",
@@ -80,64 +55,104 @@ async function configureFlyFrps(params: {
     throw new Error(`failed writing frps config:\n${writeConfig.output}`);
   }
 
-  const bootstrapScript = [
+  const pidFile = `/tmp/${params.processSlug}.frps.pid`;
+  const logFile = `/tmp/${params.processSlug}.frps.log`;
+  const startScript = [
     "set -euo pipefail",
-    `FRP_VERSION=${shellSingleQuote(FRP_VERSION)}`,
-    "ARCH=$(uname -m)",
-    'case "$ARCH" in',
-    "  x86_64|amd64) FRP_ARCH=amd64 ;;",
-    "  aarch64|arm64) FRP_ARCH=arm64 ;;",
-    '  *) echo "unsupported frp arch: $ARCH" >&2; exit 1 ;;',
-    "esac",
-    "ROOT=/tmp/iterate-frp",
-    'mkdir -p "$ROOT/bin" "$ROOT/cache"',
-    'FRPS="$ROOT/bin/frps"',
-    'if [ ! -x "$FRPS" ]; then',
-    '  ASSET="frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"',
-    '  URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${ASSET}"',
-    '  TAR="$ROOT/cache/$ASSET"',
-    '  EXTRACT="$ROOT/cache/frp_${FRP_VERSION}_linux_${FRP_ARCH}"',
-    '  rm -rf "$EXTRACT"',
-    '  curl -fsSL "$URL" -o "$TAR"',
-    '  tar -xzf "$TAR" -C "$ROOT/cache"',
-    '  cp "$EXTRACT/frps" "$FRPS"',
-    '  chmod +x "$FRPS"',
-    "fi",
-    `exec \"$FRPS\" -c ${shellSingleQuote(configPath)}`,
+    "FRPS_BIN=/usr/local/bin/frps",
+    'if [ ! -x "$FRPS_BIN" ]; then echo "frps binary missing at /usr/local/bin/frps" >&2; exit 1; fi',
+    `PID_FILE=${shellSingleQuote(pidFile)}`,
+    `LOG_FILE=${shellSingleQuote(logFile)}`,
+    'if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then kill "$(cat "$PID_FILE")" || true; fi',
+    `nohup "$FRPS_BIN" -c ${shellSingleQuote(configPath)} > "$LOG_FILE" 2>&1 &`,
+    'echo $! > "$PID_FILE"',
   ].join("\n");
 
-  const updated = await params.deployment.pidnap.processes.updateConfig({
-    processSlug: params.processSlug,
-    definition: {
-      command: "/bin/sh",
-      args: ["-ec", bootstrapScript],
-      env: {
-        FRP_VERSION,
-      },
-    },
-    options: {
-      restartPolicy: "always",
-    },
-    envOptions: {
-      reloadDelay: false,
-    },
-    tags: ["e2e", "frp"],
-  });
-
-  if (updated.state !== "running") {
-    await params.deployment.pidnap.processes.start({ target: params.processSlug });
+  const start = await params.deployment.exec(["bash", "-lc", startScript]);
+  if (start.exitCode !== 0) {
+    throw new Error(`failed to start frps:\n${start.output}`);
   }
 
-  await params.deployment.waitForPidnapProcessRunning({
-    target: params.processSlug,
-    timeoutMs: 60_000,
+  const waitPort = await params.deployment.exec([
+    "bash",
+    "-lc",
+    `for i in $(seq 1 120); do (echo > /dev/tcp/127.0.0.1/${String(FRP_CONTROL_BIND_PORT)}) >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1`,
+  ]);
+  if (waitPort.exitCode !== 0) {
+    const logs = await params.deployment
+      .exec(["bash", "-lc", `tail -n 200 ${shellSingleQuote(logFile)} || true`])
+      .catch(() => ({ exitCode: 1, output: "" }));
+    throw new Error(`frps did not open port ${String(FRP_CONTROL_BIND_PORT)}:\n${logs.output}`);
+  }
+}
+
+async function stopFlyFrpsBestEffort(params: {
+  deployment: ProjectDeployment;
+  processSlug: string;
+}): Promise<void> {
+  const pidFile = `/tmp/${params.processSlug}.frps.pid`;
+  await params.deployment
+    .exec([
+      "bash",
+      "-lc",
+      `if [ -f ${shellSingleQuote(pidFile)} ]; then kill "$(cat ${shellSingleQuote(pidFile)})" 2>/dev/null || true; rm -f ${shellSingleQuote(pidFile)}; fi; pkill -f ${shellSingleQuote(`${params.processSlug}.frps.toml`)} 2>/dev/null || true`,
+    ])
+    .catch(() => {});
+}
+
+async function readFlyFrpsLogsBestEffort(params: {
+  deployment: ProjectDeployment;
+  processSlug: string;
+}): Promise<string> {
+  const logFile = `/tmp/${params.processSlug}.frps.log`;
+  const result = await params.deployment
+    .exec(["bash", "-lc", `tail -n 200 ${shellSingleQuote(logFile)} || true`])
+    .catch(() => ({ exitCode: 1, output: "" }));
+  return result.output.trim();
+}
+
+async function probeControlRouteBestEffort(controlRouteHost: string): Promise<string> {
+  const args = [
+    "-i",
+    "-sS",
+    "--max-time",
+    "8",
+    "-H",
+    "Connection: Upgrade",
+    "-H",
+    "Upgrade: websocket",
+    "-H",
+    "Sec-WebSocket-Version: 13",
+    "-H",
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+    `https://${controlRouteHost}/`,
+  ];
+
+  return await new Promise<string>((resolve) => {
+    const child = spawn("curl", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const output: string[] = [];
+    child.stdout.on("data", (chunk) => {
+      output.push(String(chunk));
+    });
+    child.stderr.on("data", (chunk) => {
+      output.push(String(chunk));
+    });
+
+    child.on("error", (error) => {
+      resolve(`curl spawn error: ${error.message}`);
+    });
+    child.on("close", (code) => {
+      resolve(`curl exit=${String(code)}\n${output.join("")}`);
+    });
   });
 }
 
 async function startFrpc(params: {
-  controlRouteHost: string;
+  controlServerHost: string;
   token: string;
-  dataHost: string;
   localTargetPort: number;
   frpcBin?: string;
 }): Promise<{
@@ -150,17 +165,17 @@ async function startFrpc(params: {
   const configPath = join(tmpDir, "frpc.toml");
 
   const config = [
-    `serverAddr = ${tomlString(params.controlRouteHost)}`,
+    `serverAddr = ${tomlString(params.controlServerHost)}`,
     `serverPort = ${String(443)}`,
     `transport.protocol = ${tomlString("wss")}`,
     `auth.token = ${tomlString(params.token)}`,
     "",
     "[[proxies]]",
     `name = ${tomlString("vitest-mock-egress")}`,
-    `type = ${tomlString("http")}`,
+    `type = ${tomlString("tcp")}`,
     `localIP = ${tomlString("127.0.0.1")}`,
     `localPort = ${String(params.localTargetPort)}`,
-    `customDomains = [${tomlString(params.dataHost)}]`,
+    `remotePort = ${String(FRP_DATA_REMOTE_PORT)}`,
     "",
   ].join("\n");
 
@@ -251,97 +266,84 @@ export interface FlyFrpEgressBridge extends AsyncDisposable {
 
 export async function startFlyFrpEgressBridge(params: {
   deployment: ProjectDeployment;
-  cfProxyWorkerClient: CfProxyWorkerClient;
-  cfProxyWorkerRouteDomain: string;
   localTargetPort: number;
   frpcBin?: string;
   runId?: string;
 }): Promise<FlyFrpEgressBridge> {
-  const runId = sanitizeRunId(params.runId);
-  const processSlug = `frps-${runId}`;
-  const token = randomUUID();
-  const routeDomain = normalizeRouteDomainSuffix(params.cfProxyWorkerRouteDomain);
-  const targetBaseUrl = normalizeTargetBaseUrl(await params.deployment.ingressUrl());
-
-  const controlRouteHost = `frpctl-${runId}.${routeDomain}`;
-  const dataRouteHost = `frpdata-${runId}.${routeDomain}`;
-  const dataHost = `frp-${runId}.${FRP_DATA_HOST_SUFFIX}`;
-
-  await configureFlyFrps({
-    deployment: params.deployment,
-    processSlug,
-    token,
-  });
-
-  await params.cfProxyWorkerClient.setRoute({
-    route: controlRouteHost,
-    target: targetBaseUrl,
-    headers: {
-      host: FRP_CONTROL_HOST_HEADER,
-    },
-    metadata: {
-      source: "jonasland-e2e-frp",
-      kind: "frp-control",
-      runId,
-    },
-    ttlSeconds: ROUTE_TTL_SECONDS,
-  });
+  let step = "init";
+  let runId = "";
+  let processSlug = "";
+  let controlServerHost = "";
+  let dataProxyUrl = "";
 
   try {
-    await params.cfProxyWorkerClient.setRoute({
-      route: dataRouteHost,
-      target: targetBaseUrl,
-      headers: {
-        host: dataHost,
-      },
-      metadata: {
-        source: "jonasland-e2e-frp",
-        kind: "frp-data",
-        runId,
-      },
-      ttlSeconds: ROUTE_TTL_SECONDS,
+    step = "compute-run-context";
+    runId = sanitizeRunId(params.runId);
+    processSlug = `frps-${runId}`;
+    const token = randomUUID();
+    controlServerHost = new URL(await params.deployment.ingressUrl()).hostname;
+    dataProxyUrl = `http://127.0.0.1:${String(FRP_DATA_REMOTE_PORT)}`;
+
+    step = "configure-fly-frps";
+    await configureFlyFrps({
+      deployment: params.deployment,
+      processSlug,
+      token,
     });
+
+    step = "start-frpc";
+    const frpc = await startFrpc({
+      controlServerHost,
+      token,
+      localTargetPort: params.localTargetPort,
+      frpcBin: params.frpcBin,
+    });
+
+    try {
+      step = "wait-frpc-connected";
+      await frpc.waitUntilConnected();
+    } catch (error) {
+      const controlRouteProbe = await probeControlRouteBestEffort(controlServerHost);
+      const frpsLogs = await readFlyFrpsLogsBestEffort({
+        deployment: params.deployment,
+        processSlug,
+      });
+      await frpc.stop().catch(() => {});
+      await stopFlyFrpsBestEffort({
+        deployment: params.deployment,
+        processSlug,
+      });
+      throw new Error(
+        `frpc failed to connect (controlServerHost=${controlServerHost}, dataProxyUrl=${dataProxyUrl})\ncontrol route probe:\n${controlRouteProbe}\nfrps logs:\n${frpsLogs || "(empty)"}`,
+        { cause: error },
+      );
+    }
+
+    let stopped = false;
+    const stop = async () => {
+      if (stopped) return;
+      stopped = true;
+
+      await frpc.stop().catch(() => {});
+      await stopFlyFrpsBestEffort({
+        deployment: params.deployment,
+        processSlug,
+      });
+    };
+
+    return {
+      runId,
+      dataProxyUrl,
+      clientLogs: () => frpc.logs(),
+      stop,
+      async [Symbol.asyncDispose]() {
+        await stop();
+      },
+    };
   } catch (error) {
-    await deleteRouteBestEffort(params.cfProxyWorkerClient, controlRouteHost);
-    throw error;
+    throw new Error(
+      `startFlyFrpEgressBridge failed during: ${step} (runId=${runId || "n/a"}, processSlug=${processSlug || "n/a"}, controlServerHost=${controlServerHost || "n/a"}, dataProxyUrl=${dataProxyUrl || "n/a"})`,
+      { cause: error },
+    );
   }
-
-  const frpc = await startFrpc({
-    controlRouteHost,
-    token,
-    dataHost,
-    localTargetPort: params.localTargetPort,
-    frpcBin: params.frpcBin,
-  });
-
-  try {
-    await frpc.waitUntilConnected();
-  } catch (error) {
-    await frpc.stop().catch(() => {});
-    await deleteRouteBestEffort(params.cfProxyWorkerClient, dataRouteHost);
-    await deleteRouteBestEffort(params.cfProxyWorkerClient, controlRouteHost);
-    await params.deployment.pidnap.processes.delete({ processSlug }).catch(() => {});
-    throw error;
-  }
-
-  let stopped = false;
-  const stop = async () => {
-    if (stopped) return;
-    stopped = true;
-
-    await frpc.stop().catch(() => {});
-    await deleteRouteBestEffort(params.cfProxyWorkerClient, dataRouteHost);
-    await deleteRouteBestEffort(params.cfProxyWorkerClient, controlRouteHost);
-    await params.deployment.pidnap.processes.delete({ processSlug }).catch(() => {});
-  };
-
-  return {
-    runId,
-    dataProxyUrl: `https://${dataRouteHost}`,
-    clientLogs: () => frpc.logs(),
-    stop,
-    async [Symbol.asyncDispose]() {
-      await stop();
-    },
-  };
 }

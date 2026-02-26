@@ -100,6 +100,14 @@ http://clickstack.iterate.localhost {
         reverse_proxy 127.0.0.1:27080
     }
 
+    @frp_control_ws {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @frp_control_ws {
+        reverse_proxy 127.0.0.1:27000
+    }
+
     @local host 127.0.0.1 localhost
     handle @local {
         respond "caddy ok" 200
@@ -170,6 +178,16 @@ http://clickstack.iterate.localhost {
     @frp_data host *.frp-egress.iterate.localhost
     handle @frp_data {
         reverse_proxy 127.0.0.1:27080
+    }
+
+    @frp_control_ws {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @frp_control_ws {
+        reverse_proxy 127.0.0.1:27000 {
+            stream_close_delay 5m
+        }
     }
 
     reverse_proxy 127.0.0.1:19000 {

@@ -400,25 +400,75 @@ async function waitForPidnapHealthy(params: {
   throw new Error("timed out waiting for pidnap health", { cause: lastError });
 }
 
+async function waitForHostHealthViaExec(params: {
+  exec: (cmd: string | string[]) => Promise<{ exitCode: number; output: string }>;
+  host: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 120_000;
+  const deadline = Date.now() + timeoutMs;
+  const path = params.path.startsWith("/") ? params.path : `/${params.path}`;
+  const cmd = `curl -fsS -H 'Host: ${params.host}' http://127.0.0.1${path}`;
+
+  let lastOutput = "";
+  while (Date.now() < deadline) {
+    const response = await params.exec(["sh", "-ec", cmd]).catch((error) => ({
+      exitCode: 1,
+      output: error instanceof Error ? error.message : String(error),
+    }));
+
+    if (response.exitCode === 0) return;
+    lastOutput = response.output;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `timed out waiting for ${params.host}${path} via machine loopback\n${lastOutput}`,
+  );
+}
+
 async function waitForRuntimeReady(params: {
   ingressBaseUrl: string;
   pidnap: PidnapClient;
+  exec: (cmd: string | string[]) => Promise<{ exitCode: number; output: string }>;
 }): Promise<void> {
   await waitForHttpOk({
     url: `${params.ingressBaseUrl}/healthz`,
     timeoutMs: 180_000,
   });
-  await waitForPidnapHealthy({
-    client: params.pidnap,
-    timeoutMs: 120_000,
-  });
+  try {
+    await waitForPidnapHealthy({
+      client: params.pidnap,
+      timeoutMs: 120_000,
+    });
+  } catch (error) {
+    if (!isRetriableSocketError(error)) throw error;
+    await waitForPidnapHostRoute({
+      deployment: {
+        exec: params.exec,
+      },
+      timeoutMs: 120_000,
+    });
+  }
+
   await Promise.all(
     (["registry", "events"] as const).map(async (processName) => {
-      await waitForPidnapProcessRunning({
-        client: params.pidnap,
-        target: processName,
-        timeoutMs: 120_000,
-      });
+      try {
+        await waitForPidnapProcessRunning({
+          client: params.pidnap,
+          target: processName,
+          timeoutMs: 120_000,
+        });
+      } catch (error) {
+        if (!isRetriableSocketError(error)) throw error;
+        await waitForHostHealthViaExec({
+          exec: params.exec,
+          host: `${processName}.iterate.localhost`,
+          path: "/healthz",
+          timeoutMs: 120_000,
+        });
+      }
     }),
   );
 }
@@ -584,6 +634,7 @@ export async function flyProjectDeployment(
       await waitForRuntimeReady({
         ingressBaseUrl,
         pidnap,
+        exec,
       });
 
       step = "refresh-host-routed-clients";
@@ -605,12 +656,13 @@ export async function flyProjectDeployment(
       output: `failed to fetch bootstrap logs: ${logsError instanceof Error ? logsError.message : String(logsError)}`,
     }));
 
-    if (!deleted) {
+    const keepFailedApp = process.env.JONASLAND_E2E_KEEP_FAILED_FLY_APP === "true";
+    if (!deleted && !keepFailedApp) {
       await sandbox.delete().catch(() => {});
       deleted = true;
     }
     throw new Error(
-      `${error instanceof Error ? error.message : String(error)}\nbootstrap logs:\n${bootstrapLogs.output}`,
+      `${error instanceof Error ? error.message : String(error)}\nbootstrap logs:\n${bootstrapLogs.output}${keepFailedApp ? `\nkept failing fly app for debugging: ${sandbox.appName}` : ""}`,
       { cause: error },
     );
   }

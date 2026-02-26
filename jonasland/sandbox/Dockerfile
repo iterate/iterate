@@ -12,6 +12,7 @@ FROM node:24-trixie-slim
 
 ARG GIT_SHA=unknown
 ARG CADDY_VERSION=2.11.1
+ARG FRP_VERSION=0.65.0
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -27,6 +28,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${TARGETARCH}.tar.gz" \
     | tar -xz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy
+
+RUN case "${TARGETARCH}" in \
+      amd64) FRP_ARCH=amd64 ;; \
+      arm64) FRP_ARCH=arm64 ;; \
+      *) echo "Unsupported TARGETARCH for frp: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" \
+    -o /tmp/frp.tar.gz && \
+    tar -xzf /tmp/frp.tar.gz -C /tmp && \
+    mv "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}/frps" /usr/local/bin/frps && \
+    chmod +x /usr/local/bin/frps && \
+    rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}"
 
 RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
 
