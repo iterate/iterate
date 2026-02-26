@@ -86,7 +86,7 @@ http://clickstack.iterate.localhost {
     reverse_proxy 127.0.0.1:8080
 }
 
-:80 {
+:80, :8080 {
     @health path /healthz
     respond @health "ok" 200
 
@@ -102,7 +102,7 @@ http://clickstack.iterate.localhost {
     }
 }
 
-:443 {
+:443, :8443 {
     tls internal {
         on_demand
     }
