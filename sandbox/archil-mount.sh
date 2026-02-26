@@ -3,10 +3,10 @@
 # Mounts the project's Archil disk at ~ so the entire home directory
 # persists across machine reprovisioning.
 #
-# First boot: seeds the archil disk from /opt/home-base (image defaults).
+# First boot: seeds the archil disk from /opt/home-seed (image dotfiles/configs).
 # Subsequent boots: archil already has the home dir contents.
 #
-# Env vars (from ~/.iterate/.env or /opt/home-base/.iterate/.env):
+# Env vars (from process env, set by Fly from project env vars):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
 #   ARCHIL_MOUNT_TOKEN — auth token for mount
 #   ARCHIL_REGION      — region (e.g. us-east-1, auto-prefixed to aws-us-east-1)
@@ -14,8 +14,8 @@ set -euo pipefail
 
 MOUNT_POINT="/home/iterate"
 
-# Source env vars — home may be empty (cleared by entry.sh), so check /opt/home-base too
-for env_file in /home/iterate/.iterate/.env /opt/home-base/.iterate/.env; do
+# Source env vars from .env files if not already set via process env
+for env_file in /home/iterate/.iterate/.env /opt/home-seed/.iterate/.env; do
   if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "$env_file" ]]; then
     eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' "$env_file")"
   fi
@@ -44,26 +44,28 @@ export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
 # Post-mount tasks run in background since --no-fork blocks the main thread:
-# 1. Seed from /opt/home-base on first boot (empty disk)
+# 1. Seed from /opt/home-seed on first boot (empty disk)
 # 2. Fix ownership so iterate user can write
+# 3. Symlink iterate repo from /opt/iterate-repo into ~
 (
   while ! grep -q "archil" /proc/mounts 2>/dev/null; do sleep 1; done
 
-  # Seed on first boot: if the disk has no .bashrc, it's empty — copy image defaults
-  if [[ -d /opt/home-base ]] && [[ ! -f "${MOUNT_POINT}/.bashrc" ]]; then
+  sudo chown iterate:iterate "${MOUNT_POINT}"
+
+  # Seed on first boot: if the disk has no .bashrc, it's empty — copy image defaults.
+  # /opt/home-seed contains the image's home dir minus src/ (dotfiles, configs, tools).
+  if [[ -d /opt/home-seed ]] && [[ ! -f "${MOUNT_POINT}/.bashrc" ]]; then
     echo "[archil] First boot — seeding home dir from image defaults"
-    sudo cp -a /opt/home-base/. "${MOUNT_POINT}/"
+    sudo cp -a /opt/home-seed/. "${MOUNT_POINT}/"
+    sudo chown -R iterate:iterate "${MOUNT_POINT}"
     echo "[archil] Seed complete"
   fi
 
-  sudo chown iterate:iterate "${MOUNT_POINT}"
-
   # Symlink iterate repo into ~ so it's accessible at the expected path.
-  # The repo lives in /opt/iterate-repo (moved there by entry.sh) and is NOT
+  # The repo lives in /opt/iterate-repo (hard-linked in Dockerfile) and is NOT
   # stored on the archil disk to avoid duplicating ~2GB of node_modules.
-  if [[ -d /opt/iterate-repo ]]; then
-    sudo mkdir -p "${MOUNT_POINT}/src/github.com/iterate"
-    sudo chown -R iterate:iterate "${MOUNT_POINT}/src"
+  if [[ -d /opt/iterate-repo ]] && [[ ! -d "${MOUNT_POINT}/src/github.com/iterate/iterate/sandbox" ]]; then
+    mkdir -p "${MOUNT_POINT}/src/github.com/iterate"
     ln -sfn /opt/iterate-repo "${MOUNT_POINT}/src/github.com/iterate/iterate"
     echo "[archil] Linked iterate repo into home dir"
   fi

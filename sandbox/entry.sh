@@ -34,22 +34,11 @@ if [[ -n "${SANDBOX_ENTRY_ARGS:-}" ]]; then
   fi
 fi
 
-# Archil persistent home: prepare ~ for archil mount.
-# When archil is configured, we need ~ to be empty so archil can mount over it.
-# The archil-mount pidnap process will mount archil at ~ and seed from /opt/home-base
-# on first boot. The iterate repo is copied to /opt/iterate-repo so pidnap can
-# still start (since ~/src/... will be briefly unavailable during mount).
-if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ ! -d /opt/home-base ]]; then
-  echo "[entry] Preparing home dir for archil persistence"
-  # Move iterate repo to /opt first — pidnap needs it while ~ is empty/mounting.
-  # mv is instant (same filesystem), unlike cp which takes minutes for node_modules.
-  sudo mv "${ITERATE_REPO}" /opt/iterate-repo
-  # Save home dir (minus the repo) as seed template for first-boot archil seeding.
-  # The repo dir is now gone from ~, so this only copies dotfiles/configs (~fast).
-  sudo cp -a /home/iterate /opt/home-base
-  # Clear home dir contents so archil can mount cleanly
-  sudo find /home/iterate -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  # Update ITERATE_REPO to point to the /opt copy for this boot
+# Archil persistent home: when configured, archil mounts over ~ so the entire
+# home directory persists. The repo at ~/src/... becomes invisible under the mount,
+# so point ITERATE_REPO to the hard-linked copy at /opt/iterate-repo (baked into image).
+if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ -d /opt/iterate-repo ]]; then
+  echo "[entry] Archil mode: using /opt/iterate-repo"
   ITERATE_REPO="/opt/iterate-repo"
 fi
 
