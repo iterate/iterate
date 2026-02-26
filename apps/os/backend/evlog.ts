@@ -90,7 +90,8 @@ export const log: RequestLogger<RequestEvlogEvent> = {
     setRequestEvlogLevel("warn");
     getLogger().warn(...args);
   },
-  emit: (...args: Parameters<RequestLogger<RequestEvlogEvent>["emit"]>) => getLogger().emit(...args),
+  emit: (...args: Parameters<RequestLogger<RequestEvlogEvent>["emit"]>) =>
+    getLogger().emit(...args),
   getContext: () => getLogger().getContext(),
 };
 
