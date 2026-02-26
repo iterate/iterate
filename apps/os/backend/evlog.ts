@@ -135,7 +135,26 @@ export function flushRequestEvlog(): RequestEvlogFlushPayload | undefined {
 
   if (!flushHandler) return payload;
 
-  const task = Promise.resolve(flushHandler(payload)).catch(() => undefined);
+  if ((payload.errors?.length ?? 0) > 0) {
+    const request =
+      typeof payload.event === "object" && payload.event !== null
+        ? ((payload.event as Record<string, unknown>).request as
+            | Record<string, unknown>
+            | undefined)
+        : undefined;
+    rootLog.info({
+      message: "request evlog flush dispatch",
+      requestId: typeof request?.id === "string" ? request.id : undefined,
+      path: typeof request?.path === "string" ? request.path : undefined,
+      errorCount: payload.errors?.length ?? 0,
+      hasExecutionCtx: Boolean(store.executionCtx),
+    });
+  }
+
+  const task = Promise.resolve(flushHandler(payload)).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    rootLog.error({ message: `request evlog flush handler failed: ${message}` });
+  });
   if (store.executionCtx) {
     store.executionCtx.waitUntil(task);
   } else {
