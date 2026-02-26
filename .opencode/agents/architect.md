@@ -135,10 +135,9 @@ gh pr create \
   --body "<what was checked, found, changed, and why>"
 ```
 
-## Slack reporting (non-monitoring runs)
+## Slack reporting
 
-If this run is Fly machine monitoring, follow `skills/architect-monitoring/SKILL.md` for Slack behavior.
-Do not post a second standalone message from this file when that skill is in use.
+For architect monitoring runs, follow `skills/architect-monitoring/SKILL.md` for Slack behavior and reporting.
 
 For all other architect runs, after opening a PR, post a summary to `#monitoring` (`C0AH6P1D1MJ`) with the PR link:
 
