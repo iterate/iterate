@@ -14,6 +14,7 @@
 set -euo pipefail
 
 MOUNT_POINT="/home/iterate"
+STAGING="/mnt/archil-staging"
 ITERATE_REPO="${ITERATE_REPO:-${MOUNT_POINT}/src/github.com/iterate/iterate}"
 
 # Source env vars from .env files if not already set via process env
@@ -28,7 +29,13 @@ fi
 
 # Already mounted? Sleep to keep process alive.
 if grep -q "archil" /proc/mounts 2>/dev/null; then
-  echo "[archil] Already mounted at ${MOUNT_POINT}"
+  echo "[archil] Already mounted"
+  # Ensure bind mount is in place (may have been lost on restart)
+  if ! mountpoint -q "${MOUNT_POINT}" 2>/dev/null; then
+    echo "[archil] Re-establishing bind mount ${STAGING} -> ${MOUNT_POINT}"
+    sudo mount --bind "$STAGING" "$MOUNT_POINT"
+    touch /tmp/archil-home-ready
+  fi
   exec sleep infinity
 fi
 
@@ -41,7 +48,7 @@ esac
 
 export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 
-echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
+echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${STAGING} -> ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
 # Snapshot essential dotfiles from image BEFORE mount hides them.
 # Only copy small config files — skip large tool caches (.cache, .npm, go/, .bun, etc.)
@@ -60,25 +67,30 @@ if [[ ! -d /tmp/home-seed ]]; then
   echo "[archil] Saved dotfiles snapshot"
 fi
 
+# Archil FUSE (libfuse2) refuses to mount on a non-empty directory.
+# Mount to an empty staging dir first, then bind-mount over ~.
+sudo mkdir -p "$STAGING"
+
 # Post-mount tasks run in background since --no-fork blocks the main thread.
 (
-  while ! grep -q "archil" /proc/mounts 2>/dev/null; do sleep 1; done
-  echo "[archil] Mount detected"
+  # Wait for archil to mount at the staging dir
+  while ! grep -q "$STAGING" /proc/mounts 2>/dev/null; do sleep 1; done
+  echo "[archil] Archil mounted at ${STAGING}"
 
-  sudo chown iterate:iterate "${MOUNT_POINT}"
+  sudo chown iterate:iterate "$STAGING"
 
   # First boot: if the disk has no .bashrc, it's a fresh/empty disk.
-  if [[ ! -f "${MOUNT_POINT}/.bashrc" ]]; then
+  if [[ ! -f "${STAGING}/.bashrc" ]]; then
     echo "[archil] First boot — setting up persistent home directory"
 
     # 1. Seed dotfiles/configs from image snapshot
     if [[ -d /tmp/home-seed ]]; then
-      cp -a /tmp/home-seed/. "${MOUNT_POINT}/"
+      cp -a /tmp/home-seed/. "${STAGING}/"
       echo "[archil] Dotfiles seeded"
     fi
 
     # 2. Clone iterate repo and install deps
-    REPO_DIR="${MOUNT_POINT}/src/github.com/iterate/iterate"
+    REPO_DIR="${STAGING}/src/github.com/iterate/iterate"
     mkdir -p "$(dirname "$REPO_DIR")"
 
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
@@ -115,6 +127,10 @@ fi
     echo "[archil] Existing home directory found, skipping setup"
   fi
 
+  # Bind-mount the staging dir over ~ so all processes see the persistent disk at ~
+  echo "[archil] Bind-mounting ${STAGING} over ${MOUNT_POINT}"
+  sudo mount --bind "$STAGING" "$MOUNT_POINT"
+
   # Signal that the home directory is ready for other processes
   touch /tmp/archil-home-ready
   echo "[archil] Home directory ready"
@@ -123,7 +139,7 @@ fi
 # --force: claim ownership even if stale delegation exists from a previous machine.
 # --no-fork: keep archil in foreground so pidnap can manage the process lifecycle.
 # --log-dir: log to file for debugging.
-sudo --preserve-env=ARCHIL_MOUNT_TOKEN archil mount "${ARCHIL_DISK_NAME}" "${MOUNT_POINT}" \
+sudo --preserve-env=ARCHIL_MOUNT_TOKEN archil mount "${ARCHIL_DISK_NAME}" "${STAGING}" \
   --region "${ARCHIL_CLI_REGION}" \
   --force \
   --no-fork \
