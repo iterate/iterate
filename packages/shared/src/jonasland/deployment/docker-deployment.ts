@@ -86,6 +86,29 @@ async function bodyInitToString(
   return await response.text();
 }
 
+export type HostRequestParams = {
+  host: string;
+  path: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  json?: unknown;
+};
+
+function withBody(params: HostRequestParams): { body: string | undefined; headers: Headers } {
+  const headers = new Headers(params.headers);
+  const body = params.json === undefined ? params.body : JSON.stringify(params.json);
+
+  if (params.json !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  if (body !== undefined) {
+    headers.set("content-length", Buffer.byteLength(body, "utf-8").toString());
+  }
+
+  return { body, headers };
+}
+
 function createCaddyApiClient(params: { adminUrl: string; hostHeader?: string }): CaddyClient {
   const adminUrl = params.adminUrl;
   const caddy = new CaddyClient({ adminUrl });
@@ -209,6 +232,141 @@ function createHostRoutedFetch(params: {
       req.end();
     });
   };
+}
+
+async function ingressRequest(
+  params: {
+    ingressBaseUrl: string;
+  } & HostRequestParams,
+): Promise<Response> {
+  const targetUrl = new URL(params.path, params.ingressBaseUrl);
+  const method = (
+    params.method ?? (params.json === undefined && params.body === undefined ? "GET" : "POST")
+  ).toUpperCase();
+  const { body, headers } = withBody(params);
+  headers.set("host", params.host);
+
+  return await new Promise<Response>((resolve, reject) => {
+    const req = httpRequest(
+      targetUrl,
+      {
+        method,
+        headers: Object.fromEntries(headers.entries()),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        res.on("end", () => {
+          const responseHeaders = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (value === undefined) continue;
+            if (Array.isArray(value)) {
+              for (const entry of value) {
+                responseHeaders.append(key, entry);
+              }
+              continue;
+            }
+            responseHeaders.set(key, String(value));
+          }
+
+          resolve(
+            new Response(Buffer.concat(chunks), {
+              status: res.statusCode ?? 0,
+              statusText: res.statusMessage ?? "",
+              headers: responseHeaders,
+            }),
+          );
+        });
+      },
+    );
+    req.on("error", reject);
+    if (body !== undefined) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
+async function waitForHostRouteViaIngress(params: {
+  ingressBaseUrl: string;
+  host: string;
+  path: string;
+  timeoutMs?: number;
+  readyStatus?: "ok" | "lt400";
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+  const readyStatus = params.readyStatus ?? "ok";
+
+  while (Date.now() < deadline) {
+    const response = await ingressRequest({
+      ingressBaseUrl: params.ingressBaseUrl,
+      host: params.host,
+      path: params.path,
+    }).catch(() => undefined);
+
+    if (
+      response &&
+      ((readyStatus === "ok" && response.ok) || (readyStatus === "lt400" && response.status < 400))
+    ) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
+}
+
+async function waitForDirectHttpViaContainer(params: {
+  deployment: Pick<ProjectDeployment, "exec">;
+  url: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await params.deployment
+      .exec(`curl -fsS '${params.url}' >/dev/null`)
+      .catch(() => ({ exitCode: 1, output: "" }));
+    if (result.exitCode === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`timed out waiting for direct http ${params.url}`);
+}
+
+function createOrpcRpcHostClient<TContract extends AnyContractRouter>(params: {
+  ingressBaseUrl: string;
+  host: string;
+  manifest: ServiceManifestLike<TContract>;
+}): ContractRouterClient<TContract> {
+  return createOrpcRpcServiceClient({
+    env: {},
+    manifest: params.manifest,
+    url: `${params.ingressBaseUrl}/orpc`,
+    fetch: createHostRoutedFetch({
+      ingressBaseUrl: params.ingressBaseUrl,
+      hostHeader: params.host,
+    }),
+  });
+}
+
+function createOrdersClient(params: { ingressBaseUrl: string }): OrdersClient {
+  return createOrpcRpcHostClient({
+    ingressBaseUrl: params.ingressBaseUrl,
+    host: "orders.iterate.localhost",
+    manifest: ordersServiceManifest,
+  });
+}
+
+function createEventsClient(params: { ingressBaseUrl: string }): EventsClient {
+  return createOrpcRpcHostClient({
+    ingressBaseUrl: params.ingressBaseUrl,
+    host: "events.iterate.localhost",
+    manifest: eventsServiceManifest,
+  });
 }
 
 export async function dockerContainerFixture(params: {
@@ -389,31 +547,8 @@ async function waitForRegistryReady(params: {
   throw new Error("timed out waiting for registry service");
 }
 
-async function waitForHostRouteViaContainer(params: {
-  containerId: string;
-  host: string;
-  path: string;
-  timeoutMs?: number;
-}): Promise<void> {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const result = await execInContainer({
-      containerId: params.containerId,
-      cmd: [
-        "sh",
-        "-ec",
-        `curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${params.path}' >/dev/null`,
-      ],
-    }).catch(() => ({ exitCode: 1, output: "" }));
-
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  throw new Error(`timed out waiting for host route ${params.host}${params.path}`);
-}
+export type OrdersClient = ContractRouterClient<typeof ordersContract>;
+export type EventsClient = ContractRouterClient<typeof eventBusContract>;
 
 export interface DeploymentRuntime {
   ports: {
@@ -424,6 +559,15 @@ export interface DeploymentRuntime {
   registry: RegistryClient;
   ingressUrl(): Promise<string>;
   exec(cmd: string | string[]): Promise<{ exitCode: number; output: string }>;
+  request(params: HostRequestParams): Promise<Response>;
+  waitForHostRoute(params: {
+    host: string;
+    path: string;
+    timeoutMs?: number;
+    readyStatus?: "ok" | "lt400";
+  }): Promise<void>;
+  startOnDemandProcess(processName: OnDemandProcessName): Promise<void>;
+  waitForDocsSources(expectedHosts: string[]): Promise<DocsSourcesPayload>;
   logs(): Promise<string>;
   waitForHealthyWithLogs(params: { url: string }): Promise<void>;
   waitForCaddyHealthy(params?: { timeoutMs?: number }): Promise<void>;
@@ -586,6 +730,8 @@ async function createRuntimeFromContainer(params: {
       hostHeader: "registry.iterate.localhost",
     }),
   });
+  let orders = createOrdersClient({ ingressBaseUrl });
+  let events = createEventsClient({ ingressBaseUrl });
 
   const resolvePublicBaseUrlType = (fallback?: string): "prefixed" | "subdomain-wildcard" => {
     const candidate = requestedEnv.ITERATE_PUBLIC_BASE_URL_TYPE ?? fallback;
@@ -667,8 +813,8 @@ async function createRuntimeFromContainer(params: {
       timeoutMs: 90_000,
     });
 
-    await waitForHostRouteViaContainer({
-      containerId: container.containerId,
+    await waitForHostRouteViaIngress({
+      ingressBaseUrl,
       host: "events.iterate.localhost",
       path: "/healthz",
       timeoutMs: 60_000,
@@ -685,6 +831,45 @@ async function createRuntimeFromContainer(params: {
       const argv = typeof cmd === "string" ? ["sh", "-ec", cmd] : cmd;
       return await execInContainer({ containerId: container.containerId, cmd: argv });
     },
+    request: async (params) =>
+      await ingressRequest({
+        ingressBaseUrl,
+        ...params,
+      }),
+    waitForHostRoute: async (params) =>
+      await waitForHostRouteViaIngress({
+        ingressBaseUrl,
+        ...params,
+      }),
+    startOnDemandProcess: async (processName) =>
+      await startOnDemandProcessShared({
+        deployment,
+        processName,
+        processConfig: onDemandProcesses[processName],
+        waitForHostRoute: async (params) => {
+          await deployment.waitForHostRoute(params);
+        },
+        waitForDirectHttp: async (params) => {
+          await waitForDirectHttpViaContainer({
+            deployment,
+            ...params,
+          });
+        },
+      }),
+    waitForDocsSources: async (expectedHosts) =>
+      await waitForDocsSourcesShared({
+        expectedHosts,
+        fetchSources: async () => {
+          const response = await deployment
+            .request({
+              host: "docs.iterate.localhost",
+              path: "/api/openapi-sources",
+            })
+            .catch(() => undefined);
+          if (!response?.ok) return undefined;
+          return (await response.json().catch(() => undefined)) as DocsSourcesPayload | undefined;
+        },
+      }),
     logs: async () => await container.logs(),
     waitForHealthyWithLogs: async ({ url }) =>
       await waitForHealthyWithLogs({
@@ -732,6 +917,8 @@ async function createRuntimeFromContainer(params: {
           hostHeader: "registry.iterate.localhost",
         }),
       });
+      orders = createOrdersClient({ ingressBaseUrl });
+      events = createEventsClient({ ingressBaseUrl });
       deployment.pidnap = pidnap;
       deployment.caddy = caddy;
       deployment.registry = registry;

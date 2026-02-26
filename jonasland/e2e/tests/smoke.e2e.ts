@@ -364,7 +364,7 @@ describe.runIf(RUN_DOCKER_E2E)("jonasland smoke", () => {
     expect(docsHome.exitCode).toBe(0);
     expect(docsHome.output).toContain("jonasland API Docs");
 
-    const sourcesPayload = await waitForDocsSources(deployment, [
+    const sourcesPayload = await deployment.waitForDocsSources([
       "events.iterate.localhost",
       "orders.iterate.localhost",
     ]);
