@@ -221,7 +221,14 @@ app.use(
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  let session: Awaited<ReturnType<typeof auth.api.getSession>> = null;
+  try {
+    session = await auth.api.getSession({ headers: c.req.raw.headers });
+  } catch (error) {
+    // better-auth wraps DB errors as generic "Failed to get session" —
+    // log the real cause so it surfaces in error tracking
+    logger.error("getSession failed", error);
+  }
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
