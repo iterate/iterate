@@ -47,6 +47,7 @@ export type EvlogExceptionPayload = {
   event: WideEvent;
   errors?: Error[];
   env?: EvlogPostHogEnv;
+  executionCtx?: { waitUntil: (promise: Promise<unknown>) => void };
 };
 
 function getTimestamp(timestamp?: string): string {
@@ -63,7 +64,10 @@ async function posthogCapture(body: Record<string, unknown>): Promise<void> {
   });
 
   if (!response.ok) {
-    throw new Error(`PostHog capture failed: ${response.status} ${response.statusText}`);
+    const details = await response.text().catch(() => "<no body>");
+    throw new Error(
+      `PostHog capture failed: ${response.status} ${response.statusText} ${details.slice(0, 500)}`,
+    );
   }
 }
 
@@ -181,21 +185,38 @@ export async function sendEvlogExceptionToPostHog(payload: EvlogExceptionPayload
   if (!payload.errors || payload.errors.length === 0) return;
 
   const apiKey = payload.env?.POSTHOG_PUBLIC_KEY;
-  if (!apiKey) return;
+  if (!apiKey) {
+    logger.warn("POSTHOG_PUBLIC_KEY missing for evlog exception flush");
+    return;
+  }
 
   const event = payload.event as unknown as EvlogExceptionEvent;
   const request = toPostHogRequestContext(event);
   const user = toPostHogUserContext(event);
 
-  await sendPostHogException({
-    apiKey,
-    distinctId: user.id,
-    errors: payload.errors,
-    request,
-    user,
-    environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
-    lib: "evlog-worker",
-  });
+  logger.info(
+    `PostHog evlog exception dispatch requestId=${request.id} path=${request.path} errorCount=${payload.errors.length} waitUntil=${Boolean(payload.executionCtx)}`,
+  );
+
+  try {
+    await sendPostHogException({
+      apiKey,
+      distinctId: user.id,
+      errors: payload.errors,
+      request,
+      user,
+      environment: payload.env?.VITE_APP_STAGE ?? evlogAppStage,
+      lib: "evlog-worker",
+    });
+    logger.info(`PostHog evlog exception sent requestId=${request.id}`);
+  } catch (error) {
+    logger.error("PostHog evlog exception failed", {
+      requestId: request.id,
+      path: request.path,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 /**
