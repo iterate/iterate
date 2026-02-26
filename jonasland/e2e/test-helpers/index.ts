@@ -25,6 +25,7 @@ export {
   type CfProxyWorkerClient,
   type CfProxyWorkerRoute,
 } from "./cf-proxy-worker-client.ts";
+export { startFlyFrpEgressBridge, type FlyFrpEgressBridge } from "./frp-egress-bridge.ts";
 
 export {
   projectDeployment,

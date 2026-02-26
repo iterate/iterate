@@ -189,6 +189,7 @@ function createFlyHostRoutedFetch(params: {
     const method = request.method.toUpperCase();
     const headers = new Headers(request.headers);
     headers.set("host", params.hostHeader);
+    headers.set("connection", "close");
     headers.delete("content-length");
 
     const body =
@@ -264,6 +265,7 @@ function createFlyCaddyApiClient(params: {
     if (!headers.has("content-type")) {
       headers.set("content-type", "application/json");
     }
+    headers.set("connection", "close");
 
     headers.delete("sec-fetch-mode");
     headers.delete("sec-fetch-site");
@@ -377,11 +379,48 @@ async function resolveIngressBaseUrl(params: {
   }
 }
 
-async function waitForRuntimeReady(params: { ingressBaseUrl: string }): Promise<void> {
+async function waitForPidnapHealthy(params: {
+  client: PidnapClient;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 120_000;
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      await params.client.health();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error("timed out waiting for pidnap health", { cause: lastError });
+}
+
+async function waitForRuntimeReady(params: {
+  ingressBaseUrl: string;
+  pidnap: PidnapClient;
+}): Promise<void> {
   await waitForHttpOk({
     url: `${params.ingressBaseUrl}/healthz`,
     timeoutMs: 180_000,
   });
+  await waitForPidnapHealthy({
+    client: params.pidnap,
+    timeoutMs: 120_000,
+  });
+  await Promise.all(
+    (["registry", "events"] as const).map(async (processName) => {
+      await waitForPidnapProcessRunning({
+        client: params.pidnap,
+        target: processName,
+        timeoutMs: 120_000,
+      });
+    }),
+  );
 }
 
 export interface FlyProjectDeploymentParams {
@@ -544,6 +583,7 @@ export async function flyProjectDeployment(
     try {
       await waitForRuntimeReady({
         ingressBaseUrl,
+        pidnap,
       });
 
       step = "refresh-host-routed-clients";
