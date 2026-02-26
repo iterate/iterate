@@ -1,24 +1,28 @@
 #!/bin/bash
 # Archil persistent volume mount — managed by pidnap.
-# Mounts the project's Archil disk at ~/workspace so user files
-# persist across machine reprovisioning.
+# Mounts the project's Archil disk at ~ so the entire home directory
+# persists across machine reprovisioning.
 #
-# Env vars (from ~/.iterate/.env or machine env):
+# First boot: seeds the archil disk from /opt/home-base (image defaults).
+# Subsequent boots: archil already has the home dir contents.
+#
+# Env vars (from ~/.iterate/.env or /opt/home-base/.iterate/.env):
 #   ARCHIL_DISK_NAME   — disk ID (e.g. dsk-0000000000003139)
 #   ARCHIL_MOUNT_TOKEN — auth token for mount
 #   ARCHIL_REGION      — region (e.g. us-east-1, auto-prefixed to aws-us-east-1)
 set -euo pipefail
 
-MOUNT_POINT="/home/iterate/workspace"
+MOUNT_POINT="/home/iterate"
 
-# Source env vars from .iterate/.env if not already set
-if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f /home/iterate/.iterate/.env ]]; then
-  eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' /home/iterate/.iterate/.env)"
-fi
+# Source env vars — home may be empty (cleared by entry.sh), so check /opt/home-base too
+for env_file in /home/iterate/.iterate/.env /opt/home-base/.iterate/.env; do
+  if [[ -z "${ARCHIL_DISK_NAME:-}" ]] && [[ -f "$env_file" ]]; then
+    eval "$(grep -E '^(ARCHIL_DISK_NAME|ARCHIL_MOUNT_TOKEN|ARCHIL_REGION)=' "$env_file")"
+  fi
+done
 
 if [[ -z "${ARCHIL_DISK_NAME:-}" ]]; then
   echo "[archil] No ARCHIL_DISK_NAME set, skipping mount"
-  # Sleep forever so pidnap doesn't restart us in a loop
   exec sleep infinity
 fi
 
@@ -37,17 +41,23 @@ esac
 
 export ARCHIL_MOUNT_TOKEN="${ARCHIL_MOUNT_TOKEN:-}"
 
-# Ensure mount point exists
-mkdir -p "${MOUNT_POINT}"
-
 echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${ARCHIL_CLI_REGION})"
 
-# Fix ownership after mount: archil mounts as root, but the iterate user needs write access.
-# Run in background since --no-fork blocks the main thread.
+# Post-mount tasks run in background since --no-fork blocks the main thread:
+# 1. Seed from /opt/home-base on first boot (empty disk)
+# 2. Fix ownership so iterate user can write
 (
   while ! grep -q "archil" /proc/mounts 2>/dev/null; do sleep 1; done
+
+  # Seed on first boot: if the disk has no .bashrc, it's empty — copy image defaults
+  if [[ -d /opt/home-base ]] && [[ ! -f "${MOUNT_POINT}/.bashrc" ]]; then
+    echo "[archil] First boot — seeding home dir from image defaults"
+    sudo cp -a /opt/home-base/. "${MOUNT_POINT}/"
+    echo "[archil] Seed complete"
+  fi
+
   sudo chown iterate:iterate "${MOUNT_POINT}"
-  echo "[archil] Mount ready — ownership set to iterate:iterate"
+  echo "[archil] Mount ready"
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.

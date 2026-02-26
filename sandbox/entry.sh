@@ -34,6 +34,23 @@ if [[ -n "${SANDBOX_ENTRY_ARGS:-}" ]]; then
   fi
 fi
 
+# Archil persistent home: prepare ~ for archil mount.
+# When archil is configured, we need ~ to be empty so archil can mount over it.
+# The archil-mount pidnap process will mount archil at ~ and seed from /opt/home-base
+# on first boot. The iterate repo is copied to /opt/iterate-repo so pidnap can
+# still start (since ~/src/... will be briefly unavailable during mount).
+if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ ! -d /opt/home-base ]]; then
+  echo "[entry] Preparing home dir for archil persistence"
+  # Save a clean copy of the image's home dir as the seed template
+  sudo cp -a /home/iterate /opt/home-base
+  # Copy iterate repo to /opt so entry.sh + pidnap can reference it during mount
+  sudo cp -a "${ITERATE_REPO}" /opt/iterate-repo
+  # Clear home dir contents so archil can mount cleanly
+  sudo find /home/iterate -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  # Update ITERATE_REPO to point to the /opt copy for this boot
+  ITERATE_REPO="/opt/iterate-repo"
+fi
+
 # Setup console logging via named pipe (FIFO)
 # Using a FIFO keeps pidnap as direct child of tini for proper signal handling
 CONSOLE_LOG="/var/log/pidnap/console"

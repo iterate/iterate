@@ -3,15 +3,19 @@ import { join } from "node:path";
 import { defineConfig } from "pidnap";
 
 const home = homedir();
-const iterateRepo = process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
+const iterateRepo =
+  process.env.ITERATE_REPO ?? join(home, "src/github.com/iterate/iterate");
 const sandboxDir = join(iterateRepo, "sandbox");
 const envFile = join(home, ".iterate/.env");
 const mitmproxyDir = join(home, ".mitmproxy");
 const caCert = join(mitmproxyDir, "mitmproxy-ca-cert.pem");
 const proxyPort = "8888";
-const githubMagicToken = encodeURIComponent("getIterateSecret({secretKey: 'github.access_token'})");
+const githubMagicToken = encodeURIComponent(
+  "getIterateSecret({secretKey: 'github.access_token'})",
+);
 const cloudflareTunnelHostname = process.env.CLOUDFLARE_TUNNEL_HOSTNAME?.trim();
-const cloudflareTunnelUrl = process.env.CLOUDFLARE_TUNNEL_URL?.trim() || "http://127.0.0.1:3000";
+const cloudflareTunnelUrl =
+  process.env.CLOUDFLARE_TUNNEL_URL?.trim() || "http://127.0.0.1:3000";
 
 // ITERATE_SKIP_PROXY is set by the control plane at machine creation when
 // DANGEROUS_RAW_SECRETS_ENABLED is true. When set, proxy/CA vars are omitted
@@ -85,6 +89,8 @@ export default defineConfig({
         args: [`${sandboxDir}/archil-mount.sh`],
       },
       envOptions: {
+        // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
+        // inheritProcessEnv=true (default): ARCHIL_* vars come from Fly process env.
         inheritGlobalEnv: false,
         reloadDelay: false,
       },
@@ -143,7 +149,15 @@ export default defineConfig({
       definition: {
         // Build is baked into the image.
         command: "pnpm",
-        args: ["exec", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"],
+        args: [
+          "exec",
+          "vite",
+          "preview",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "3000",
+        ],
         cwd: `${iterateRepo}/apps/daemon`,
         env: {
           NODE_ENV: "production",
@@ -196,7 +210,11 @@ export default defineConfig({
       },
       options: {
         restartPolicy: "always",
-        backoff: { type: "exponential", initialDelayMs: 1000, maxDelayMs: 30000 },
+        backoff: {
+          type: "exponential",
+          initialDelayMs: 1000,
+          maxDelayMs: 30000,
+        },
       },
     },
     ...(cloudflareTunnelHostname
