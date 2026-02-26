@@ -41,10 +41,12 @@ fi
 # still start (since ~/src/... will be briefly unavailable during mount).
 if [[ -n "${ARCHIL_DISK_NAME:-}" ]] && [[ ! -d /opt/home-base ]]; then
   echo "[entry] Preparing home dir for archil persistence"
-  # Save a clean copy of the image's home dir as the seed template
+  # Move iterate repo to /opt first — pidnap needs it while ~ is empty/mounting.
+  # mv is instant (same filesystem), unlike cp which takes minutes for node_modules.
+  sudo mv "${ITERATE_REPO}" /opt/iterate-repo
+  # Save home dir (minus the repo) as seed template for first-boot archil seeding.
+  # The repo dir is now gone from ~, so this only copies dotfiles/configs (~fast).
   sudo cp -a /home/iterate /opt/home-base
-  # Copy iterate repo to /opt so entry.sh + pidnap can reference it during mount
-  sudo cp -a "${ITERATE_REPO}" /opt/iterate-repo
   # Clear home dir contents so archil can mount cleanly
   sudo find /home/iterate -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   # Update ITERATE_REPO to point to the /opt copy for this boot

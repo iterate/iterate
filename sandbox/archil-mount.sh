@@ -57,6 +57,17 @@ echo "[archil] Mounting disk ${ARCHIL_DISK_NAME} at ${MOUNT_POINT} (region: ${AR
   fi
 
   sudo chown iterate:iterate "${MOUNT_POINT}"
+
+  # Symlink iterate repo into ~ so it's accessible at the expected path.
+  # The repo lives in /opt/iterate-repo (moved there by entry.sh) and is NOT
+  # stored on the archil disk to avoid duplicating ~2GB of node_modules.
+  if [[ -d /opt/iterate-repo ]]; then
+    sudo mkdir -p "${MOUNT_POINT}/src/github.com/iterate"
+    sudo chown -R iterate:iterate "${MOUNT_POINT}/src"
+    ln -sfn /opt/iterate-repo "${MOUNT_POINT}/src/github.com/iterate/iterate"
+    echo "[archil] Linked iterate repo into home dir"
+  fi
+
   echo "[archil] Mount ready"
 ) &
 
