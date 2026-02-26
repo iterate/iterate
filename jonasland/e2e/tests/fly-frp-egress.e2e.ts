@@ -19,11 +19,12 @@ const image =
   process.env.JONASLAND_SANDBOX_IMAGE ??
   "";
 
-const OTEL_SERVICE_ENV = {
+const EGRESS_PROCESS_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:15318/v1/traces",
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
   OTEL_PROPAGATORS: "tracecontext,baggage",
+  ITERATE_EXTERNAL_EGRESS_PROXY: "http://127.0.0.1:27180",
 };
 
 async function waitForDirectHttp(
@@ -32,44 +33,129 @@ async function waitForDirectHttp(
 ): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const deadline = Date.now() + timeoutMs;
+  let lastOutput = "";
   while (Date.now() < deadline) {
-    const result = await deployment
-      .exec(["curl", "-fsS", params.url])
-      .catch(() => ({ exitCode: 1, output: "" }));
+    const result = await deployment.exec(["curl", "-fsS", params.url]).catch((error) => ({
+      exitCode: 1,
+      output: error instanceof Error ? error.message : String(error),
+    }));
     if (result.exitCode === 0) return;
+    lastOutput = result.output;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`timed out waiting for direct http ${params.url}`);
+  throw new Error(`timed out waiting for direct http ${params.url}\n${lastOutput}`);
 }
 
-async function startEgressProxyWithExternalProxy(
-  deployment: ProjectDeployment,
-  externalProxyUrl: string,
-): Promise<void> {
-  const updated = await deployment.pidnap.processes.updateConfig({
-    processSlug: "egress-proxy",
-    definition: {
-      command: "/opt/pidnap/node_modules/.bin/tsx",
-      args: ["/opt/services/egress-service/src/server.ts"],
-      env: {
-        ...OTEL_SERVICE_ENV,
-        ITERATE_EXTERNAL_EGRESS_PROXY: externalProxyUrl,
+async function startEgressProxyViaExec(deployment: ProjectDeployment): Promise<void> {
+  const listed = await deployment.exec([
+    "sh",
+    "-ec",
+    [
+      "curl -sS -X POST",
+      "-H 'Host: pidnap.iterate.localhost'",
+      "-H 'Content-Type: application/json'",
+      "--data '{}'",
+      "http://127.0.0.1/rpc/processes/list",
+    ].join(" "),
+  ]);
+
+  const updatePayload = JSON.stringify({
+    json: {
+      processSlug: "egress-proxy",
+      definition: {
+        command: "/opt/pidnap/node_modules/.bin/tsx",
+        args: ["/opt/services/egress-service/src/server.ts"],
+        env: EGRESS_PROCESS_ENV,
       },
+      options: { restartPolicy: "always" },
+      envOptions: { reloadDelay: false },
+      restartImmediately: true,
     },
-    options: { restartPolicy: "always" },
-    envOptions: { reloadDelay: false },
   });
 
-  if (updated.state !== "running") {
-    await deployment.pidnap.processes.start({ target: "egress-proxy" });
+  const updated = await deployment.exec([
+    "curl",
+    "-fsS",
+    "-X",
+    "POST",
+    "-H",
+    "Host: pidnap.iterate.localhost",
+    "-H",
+    "Content-Type: application/json",
+    "--data",
+    updatePayload,
+    "http://127.0.0.1/rpc/processes/updateConfig",
+  ]);
+  if (updated.exitCode !== 0) {
+    throw new Error(
+      `failed to update egress-proxy via pidnap rpc:\nupdate output:\n${updated.output}\nprocess list output:\n${listed.output}`,
+    );
   }
 
-  await deployment.waitForPidnapProcessRunning({
-    target: "egress-proxy",
-    timeoutMs: 45_000,
-  });
+  const start = await deployment.exec([
+    "sh",
+    "-ec",
+    [
+      "curl -fsS -X POST",
+      "-H 'Host: pidnap.iterate.localhost'",
+      "-H 'Content-Type: application/json'",
+      '--data \'{"json":{"target":"egress-proxy"}}\'',
+      "http://127.0.0.1/rpc/processes/start",
+    ].join(" "),
+  ]);
+
+  const listedAfterUpdate = await deployment.exec([
+    "sh",
+    "-ec",
+    [
+      "curl -sS -X POST",
+      "-H 'Host: pidnap.iterate.localhost'",
+      "-H 'Content-Type: application/json'",
+      "--data '{}'",
+      "http://127.0.0.1/rpc/processes/list",
+    ].join(" "),
+  ]);
+  if (!listedAfterUpdate.output.includes('"name":"egress-proxy"')) {
+    throw new Error(
+      `egress-proxy not present after updateConfig\nstart output:\n${start.output}\nprocess list before update:\n${listed.output}\nprocess list after update:\n${listedAfterUpdate.output}`,
+    );
+  }
+}
+
+async function routeExampleThroughEgressViaExec(deployment: ProjectDeployment): Promise<void> {
+  const patch = await deployment.exec([
+    "bash",
+    "-lc",
+    [
+      "set -euo pipefail",
+      "FILE=/opt/jonasland-sandbox/caddy/Caddyfile",
+      "if grep -q '@frp_example host example.com' \"$FILE\"; then",
+      "  perl -0777 -i -pe 's/\\n\\s*\\@frp_example host example\\.com\\n\\s*handle \\@frp_example \\{\\n\\s*reverse_proxy 127\\.0\\.0\\.1:27180\\n\\s*\\}\\n/\\n/s' \"$FILE\"",
+      "fi",
+    ].join("\n"),
+  ]);
+  if (patch.exitCode !== 0) {
+    throw new Error(`failed to patch caddy route for example.com:\n${patch.output}`);
+  }
+
+  const restart = await deployment.exec([
+    "sh",
+    "-ec",
+    [
+      "curl -fsS -X POST",
+      "-H 'Host: pidnap.iterate.localhost'",
+      "-H 'Content-Type: application/json'",
+      '--data \'{"json":{"target":"caddy","force":true}}\'',
+      "http://127.0.0.1/rpc/processes/restart",
+    ].join(" "),
+  ]);
+  if (restart.exitCode !== 0 && !/empty reply from server/i.test(restart.output)) {
+    throw new Error(`failed to restart caddy after route patch:\n${restart.output}`);
+  }
+
   await waitForDirectHttp(deployment, {
-    url: "http://127.0.0.1:19000/healthz",
+    url: "http://127.0.0.1/healthz",
+    timeoutMs: 45_000,
   });
 }
 
@@ -95,7 +181,13 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
       await using deployment = await projectDeployment({
         image,
         name: `jonasland-e2e-fly-frp-${randomUUID().slice(0, 8)}`,
+        env: {
+          ITERATE_EXTERNAL_EGRESS_PROXY: "http://127.0.0.1:27180",
+        },
       });
+
+      step = "patch-caddy-example-route";
+      await routeExampleThroughEgressViaExec(deployment);
 
       step = "start-frp-bridge";
       await using frpBridge = await startFlyFrpEgressBridge({
@@ -103,7 +195,13 @@ describe.runIf(RUN_FLY_FRP_E2E)("jonasland fly frp egress", () => {
         localTargetPort: proxy.port,
         frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
       });
-      await startEgressProxyWithExternalProxy(deployment, frpBridge.dataProxyUrl);
+      step = "start-egress-proxy";
+      await startEgressProxyViaExec(deployment);
+      step = "wait-egress-health";
+      await waitForDirectHttp(deployment, {
+        url: "http://127.0.0.1:19000/healthz",
+        timeoutMs: 90_000,
+      });
 
       step = "wait-for-delivery";
       const requestPath = "/vitest-frp-post";
