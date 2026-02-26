@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DemoEvent, EgressRecord, MockConfig, RuntimeState } from "./types.ts";
+import type {
+  JonaslandDemoProvider,
+  JonaslandDemoState,
+  JonaslandEgressFallbackMode,
+  JonaslandMockRule,
+  SimulateSlackResult,
+} from "./types.ts";
 
 const API_BASE = import.meta.env.VITE_JONASLAND_DEMO_API_BASE ?? "http://127.0.0.1:19099";
 
-type SlackActionResult = {
-  status: number;
-  ok: boolean;
-  body: string;
-  threadTs: string;
-  channel: string;
-  text: string;
+type RuleDraft = {
+  id: string | null;
+  name: string;
+  enabled: boolean;
+  method: string;
+  hostPattern: string;
+  pathPattern: string;
+  responseStatus: string;
+  responseHeadersJson: string;
+  responseBody: string;
 };
 
 class HttpError extends Error {
@@ -23,22 +32,17 @@ class HttpError extends Error {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  const text = await response.text();
-  if (!response.ok) {
-    throw new HttpError(response.status, text);
-  }
-
-  return (text.length > 0 ? JSON.parse(text) : {}) as T;
-}
+const NEW_RULE_DRAFT: RuleDraft = {
+  id: null,
+  name: "",
+  enabled: true,
+  method: "POST",
+  hostPattern: "",
+  pathPattern: "",
+  responseStatus: "200",
+  responseHeadersJson: '{\n  "content-type": "application/json; charset=utf-8"\n}',
+  responseBody: "{}",
+};
 
 function prettyBody(body: string): string {
   if (body.trim().length === 0) return "(empty)";
@@ -49,7 +53,7 @@ function prettyBody(body: string): string {
   }
 }
 
-function phaseLabel(phase: RuntimeState["phase"]): string {
+function phaseLabel(phase: JonaslandDemoState["phase"]): string {
   if (phase === "idle") return "Idle";
   if (phase === "starting") return "Starting";
   if (phase === "running") return "Running";
@@ -57,50 +61,63 @@ function phaseLabel(phase: RuntimeState["phase"]): string {
   return "Error";
 }
 
+async function requestOrpc<T>(procedure: string, input: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}/orpc/${procedure}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ json: input }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new HttpError(response.status, text);
+  }
+
+  const parsed = (text.length > 0 ? JSON.parse(text) : {}) as { json: T };
+  return parsed.json;
+}
+
+function normalizeRuleDraft(rule: JonaslandMockRule): RuleDraft {
+  return {
+    id: rule.id,
+    name: rule.name,
+    enabled: rule.enabled,
+    method: rule.method,
+    hostPattern: rule.hostPattern,
+    pathPattern: rule.pathPattern,
+    responseStatus: String(rule.responseStatus),
+    responseHeadersJson: JSON.stringify(rule.responseHeaders, null, 2),
+    responseBody: rule.responseBody,
+  };
+}
+
 export function App() {
-  const [runtime, setRuntime] = useState<RuntimeState | null>(null);
-  const [records, setRecords] = useState<EgressRecord[]>([]);
-  const [events, setEvents] = useState<DemoEvent[]>([]);
-  const [lastSlackResult, setLastSlackResult] = useState<SlackActionResult | null>(null);
+  const [state, setState] = useState<JonaslandDemoState | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const [providerDraft, setProviderDraft] = useState<JonaslandDemoProvider>("docker");
+  const [fallbackModeDraft, setFallbackModeDraft] =
+    useState<JonaslandEgressFallbackMode>("deny-all");
   const [promptDraft, setPromptDraft] = useState("<@BOT> what is 50 minus 8");
-  const [openaiOutputDraft, setOpenaiOutputDraft] = useState("The answer is 42");
-  const [openaiModelDraft, setOpenaiModelDraft] = useState("gpt-4o-mini");
-  const [slackResponseOkDraft, setSlackResponseOkDraft] = useState(true);
-  const [slackResponseTsDraft, setSlackResponseTsDraft] = useState("123.456");
+  const [lastSlackResult, setLastSlackResult] = useState<SimulateSlackResult | null>(null);
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft>(NEW_RULE_DRAFT);
+
   const hasLoadedInitialDrafts = useRef(false);
 
-  const applyDraftsFromConfig = useCallback((config: MockConfig) => {
-    setOpenaiOutputDraft(config.openaiOutputText);
-    setOpenaiModelDraft(config.openaiModel);
-    setSlackResponseOkDraft(config.slackResponseOk);
-    setSlackResponseTsDraft(config.slackResponseTs);
-    setPromptDraft(config.defaultSlackPrompt);
+  const refresh = useCallback(async (options?: { syncDrafts?: boolean }) => {
+    const next = await requestOrpc<JonaslandDemoState>("demo.getState", {});
+    setState(next);
+
+    const shouldSync = options?.syncDrafts === true || !hasLoadedInitialDrafts.current;
+    if (shouldSync) {
+      setProviderDraft(next.provider);
+      setFallbackModeDraft(next.config.fallbackMode);
+      setPromptDraft(next.config.defaultSlackPrompt);
+      hasLoadedInitialDrafts.current = true;
+    }
   }, []);
-
-  const refresh = useCallback(
-    async (options?: { syncDrafts?: boolean }) => {
-      const [nextRuntime, nextEvents, nextRecords] = await Promise.all([
-        requestJson<RuntimeState>("/__demo/state"),
-        requestJson<{ events: DemoEvent[] }>("/__demo/events"),
-        requestJson<{ records: EgressRecord[] }>("/records"),
-      ]);
-
-      setRuntime(nextRuntime);
-      setEvents(nextEvents.events);
-      setRecords(nextRecords.records);
-
-      const shouldSyncDrafts = options?.syncDrafts === true || !hasLoadedInitialDrafts.current;
-      if (shouldSyncDrafts) {
-        applyDraftsFromConfig(nextRuntime.mockConfig);
-        hasLoadedInitialDrafts.current = true;
-      }
-    },
-    [applyDraftsFromConfig],
-  );
 
   useEffect(() => {
     void refresh({ syncDrafts: true }).catch((error) => {
@@ -110,7 +127,6 @@ export function App() {
 
   useEffect(() => {
     if (!autoRefresh) return;
-
     const interval = setInterval(() => {
       void refresh().catch((error) => {
         setErrorText(error instanceof Error ? error.message : String(error));
@@ -136,100 +152,167 @@ export function App() {
     [refresh],
   );
 
-  const onStartSandbox = useCallback(() => {
+  const onSetProvider = useCallback(
+    (provider: JonaslandDemoProvider) => {
+      setProviderDraft(provider);
+      void runAction(async () => {
+        const next = await requestOrpc<JonaslandDemoState>("demo.setProvider", { provider });
+        setState(next);
+      });
+    },
+    [runAction],
+  );
+
+  const onStart = useCallback(() => {
     void runAction(async () => {
-      await requestJson("/__demo/actions/start", { method: "POST", body: "{}" });
+      const next = await requestOrpc<JonaslandDemoState>("demo.startSandbox", {});
+      setState(next);
     });
   }, [runAction]);
 
-  const onStopSandbox = useCallback(() => {
+  const onStop = useCallback(() => {
     void runAction(async () => {
-      await requestJson("/__demo/actions/stop", { method: "POST", body: "{}" });
+      const next = await requestOrpc<JonaslandDemoState>("demo.stopSandbox", {});
+      setState(next);
       setLastSlackResult(null);
     });
   }, [runAction]);
 
-  const onSaveMockConfig = useCallback(() => {
+  const onSaveConfig = useCallback(() => {
     void runAction(
       async () => {
-        await requestJson("/__demo/config", {
-          method: "POST",
-          body: JSON.stringify({
-            openaiOutputText: openaiOutputDraft,
-            openaiModel: openaiModelDraft,
-            slackResponseOk: slackResponseOkDraft,
-            slackResponseTs: slackResponseTsDraft,
-            defaultSlackPrompt: promptDraft,
-          } satisfies Partial<MockConfig>),
+        const next = await requestOrpc<JonaslandDemoState>("demo.patchConfig", {
+          fallbackMode: fallbackModeDraft,
+          defaultSlackPrompt: promptDraft,
         });
+        setState(next);
       },
       { syncDrafts: true },
     );
-  }, [
-    openaiModelDraft,
-    openaiOutputDraft,
-    promptDraft,
-    runAction,
-    slackResponseOkDraft,
-    slackResponseTsDraft,
-  ]);
+  }, [fallbackModeDraft, promptDraft, runAction]);
 
   const onSimulateSlack = useCallback(() => {
     void runAction(async () => {
-      const payload = await requestJson<{ result: SlackActionResult }>(
-        "/__demo/actions/simulate-slack",
-        {
-          method: "POST",
-          body: JSON.stringify({ text: promptDraft }),
-        },
+      const payload = await requestOrpc<{ state: JonaslandDemoState; result: SimulateSlackResult }>(
+        "demo.simulateSlackWebhook",
+        { text: promptDraft },
       );
+      setState(payload.state);
       setLastSlackResult(payload.result);
     });
   }, [promptDraft, runAction]);
 
   const onClearRecords = useCallback(() => {
     void runAction(async () => {
-      await requestJson("/records/clear", { method: "POST", body: "{}" });
+      const next = await requestOrpc<JonaslandDemoState>("demo.clearRecords", {});
+      setState(next);
     });
   }, [runAction]);
 
-  const disableActions = actionBusy || runtime?.busy === true;
-  const isRunning = runtime?.phase === "running";
-  const canStop = runtime !== null && runtime.phase !== "idle";
+  const onLoadRule = useCallback((rule: JonaslandMockRule) => {
+    setRuleDraft(normalizeRuleDraft(rule));
+  }, []);
+
+  const onResetRuleDraft = useCallback(() => {
+    setRuleDraft(NEW_RULE_DRAFT);
+  }, []);
+
+  const onSaveRule = useCallback(() => {
+    void runAction(async () => {
+      let parsedHeaders: Record<string, string> = {};
+      try {
+        const parsed = JSON.parse(ruleDraft.responseHeadersJson) as unknown;
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          parsedHeaders = Object.fromEntries(
+            Object.entries(parsed)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+              .map(([key, value]) => [key, value]),
+          );
+        }
+      } catch {
+        throw new Error("response headers JSON is invalid");
+      }
+
+      const status = Number.parseInt(ruleDraft.responseStatus, 10);
+      if (!Number.isInteger(status) || status < 100 || status > 599) {
+        throw new Error("response status must be an integer between 100 and 599");
+      }
+
+      const next = await requestOrpc<JonaslandDemoState>("demo.upsertMockRule", {
+        ...(ruleDraft.id ? { id: ruleDraft.id } : {}),
+        name: ruleDraft.name,
+        enabled: ruleDraft.enabled,
+        method: ruleDraft.method,
+        hostPattern: ruleDraft.hostPattern,
+        pathPattern: ruleDraft.pathPattern,
+        responseStatus: status,
+        responseHeaders: parsedHeaders,
+        responseBody: ruleDraft.responseBody,
+      });
+
+      setState(next);
+      onResetRuleDraft();
+    });
+  }, [onResetRuleDraft, ruleDraft, runAction]);
+
+  const onDeleteRule = useCallback(
+    (id: string) => {
+      void runAction(async () => {
+        const next = await requestOrpc<JonaslandDemoState>("demo.deleteMockRule", { id });
+        setState(next);
+        if (ruleDraft.id === id) {
+          onResetRuleDraft();
+        }
+      });
+    },
+    [onResetRuleDraft, ruleDraft.id, runAction],
+  );
+
+  const disableActions = actionBusy || state?.busy === true;
+  const isRunning = state?.phase === "running";
+  const canStop = state !== null && state.phase !== "idle";
 
   const phaseTone = useMemo(() => {
-    if (runtime?.phase === "running") return "is-running";
-    if (runtime?.phase === "starting" || runtime?.phase === "stopping") return "is-pending";
-    if (runtime?.phase === "error") return "is-error";
+    if (state?.phase === "running") return "is-running";
+    if (state?.phase === "starting" || state?.phase === "stopping") return "is-pending";
+    if (state?.phase === "error") return "is-error";
     return "is-idle";
-  }, [runtime?.phase]);
+  }, [state?.phase]);
 
   return (
     <div className="page-shell">
       <header className="hero-panel">
         <p className="kicker">Jonas Land Demo Control</p>
-        <h1>Sandbox + Egress Workbench</h1>
+        <h1>State-Driven Sandbox + Egress Lab</h1>
         <p className="lede">
-          Start a sandbox, simulate Slack webhooks, and inspect every mocked third-party request and
-          response.
+          One in-memory JonaslandDemoState drives sandbox lifecycle, mock egress behavior, and the
+          request/response firehose.
         </p>
         <div className={`phase-pill ${phaseTone}`}>
-          {runtime ? phaseLabel(runtime.phase) : "Loading"}
+          {state ? phaseLabel(state.phase) : "Loading"}
         </div>
       </header>
 
       <main className="grid-layout">
         <section className="panel">
-          <h2>Sandbox</h2>
+          <h2>Provider + Sandbox</h2>
+          <label>
+            Provider
+            <select
+              disabled={disableActions || (state !== null && state.phase !== "idle")}
+              onChange={(event) => onSetProvider(event.target.value as JonaslandDemoProvider)}
+              value={providerDraft}
+            >
+              <option value="docker">docker</option>
+              <option value="fly">fly (not implemented)</option>
+            </select>
+          </label>
+
           <div className="row-actions">
-            <button disabled={disableActions || isRunning} onClick={onStartSandbox}>
+            <button disabled={disableActions || isRunning} onClick={onStart}>
               Start Sandbox
             </button>
-            <button
-              className="danger"
-              disabled={disableActions || !canStop}
-              onClick={onStopSandbox}
-            >
+            <button className="danger" disabled={disableActions || !canStop} onClick={onStop}>
               Stop Sandbox
             </button>
             <button
@@ -243,64 +326,52 @@ export function App() {
 
           <dl className="meta-grid">
             <dt>Container</dt>
-            <dd>{runtime?.containerName ?? "-"}</dd>
+            <dd>{state?.sandbox.containerName ?? "-"}</dd>
             <dt>Ingress URL</dt>
-            <dd>{runtime?.ingressUrl ?? "-"}</dd>
-            <dt>Sandbox image</dt>
-            <dd>{runtime?.image ?? "-"}</dd>
+            <dd>{state?.sandbox.ingressUrl ?? "-"}</dd>
+            <dt>Home URL</dt>
+            <dd>
+              {state?.links.home ? (
+                <a href={state.links.home} rel="noreferrer" target="_blank">
+                  {state.links.home}
+                </a>
+              ) : (
+                "-"
+              )}
+            </dd>
             <dt>Egress target</dt>
-            <dd>{runtime?.externalEgressProxy ?? "-"}</dd>
+            <dd>{state?.sandbox.externalEgressProxy ?? "-"}</dd>
           </dl>
         </section>
 
         <section className="panel">
-          <h2>Mock Behavior</h2>
+          <h2>Egress Policy</h2>
           <label>
-            Slack prompt to send
+            Fallback mode
+            <select
+              disabled={disableActions}
+              onChange={(event) =>
+                setFallbackModeDraft(event.target.value as JonaslandEgressFallbackMode)
+              }
+              value={fallbackModeDraft}
+            >
+              <option value="deny-all">deny-all</option>
+              <option value="proxy-internet">proxy-internet</option>
+            </select>
+          </label>
+
+          <label>
+            Default Slack prompt
             <textarea
-              value={promptDraft}
               onChange={(event) => setPromptDraft(event.target.value)}
               rows={3}
+              value={promptDraft}
             />
-          </label>
-          <label>
-            Mock OpenAI output text
-            <textarea
-              value={openaiOutputDraft}
-              onChange={(event) => setOpenaiOutputDraft(event.target.value)}
-              rows={4}
-            />
-          </label>
-
-          <div className="row-split">
-            <label>
-              OpenAI model label
-              <input
-                value={openaiModelDraft}
-                onChange={(event) => setOpenaiModelDraft(event.target.value)}
-              />
-            </label>
-            <label>
-              Slack timestamp
-              <input
-                value={slackResponseTsDraft}
-                onChange={(event) => setSlackResponseTsDraft(event.target.value)}
-              />
-            </label>
-          </div>
-
-          <label className="checkbox-row">
-            <input
-              checked={slackResponseOkDraft}
-              onChange={(event) => setSlackResponseOkDraft(event.target.checked)}
-              type="checkbox"
-            />
-            Slack post returns ok=true
           </label>
 
           <div className="row-actions">
-            <button disabled={disableActions} onClick={onSaveMockConfig}>
-              Save Mock Config
+            <button disabled={disableActions} onClick={onSaveConfig}>
+              Save Config
             </button>
             <button disabled={disableActions || !isRunning} onClick={onSimulateSlack}>
               Simulate Slack Webhook
@@ -316,6 +387,142 @@ export function App() {
         </section>
 
         <section className="panel panel-full">
+          <h2>Mock Rules</h2>
+
+          <div className="row-split">
+            <label>
+              Name
+              <input
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, name: event.target.value }))
+                }
+                value={ruleDraft.name}
+              />
+            </label>
+            <label>
+              Method
+              <input
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, method: event.target.value.toUpperCase() }))
+                }
+                value={ruleDraft.method}
+              />
+            </label>
+          </div>
+
+          <div className="row-split">
+            <label>
+              Host pattern (`*` supported)
+              <input
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, hostPattern: event.target.value }))
+                }
+                value={ruleDraft.hostPattern}
+              />
+            </label>
+            <label>
+              Path pattern (`*` supported)
+              <input
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, pathPattern: event.target.value }))
+                }
+                value={ruleDraft.pathPattern}
+              />
+            </label>
+          </div>
+
+          <div className="row-split">
+            <label>
+              Response status
+              <input
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, responseStatus: event.target.value }))
+                }
+                value={ruleDraft.responseStatus}
+              />
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={ruleDraft.enabled}
+                onChange={(event) =>
+                  setRuleDraft((prev) => ({ ...prev, enabled: event.target.checked }))
+                }
+                type="checkbox"
+              />
+              Rule enabled
+            </label>
+          </div>
+
+          <label>
+            Response headers (JSON object)
+            <textarea
+              onChange={(event) =>
+                setRuleDraft((prev) => ({ ...prev, responseHeadersJson: event.target.value }))
+              }
+              rows={5}
+              value={ruleDraft.responseHeadersJson}
+            />
+          </label>
+
+          <label>
+            Response body
+            <textarea
+              onChange={(event) =>
+                setRuleDraft((prev) => ({ ...prev, responseBody: event.target.value }))
+              }
+              rows={8}
+              value={ruleDraft.responseBody}
+            />
+          </label>
+
+          <div className="row-actions">
+            <button disabled={disableActions} onClick={onSaveRule}>
+              {ruleDraft.id ? "Update Rule" : "Add Rule"}
+            </button>
+            <button className="ghost" disabled={disableActions} onClick={onResetRuleDraft}>
+              New Rule
+            </button>
+          </div>
+
+          {state?.config.mockRules.length ? (
+            <div className="record-list">
+              {state.config.mockRules.map((rule) => (
+                <article className="record-card" key={rule.id}>
+                  <div className="record-head">
+                    <strong>
+                      {rule.method} {rule.hostPattern}
+                      {rule.pathPattern}
+                    </strong>
+                    <span>{rule.enabled ? "enabled" : "disabled"}</span>
+                  </div>
+                  <p className="record-host">
+                    {rule.name} | {rule.responseStatus}
+                  </p>
+                  <div className="row-actions">
+                    <button
+                      className="ghost"
+                      disabled={disableActions}
+                      onClick={() => onLoadRule(rule)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="danger"
+                      disabled={disableActions}
+                      onClick={() => onDeleteRule(rule.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="empty">No mock rules configured.</p>
+          )}
+        </section>
+
+        <section className="panel panel-full">
           <div className="panel-head">
             <h2>Captured Third-Party Traffic</h2>
             <label className="checkbox-row compact">
@@ -328,11 +535,9 @@ export function App() {
             </label>
           </div>
 
-          {records.length === 0 ? (
-            <p className="empty">No requests captured yet.</p>
-          ) : (
+          {state?.records.length ? (
             <div className="record-list">
-              {records
+              {state.records
                 .slice()
                 .reverse()
                 .map((record) => (
@@ -359,16 +564,16 @@ export function App() {
                   </article>
                 ))}
             </div>
+          ) : (
+            <p className="empty">No requests captured yet.</p>
           )}
         </section>
 
         <section className="panel panel-full">
           <h2>Runtime Events</h2>
-          {events.length === 0 ? (
-            <p className="empty">No events yet.</p>
-          ) : (
+          {state?.events.length ? (
             <ul className="event-list">
-              {events
+              {state.events
                 .slice()
                 .reverse()
                 .map((event) => (
@@ -378,6 +583,8 @@ export function App() {
                   </li>
                 ))}
             </ul>
+          ) : (
+            <p className="empty">No events yet.</p>
           )}
         </section>
       </main>

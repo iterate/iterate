@@ -10,7 +10,16 @@ import {
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { projectDeployment, type ProjectDeployment } from "../e2e/test-helpers/index.ts";
-import { ON_DEMAND_PROCESSES } from "../shared/on-demand-processes.ts";
+import { ON_DEMAND_OTEL_SERVICE_ENV, ON_DEMAND_PROCESSES } from "../shared/on-demand-processes.ts";
+import type {
+  DemoEvent,
+  EgressRecord,
+  JonaslandDemoProvider,
+  JonaslandDemoState,
+  JonaslandMockRule,
+  SimulateSlackInput,
+  SimulateSlackResult,
+} from "./src/types.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,38 +45,29 @@ type ProcessConfig = {
   directHttpCheck?: DirectHttpCheck;
 };
 
-type RuntimePhase = "idle" | "starting" | "running" | "stopping" | "error";
+type OrpcEnvelope<T> = { json: T };
 
-type MockConfig = {
-  openaiOutputText: string;
-  openaiModel: string;
-  slackResponseOk: boolean;
-  slackResponseTs: string;
-  defaultSlackPrompt: string;
-};
-
-type EgressRecord = {
-  id: string;
+type UpsertMockRuleInput = {
+  id?: string;
+  name: string;
+  enabled?: boolean;
   method: string;
-  path: string;
-  host: string;
-  headers: Record<string, string | string[]>;
-  requestBody: string;
+  hostPattern: string;
+  pathPattern: string;
   responseStatus: number;
-  responseHeaders: Record<string, string>;
+  responseHeaders?: Record<string, string>;
   responseBody: string;
-  createdAt: string;
-  durationMs: number;
 };
 
-type DemoEvent = {
-  id: string;
-  createdAt: string;
-  message: string;
+type ProxyResult = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
 };
 
 const MAX_RECORDS = 300;
 const MAX_EVENTS = 300;
+const DEFAULT_ORPC_TIMEOUT_MS = 90_000;
 
 const apiPort = Number.parseInt(process.env.JONASLAND_DEMO_API_PORT ?? "19099", 10);
 const repoRootPath = fileURLToPath(new URL("../..", import.meta.url));
@@ -75,7 +75,11 @@ const sandboxImage = process.env.JONASLAND_SANDBOX_IMAGE ?? "jonasland-sandbox:l
 const externalEgressProxy =
   process.env.JONASLAND_DEMO_EGRESS_PROXY ?? `http://host.docker.internal:${String(apiPort)}`;
 
-const processes: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfig) => ({
+const configuredProvider = process.env.JONASLAND_DEMO_PROVIDER?.trim();
+const initialProvider: JonaslandDemoProvider =
+  configuredProvider === "fly" || configuredProvider === "docker" ? configuredProvider : "docker";
+
+const onDemandProcesses: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfig) => ({
   slug: processConfig.slug,
   definition: processConfig.definition,
   ...(processConfig.routeCheck
@@ -86,26 +90,115 @@ const processes: ProcessConfig[] = ON_DEMAND_PROCESSES.map((processConfig) => ({
     : {}),
 }));
 
-const mockConfig: MockConfig = {
-  openaiOutputText: "The answer is 42",
-  openaiModel: "gpt-4o-mini",
-  slackResponseOk: true,
-  slackResponseTs: "123.456",
-  defaultSlackPrompt: "<@BOT> what is 50 minus 8",
+const homeProcess: ProcessConfig = {
+  slug: "home",
+  definition: {
+    command: "/opt/pidnap/node_modules/.bin/tsx",
+    args: ["/opt/services/home-service/src/server.ts"],
+    env: ON_DEMAND_OTEL_SERVICE_ENV,
+  },
+  routeCheck: { host: "home.iterate.localhost", path: "/", timeoutMs: 60_000 },
 };
 
-const records: EgressRecord[] = [];
-const events: DemoEvent[] = [];
+const state: JonaslandDemoState = {
+  provider: initialProvider,
+  phase: "idle",
+  busy: false,
+  lastError: null,
+  sandbox: {
+    image: sandboxImage,
+    containerName: null,
+    ingressUrl: null,
+    externalEgressProxy,
+  },
+  links: {
+    home: null,
+  },
+  config: {
+    defaultSlackPrompt: "<@BOT> what is 50 minus 8",
+    fallbackMode: "deny-all",
+    mockRules: [
+      {
+        id: "rule-openai-responses",
+        name: "OpenAI responses",
+        enabled: true,
+        method: "POST",
+        hostPattern: "api.openai.com",
+        pathPattern: "/v1/responses",
+        responseStatus: 200,
+        responseHeaders: {
+          "content-type": "application/json; charset=utf-8",
+        },
+        responseBody: JSON.stringify(
+          {
+            id: "resp_demo",
+            object: "response",
+            status: "completed",
+            model: "gpt-4o-mini",
+            output_text: "The answer is 42",
+            output: [
+              {
+                type: "message",
+                content: [{ type: "output_text", text: "The answer is 42" }],
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+      },
+      {
+        id: "rule-slack-post-message",
+        name: "Slack chat.postMessage",
+        enabled: true,
+        method: "POST",
+        hostPattern: "slack.com",
+        pathPattern: "/api/chat.postMessage",
+        responseStatus: 200,
+        responseHeaders: {
+          "content-type": "application/json; charset=utf-8",
+        },
+        responseBody: JSON.stringify(
+          {
+            ok: true,
+            ts: "123.456",
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  },
+  records: [],
+  events: [],
+};
 
 let deployment: ProjectDeployment | null = null;
-let containerName: string | null = null;
-let ingressUrl: string | null = null;
-let runtimePhase: RuntimePhase = "idle";
 let activeOperation: Promise<unknown> | null = null;
-let lastError: string | null = null;
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function snapshotState(): JonaslandDemoState {
+  return {
+    ...state,
+    sandbox: { ...state.sandbox },
+    links: { ...state.links },
+    config: {
+      ...state.config,
+      mockRules: state.config.mockRules.map((rule) => ({
+        ...rule,
+        responseHeaders: { ...rule.responseHeaders },
+      })),
+    },
+    records: state.records.map((record) => ({
+      ...record,
+      headers: { ...record.headers },
+      responseHeaders: { ...record.responseHeaders },
+    })),
+    events: state.events.map((event) => ({ ...event })),
+  };
 }
 
 function appendEvent(message: string): void {
@@ -114,11 +207,22 @@ function appendEvent(message: string): void {
     createdAt: nowIso(),
     message,
   };
-  events.push(event);
-  if (events.length > MAX_EVENTS) {
-    events.splice(0, events.length - MAX_EVENTS);
+  state.events.push(event);
+  if (state.events.length > MAX_EVENTS) {
+    state.events.splice(0, state.events.length - MAX_EVENTS);
   }
   process.stdout.write(`[jonasland-demo] ${event.createdAt} ${message}\n`);
+}
+
+function syncLinksFromIngress(): void {
+  if (state.sandbox.ingressUrl === null) {
+    state.links.home = null;
+    return;
+  }
+
+  const parsed = new URL(state.sandbox.ingressUrl);
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  state.links.home = `http://home.iterate.localhost:${port}/`;
 }
 
 function setCors(res: ServerResponse): void {
@@ -131,6 +235,10 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   setCors(res);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(value, null, 2));
+}
+
+function sendOrpcJson<T>(res: ServerResponse, status: number, value: T): void {
+  sendJson(res, status, { json: value } satisfies OrpcEnvelope<T>);
 }
 
 function errorMessage(error: unknown): string {
@@ -170,23 +278,10 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 }
 
 function recordEgress(entry: EgressRecord): void {
-  records.push(entry);
-  if (records.length > MAX_RECORDS) {
-    records.splice(0, records.length - MAX_RECORDS);
+  state.records.push(entry);
+  if (state.records.length > MAX_RECORDS) {
+    state.records.splice(0, state.records.length - MAX_RECORDS);
   }
-}
-
-function runtimeState() {
-  return {
-    phase: runtimePhase,
-    containerName,
-    ingressUrl,
-    image: sandboxImage,
-    externalEgressProxy,
-    lastError,
-    busy: activeOperation !== null,
-    mockConfig,
-  };
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -206,9 +301,13 @@ async function waitForHostRoute(
 
   while (Date.now() < deadline) {
     const result = await sandbox
-      .exec(
-        `curl -fsS -H 'Host: ${params.host}' 'http://127.0.0.1${normalizePath(params.path)}' >/dev/null`,
-      )
+      .exec([
+        "curl",
+        "-fsS",
+        "-H",
+        `Host: ${params.host}`,
+        `http://127.0.0.1${normalizePath(params.path)}`,
+      ])
       .catch(() => ({ exitCode: 1, output: "" }));
 
     if (result.exitCode === 0) return;
@@ -267,6 +366,25 @@ async function startProcess(sandbox: ProjectDeployment, config: ProcessConfig): 
   appendEvent(`process ready: ${config.slug}`);
 }
 
+async function bodyInitToString(
+  body: RequestInit["body"] | null | undefined,
+): Promise<string | undefined> {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof Blob) return await body.text();
+  if (body instanceof ArrayBuffer) return Buffer.from(body).toString("utf-8");
+  if (ArrayBuffer.isView(body)) {
+    return Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString("utf-8");
+  }
+  if (body instanceof ReadableStream) {
+    const response = new Response(body);
+    return await response.text();
+  }
+  const response = new Response(body);
+  return await response.text();
+}
+
 async function hostRequest(
   targetIngressUrl: string,
   host: string,
@@ -279,10 +397,8 @@ async function hostRequest(
   headers.set("host", host);
   headers.delete("content-length");
 
-  let body: string | undefined;
-  if (init?.body !== undefined) {
-    const raw = await new Response(init.body).text();
-    body = raw;
+  const body = await bodyInitToString(init?.body);
+  if (body !== undefined) {
     headers.set("content-length", Buffer.byteLength(body, "utf8").toString());
   }
 
@@ -336,19 +452,26 @@ async function withOperationLock<Result>(task: () => Promise<Result>): Promise<R
     throw new Error("another operation is already running");
   }
 
+  state.busy = true;
   const operation = task();
   activeOperation = operation;
+
   try {
     return await operation;
   } finally {
     if (activeOperation === operation) {
       activeOperation = null;
+      state.busy = false;
     }
   }
 }
 
 async function startSandbox(): Promise<void> {
-  if (deployment !== null && runtimePhase === "running") {
+  if (state.provider === "fly") {
+    throw new Error("fly provider is not implemented yet");
+  }
+
+  if (deployment !== null && state.phase === "running") {
     appendEvent("sandbox already running; skipping start");
     return;
   }
@@ -357,18 +480,19 @@ async function startSandbox(): Promise<void> {
     appendEvent("cleaning up stale sandbox before start");
     await deployment[Symbol.asyncDispose]().catch(() => {});
     deployment = null;
-    containerName = null;
-    ingressUrl = null;
+    state.sandbox.containerName = null;
+    state.sandbox.ingressUrl = null;
+    syncLinksFromIngress();
   }
 
-  runtimePhase = "starting";
-  lastError = null;
+  state.phase = "starting";
+  state.lastError = null;
 
   let sandbox: ProjectDeployment | null = null;
   let nextContainerName: string | null = null;
 
   try {
-    appendEvent(`building image: ${sandboxImage}`);
+    appendEvent(`building image: ${state.sandbox.image}`);
     await execFileAsync("pnpm", ["--filter", "./jonasland/sandbox", "build"], {
       cwd: repoRootPath,
     });
@@ -377,12 +501,12 @@ async function startSandbox(): Promise<void> {
     appendEvent(`starting container: ${nextContainerName}`);
 
     sandbox = await projectDeployment({
-      image: sandboxImage,
+      image: state.sandbox.image,
       name: nextContainerName,
       capAdd: ["NET_ADMIN", "SYS_ADMIN"],
       extraHosts: ["host.docker.internal:host-gateway"],
       env: {
-        ITERATE_EXTERNAL_EGRESS_PROXY: externalEgressProxy,
+        ITERATE_EXTERNAL_EGRESS_PROXY: state.sandbox.externalEgressProxy,
       },
     });
     const nextIngressUrl = await sandbox.ingressUrl();
@@ -392,81 +516,88 @@ async function startSandbox(): Promise<void> {
       await sandbox.waitForPidnapProcessRunning({ target: processSlug, timeoutMs: 120_000 });
     }
 
-    for (const processConfig of processes) {
+    await startProcess(sandbox, homeProcess);
+
+    for (const processConfig of onDemandProcesses) {
       await startProcess(sandbox, processConfig);
     }
 
     deployment = sandbox;
-    containerName = nextContainerName;
-    ingressUrl = nextIngressUrl;
-    runtimePhase = "running";
+    state.sandbox.containerName = nextContainerName;
+    state.sandbox.ingressUrl = nextIngressUrl;
+    syncLinksFromIngress();
+    state.phase = "running";
     appendEvent(`sandbox ready at ${nextIngressUrl}`);
   } catch (error) {
     await sandbox?.[Symbol.asyncDispose]().catch(() => {});
     deployment = null;
-    containerName = null;
-    ingressUrl = null;
-    runtimePhase = "error";
-    lastError = errorMessage(error);
-    appendEvent(`sandbox start failed: ${lastError.split("\n")[0] ?? "unknown error"}`);
+    state.sandbox.containerName = null;
+    state.sandbox.ingressUrl = null;
+    syncLinksFromIngress();
+    state.phase = "error";
+    state.lastError = errorMessage(error);
+    appendEvent(`sandbox start failed: ${state.lastError.split("\n")[0] ?? "unknown error"}`);
     throw error;
   }
 }
 
 async function stopSandbox(): Promise<void> {
   if (deployment === null) {
-    runtimePhase = "idle";
-    containerName = null;
-    ingressUrl = null;
+    state.phase = "idle";
+    state.sandbox.containerName = null;
+    state.sandbox.ingressUrl = null;
+    syncLinksFromIngress();
     appendEvent("sandbox not running; nothing to stop");
     return;
   }
 
-  runtimePhase = "stopping";
-  appendEvent(`stopping container: ${containerName ?? "unknown"}`);
+  state.phase = "stopping";
+  appendEvent(`stopping container: ${state.sandbox.containerName ?? "unknown"}`);
 
   const currentDeployment = deployment;
   try {
     await currentDeployment[Symbol.asyncDispose]();
     appendEvent("sandbox stopped");
   } catch (error) {
-    lastError = errorMessage(error);
-    appendEvent(`sandbox stop failed: ${lastError.split("\n")[0] ?? "unknown error"}`);
+    state.lastError = errorMessage(error);
+    appendEvent(`sandbox stop failed: ${state.lastError.split("\n")[0] ?? "unknown error"}`);
   } finally {
     deployment = null;
-    containerName = null;
-    ingressUrl = null;
-    runtimePhase = "idle";
+    state.sandbox.containerName = null;
+    state.sandbox.ingressUrl = null;
+    syncLinksFromIngress();
+    state.phase = "idle";
   }
 }
 
-async function simulateSlackWebhook(payload: {
-  text?: string;
-  channel?: string;
-  threadTs?: string;
-}) {
-  if (ingressUrl === null) {
+async function simulateSlackWebhook(payload: SimulateSlackInput): Promise<SimulateSlackResult> {
+  if (state.sandbox.ingressUrl === null) {
     throw new Error("sandbox is not running");
   }
 
   const threadTs = payload.threadTs ?? `${Math.floor(Date.now() / 1000)}.000100`;
   const channel = payload.channel ?? "C_DEMO";
-  const text = payload.text ?? mockConfig.defaultSlackPrompt;
+  const text = payload.text ?? state.config.defaultSlackPrompt;
 
-  const response = await hostRequest(ingressUrl, "slack.iterate.localhost", "/webhook", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      event: {
-        type: "app_mention",
-        user: "U_DEMO",
-        text,
-        channel,
-        ts: threadTs,
-        thread_ts: threadTs,
-      },
-    }),
-  });
+  const response = await hostRequest(
+    state.sandbox.ingressUrl,
+    "slack.iterate.localhost",
+    "/webhook",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event: {
+          type: "app_mention",
+          user: "U_DEMO",
+          text,
+          channel,
+          ts: threadTs,
+          thread_ts: threadTs,
+        },
+      }),
+    },
+  );
 
   const body = await response.text();
   appendEvent(`simulate slack webhook -> status ${String(response.status)}`);
@@ -481,13 +612,184 @@ async function simulateSlackWebhook(payload: {
   };
 }
 
-function isInternalPath(pathname: string): boolean {
+function wildcardMatch(value: string, pattern: string): boolean {
+  const normalized = pattern.trim();
+  if (normalized.length === 0 || normalized === "*") return true;
+
+  const escaped = normalized.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const regex = new RegExp(`^${escaped}$`, "i");
+  return regex.test(value);
+}
+
+function findMatchingMockRule(params: {
+  method: string;
+  host: string;
+  path: string;
+}): JonaslandMockRule | undefined {
+  return state.config.mockRules.find((rule) => {
+    if (!rule.enabled) return false;
+
+    const methodMatch = wildcardMatch(params.method, rule.method);
+    const hostMatch = wildcardMatch(params.host, rule.hostPattern);
+    const pathMatch = wildcardMatch(params.path, rule.pathPattern);
+
+    return methodMatch && hostMatch && pathMatch;
+  });
+}
+
+function hopByHopHeader(name: string): boolean {
+  const lowered = name.toLowerCase();
   return (
-    pathname.startsWith("/__demo") ||
-    pathname === "/records" ||
-    pathname === "/records/clear" ||
-    pathname === "/healthz"
+    lowered === "host" ||
+    lowered === "connection" ||
+    lowered === "proxy-connection" ||
+    lowered === "keep-alive" ||
+    lowered === "transfer-encoding" ||
+    lowered === "te" ||
+    lowered === "trailer" ||
+    lowered === "upgrade" ||
+    lowered === "content-length"
   );
+}
+
+function buildForwardHeaders(incoming: IncomingMessage["headers"]): Headers {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || hopByHopHeader(key)) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(key, item);
+      }
+      continue;
+    }
+    headers.set(key, value);
+  }
+  return headers;
+}
+
+function parseTargetUrl(pathnameWithQuery: string, host: string): URL {
+  if (pathnameWithQuery.startsWith("http://") || pathnameWithQuery.startsWith("https://")) {
+    return new URL(pathnameWithQuery);
+  }
+
+  return new URL(pathnameWithQuery, `https://${host}`);
+}
+
+async function proxyToInternet(params: {
+  request: IncomingMessage;
+  requestBody: string;
+  host: string;
+  pathnameWithQuery: string;
+}): Promise<ProxyResult> {
+  const method = (params.request.method ?? "GET").toUpperCase();
+  const headers = buildForwardHeaders(params.request.headers);
+  const hasBody = method !== "GET" && method !== "HEAD";
+  const requestBody = hasBody ? params.requestBody : undefined;
+
+  const primaryTarget = parseTargetUrl(params.pathnameWithQuery, params.host);
+  const candidates = [primaryTarget];
+
+  if (
+    !params.pathnameWithQuery.startsWith("http://") &&
+    !params.pathnameWithQuery.startsWith("https://") &&
+    primaryTarget.protocol === "https:"
+  ) {
+    const fallback = new URL(primaryTarget.toString());
+    fallback.protocol = "http:";
+    candidates.push(fallback);
+  }
+
+  let lastError: unknown;
+  for (const target of candidates) {
+    try {
+      const response = await fetch(target, {
+        method,
+        headers,
+        body: requestBody,
+      });
+
+      const responseBody = await response.text();
+      const responseHeaders: Record<string, string> = {};
+      for (const [key, value] of response.headers.entries()) {
+        responseHeaders[key] = value;
+      }
+
+      return {
+        status: response.status,
+        headers: responseHeaders,
+        body: responseBody,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`proxy to internet failed: ${errorMessage(lastError)}`);
+}
+
+function jsonString(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+async function handleEgressRequest(
+  req: IncomingMessage,
+  pathnameWithQuery: string,
+): Promise<ProxyResult> {
+  const method = (req.method ?? "GET").toUpperCase();
+  const host = req.headers.host?.trim() ?? "";
+  const requestPath = pathnameWithQuery;
+  const requestBody = await readBody(req);
+
+  const matchedRule = findMatchingMockRule({
+    method,
+    host,
+    path: requestPath,
+  });
+
+  if (matchedRule) {
+    return {
+      status: matchedRule.responseStatus,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        ...matchedRule.responseHeaders,
+      },
+      body: matchedRule.responseBody,
+    };
+  }
+
+  if (state.config.fallbackMode === "deny-all") {
+    return {
+      status: 502,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: jsonString({
+        error: "egress_denied",
+        message: "No mock rule matched and fallback mode is deny-all",
+        request: {
+          method,
+          host,
+          path: requestPath,
+        },
+      }),
+    };
+  }
+
+  if (!host) {
+    return {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: jsonString({
+        error: "missing_host",
+        message: "Cannot proxy request without Host header",
+      }),
+    };
+  }
+
+  return await proxyToInternet({
+    request: req,
+    requestBody,
+    host,
+    pathnameWithQuery,
+  });
 }
 
 function parseSafeJson(text: string): unknown {
@@ -498,9 +800,222 @@ function parseSafeJson(text: string): unknown {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function readBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
+  const value = input[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readNumber(input: Record<string, unknown>, key: string): number | undefined {
+  const value = input[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function parseOrpcProcedure(pathname: string): string | null {
+  if (!pathname.startsWith("/orpc/")) return null;
+  const procedure = pathname.slice("/orpc/".length);
+  return procedure.length > 0 ? procedure : null;
+}
+
+async function parseOrpcInput(req: IncomingMessage): Promise<unknown> {
+  const payload = await readJson<unknown>(req).catch(() => ({}));
+  if (!isRecord(payload)) return {};
+  if ("json" in payload) {
+    return (payload as { json?: unknown }).json ?? {};
+  }
+  return payload;
+}
+
+function asProvider(input: unknown): JonaslandDemoProvider {
+  if (input === "docker" || input === "fly") return input;
+  throw new Error("provider must be 'docker' or 'fly'");
+}
+
+function sanitizeMockRuleInput(input: unknown): UpsertMockRuleInput {
+  if (!isRecord(input)) throw new Error("mock rule payload must be an object");
+
+  const name = readString(input, "name")?.trim();
+  const method = readString(input, "method")?.trim().toUpperCase();
+  const hostPattern = readString(input, "hostPattern")?.trim();
+  const pathPattern = readString(input, "pathPattern")?.trim();
+  const responseStatus = readNumber(input, "responseStatus");
+  const responseBody = readString(input, "responseBody");
+  const validStatus =
+    typeof responseStatus === "number" &&
+    Number.isInteger(responseStatus) &&
+    responseStatus >= 100 &&
+    responseStatus <= 599
+      ? responseStatus
+      : null;
+
+  if (!name) throw new Error("name is required");
+  if (!method) throw new Error("method is required");
+  if (!hostPattern) throw new Error("hostPattern is required");
+  if (!pathPattern) throw new Error("pathPattern is required");
+  if (validStatus === null) {
+    throw new Error("responseStatus must be an integer between 100 and 599");
+  }
+  if (responseBody === undefined) throw new Error("responseBody is required");
+
+  const rawHeaders = input.responseHeaders;
+  const responseHeaders: Record<string, string> = {};
+  if (isRecord(rawHeaders)) {
+    for (const [key, value] of Object.entries(rawHeaders)) {
+      if (typeof value === "string") {
+        responseHeaders[key] = value;
+      }
+    }
+  }
+
+  return {
+    id: readString(input, "id")?.trim(),
+    name,
+    enabled: readBoolean(input, "enabled"),
+    method,
+    hostPattern,
+    pathPattern,
+    responseStatus: validStatus,
+    responseHeaders,
+    responseBody,
+  };
+}
+
+async function dispatchOrpcProcedure(procedure: string, input: unknown): Promise<unknown> {
+  if (procedure === "demo.getState") {
+    return snapshotState();
+  }
+
+  if (procedure === "demo.setProvider") {
+    const payload = isRecord(input) ? input : {};
+    if (state.phase !== "idle") {
+      throw new Error("provider can only be changed while sandbox is idle");
+    }
+
+    state.provider = asProvider(payload.provider);
+    appendEvent(`provider set to ${state.provider}`);
+    return snapshotState();
+  }
+
+  if (procedure === "demo.startSandbox") {
+    await withOperationLock(async () => await startSandbox());
+    return snapshotState();
+  }
+
+  if (procedure === "demo.stopSandbox") {
+    await withOperationLock(async () => await stopSandbox());
+    return snapshotState();
+  }
+
+  if (procedure === "demo.simulateSlackWebhook") {
+    const payload = isRecord(input) ? input : {};
+    const result = await withOperationLock(
+      async () =>
+        await simulateSlackWebhook({
+          text: readString(payload, "text"),
+          channel: readString(payload, "channel"),
+          threadTs: readString(payload, "threadTs"),
+        }),
+    );
+
+    return {
+      state: snapshotState(),
+      result,
+    };
+  }
+
+  if (procedure === "demo.patchConfig") {
+    const payload = isRecord(input) ? input : {};
+
+    const maybePrompt = readString(payload, "defaultSlackPrompt");
+    if (maybePrompt !== undefined) {
+      state.config.defaultSlackPrompt = maybePrompt;
+    }
+
+    const maybeFallback = readString(payload, "fallbackMode");
+    if (maybeFallback !== undefined) {
+      if (maybeFallback !== "deny-all" && maybeFallback !== "proxy-internet") {
+        throw new Error("fallbackMode must be 'deny-all' or 'proxy-internet'");
+      }
+      state.config.fallbackMode = maybeFallback;
+    }
+
+    appendEvent("updated demo config");
+    return snapshotState();
+  }
+
+  if (procedure === "demo.upsertMockRule") {
+    const next = sanitizeMockRuleInput(input);
+    const ruleId = next.id && next.id.length > 0 ? next.id : `rule-${randomUUID()}`;
+
+    const rule: JonaslandMockRule = {
+      id: ruleId,
+      name: next.name,
+      enabled: next.enabled ?? true,
+      method: next.method,
+      hostPattern: next.hostPattern,
+      pathPattern: next.pathPattern,
+      responseStatus: next.responseStatus,
+      responseHeaders: next.responseHeaders ?? {},
+      responseBody: next.responseBody,
+    };
+
+    const existingIndex = state.config.mockRules.findIndex((entry) => entry.id === ruleId);
+    if (existingIndex >= 0) {
+      state.config.mockRules[existingIndex] = rule;
+      appendEvent(`updated mock rule: ${rule.name}`);
+    } else {
+      state.config.mockRules.push(rule);
+      appendEvent(`added mock rule: ${rule.name}`);
+    }
+
+    return snapshotState();
+  }
+
+  if (procedure === "demo.deleteMockRule") {
+    const payload = isRecord(input) ? input : {};
+    const id = readString(payload, "id")?.trim();
+    if (!id) throw new Error("id is required");
+
+    const prevLength = state.config.mockRules.length;
+    state.config.mockRules = state.config.mockRules.filter((rule) => rule.id !== id);
+    if (state.config.mockRules.length !== prevLength) {
+      appendEvent(`deleted mock rule: ${id}`);
+    }
+
+    return snapshotState();
+  }
+
+  if (procedure === "demo.clearRecords") {
+    state.records = [];
+    appendEvent("cleared egress records");
+    return snapshotState();
+  }
+
+  throw new Error(`unknown procedure: ${procedure}`);
+}
+
+function isInternalPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/__demo") ||
+    pathname.startsWith("/orpc/") ||
+    pathname === "/records" ||
+    pathname === "/records/clear" ||
+    pathname === "/healthz"
+  );
+}
+
 const server = createServer(async (req, res) => {
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", "http://localhost");
+  const pathnameWithQuery = `${url.pathname}${url.search}`;
 
   if (method === "OPTIONS") {
     setCors(res);
@@ -511,139 +1026,164 @@ const server = createServer(async (req, res) => {
 
   try {
     if (method === "GET" && url.pathname === "/healthz") {
-      sendJson(res, 200, { ok: true, phase: runtimePhase });
+      sendJson(res, 200, { ok: true, phase: state.phase });
+      return;
+    }
+
+    if (method === "POST" && url.pathname.startsWith("/orpc/")) {
+      const procedure = parseOrpcProcedure(url.pathname);
+      if (!procedure) {
+        sendJson(res, 404, { error: "procedure not found" });
+        return;
+      }
+
+      const input = await parseOrpcInput(req);
+      const timeout = setTimeout(() => {
+        if (!res.headersSent) {
+          sendJson(res, 504, {
+            error: `procedure timeout after ${String(DEFAULT_ORPC_TIMEOUT_MS)}ms`,
+          });
+        }
+      }, DEFAULT_ORPC_TIMEOUT_MS);
+
+      try {
+        const output = await dispatchOrpcProcedure(procedure, input);
+        clearTimeout(timeout);
+        if (!res.headersSent) {
+          sendOrpcJson(res, 200, output);
+        }
+      } catch (error) {
+        clearTimeout(timeout);
+        if (!res.headersSent) {
+          const message = errorMessage(error);
+          state.lastError = message;
+          appendEvent(`orpc error (${procedure}): ${message.split("\n")[0] ?? "unknown error"}`);
+          sendJson(res, 400, { error: message });
+        }
+      }
       return;
     }
 
     if (method === "GET" && url.pathname === "/records") {
-      sendJson(res, 200, { total: records.length, records });
+      sendJson(res, 200, { total: state.records.length, records: state.records });
       return;
     }
 
     if (method === "POST" && url.pathname === "/records/clear") {
-      records.length = 0;
-      appendEvent("cleared egress records");
+      await dispatchOrpcProcedure("demo.clearRecords", {});
       sendJson(res, 200, { ok: true });
       return;
     }
 
     if (method === "GET" && url.pathname === "/__demo/state") {
-      sendJson(res, 200, runtimeState());
+      sendJson(res, 200, snapshotState());
       return;
     }
 
     if (method === "GET" && url.pathname === "/__demo/events") {
-      sendJson(res, 200, { total: events.length, events });
+      sendJson(res, 200, { total: state.events.length, events: state.events });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/config") {
-      const body = await readJson<Partial<MockConfig>>(req);
-      if (typeof body.openaiOutputText === "string") {
-        mockConfig.openaiOutputText = body.openaiOutputText;
-      }
-      if (typeof body.openaiModel === "string") {
-        mockConfig.openaiModel = body.openaiModel;
-      }
-      if (typeof body.defaultSlackPrompt === "string") {
-        mockConfig.defaultSlackPrompt = body.defaultSlackPrompt;
-      }
-      if (typeof body.slackResponseTs === "string") {
-        mockConfig.slackResponseTs = body.slackResponseTs;
-      }
-      if (typeof body.slackResponseOk === "boolean") {
-        mockConfig.slackResponseOk = body.slackResponseOk;
-      }
-      appendEvent("updated mock config");
-      sendJson(res, 200, { ok: true, mockConfig });
+      const input = await readJson<unknown>(req);
+      await dispatchOrpcProcedure("demo.patchConfig", input);
+      sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/start") {
-      await withOperationLock(async () => {
-        await startSandbox();
-      });
-      sendJson(res, 200, { ok: true, state: runtimeState() });
+      await dispatchOrpcProcedure("demo.startSandbox", {});
+      sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/stop") {
-      await withOperationLock(async () => {
-        await stopSandbox();
-      });
-      sendJson(res, 200, { ok: true, state: runtimeState() });
+      await dispatchOrpcProcedure("demo.stopSandbox", {});
+      sendJson(res, 200, { ok: true, state: snapshotState() });
       return;
     }
 
     if (method === "POST" && url.pathname === "/__demo/actions/simulate-slack") {
-      const body = await readJson<{ text?: string; channel?: string; threadTs?: string }>(req);
-      const result = await withOperationLock(async () => await simulateSlackWebhook(body));
-      sendJson(res, 200, { ok: true, result });
+      const payload = await readJson<unknown>(req);
+      const result = await dispatchOrpcProcedure("demo.simulateSlackWebhook", payload);
+      sendJson(res, 200, { ok: true, ...(isRecord(result) ? result : { result }) });
       return;
     }
 
-    const requestBody = await readBody(req);
     if (isInternalPath(url.pathname)) {
       sendJson(res, 404, { error: "not_found" });
       return;
     }
 
+    const requestBody = await readBody(req);
     const startedAt = Date.now();
-    let responseStatus = 599;
-    let responseBody = "unmatched";
-    let responseHeaders: Record<string, string | number | string[] | undefined> = {
-      "content-type": "text/plain; charset=utf-8",
-    };
 
-    if (url.pathname === "/v1/responses") {
-      responseStatus = 200;
-      responseHeaders = { "content-type": "application/json; charset=utf-8" };
-      responseBody = JSON.stringify({
-        id: `resp_${randomUUID().slice(0, 8)}`,
-        object: "response",
-        status: "completed",
-        model: mockConfig.openaiModel,
-        output_text: mockConfig.openaiOutputText,
-        output: [
-          {
-            type: "message",
-            content: [{ type: "output_text", text: mockConfig.openaiOutputText }],
+    const response = await (async (): Promise<ProxyResult> => {
+      const matchedRule = findMatchingMockRule({
+        method: (method ?? "GET").toUpperCase(),
+        host: req.headers.host ?? "",
+        path: pathnameWithQuery,
+      });
+
+      if (matchedRule) {
+        return {
+          status: matchedRule.responseStatus,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            ...matchedRule.responseHeaders,
           },
-        ],
-        received: parseSafeJson(requestBody),
+          body: matchedRule.responseBody,
+        };
+      }
+
+      if (state.config.fallbackMode === "deny-all") {
+        return {
+          status: 502,
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: jsonString({
+            error: "egress_denied",
+            message: "No mock rule matched and fallback mode is deny-all",
+            request: {
+              method,
+              host: req.headers.host ?? "",
+              path: pathnameWithQuery,
+              body: parseSafeJson(requestBody),
+            },
+          }),
+        };
+      }
+
+      return await proxyToInternet({
+        request: req,
+        requestBody,
+        host: req.headers.host ?? "",
+        pathnameWithQuery,
       });
-    } else if (url.pathname === "/api/chat.postMessage") {
-      responseStatus = 200;
-      responseHeaders = { "content-type": "application/json; charset=utf-8" };
-      responseBody = JSON.stringify({
-        ok: mockConfig.slackResponseOk,
-        error: mockConfig.slackResponseOk ? undefined : "mock_slack_error",
-        ts: mockConfig.slackResponseTs,
-        received: parseSafeJson(requestBody),
-      });
-    }
+    })();
 
     const record: EgressRecord = {
       id: randomUUID(),
       method,
-      path: `${url.pathname}${url.search}`,
+      path: pathnameWithQuery,
       host: req.headers.host ?? "",
       headers: toHeaders(req.headers),
       requestBody,
-      responseStatus,
-      responseHeaders: sanitizeResponseHeaders(responseHeaders),
-      responseBody,
+      responseStatus: response.status,
+      responseHeaders: sanitizeResponseHeaders(response.headers),
+      responseBody: response.body,
       createdAt: nowIso(),
       durationMs: Date.now() - startedAt,
     };
+
     recordEgress(record);
 
     setCors(res);
-    res.writeHead(responseStatus, responseHeaders);
-    res.end(responseBody);
+    res.writeHead(response.status, response.headers);
+    res.end(response.body);
   } catch (error) {
     const message = errorMessage(error);
-    lastError = message;
+    state.lastError = message;
     appendEvent(`error: ${message.split("\n")[0] ?? "unknown error"}`);
     sendJson(res, 500, { error: message });
   }
@@ -662,6 +1202,8 @@ const shutdown = async () => {
 
 server.listen(apiPort, "0.0.0.0", () => {
   appendEvent(`demo api + mock egress listening on http://0.0.0.0:${String(apiPort)}`);
+  appendEvent(`provider: ${state.provider}`);
+  appendEvent(`fallback mode: ${state.config.fallbackMode}`);
 });
 
 process.on("SIGINT", () => {

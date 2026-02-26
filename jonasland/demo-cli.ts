@@ -885,11 +885,45 @@ async function runSandboxDemo(): Promise<void> {
 async function runDemoUi(): Promise<void> {
   const demoUiUrl = process.env.JONASLAND_DEMO_UI_URL || "http://127.0.0.1:5173";
   prompts.intro("Jonasland Demo UI");
+
+  const providerChoice = await prompts.select({
+    message: "Choose sandbox provider",
+    options: [
+      {
+        value: "docker",
+        label: "Docker (works now)",
+        hint: "start local container sandbox",
+      },
+      {
+        value: "fly",
+        label: "Fly.io (not implemented)",
+        hint: "placeholder for remote provider",
+      },
+    ],
+    initialValue: "docker",
+  });
+
+  if (prompts.isCancel(providerChoice)) {
+    prompts.cancel("Cancelled.");
+    return;
+  }
+
+  const provider = providerChoice as "docker" | "fly";
+  if (provider === "fly") {
+    prompts.log.warning("Fly provider is not implemented yet.");
+    return;
+  }
+
+  prompts.log.info(`Provider: ${provider}`);
   prompts.log.info(`Open ${demoUiUrl}`);
   prompts.log.info("Starting demo UI + API (Ctrl+C to stop)");
 
   execFileSync("pnpm", ["--filter", "@iterate-com/jonasland-demo", "dev"], {
     stdio: "inherit",
+    env: {
+      ...process.env,
+      JONASLAND_DEMO_PROVIDER: provider,
+    },
   });
 }
 
