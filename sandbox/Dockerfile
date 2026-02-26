@@ -196,6 +196,9 @@ RUN opencode --version && (opencode run --model opencode/kimi-k2.5-free "Hello" 
 ENV ITERATE_REPO=/home/iterate/src/github.com/iterate/iterate
 WORKDIR /home/iterate/src/github.com/iterate/iterate
 
+# Persistent workspace — Archil mounts here when configured.
+RUN mkdir -p /home/iterate/workspace
+
 # Copy lockfile first (dependency layer)
 # This way, unless the dependencies change, we don't have to download from pnpm
 # TODO: consider BuildKit cache mount for pnpm store to speed CI builds.

@@ -35,7 +35,9 @@ function createDaemonClient(params: {
 }): RouterClient<AppRouter> {
   const link = new RPCLink({
     url: `${params.baseUrl}/api/orpc`,
-    ...(params.fetcher ? { fetch: params.fetcher as typeof globalThis.fetch } : {}),
+    ...(params.fetcher
+      ? { fetch: params.fetcher as typeof globalThis.fetch }
+      : {}),
   });
   return createORPCClient(link);
 }
@@ -81,7 +83,8 @@ export async function resolveMachineSetupData(
     where: eq(schema.project.id, projectId),
     with: {
       connections: {
-        where: (connection, { eq: whereEq }) => whereEq(connection.provider, "github-app"),
+        where: (connection, { eq: whereEq }) =>
+          whereEq(connection.provider, "github-app"),
       },
       projectRepos: true,
     },
@@ -92,10 +95,15 @@ export async function resolveMachineSetupData(
   // Get GitHub installation token for repo access
   let installationToken: string | null = null;
   if (githubConnection) {
-    const providerData = githubConnection.providerData as { installationId?: number };
+    const providerData = githubConnection.providerData as {
+      installationId?: number;
+    };
     const installationId = providerData.installationId;
     if (installationId) {
-      const tokenResult = await getGitHubInstallationTokenWithDiagnostics(env, installationId);
+      const tokenResult = await getGitHubInstallationTokenWithDiagnostics(
+        env,
+        installationId,
+      );
       installationToken = tokenResult.token;
       if (!tokenResult.token) {
         logger.set({ machine: { id: machineId }, project: { id: projectId } });
@@ -111,9 +119,14 @@ export async function resolveMachineSetupData(
     installationToken && projectRepos.length > 0
       ? await Promise.all(
           projectRepos.map(async (repo): Promise<RepoInfo | null> => {
-            const repoInfo = await getRepositoryById(installationToken!, repo.externalId);
+            const repoInfo = await getRepositoryById(
+              installationToken!,
+              repo.externalId,
+            );
             if (!repoInfo) {
-              logger.warn(`[machine-setup] Could not fetch repo info repoId=${repo.externalId}`);
+              logger.warn(
+                `[machine-setup] Could not fetch repo info repoId=${repo.externalId}`,
+              );
               return null;
             }
             return {
@@ -129,9 +142,11 @@ export async function resolveMachineSetupData(
   const repos = repoResults.filter((r): r is RepoInfo => r !== null);
 
   // Customer repo / workspace path: first cloned repo, or the default iterate repo.
-  // When Archil is mounted at ~/src, both paths live on persistent storage automatically.
+  // Archil persistent storage mounts at ~/workspace (separate from the repo path).
   const customerRepoPath =
-    repos.length > 0 ? repos[0].path : "/home/iterate/src/github.com/iterate/iterate";
+    repos.length > 0
+      ? repos[0].path
+      : "/home/iterate/src/github.com/iterate/iterate";
 
   // Add daemon-specific env vars
   const daemonEnvVars = [
@@ -142,7 +157,10 @@ export async function resolveMachineSetupData(
       secret: null,
       description: null,
       egressProxyRule: null,
-      source: { type: "global" as const, description: "Iterate-provided Resend from address" },
+      source: {
+        type: "global" as const,
+        description: "Iterate-provided Resend from address",
+      },
       createdAt: null,
     },
     {
@@ -156,7 +174,9 @@ export async function resolveMachineSetupData(
     },
   ];
 
-  const envFileContent = buildEnvFileContent(daemonEnvVars, { skipProxy: dangerousRawSecrets });
+  const envFileContent = buildEnvFileContent(daemonEnvVars, {
+    skipProxy: dangerousRawSecrets,
+  });
 
   return { envFileContent, repos };
 }
@@ -186,9 +206,14 @@ export async function getPushMachineSetupInput(
 
   const setupFingerprint = hashSetupIntent(envFileContent, repos);
   const existingSentinel = await client.tool.readFile({ path: sentinelPath });
-  if (existingSentinel.exists && existingSentinel.content?.trim() === setupFingerprint) {
+  if (
+    existingSentinel.exists &&
+    existingSentinel.content?.trim() === setupFingerprint
+  ) {
     logger.set({ machine: { id: machine.id } });
-    logger.info("[machine-setup] Setup already completed (sentinel matches), skipping");
+    logger.info(
+      "[machine-setup] Setup already completed (sentinel matches), skipping",
+    );
     return null;
   }
 
@@ -207,7 +232,9 @@ export async function pushSetupToMachine(
 
   // Write env file first so pidnap picks up env vars immediately
   logger.set({ machine: { id: machine.id } });
-  logger.info(`[machine-setup] Writing .env to machine contentLength=${envFileContent.length}`);
+  logger.info(
+    `[machine-setup] Writing .env to machine contentLength=${envFileContent.length}`,
+  );
   await client.tool.writeFile({
     path: "~/.iterate/.env",
     content: envFileContent,
@@ -233,14 +260,24 @@ export async function pushSetupToMachine(
       .catch(() => false);
 
     if (dirCheck) {
-      logger.info(`[machine-setup] Repo already cloned, skipping repo=${repo.owner}/${repo.name}`);
+      logger.info(
+        `[machine-setup] Repo already cloned, skipping repo=${repo.owner}/${repo.name}`,
+      );
       continue;
     }
 
     // Clone — try with branch first, fall back to default
     try {
       await client.tool.execCommand({
-        command: ["git", "clone", "--branch", repo.branch, "--single-branch", repo.url, repo.path],
+        command: [
+          "git",
+          "clone",
+          "--branch",
+          repo.branch,
+          "--single-branch",
+          repo.url,
+          repo.path,
+        ],
         timeout: 120_000,
       });
     } catch {
@@ -262,7 +299,11 @@ export async function pushSetupToMachine(
   // Let the caller write sentinel file last — marks the full setup as complete.
   // If we crashed before here, the next retry re-writes .env and re-clones (skipping existing).
   return () =>
-    client.tool.writeFile({ path: sentinelPath, content: setupFingerprint, mode: 0o600 });
+    client.tool.writeFile({
+      path: sentinelPath,
+      content: setupFingerprint,
+      mode: 0o600,
+    });
 }
 
 /**
@@ -276,7 +317,10 @@ export async function pushEnvToRunningMachines(
 ): Promise<void> {
   const runningMachines = await db.query.machine.findMany({
     where: (machine, { eq: whereEq, and: whereAnd }) =>
-      whereAnd(whereEq(machine.projectId, projectId), whereEq(machine.state, "active")),
+      whereAnd(
+        whereEq(machine.projectId, projectId),
+        whereEq(machine.state, "active"),
+      ),
   });
 
   if (runningMachines.length === 0) {
@@ -291,7 +335,12 @@ export async function pushEnvToRunningMachines(
   );
 
   // Resolve env data once, push to all machines
-  const { envFileContent } = await resolveMachineSetupData(db, env, projectId, "env-refresh");
+  const { envFileContent } = await resolveMachineSetupData(
+    db,
+    env,
+    projectId,
+    "env-refresh",
+  );
 
   await Promise.all(
     runningMachines.map(async (machine) => {
@@ -299,7 +348,9 @@ export async function pushEnvToRunningMachines(
         const transport = await buildDaemonTransport(machine, env);
         const client = createDaemonClient(transport);
         // Read first to skip no-op writes (avoids unnecessary pidnap restarts)
-        const existing = await client.tool.readFile({ path: "~/.iterate/.env" });
+        const existing = await client.tool.readFile({
+          path: "~/.iterate/.env",
+        });
         if (existing.exists && existing.content === envFileContent) {
           logger.set({ machine: { id: machine.id } });
           logger.info("[machine-setup] .env already up to date, skipping");

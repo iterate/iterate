@@ -2,8 +2,8 @@
  * Archil integration — persistent POSIX volumes backed by Cloudflare R2.
  *
  * Every project gets an Archil disk with a per-project R2 prefix.
- * The disk is mounted at ~/src inside the sandbox so all workspace files
- * (cloned repos, scripts, data) survive machine reprovisioning.
+ * The disk is mounted at ~/workspace inside the sandbox so user files
+ * survive machine reprovisioning.
  *
  * @see https://docs.archil.com/api-reference/introduction
  */
@@ -43,7 +43,10 @@ export async function ensureProjectArchilDisk(
   // Idempotent: check if already provisioned
   const existingDisk = await db.query.projectEnvVar.findFirst({
     where: (e, { eq: whereEq, and: whereAnd }) =>
-      whereAnd(whereEq(e.projectId, params.projectId), whereEq(e.key, "ARCHIL_DISK_NAME")),
+      whereAnd(
+        whereEq(e.projectId, params.projectId),
+        whereEq(e.key, "ARCHIL_DISK_NAME"),
+      ),
   });
   if (existingDisk) {
     return true;
@@ -66,10 +69,15 @@ export async function ensureProjectArchilDisk(
       });
     }
 
-    logger.info(`[Archil] Disk provisioned for project=${params.projectId} diskId=${diskId}`);
+    logger.info(
+      `[Archil] Disk provisioned for project=${params.projectId} diskId=${diskId}`,
+    );
     return true;
   } catch (err) {
-    logger.error("[Archil] Disk creation failed, machine will run without persistence", err);
+    logger.error(
+      "[Archil] Disk creation failed, machine will run without persistence",
+      err,
+    );
     return false;
   }
 }
@@ -98,7 +106,7 @@ async function createArchilDisk(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `key-${env.ARCHIL_API_KEY}`,
+      Authorization: env.ARCHIL_API_KEY,
     },
     body: JSON.stringify({
       name: diskName,
@@ -125,12 +133,16 @@ async function createArchilDisk(
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Archil disk creation failed: HTTP ${resp.status} — ${text}`);
+    throw new Error(
+      `Archil disk creation failed: HTTP ${resp.status} — ${text}`,
+    );
   }
 
   const result = (await resp.json()) as ArchilApiResponse<CreateDiskResult>;
   if (!result.success || !result.data) {
-    throw new Error(`Archil disk creation failed: ${result.error ?? "unknown error"}`);
+    throw new Error(
+      `Archil disk creation failed: ${result.error ?? "unknown error"}`,
+    );
   }
 
   return { diskId: result.data.diskId, mountToken };
@@ -139,12 +151,15 @@ async function createArchilDisk(
 /**
  * Delete an Archil disk (cleanup when project is deleted).
  */
-export async function deleteArchilDisk(env: CloudflareEnv, diskId: string): Promise<void> {
+export async function deleteArchilDisk(
+  env: CloudflareEnv,
+  diskId: string,
+): Promise<void> {
   const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
 
   const resp = await fetch(`${baseUrl}/api/disks/${diskId}`, {
     method: "DELETE",
-    headers: { Authorization: `key-${env.ARCHIL_API_KEY}` },
+    headers: { Authorization: env.ARCHIL_API_KEY },
   });
 
   if (!resp.ok) {

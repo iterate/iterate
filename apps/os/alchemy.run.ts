@@ -416,6 +416,8 @@ const Env = z.object({
   // Archil — persistent POSIX volumes backed by R2
   ARCHIL_API_KEY: Optional,
   ARCHIL_REGION: NonEmpty.default("us-east-1"),
+  ARCHIL_R2_BUCKET_NAME: Optional,
+  ARCHIL_R2_ENDPOINT: Optional,
   ARCHIL_R2_ACCESS_KEY_ID: Optional,
   ARCHIL_R2_SECRET_ACCESS_KEY: Optional,
   POSTHOG_PUBLIC_KEY: Optional,
@@ -726,7 +728,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
   // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
-  const archilBucket = await R2Bucket("archil-data", {
+  const _archilBucket = await R2Bucket("archil-data", {
     name: `iterate-archil-${app.stage}`,
     locationHint: "enam", // US East — colocate with worker + PlanetScale
     adopt: true,
@@ -743,9 +745,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
-      // Archil R2 bucket name + endpoint from alchemy; credentials from Doppler (shared across devs)
-      ARCHIL_R2_BUCKET_NAME: archilBucket.name,
-      ARCHIL_R2_ENDPOINT: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,

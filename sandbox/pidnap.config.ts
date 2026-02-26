@@ -79,6 +79,26 @@ export default defineConfig({
       },
     },
     {
+      name: "archil-mount",
+      definition: {
+        command: "bash",
+        args: [`${sandboxDir}/archil-mount.sh`],
+      },
+      envOptions: {
+        inheritGlobalEnv: false,
+        reloadDelay: false,
+      },
+      options: {
+        restartPolicy: "always",
+        backoff: {
+          type: "exponential",
+          initialDelayMs: 2000,
+          maxDelayMs: 60000,
+        },
+      },
+      dependsOn: ["egress-proxy"],
+    },
+    {
       name: "project-ingress-proxy",
       definition: {
         command: "tsx",
