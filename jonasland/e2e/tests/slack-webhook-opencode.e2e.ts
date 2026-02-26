@@ -12,6 +12,8 @@ import {
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
+const EVENTS_HOST_HEADER = "Host: events.iterate.localhost";
+const EVENTS_JSON_HEADER = "content-type: application/json";
 
 type OnDemandProcessConfig = {
   definition: {
@@ -87,8 +89,26 @@ async function startOnDemandProcess(
   }
 }
 
+async function postEventsOrpc(
+  deployment: ProjectDeployment,
+  procedure: string,
+  body: unknown,
+): Promise<{ exitCode: number; output: string }> {
+  return await deployment.exec([
+    "curl",
+    "-fsS",
+    "-H",
+    EVENTS_HOST_HEADER,
+    "-H",
+    EVENTS_JSON_HEADER,
+    "--data",
+    JSON.stringify({ json: body }),
+    `http://127.0.0.1/orpc/${procedure}`,
+  ]);
+}
+
 describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
-  test("slack webhook triggers llm call and sends mocked response to slack", async () => {
+  test("slack webhook goes through events mediation, triggers llm call, and posts slack updates", async () => {
     await using proxy = await mockEgressProxy();
 
     proxy.fetch = async (request) => {
@@ -108,15 +128,21 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       return new Response("unmatched", { status: 599 });
     };
 
-    const llmReq = proxy.waitFor((request) => {
-      const url = new URL(request.url);
-      return url.pathname === "/v1/responses";
-    });
+    const llmReq = proxy.waitFor(
+      (request) => {
+        const url = new URL(request.url);
+        return url.pathname === "/v1/responses";
+      },
+      { timeout: 30_000 },
+    );
 
-    const slackReq = proxy.waitFor((request) => {
-      const url = new URL(request.url);
-      return url.pathname === "/api/chat.postMessage";
-    });
+    const firstSlackReq = proxy.waitFor(
+      (request) => {
+        const url = new URL(request.url);
+        return url.pathname === "/api/chat.postMessage";
+      },
+      { timeout: 30_000 },
+    );
 
     await using deployment = await projectDeployment({
       image,
@@ -171,15 +197,47 @@ describe.runIf(RUN_E2E)("jonasland slack webhook flow", () => {
       }),
     );
 
-    const slackRecord = await slackReq;
-    const slackBody = (await slackRecord.request.json()) as Record<string, unknown>;
-    expect(slackBody).toEqual(
-      expect.objectContaining({
-        channel: "C123",
-        thread_ts: "1730000000.000100",
-        text: expect.stringContaining("42"),
-      }),
-    );
+    await firstSlackReq;
+
+    const slackDeadline = Date.now() + 45_000;
+    let observedTwoSlackMessages = false;
+    while (Date.now() < slackDeadline) {
+      const slackRecords = proxy.records.filter(
+        (record) => new URL(record.request.url).pathname === "/api/chat.postMessage",
+      );
+      if (slackRecords.length >= 2) {
+        const firstBody = (await slackRecords[0]!.request.json()) as Record<string, unknown>;
+        const secondBody = (await slackRecords[1]!.request.json()) as Record<string, unknown>;
+
+        expect(firstBody).toEqual(
+          expect.objectContaining({
+            channel: "C123",
+            thread_ts: "1730000000.000100",
+            text: expect.stringContaining("Thinking"),
+          }),
+        );
+        expect(secondBody).toEqual(
+          expect.objectContaining({
+            channel: "C123",
+            thread_ts: "1730000000.000100",
+            text: expect.stringContaining("42"),
+          }),
+        );
+        observedTwoSlackMessages = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(observedTwoSlackMessages).toBe(true);
+
+    const listResult = await postEventsOrpc(deployment, "listStreams", {});
+    expect(listResult.exitCode).toBe(0);
+    const streamsPayload = JSON.parse(listResult.output) as {
+      json: Array<{ path: string; eventCount: number }>;
+    };
+    const streams = streamsPayload.json;
+    expect(streams.some((stream) => stream.path === "/integrations/slack/webhooks")).toBe(true);
+    expect(streams.some((stream) => stream.path.startsWith("/agents/opencode/"))).toBe(true);
 
     const unmatchedCount = proxy.records.filter((record) => record.response.status === 599).length;
     expect(unmatchedCount).toBe(0);

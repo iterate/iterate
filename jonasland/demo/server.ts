@@ -101,7 +101,7 @@ let deployment: ProjectDeployment | null = null;
 let containerName: string | null = null;
 let ingressUrl: string | null = null;
 let runtimePhase: RuntimePhase = "idle";
-let activeOperation: Promise<void> | null = null;
+let activeOperation: Promise<unknown> | null = null;
 let lastError: string | null = null;
 
 function nowIso(): string {
@@ -331,16 +331,19 @@ async function hostRequest(
   });
 }
 
-async function withOperationLock(task: () => Promise<void>): Promise<void> {
+async function withOperationLock<Result>(task: () => Promise<Result>): Promise<Result> {
   if (activeOperation !== null) {
     throw new Error("another operation is already running");
   }
 
-  activeOperation = task();
+  const operation = task();
+  activeOperation = operation;
   try {
-    await activeOperation;
+    return await operation;
   } finally {
-    activeOperation = null;
+    if (activeOperation === operation) {
+      activeOperation = null;
+    }
   }
 }
 
@@ -574,7 +577,7 @@ const server = createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/__demo/actions/simulate-slack") {
       const body = await readJson<{ text?: string; channel?: string; threadTs?: string }>(req);
-      const result = await simulateSlackWebhook(body);
+      const result = await withOperationLock(async () => await simulateSlackWebhook(body));
       sendJson(res, 200, { ok: true, result });
       return;
     }
