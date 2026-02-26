@@ -4,9 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.e2e.ts"],
-    sequence: {
-      concurrent: true,
-    },
+    maxWorkers: 1,
     testTimeout: 120_000,
   },
 });

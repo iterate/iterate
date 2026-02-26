@@ -16,8 +16,6 @@ type ProviderCase = {
   image: string;
 };
 
-const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
-const RUN_FRP_E2E = process.env.RUN_JONASLAND_FRP_E2E === "true";
 const providerEnv = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
 const runAllProviders = providerEnv === "all";
 
@@ -288,95 +286,92 @@ function makeFixture(params: { providerName: ProviderName; image: string }): Dep
 }
 
 for (const provider of providerCases) {
-  describe.runIf(RUN_E2E && RUN_FRP_E2E && provider.enabled)(
-    `deployment abstraction parity (${provider.name})`,
-    () => {
-      test("core control plane + events orpc append/list works", async () => {
-        await using fixture = makeFixture({
-          providerName: provider.name,
-          image: provider.image,
-        });
-        const deployment = await fixture.start();
+  describe.runIf(provider.enabled)(`deployment abstraction parity (${provider.name})`, () => {
+    test("core control plane + events orpc append/list works", async () => {
+      await using fixture = makeFixture({
+        providerName: provider.name,
+        image: provider.image,
+      });
+      const deployment = await fixture.start();
 
-        const streamPath = `frp-parity/events/${randomUUID().slice(0, 8)}`;
-        const appendResult = await retry(
-          async () =>
-            await postEventsOrpc(deployment, "append", {
-              path: streamPath,
-              events: [
-                {
-                  type: "https://events.iterate.com/events/test/e2e-recorded",
-                  payload: { ok: true },
-                },
-              ],
-            }),
-          6,
-        );
-        expect(appendResult.exitCode).toBe(0);
-        expect(appendResult.output).toBe("{}");
+      const streamPath = `frp-parity/events/${randomUUID().slice(0, 8)}`;
+      const appendResult = await retry(
+        async () =>
+          await postEventsOrpc(deployment, "append", {
+            path: streamPath,
+            events: [
+              {
+                type: "https://events.iterate.com/events/test/e2e-recorded",
+                payload: { ok: true },
+              },
+            ],
+          }),
+        6,
+      );
+      expect(appendResult.exitCode).toBe(0);
+      expect(appendResult.output).toBe("{}");
 
-        const listResult = await retry(
-          async () => await postEventsOrpc(deployment, "listStreams", {}),
-          6,
-        );
-        expect(listResult.exitCode).toBe(0);
-        const parsed = JSON.parse(listResult.output) as {
-          json: Array<{ path: string; eventCount: number }>;
-        };
-        const expectedPath = `/${streamPath}`;
-        expect(
-          parsed.json.some((entry) => entry.path === expectedPath && entry.eventCount >= 1),
-        ).toBe(true);
-      }, 900_000);
+      const listResult = await retry(
+        async () => await postEventsOrpc(deployment, "listStreams", {}),
+        6,
+      );
+      expect(listResult.exitCode).toBe(0);
+      const parsed = JSON.parse(listResult.output) as {
+        json: Array<{ path: string; eventCount: number }>;
+      };
+      const expectedPath = `/${streamPath}`;
+      expect(
+        parsed.json.some((entry) => entry.path === expectedPath && entry.eventCount >= 1),
+      ).toBe(true);
+    }, 900_000);
 
-      test("frp + egress external-proxy mode delivers payload to local vitest mock", async () => {
-        await using proxy = await mockEgressProxy();
-        proxy.fetch = async (request) =>
-          Response.json({
-            ok: true,
-            path: new URL(request.url).pathname,
-            mode: "external-proxy",
-          });
-
-        await using fixture = makeFixture({
-          providerName: provider.name,
-          image: provider.image,
-        });
-        const deployment = await fixture.start();
-
-        await using frpBridge = await startFlyFrpEgressBridge({
-          deployment,
-          localTargetPort: proxy.port,
-          frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
+    test("frp + egress external-proxy mode delivers payload to local vitest mock", async () => {
+      await using proxy = await mockEgressProxy();
+      proxy.fetch = async (request) =>
+        Response.json({
+          ok: true,
+          path: new URL(request.url).pathname,
+          mode: "external-proxy",
         });
 
-        await fixture.configureEgressProxy(frpBridge.dataProxyUrl);
+      await using fixture = makeFixture({
+        providerName: provider.name,
+        image: provider.image,
+      });
+      const deployment = await fixture.start();
 
-        const requestPath = "/vitest-frp-external";
-        const payload = JSON.stringify({
-          source: `${provider.name}-frp-external`,
-          run: randomUUID().slice(0, 8),
-        });
-        const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
-          timeout: 180_000,
-        });
+      await using frpBridge = await startFlyFrpEgressBridge({
+        deployment,
+        localTargetPort: proxy.port,
+        frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
+      });
 
-        const curl = await fixture.runEgressRequestViaCurl({
-          requestPath,
-          payloadJson: payload,
-        });
+      await fixture.configureEgressProxy(frpBridge.dataProxyUrl);
 
-        expect(curl.exitCode).toBe(0);
-        expect(curl.output).toContain('"ok":true');
-        expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
-        expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
+      const requestPath = "/vitest-frp-external";
+      const payload = JSON.stringify({
+        source: `${provider.name}-frp-external`,
+        run: randomUUID().slice(0, 8),
+      });
+      const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
+        timeout: 180_000,
+      });
 
-        const delivered = await observed;
-        expect(new URL(delivered.request.url).pathname).toBe(requestPath);
-        expect(await delivered.request.text()).toBe(payload);
-        expect(delivered.request.headers.get("host")).toContain("127.0.0.1:27180");
-        expect(delivered.response.status).toBe(200);
-      }, 900_000);
-    },
-  );
+      const curl = await fixture.runEgressRequestViaCurl({
+        requestPath,
+        payloadJson: payload,
+      });
+
+      expect(curl.exitCode).toBe(0);
+      expect(curl.output).toContain('"ok":true');
+      expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: external-proxy");
+      expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
+
+      const delivered = await observed;
+      expect(new URL(delivered.request.url).pathname).toBe(requestPath);
+      expect(await delivered.request.text()).toBe(payload);
+      expect(delivered.request.headers.get("host")).toContain("127.0.0.1:27180");
+      expect(delivered.response.status).toBe(200);
+    }, 900_000);
+  });
 }

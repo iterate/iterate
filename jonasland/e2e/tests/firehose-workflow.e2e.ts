@@ -3,9 +3,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { projectDeployment, type ProjectDeployment } from "../test-helpers/index.ts";
 
-const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
-const RUN_DOCKER_E2E = RUN_E2E && E2E_PROVIDER === "docker";
+const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 
 const ORDER_WORKFLOW_STARTED_EVENT_TYPE = "https://events.iterate.com/orders/workflow-started";

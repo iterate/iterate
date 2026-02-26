@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, chmod, copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -8,6 +8,7 @@ import type { ProjectDeployment } from "./project-deployment.ts";
 
 const FRP_CONTROL_BIND_PORT = 27000;
 const FRP_DATA_REMOTE_PORT = 27180;
+const FRP_VERSION = "0.65.0";
 const CONNECT_TIMEOUT_MS = 45_000;
 
 function sleep(ms: number): Promise<void> {
@@ -29,6 +30,83 @@ function tomlString(value: string): string {
 
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function commandExists(command: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("sh", ["-lc", `command -v ${shellSingleQuote(command)} >/dev/null 2>&1`], {
+      stdio: "ignore",
+    });
+    child.once("exit", (code) => {
+      resolve(code === 0);
+    });
+    child.once("error", () => {
+      resolve(false);
+    });
+  });
+}
+
+function resolveFrpDownloadTarget(): { os: string; arch: string } {
+  const os = platform();
+  const cpu = arch();
+
+  const frpOs = os === "darwin" ? "darwin" : os === "linux" ? "linux" : null;
+  const frpArch = cpu === "x64" ? "amd64" : cpu === "arm64" ? "arm64" : null;
+
+  if (!frpOs || !frpArch) {
+    throw new Error(`Unsupported platform for frpc auto-download: ${os}/${cpu}`);
+  }
+
+  return { os: frpOs, arch: frpArch };
+}
+
+async function resolveFrpcBinary(explicit?: string): Promise<string> {
+  if (explicit && explicit.trim().length > 0) return explicit;
+  if (await commandExists("frpc")) return "frpc";
+
+  const target = resolveFrpDownloadTarget();
+  const cacheDir = join(tmpdir(), `jonasland-frpc-${FRP_VERSION}-${target.os}-${target.arch}`);
+  const archivePath = join(cacheDir, "frpc.tar.gz");
+  const unpackDir = join(cacheDir, "unpack");
+  const binaryPath = join(cacheDir, "frpc");
+
+  try {
+    await access(binaryPath);
+    return binaryPath;
+  } catch {
+    // continue
+  }
+
+  await mkdir(unpackDir, { recursive: true });
+
+  const downloadUrl = `https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_${target.os}_${target.arch}.tar.gz`;
+  const download = await fetch(downloadUrl);
+  if (!download.ok || !download.body) {
+    throw new Error(`failed downloading frpc from ${downloadUrl} (${download.status})`);
+  }
+  const archive = Buffer.from(await download.arrayBuffer());
+  await writeFile(archivePath, archive);
+
+  const untarExit = await new Promise<number>((resolve) => {
+    const child = spawn("tar", ["-xzf", archivePath, "-C", unpackDir], { stdio: "ignore" });
+    child.once("exit", (code) => resolve(code ?? 1));
+    child.once("error", () => resolve(1));
+  });
+  if (untarExit !== 0) {
+    throw new Error(`failed extracting frpc archive ${archivePath}`);
+  }
+
+  const extractedDir = join(unpackDir, `frp_${FRP_VERSION}_${target.os}_${target.arch}`);
+  const extractedBinary = join(extractedDir, "frpc");
+  await copyFile(extractedBinary, binaryPath).catch((error) => {
+    throw new Error(
+      `failed installing frpc binary from ${extractedBinary}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+
+  await chmod(binaryPath, 0o755);
+  await rm(unpackDir, { recursive: true, force: true }).catch(() => {});
+  return binaryPath;
 }
 
 async function configureFlyFrps(params: {
@@ -121,7 +199,7 @@ async function startFrpc(params: {
   stop: () => Promise<void>;
   waitUntilConnected: () => Promise<void>;
 }> {
-  const frpcBin = params.frpcBin ?? process.env.JONASLAND_E2E_FRPC_BIN ?? "frpc";
+  const frpcBin = await resolveFrpcBinary(params.frpcBin ?? process.env.JONASLAND_E2E_FRPC_BIN);
   const tmpDir = await mkdtemp(join(tmpdir(), "jonasland-frpc-client-"));
   const configPath = join(tmpDir, "frpc.toml");
 

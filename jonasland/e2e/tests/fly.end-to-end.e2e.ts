@@ -2,9 +2,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { projectDeployment } from "../test-helpers/index.ts";
 
-const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
-const RUN_FLY_E2E = RUN_E2E && E2E_PROVIDER === "fly";
+const RUN_FLY_E2E = E2E_PROVIDER === "fly";
 
 const image =
   process.env.JONASLAND_E2E_FLY_IMAGE ??

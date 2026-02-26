@@ -6,9 +6,8 @@ import {
   type ProjectDeployment,
 } from "../test-helpers/index.ts";
 
-const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const E2E_PROVIDER = (process.env.JONASLAND_E2E_PROVIDER ?? "docker").trim().toLowerCase();
-const RUN_DOCKER_E2E = RUN_E2E && E2E_PROVIDER === "docker";
+const RUN_DOCKER_E2E = E2E_PROVIDER === "docker";
 const image = process.env.JONASLAND_SANDBOX_IMAGE || "jonasland-sandbox:local";
 const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:15318",
@@ -16,7 +15,6 @@ const OTEL_SERVICE_ENV = {
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:15318/v1/logs",
   OTEL_PROPAGATORS: "tracecontext,baggage",
 };
-
 type OnDemandProcessName = "orders" | "home" | "outerbase" | "egress-proxy" | "docs";
 type OnDemandProcessConfig = {
   definition: {

@@ -34,3 +34,12 @@ export {
   type SandboxFixture,
   type CreateProjectDeploymentParams,
 } from "./project-deployment.ts";
+export {
+  Deployment,
+  DockerDeployment,
+  FlyDeployment,
+  type DeploymentConfig,
+  type DeploymentFactory,
+  type DeploymentStartParams,
+  type ProviderName,
+} from "./deployment.ts";

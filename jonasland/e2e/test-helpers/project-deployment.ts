@@ -1,9 +1,9 @@
 import {
-  dockerProjectDeployment,
+  DockerDeployment,
+  FlyDeployment,
   type ProjectDeployment,
   type SandboxFixture,
-} from "./docker-project-deployment.ts";
-import { flyProjectDeployment } from "./fly-project-deployment.ts";
+} from "./deployment.ts";
 
 export type { ProjectDeployment, SandboxFixture };
 
@@ -35,14 +35,18 @@ export async function projectDeployment(
 ): Promise<ProjectDeployment> {
   const provider = resolveProvider();
   if (provider === "fly") {
-    return await flyProjectDeployment({
+    const deployment = new FlyDeployment({
       image: resolveFlyImage(params),
       name: params.name,
       env: params.env,
     });
+    await deployment.start();
+    return deployment;
   }
 
-  return await dockerProjectDeployment(params);
+  const deployment = new DockerDeployment(params);
+  await deployment.start();
+  return deployment;
 }
 
 export const sandboxFixture = projectDeployment;
