@@ -9,7 +9,8 @@ import { RPCHandler } from "@orpc/server/fetch";
 import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
-import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
+import { initLogger } from "evlog";
+import { createWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
   isProjectIngressHostname,
@@ -32,6 +33,7 @@ import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
 import {
+  evaluateLogFilter,
   flushRequestEvlog,
   log as evlog,
   setRequestEvlogFlushHandler,
@@ -87,11 +89,13 @@ const appStage =
 
 setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
 
-initWorkersLogger({
+initLogger({
   env: {
     service: "os",
     environment: appStage,
   },
+  pretty: import.meta.env.DEV,
+  stringify: false,
 });
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -158,6 +162,7 @@ app.use("*", async (c, next) => {
           },
           user,
         });
+        await evaluateLogFilter();
         flushRequestEvlog();
       }
     },

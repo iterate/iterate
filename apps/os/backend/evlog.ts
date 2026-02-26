@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequestLogger, log as rootLog, type RequestLogger, type WideEvent } from "evlog";
+import { shouldKeepEvent } from "./evlog-filter.ts";
 
 export type RequestEvlogEvent = Record<string, unknown>;
 
@@ -24,6 +25,8 @@ export type RequestEvlogContext = {
   executionCtx?: WaitUntilExecutionContext;
   flushed: boolean;
   errors: Error[];
+  /** When set to false by the log filter, flushRequestEvlog will skip emitting. */
+  shouldEmit?: boolean;
 };
 
 export type RequestEvlogFlushPayload = {
@@ -118,11 +121,46 @@ export function recordRequestEvlogError(error: unknown, context: RequestEvlogEve
   log.error(resolvedError, context);
 }
 
+/**
+ * Evaluate the JSONata log filter against the current request context.
+ * Must be called (and awaited) before `flushRequestEvlog()` — typically
+ * in the middleware after `await next()` completes and status/duration are known.
+ *
+ * Sets `store.shouldEmit` so that `flushRequestEvlog` knows whether to emit.
+ * Error-level events always pass through regardless of the filter.
+ */
+export async function evaluateLogFilter(): Promise<void> {
+  const store = getStore();
+  if (!store) return;
+
+  // If there are errors, always emit
+  if (store.errors.length > 0) {
+    store.shouldEmit = true;
+    return;
+  }
+
+  const context = log.getContext();
+  const level = context.error ? "error" : "info";
+
+  // Errors always pass through
+  if (level === "error") {
+    store.shouldEmit = true;
+    return;
+  }
+
+  store.shouldEmit = await shouldKeepEvent({ ...context, level });
+}
+
 export function flushRequestEvlog(): RequestEvlogFlushPayload | undefined {
   const store = getStore();
   if (!store || store.flushed) return undefined;
 
   store.flushed = true;
+
+  // If the filter was evaluated and said "drop", skip emitting to console
+  // but still run the flush handler for error reporting (errors always pass evaluateLogFilter)
+  if (store.shouldEmit === false) return undefined;
+
   const event = log.emit();
   if (!event) return undefined;
 
