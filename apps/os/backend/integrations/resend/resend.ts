@@ -21,12 +21,12 @@
  */
 import { Hono } from "hono";
 import { Resend } from "resend";
-import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import type { CloudflareEnv } from "../../../env.ts";
 import { waitUntil } from "../../../env.ts";
 import type { Variables } from "../../types.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
+import { buildMachineFetcher } from "../../services/machine-readiness-probe.ts";
 
 export const resendApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -155,24 +155,8 @@ function parseRecipientLocal(to: string): string {
 async function buildMachineForwardFetcher(
   machine: typeof schema.machine.$inferSelect,
   env: CloudflareEnv,
-): Promise<((input: string | Request | URL, init?: RequestInit) => Promise<Response>) | null> {
-  const metadata = machine.metadata as Record<string, unknown> | null;
-
-  try {
-    const runtime = await createMachineStub({
-      type: machine.type,
-      env,
-      externalId: machine.externalId,
-      metadata: metadata ?? {},
-    });
-    return await runtime.getFetcher(3000);
-  } catch (err) {
-    logger.set({ machine: { id: machine.id } });
-    logger.warn(
-      `[Resend Webhook] Failed to build forward fetcher type=${machine.type} error=${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
+) {
+  return buildMachineFetcher(machine, env, "Resend Webhook");
 }
 
 /**
