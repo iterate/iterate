@@ -50,13 +50,13 @@ export function isTransientError(err: unknown): boolean {
  */
 class RetryPool extends Pool {
   // Override query to add retry logic. Drizzle calls query(string, params) and query(config, params).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Pool.query has many overloads; matching them all is impractical
   async query(...args: any[]): Promise<any> {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- forwarding variadic args to super
         return await (super.query as any)(...args);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
