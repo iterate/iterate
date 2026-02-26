@@ -7,6 +7,7 @@
  *
  * @see https://docs.archil.com/api-reference/introduction
  */
+import { and, eq, inArray } from "drizzle-orm";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -55,7 +56,21 @@ export async function ensureProjectArchilDisk(
   try {
     const { diskId, mountToken } = await createArchilDisk(env, params);
 
-    // Store as project env vars — these flow to every machine via buildMachineEnvVars
+    // Store as project env vars — these flow to every machine via buildMachineEnvVars.
+    // Delete any stale archil env vars first (from previous broken provisioning attempts).
+    await db
+      .delete(schema.projectEnvVar)
+      .where(
+        and(
+          eq(schema.projectEnvVar.projectId, params.projectId),
+          inArray(schema.projectEnvVar.key, [
+            "ARCHIL_DISK_NAME",
+            "ARCHIL_MOUNT_TOKEN",
+            "ARCHIL_REGION",
+          ]),
+        ),
+      );
+
     const archilVars = [
       { key: "ARCHIL_DISK_NAME", value: diskId },
       { key: "ARCHIL_MOUNT_TOKEN", value: mountToken },
@@ -86,6 +101,9 @@ export async function ensureProjectArchilDisk(
  * Create an Archil disk backed by R2.
  * Currently uses a shared R2 bucket without prefix isolation.
  * TODO: use per-project bucketPrefix once Archil supports it in the mount path.
+ *
+ * Idempotent: if a disk with the same name already exists, creates a new
+ * auth token on the existing disk rather than failing.
  */
 async function createArchilDisk(
   env: CloudflareEnv,
@@ -103,6 +121,13 @@ async function createArchilDisk(
   const mountToken = `archil-${tokenHex}`;
   const tokenSuffix = tokenHex.slice(-4);
 
+  const authMethod = {
+    type: "token" as const,
+    principal: mountToken,
+    nickname: `machine-${params.projectSlug}`,
+    tokenSuffix,
+  };
+
   const resp = await fetch(`${baseUrl}/api/disks`, {
     method: "POST",
     headers: {
@@ -118,37 +143,90 @@ async function createArchilDisk(
           bucketEndpoint: env.ARCHIL_R2_ENDPOINT,
           accessKeyId: env.ARCHIL_R2_ACCESS_KEY_ID,
           secretAccessKey: env.ARCHIL_R2_SECRET_ACCESS_KEY,
-          // Note: bucketPrefix is not yet supported by Archil's mount path.
-          // For now, each project gets its own disk with a dedicated R2 bucket.
-          // TODO: re-add bucketPrefix once Archil ships the fix (per Hunter, Feb 2026).
         },
       ],
-      authMethods: [
-        {
-          type: "token",
-          principal: mountToken,
-          nickname: `machine-${params.projectSlug}`,
-          tokenSuffix,
-        },
-      ],
+      authMethods: [authMethod],
     }),
   });
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(
-      `Archil disk creation failed: HTTP ${resp.status} — ${text}`,
-    );
+  if (resp.ok) {
+    const result = (await resp.json()) as ArchilApiResponse<CreateDiskResult>;
+    if (!result.success || !result.data) {
+      throw new Error(
+        `Archil disk creation failed: ${result.error ?? "unknown error"}`,
+      );
+    }
+    return { diskId: result.data.diskId, mountToken };
   }
 
-  const result = (await resp.json()) as ArchilApiResponse<CreateDiskResult>;
-  if (!result.success || !result.data) {
-    throw new Error(
-      `Archil disk creation failed: ${result.error ?? "unknown error"}`,
+  // Disk name collision — look up existing disk and add our token to it
+  const text = await resp.text();
+  if (resp.status === 409 || text.includes("already exists")) {
+    logger.info(
+      `[Archil] Disk ${diskName} already exists, adding new auth token`,
     );
+    return addTokenToExistingDisk(env, diskName, mountToken, authMethod);
   }
 
-  return { diskId: result.data.diskId, mountToken };
+  throw new Error(`Archil disk creation failed: HTTP ${resp.status} — ${text}`);
+}
+
+/**
+ * Look up a disk by name and add a new auth token to it.
+ * Used when re-provisioning a project whose env vars were deleted
+ * but the Archil disk still exists.
+ */
+async function addTokenToExistingDisk(
+  env: CloudflareEnv,
+  diskName: string,
+  mountToken: string,
+  authMethod: {
+    type: "token";
+    principal: string;
+    nickname: string;
+    tokenSuffix: string;
+  },
+): Promise<{ diskId: string; mountToken: string }> {
+  const baseUrl = `https://control.green.${env.ARCHIL_REGION}.aws.prod.archil.com`;
+
+  // List disks and find the one with our name
+  const listResp = await fetch(`${baseUrl}/api/disks`, {
+    headers: { Authorization: env.ARCHIL_API_KEY },
+  });
+  if (!listResp.ok) {
+    throw new Error(`Archil list disks failed: HTTP ${listResp.status}`);
+  }
+
+  const listResult = (await listResp.json()) as ArchilApiResponse<
+    Array<{ diskId: string; name: string }>
+  >;
+  const disk = listResult.data?.find((d) => d.name === diskName);
+  if (!disk) {
+    throw new Error(`Archil disk ${diskName} not found despite 409 conflict`);
+  }
+
+  // Add new auth token to the existing disk
+  const addResp = await fetch(
+    `${baseUrl}/api/disks/${disk.diskId}/auth-methods`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: env.ARCHIL_API_KEY,
+      },
+      body: JSON.stringify(authMethod),
+    },
+  );
+
+  if (!addResp.ok) {
+    const addText = await addResp.text();
+    logger.warn(
+      `[Archil] Failed to add auth token to disk ${disk.diskId}: ${addResp.status} ${addText}`,
+    );
+    // Fall through — the disk exists, we'll use it. The token might fail at mount time.
+  }
+
+  return { diskId: disk.diskId, mountToken };
 }
 
 /**

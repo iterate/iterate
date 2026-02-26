@@ -82,19 +82,26 @@ sudo mkdir -p "$STAGING"
 
   sudo chown -R iterate:iterate "$STAGING"
 
+  # Seed dotfiles/configs from image snapshot (always, to pick up config updates)
+  if [[ -d /tmp/home-seed ]]; then
+    cp -a /tmp/home-seed/. "${STAGING}/"
+    echo "[archil] Dotfiles seeded"
+  fi
+
+  # Bind-mount IMMEDIATELY so other processes can use ~ without waiting for clone.
+  echo "[archil] Bind-mounting ${STAGING} over ${MOUNT_POINT}"
+  sudo mount --bind "$STAGING" "$MOUNT_POINT"
+
+  # Signal that the home directory is ready for other processes
+  touch /tmp/archil-home-ready
+  echo "[archil] Home directory ready"
+
   # First boot: check for the repo as the signal that setup completed successfully.
   # (Using .bashrc was unreliable — shared R2 buckets can have stale dotfiles.)
   REPO_DIR="${STAGING}/src/github.com/iterate/iterate"
   if [[ ! -f "${REPO_DIR}/package.json" ]]; then
-    echo "[archil] First boot — setting up persistent home directory"
+    echo "[archil] First boot — cloning repo and installing deps"
 
-    # 1. Seed dotfiles/configs from image snapshot
-    if [[ -d /tmp/home-seed ]]; then
-      cp -a /tmp/home-seed/. "${STAGING}/"
-      echo "[archil] Dotfiles seeded"
-    fi
-
-    # 2. Clone iterate repo and install deps
     mkdir -p "$(dirname "$REPO_DIR")"
 
     REPO_URL="${ITERATE_REPO_URL:-https://github.com/nichochar/iterate.git}"
@@ -112,6 +119,8 @@ sudo mkdir -p "$STAGING"
 
     # Git clone may fail early if GitHub auth isn't ready yet (egress proxy needs
     # the control plane to provision credentials). Retry with backoff.
+    # Clean up any partial/stale repo dir before first attempt.
+    rm -rf "$REPO_DIR"
     echo "[archil] Cloning ${REPO_URL} @ ${REPO_REF}"
     CLONE_OK=false
     for attempt in $(seq 1 10); do
@@ -134,36 +143,24 @@ sudo mkdir -p "$STAGING"
         git checkout "$REPO_REF" 2>/dev/null || echo "[archil] Warning: could not checkout ${REPO_REF}, staying on main"
       fi
 
-      # 3. Install dependencies
+      # Install dependencies
       echo "[archil] Installing dependencies (pnpm install)"
       cd "$REPO_DIR"
       pnpm install --frozen-lockfile 2>&1
 
-      # 4. Run post-sync steps (builds daemon frontend, runs migrations, etc.)
+      # Run post-sync steps (builds daemon frontend, runs migrations, etc.)
       echo "[archil] Running post-sync steps"
       bash "$REPO_DIR/sandbox/after-repo-sync-steps.sh" 2>&1
 
-      # 5. Init git repo for tools that need it
+      # Init git repo for tools that need it
       git add . 2>/dev/null || true
       git commit -m "archil first boot" 2>/dev/null || true
 
       echo "[archil] First boot setup complete"
     fi
   else
-    echo "[archil] Existing home directory found, updating dotfiles"
-    # Always re-seed dotfiles from image (picks up config updates from new images)
-    if [[ -d /tmp/home-seed ]]; then
-      cp -a /tmp/home-seed/. "${STAGING}/"
-    fi
+    echo "[archil] Existing home directory found"
   fi
-
-  # Bind-mount the staging dir over ~ so all processes see the persistent disk at ~
-  echo "[archil] Bind-mounting ${STAGING} over ${MOUNT_POINT}"
-  sudo mount --bind "$STAGING" "$MOUNT_POINT"
-
-  # Signal that the home directory is ready for other processes
-  touch /tmp/archil-home-ready
-  echo "[archil] Home directory ready"
 ) &
 
 # --force: claim ownership even if stale delegation exists from a previous machine.
