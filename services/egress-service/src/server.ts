@@ -18,7 +18,6 @@ const iterateOriginalProtoHeader = "x-iterate-original-proto";
 const iterateTargetUrlHeader = "x-iterate-target-url";
 const iterateEgressModeHeader = "x-iterate-egress-mode";
 const iterateEgressSeenHeader = "x-iterate-egress-proxy-seen";
-const iterateBypassExternalProxyHeader = "x-iterate-bypass-external-proxy";
 
 // Backward-compatible read aliases while migrating callers.
 const legacyOriginalHostHeader = "x-original-host";
@@ -90,12 +89,6 @@ function currentEgressMode(req: IncomingMessage): string {
   return String(preferredHeader(req, iterateEgressModeHeader, legacyEgressModeHeader) || "unknown");
 }
 
-function shouldBypassExternalProxy(req: IncomingMessage): boolean {
-  const raw = firstHeaderValue(req.headers[iterateBypassExternalProxyHeader]);
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function normalizeProxyProtocol(url: URL, protocolKind: ProtocolKind): URL {
   if (protocolKind === "ws") {
     if (url.protocol === "http:") url.protocol = "ws:";
@@ -138,7 +131,7 @@ function resolveTarget(
   protocolKind: ProtocolKind,
   env: EgressEnv,
 ): { mode: EgressMode; url: string } | null {
-  if (env.externalProxy && !shouldBypassExternalProxy(req)) {
+  if (env.externalProxy) {
     return {
       mode: "external-proxy",
       url: normalizeProxyProtocol(

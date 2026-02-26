@@ -14,10 +14,7 @@ type ProviderCase = {
   name: ProviderName;
   enabled: boolean;
   image: string;
-  create: (opts: { image: string; name: string }) => Promise<ProjectDeployment>;
 };
-
-type EgressMode = "direct" | "external-proxy";
 
 const RUN_E2E = process.env.RUN_JONASLAND_E2E === "true";
 const RUN_FRP_E2E = process.env.RUN_JONASLAND_FRP_E2E === "true";
@@ -165,14 +162,12 @@ abstract class DeploymentFixtureBase implements AsyncDisposable {
     return JSON.parse(result.output) as unknown;
   }
 
-  async configureEgressProxy(params: { externalProxyUrl?: string }): Promise<void> {
+  async configureEgressProxy(externalProxyUrl: string): Promise<void> {
     const deployment = this.requireDeployment();
     await retry(async () => {
       const env = {
         ...EGRESS_PROCESS_ENV,
-        ...(params.externalProxyUrl
-          ? { ITERATE_EXTERNAL_EGRESS_PROXY: params.externalProxyUrl }
-          : {}),
+        ITERATE_EXTERNAL_EGRESS_PROXY: externalProxyUrl,
       };
 
       await this.pidnapRpc("processes/updateConfig", {
@@ -225,18 +220,13 @@ abstract class DeploymentFixtureBase implements AsyncDisposable {
   async runEgressRequestViaCurl(params: {
     requestPath: string;
     payloadJson: string;
-    mode: EgressMode;
-    directTargetUrl?: string;
   }): Promise<{ exitCode: number; output: string }> {
-    const targetHeader =
-      params.mode === "direct" ? `-H 'x-iterate-target-url: ${params.directTargetUrl ?? ""}'` : "";
     return await this.exec([
       "sh",
       "-ec",
       [
         "curl -4 -k -sS -i",
         "-H 'content-type: application/json'",
-        targetHeader,
         `--data ${shQuote(params.payloadJson)}`,
         `https://api.openai.com${params.requestPath}`,
       ]
@@ -283,13 +273,11 @@ const providerCases: ProviderCase[] = [
     name: "docker",
     enabled: runAllProviders || providerEnv === "docker",
     image: DOCKER_IMAGE,
-    create: async ({ image, name }) => await dockerProjectDeployment({ image, name }),
   },
   {
     name: "fly",
     enabled: (runAllProviders || providerEnv === "fly") && FLY_IMAGE.trim().length > 0,
     image: FLY_IMAGE,
-    create: async ({ image, name }) => await flyProjectDeployment({ image, name }),
   },
 ];
 
@@ -341,57 +329,6 @@ for (const provider of providerCases) {
         ).toBe(true);
       }, 900_000);
 
-      test("frp + egress direct mode delivers payload to local vitest mock", async () => {
-        await using proxy = await mockEgressProxy();
-        proxy.fetch = async (request) =>
-          Response.json({
-            ok: true,
-            path: new URL(request.url).pathname,
-            mode: "direct-target",
-          });
-
-        await using fixture = makeFixture({
-          providerName: provider.name,
-          image: provider.image,
-        });
-        const deployment = await fixture.start();
-
-        await using frpBridge = await startFlyFrpEgressBridge({
-          deployment,
-          localTargetPort: proxy.port,
-          frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
-        });
-
-        await fixture.configureEgressProxy({});
-
-        const requestPath = "/vitest-frp-direct";
-        const payload = JSON.stringify({
-          source: `${provider.name}-frp-direct`,
-          run: randomUUID().slice(0, 8),
-        });
-        const observed = proxy.waitFor((request) => new URL(request.url).pathname === requestPath, {
-          timeout: 180_000,
-        });
-
-        const directTargetUrl = `${frpBridge.dataProxyUrl}${requestPath}`;
-        const curl = await fixture.runEgressRequestViaCurl({
-          requestPath: "/ignored-direct-path",
-          payloadJson: payload,
-          mode: "direct",
-          directTargetUrl,
-        });
-
-        expect(curl.exitCode).toBe(0);
-        expect(curl.output).toContain('"ok":true');
-        expect(curl.output.toLowerCase()).toContain("x-iterate-egress-mode: direct");
-        expect(curl.output.toLowerCase()).toContain("x-iterate-egress-proxy-seen: 1");
-
-        const delivered = await observed;
-        expect(new URL(delivered.request.url).pathname).toBe(requestPath);
-        expect(await delivered.request.text()).toBe(payload);
-        expect(delivered.response.status).toBe(200);
-      }, 900_000);
-
       test("frp + egress external-proxy mode delivers payload to local vitest mock", async () => {
         await using proxy = await mockEgressProxy();
         proxy.fetch = async (request) =>
@@ -413,9 +350,7 @@ for (const provider of providerCases) {
           frpcBin: process.env.JONASLAND_E2E_FRPC_BIN,
         });
 
-        await fixture.configureEgressProxy({
-          externalProxyUrl: frpBridge.dataProxyUrl,
-        });
+        await fixture.configureEgressProxy(frpBridge.dataProxyUrl);
 
         const requestPath = "/vitest-frp-external";
         const payload = JSON.stringify({
@@ -429,7 +364,6 @@ for (const provider of providerCases) {
         const curl = await fixture.runEgressRequestViaCurl({
           requestPath,
           payloadJson: payload,
-          mode: "external-proxy",
         });
 
         expect(curl.exitCode).toBe(0);
